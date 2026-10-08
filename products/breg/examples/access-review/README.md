@@ -5,7 +5,7 @@ tokens, or real records. Run from the repository root after building
 `bregctl`.
 
 ```sh
-target/debug/bregctl check products/breg/examples/access-review --deny-findings
+target/debug/bregctl check products/breg/examples/access-review --deny-warnings
 target/debug/bregctl explain access products/breg/examples/access-review
 ```
 
@@ -46,7 +46,7 @@ against the copy. Compilation refuses the profile with
 and field. Restore the exact binding to make the check pass.
 
 Then, in the copy, remove the entity requirements and leave `rowBoundaries: []`. Ordinary `check` accepts the model but reports
-`breg.access.profile-unrestricted-collection`; `check --deny-findings` exits
+`breg.access.profile-unrestricted-collection`; `check --deny-warnings` exits
 unsuccessfully. This distinguishes a declared invariant from an intentionally
 reviewable design choice. The flag covers all compiler findings, including
 incomplete package identity, not only access warnings.

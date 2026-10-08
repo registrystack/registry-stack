@@ -78,6 +78,16 @@
   problem codes, and the reader's `config.*` and `yaml.*` codes are
   unchanged. Replace each code a script or alert matches; the old-to-new
   table is in `release/notes/config-conventions/breg.md`.
+- BREAKING: `bregctl check` reports in the diagnostic shape every Registry
+  Stack check command shares. Its JSON report lists every error and warning
+  under `diagnostics[]`, each with `severity`, a JSON Pointer `path`, a
+  `source` naming the file, line, and column, and a `suggestedAction`
+  sentence, in place of `findings[]` and `entities[id=...]` paths, and its
+  human report prints `severity[code] file:line:column path` lines. A finding
+  is a `warning`, `--deny-findings` is `--deny-warnings`, and a project,
+  package, or runtime file the command cannot read exits 3 instead of 1.
+  `bregctl check --runtime-config FILE` also checks a `runtime.yaml` offline.
+  Migration steps are in `release/notes/config-conventions/breg.md`.
 - The project, module, and runtime JSON Schemas admit `null` only in a
   comparison literal, as the reader does, and declare no `default: null`. The
   project schema states its `apiVersion` and `kind` as constants, an embedded

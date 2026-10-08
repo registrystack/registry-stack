@@ -239,6 +239,34 @@ are read as the shared reader's tagged unions: `kind` still names the form and
 the accepted spellings are unchanged, and every problem inside the chosen form
 is now reported at its own member, line, and column rather than at the block.
 
+### BREAKING: `bregctl check` reports in the shared diagnostic shape
+
+`bregctl check` reads `registry.yaml` and every `module.yaml` through the
+shared reader and reports what it finds in the diagnostic shape every
+Registry Stack check command shares (CFG-DIAG-1, CFG-DIAG-2). The human
+report leads with one sentence saying whether the check passed or what
+refused it, prints each diagnostic as `severity[code] file:line:column path`
+followed by its message and a `next:` line, and closes with
+`N errors, M warnings in K files`. A refusal is still printed on stderr.
+
+| Was | Is | Migrate by |
+|---|---|---|
+| a JSON report with advisories under `findings[]`, each without `severity` | every error and warning under `diagnostics[]`, each with `severity` | Reading `diagnostics[]` and selecting `severity: warning` where a script read `findings[]`. `ok`, `command`, `profile`, `revision`, `registryRevision`, and, for `--package`, `packageDigest` are unchanged. |
+| a diagnostic `path` such as `entities[id=record].accessProfiles[id=operator].rowBoundaries` | a JSON Pointer into the file that holds the member, such as `/accessProfiles/0/permissions/1/rowBoundaries`, with `source` naming the file, line, and column | Matching on `code` and `source.file` rather than on the path text. |
+| a `suggestedAction` such as `run_schema_test` | a sentence naming the fix | Showing the sentence to the reader; a script that branched on the identifier branches on `code` instead. |
+| a finding, reported as `finding` | a `warning` | Matching `warning` where a script matched `finding`. |
+| `bregctl check --deny-findings` | `bregctl check --deny-warnings`, refusing with exit 1 when the check reports any warning | Renaming the flag in every pipeline. |
+| exit 1 when the project directory, a package file, or the runtime file could not be read | exit 3, with `breg.source.project-invalid`, `breg.package.refused`, or `platform.runtime-config.unavailable` | Treating exit 3 as "the check could not run" and exit 1 as "the check refused the project". |
+| a module diagnostic naming `RegistryProject` as its `artifact` | `BRegModule` | Matching `BRegModule` for a diagnostic inside a `module.yaml`. |
+| a refused package reported as `the package was refused` at the path `package` | a message naming the cause, such as `the shared package envelope is invalid`, with `source` naming the package directory | Reading the message and the code; the code still names the class of refusal. |
+
+`bregctl check --runtime-config FILE` also reads a `runtime.yaml` the way
+`breg` reads it at startup, with no package, database, network endpoint, or
+secret provider, and prints the reader's diagnostics unchanged. Without
+`--environment`, each `${NAME}` expression is checked by its syntax and
+position only; with it, the expressions are filled from the process
+environment, and a filled value is never repeated in a diagnostic.
+
 ### BREAKING: configuration diagnostic codes are named `breg.<area>.<condition>`
 
 Every code the Base Registry Engine reports for a problem in

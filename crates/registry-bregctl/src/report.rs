@@ -238,9 +238,9 @@ impl Lines {
     /// Render the diagnostics of a report that refused, closing with what
     /// refused it.
     ///
-    /// A refusal that carries no error is still a refusal: `--deny-findings`
-    /// stops on findings alone, and closing that report with a count opening
-    /// on `0 errors` would tell the reader the opposite of the exit status.
+    /// A refusal that carries no error is still a refusal: a command may stop
+    /// on findings alone, and closing that report with a count opening on
+    /// `0 errors` would tell the reader the opposite of the exit status.
     pub(crate) fn refusal_findings(&mut self, findings: &[Finding<'_>]) {
         self.push_findings(findings, refusal_summary);
     }

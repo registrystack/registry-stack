@@ -28,6 +28,6 @@ mkdir -p out
 cargo run --locked -p registry-bregctl -- generate openapi products/breg/acceptance/spatial-service-sites --production --output out/spatial-service-sites-openapi
 ```
 
-`check` reports `breg.access.profile-anonymous-collection` for `directory-reader` and `map-reader`. Both profiles grant `list` to unauthenticated callers on purpose, so every service site is public; `--deny-findings` would turn those two findings into failures.
+`check` reports `breg.access.profile-anonymous-collection` for `directory-reader` and `map-reader`. Both profiles grant `list` to unauthenticated callers on purpose, so every service site is public; `--deny-warnings` would turn those two findings into failures.
 
 The offline commands validate authored source and generated contracts. They do not exercise token acquisition or database execution; use the quickstart and the product's PostgreSQL tests for those paths.

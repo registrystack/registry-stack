@@ -252,16 +252,19 @@ A gated profile needs `actorKind`, `requesterClients` that a recipient organizat
 It grants reads only: writes, actions, spatial queries, bulk export, and Evidence source export are refused on a gated permission.
 The profile id is the consent scope subjects agree to. To widen a gated profile or drop its `requireConsent`, declare a new profile id and list the old one under `retiredConsentScopes`; `bregctl diff` marks an in-place change for review.
 
-The project now passes `check`, with a finding the gate cannot close by itself:
+The project now passes `check`, with a warning the gate cannot close by itself, once for each of the `evidence-source`, `operator`, and `record-reader` profiles.
+With `food-targeting` added first under `accessProfiles`, the three read:
 
 ```text
-  finding  breg.access.consent-ungated-client  3 paths
-           this profile admits any client and reads `record` without consent, so a
-           client of the consent-gated `food-targeting` can read the same rows through
-           it. List requesterClients that no gated profile admits
-             entities[id=record].accessProfiles[id=evidence-source].requesterClients
-             entities[id=record].accessProfiles[id=operator].requesterClients
-             entities[id=record].accessProfiles[id=record-reader].requesterClients
+warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:217:9 /accessProfiles/3/permissions/0
+  this profile admits any client and reads `record` without consent, so a client of the consent-gated `food-targeting` can read the same rows through it. List requesterClients that no gated profile admits (in entities[].accessProfiles[].requesterClients)
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:171:9 /accessProfiles/1/permissions/1
+  this profile admits any client and reads `record` without consent, so a client of the consent-gated `food-targeting` can read the same rows through it. List requesterClients that no gated profile admits (in entities[].accessProfiles[].requesterClients)
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:193:9 /accessProfiles/2/permissions/0
+  this profile admits any client and reads `record` without consent, so a client of the consent-gated `food-targeting` can read the same rows through it. List requesterClients that no gated profile admits (in entities[].accessProfiles[].requesterClients)
+  next: Review the finding, and change the source if the behavior it describes is not intended.
 ```
 
 A profile without `requireConsent` reads without consent, so the `food-agency-portal` client could select `record-reader` and skip the gate.

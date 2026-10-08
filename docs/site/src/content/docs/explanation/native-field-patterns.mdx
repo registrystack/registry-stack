@@ -68,7 +68,7 @@ can exhaust them, so schema-test each expression against representative values b
 `bregctl check <project>` performs offline structural checks and generates safely quoted SQL. It
 cannot establish PostgreSQL expression syntax or existing-data conformance, so it reports
 `breg.field.pattern-unverified-offline` at each authored field path. Those findings are advisory unless
-`--deny-findings` is selected. Schema-test and activation report `breg.field.pattern-syntax-invalid` at
+`--deny-warnings` is selected. Schema-test and activation report `breg.field.pattern-syntax-invalid` at
 `entities[<id>].fields[<id>].pattern`, using authored identifiers and a repair hint that excludes
 the expression and the raw database diagnostic.
 

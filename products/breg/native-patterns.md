@@ -48,7 +48,7 @@ Runtime callers supply values, never expressions.
 quoted PostgreSQL SQL. It cannot establish PostgreSQL expression syntax or
 existing-data conformance. It reports `breg.field.pattern-unverified-offline` for each
 pattern at its authored field path. These are advisory findings unless
-`--deny-findings` is selected. Use the normal PostgreSQL-backed `bregctl test <project> --runtime-config <config>
+`--deny-warnings` is selected. Use the normal PostgreSQL-backed `bregctl test <project> --runtime-config <config>
 --credentials <credentials> --output <receipt.json>`
 and package workflow before activation. The compiled installer explicitly evaluates
 each native expression even when all fixture tables are empty. An invalid

@@ -99,7 +99,7 @@ Next:
      resolves
 ```
 
-A finding is an advisory the compiler attaches to a document path; it does not fail `check`, and [Test with journeys](../breg-journeys/) lists every finding the compiler can report and explains `--deny-findings` and `--production`.
+A finding is an advisory the compiler attaches to a document path; it does not fail `check`, and [Test with journeys](../breg-journeys/) lists every finding the compiler can report and explains `--deny-warnings` and `--production`.
 The first says the `operator` profile can list every row, which is right for a registry-wide operations role and wrong once the registry holds more than one caller's data.
 The second says the `evidence-source` profile can look up any record by its code, which is right for a source that vouches for the whole registry.
 The project's `record-reader` profile shows the row boundary that closes either one.
@@ -226,7 +226,7 @@ another entity and changes when the constraint changes.
 unless a declared index or a unique constraint without `when` already leads with it.
 `bregctl check` reports `breg.entity.list-unindexed-filter` or `breg.entity.list-unindexed-sort` for a
 filterable or sortable list field that no index leads with. The finding fails a check only under
-`--deny-findings`; declare an index for an entity that will hold more than a few thousand rows.
+`--deny-warnings`; declare an index for an entity that will hold more than a few thousand rows.
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, derived_constraint_id(), compile_entities(), and unindexed_list_findings(); crates/registry-breg/src/generated_ddl.rs; products/breg/generated/authoring/registry-module.schema.json. */}
 

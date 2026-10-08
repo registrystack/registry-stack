@@ -27,40 +27,34 @@ bregctl check ./my-registry
 `check` compiles the project without a database and prints the compiled revision, a content digest of everything the compiler read:
 
 ```text
-Authoring check passed.
-  revision  sha256:<digest>
-
-  finding  breg.access.profile-unrestricted-collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
-           this profile can list all rows, subject only to query bounds; caller filters
-           are not authorization. Add a claim-bound row restriction or review this
-           registry-wide access
-  finding  breg.access.profile-unrestricted-rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
-           this profile has no claim-bound row restriction for its granted operations;
-           requestVisibility owner limits request reads only, and other lifecycle rules
-           still apply. Review this registry-wide access
-
-0 errors, 2 findings.
+Authoring check passed; registry revision sha256:<digest>.
+warning[breg.access.profile-unrestricted-collection] ./my-registry/registry.yaml:138:24 /accessProfiles/0/permissions/1/rowBoundaries
+  this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-unrestricted-rows] ./my-registry/registry.yaml:184:24 /accessProfiles/2/permissions/0/rowBoundaries
+  this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+0 errors, 2 warnings in 2 files
 ```
 
 Two people holding the same revision hold the same project.
-An error is a declaration the compiler cannot compile, printed as an `error` row carrying its code, its document path, and its message, and the command exits with status 1.
-A finding is an advisory attached to a document path: the project compiles, but a reviewer must read it.
-In JSON output, the `findings[]` array carries that classification and each element omits the
-constant `severity` field. Refusal reports use `diagnostics[]` and retain `severity`, including when
-`--deny-findings` promotes findings to a refusal.
+An error is a declaration the compiler cannot compile, printed as an `error[code]` line with the file, line, column, and JSON Pointer path of the member, then its message and the fix, and the command exits with status 1.
+A finding is an advisory attached to a member, printed as a `warning`: the project compiles, but a reviewer must read it.
+With `--format json`, `check` prints the same diagnostics in the shared shape, each with `severity`, `code`, `artifact`, `path`, `message`, `suggestedAction`, and a `source` naming the file, line, and column.
+A project `check` cannot read, such as a missing directory, exits with status 3.
 The project `init` wrote reports both findings on purpose: `breg.access.profile-unrestricted-collection`, because its `operator` profile lists every record, and `breg.access.profile-unrestricted-rows`, because its `evidence-source` profile looks up any record by code.
 
 Two flags change what counts as a failure, and a review gate wants both:
 
 ```sh
-bregctl check ./my-registry --deny-findings
+bregctl check ./my-registry --deny-warnings
 bregctl check ./my-registry --production
 ```
 
-`--deny-findings` makes every finding fail the command, so the first one prints `bregctl check refused.` above the same two findings and exits with status 1 until they are resolved or the profiles are changed.
+`--deny-warnings` makes every warning fail the command, so the first one prints `bregctl check refused the project: --deny-warnings refuses a warning.` above the same two warnings and exits with status 1 until they are resolved or the profiles are changed.
 `--production` applies the production closure rules: package identity, a lock entry with a pinned digest for every module, a loaded source for every lock, and a declared handler for every event must all be present, and a project missing one fails with `breg.package.identity-required`, `breg.module.lock-missing`, `breg.module.lock-digest-required`, `breg.module.source-required`, or `breg.event.delivery-required`.
 The project `init` wrote already carries all of them, so `check --production` succeeds on it.
-`explain` and `generate` accept `--production` as well; `--deny-findings` belongs to `check` alone.
+`explain` and `generate` accept `--production` as well; `--deny-warnings` belongs to `check` alone.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, check(); crates/registry-breg/src/compiler.rs. */}
 
@@ -72,7 +66,7 @@ bregctl explain routes ./my-registry
 bregctl explain queries ./my-registry
 ```
 
-`explain` takes one subject, prints the revision and findings the way `check` does, then the report: JSON for every subject except `access`, whose report is written for reading.
+`explain` takes one subject, prints the revision and findings the way `init` does, then the report: JSON for every subject except `access`, whose report is written for reading.
 `model` prints every entity, field, and profile as compiled.
 `routes` prints every HTTP route with its method, path, operation, and the profiles that may select it, including the default.
 `queries` prints, per entity and operation, the fields a response may carry, the filterable fields with example `$filter` expressions, and the query bounds a request stays within.
@@ -234,7 +228,7 @@ Running the journeys needs more than the project: an empty PostgreSQL database, 
 
 | Symptom | Cause and next move |
 |---|---|
-| `check` passes but `check --deny-findings` fails. | A finding is present. Read it and either change the project or accept the finding knowingly. |
+| `check` passes but `check --deny-warnings` fails. | A warning is present. Read it and either change the project or accept the finding knowingly. |
 | `generate` fails with `output.parent.invalid`. | The output directory's parent does not exist. Create it, or give a destination inside a directory that exists. |
 | `generate` fails with `output.destination.invalid`. | The output directory already exists, or the path contains `..`. Give a new path; remove the old directory first if you meant to regenerate. |
 | A journey step fails with 404 where you expected data. | The profile's row boundary or purpose excluded the caller. Compare the step's `claims` with the permission, or preview them with `explain access --scenario` ([control access per profile](../breg-access/)). |

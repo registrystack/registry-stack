@@ -75,30 +75,25 @@ yours differ, and that is expected.
 ## Read the production findings
 
 `check --production` compiles the project the way `test` and `package` do. It refuses what the
-production profile forbids and reports findings, which are decisions it wants a person to review
-rather than errors:
+production profile forbids and reports findings as warnings, which are decisions it wants a person to
+review rather than errors:
 
 ```sh
 bregctl check --production tutorial-work/candidate-project
 ```
 
 ```text
-Production check passed.
-  revision  sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
-
-  finding  breg.access.profile-unrestricted-collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
-           this profile can list all rows, subject only to query bounds; caller filters
-           are not authorization. Add a claim-bound row restriction or review this
-           registry-wide access
-  finding  breg.access.profile-unrestricted-rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
-           this profile has no claim-bound row restriction for its granted operations;
-           requestVisibility owner limits request reads only, and other lifecycle rules
-           still apply. Review this registry-wide access
-
-0 errors, 2 findings.
+Production check passed; registry revision sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc.
+warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:138:24 /accessProfiles/0/permissions/1/rowBoundaries
+  this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:184:24 /accessProfiles/2/permissions/0/rowBoundaries
+  this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+0 errors, 2 warnings in 2 files
 ```
 
-The generated project ships both findings on purpose: the `operator` profile lists every record because
+The generated project ships both warnings on purpose: the `operator` profile lists every record because
 one operations team runs the whole registry, and the `evidence-source` profile looks a record up by its
 code for any record in the registry. The comment that introduces each profile in `registry.yaml` says
 how to close it (a `rowBoundaries` entry, or removing `list` from the operator's grant).
@@ -106,28 +101,24 @@ Closing them would also change the journeys, so treat them as reviewed and see w
 with them:
 
 ```sh
-bregctl check --production --deny-findings tutorial-work/candidate-project
+bregctl check --production --deny-warnings tutorial-work/candidate-project
 ```
 
 ```text
-bregctl check refused.
-
-  finding  breg.access.profile-unrestricted-collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
-           this profile can list all rows, subject only to query bounds; caller filters
-           are not authorization. Add a claim-bound row restriction or review this
-           registry-wide access
-  finding  breg.access.profile-unrestricted-rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
-           this profile has no claim-bound row restriction for its granted operations;
-           requestVisibility owner limits request reads only, and other lifecycle rules
-           still apply. Review this registry-wide access
-
-refused on 2 findings.
+bregctl check refused the project: --deny-warnings refuses a warning.
+warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:138:24 /accessProfiles/0/permissions/1/rowBoundaries
+  this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:184:24 /accessProfiles/2/permissions/0/rowBoundaries
+  this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+0 errors, 2 warnings in 2 files
 ```
 
 The command exits with status 1. That is the gate for a pipeline that must never build a candidate
-with an unreviewed finding; the rest of this tutorial runs without it.
+with an unreviewed warning; the rest of this tutorial runs without it.
 
-{/* Evidence: crates/registry-breg/src/access.rs, access_findings; crates/registry-bregctl/src/lib.rs, CheckArgs, deny_findings. */}
+{/* Evidence: crates/registry-breg/src/access.rs, access_findings; crates/registry-bregctl/src/lib.rs, CheckArgs; crates/registry-bregctl/src/check.rs, deny_warnings. */}
 
 ## Create the issuer key
 

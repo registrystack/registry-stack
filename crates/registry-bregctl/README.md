@@ -139,5 +139,15 @@ authored or deployed values. Human diagnostics retain the existing
 Successful JSON reports put advisories in `findings[]`. Each finding has
 `code`, `artifact`, `path`, `message`, and `suggestedAction`; it omits
 `severity` because membership in `findings[]` already identifies the entry as
-a finding. A refusal keeps `severity` on every `diagnostics[]` entry, including
-findings promoted to a refusal by `check --deny-findings`.
+a finding. A refusal keeps `severity` on every `diagnostics[]` entry.
+
+`bregctl check` reports in the configuration diagnostic shape every Registry
+Stack check command shares. Its human report leads with one sentence, then
+prints each diagnostic as `severity[code] file:line:column path`, the message,
+and a `next:` line, and closes with the error, warning, and file counts. With
+`--format json` it prints `ok`, `command`, `profile`, `revision`, and
+`diagnostics[]`, whose entries carry `severity`, `code`, `artifact`, `path`,
+`message`, `suggestedAction`, and `source` (`file`, `line`, `column`). An
+advisory is a `warning`. The command exits 0 when the project passes, 1 when
+it reports an error or, with `--deny-warnings`, a warning, 2 on a usage error,
+and 3 when it could not read the project.

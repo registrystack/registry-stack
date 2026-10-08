@@ -23,7 +23,7 @@ target/debug/bregctl explain change-requests products/breg/examples/access-revie
 ```
 
 The supervisor deliberately has `rowBoundaries: []`, and the auditor has history
-access. Review these findings rather than using `--deny-findings` for this
+access. Review these findings rather than using `--deny-warnings` for this
 project. The submitter can write its district boundary when drafting a request;
 that field and every applied target must still satisfy the caller's district
 assignment. No direct patch may change an existing record's district or owner.
