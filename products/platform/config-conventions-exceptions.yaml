@@ -3116,13 +3116,6 @@ exceptions:
   wp: WP6
   reason: $id is https://id.registrystack.org/schemas/breg/authoring/registry-module.v1alpha1.schema.json
   resolution: Set $id to https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json
-- rule: CFG-YAML-1
-  format: breg/module
-  location: crates/registry-breg/src/contract.rs#parse_module_yaml()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: breg/package
   location: products/platform/config-formats.yaml#/current/kind
@@ -5142,13 +5135,6 @@ exceptions:
   wp: WP3
   reason: sourceIssuer is not typed as $defs/Url
   resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-YAML-1
-  format: breg/project
-  location: crates/registry-breg/src/contract.rs#parse_project_yaml()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-2
   format: breg/queries-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -5776,20 +5762,6 @@ exceptions:
   class: stable-move
   reason: maxModuleBytes is a refused spelling of 'Largest accepted body or file'
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to maximumModuleBytes'
-- rule: CFG-QTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawJwksCacheConfig/properties/outageToleranceSeconds
-  class: pending
-  wp: WP3
-  reason: an integer without a stated minimum (minimum 0 is the unsigned type's implicit bound)
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawOidcVerifierConfig/properties/leewayMilliseconds
-  class: pending
-  wp: WP3
-  reason: an integer without a stated minimum (minimum 0 is the unsigned type's implicit bound)
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
 - rule: CFG-SCHEMA-1
   format: breg/runtime
   location: products/platform/config-formats.yaml#/example

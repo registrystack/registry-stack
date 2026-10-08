@@ -167,6 +167,15 @@ NONCANONICAL_UNITS = {
     "Secs": "Seconds", "Sec": "Seconds", "Mins": "Minutes", "Min": "Minutes",
     "Hrs": "Hours", "Kb": "Bytes", "Mb": "Bytes", "Kib": "Bytes", "Mib": "Bytes",
 }
+# The largest value of each unsigned integer format, the bound a plain
+# unsigned type implies without stating a range of its own.
+UNSIGNED_CEILING = {
+    "uint8": 2**8 - 1,
+    "uint16": 2**16 - 1,
+    "uint32": 2**32 - 1,
+    "uint64": 2**64 - 1,
+    "uint": 2**64 - 1,
+}
 # Members that hold a URL by name. `format: uri` alone is not enough: Evidence
 # types URN identifiers that way, and a `conceptUri` is an identifier too, so
 # only the exact `uri` member counts among the URI spellings.
@@ -1681,7 +1690,10 @@ class Lint:
                     find("CFG-EMPTY-4", visit, f"the default {json.dumps(node['default'])[:60]} does not validate against the member's schema",
                          "Declare the default the reader uses, valid under the member's schema")
             if "integer" in types_of(node) and isinstance(node.get("type"), (str, list)) and "const" not in node and "enum" not in node:
-                implicit = str(node.get("format", "")).startswith("uint") and node.get("minimum") == 0
+                # A bounded integer type states minimum 0 beside a maximum below its
+                # format's own ceiling; a plain unsigned type only implies it.
+                implicit = str(node.get("format", "")).startswith("uint") and node.get("minimum") == 0 \
+                    and node.get("maximum", UNSIGNED_CEILING.get(node.get("format"))) == UNSIGNED_CEILING.get(node.get("format"))
                 has_minimum = ("minimum" in node and not implicit) or "exclusiveMinimum" in node
                 has_maximum = "maximum" in node or "exclusiveMaximum" in node
                 if not (has_minimum and has_maximum):

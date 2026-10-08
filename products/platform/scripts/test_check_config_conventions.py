@@ -963,6 +963,14 @@ class QuantityTests(ConventionsTestCase):
             at(PROJECT_SCHEMA, "/$defs/Queue/properties/attemptTimeoutMilliseconds"),
         )
 
+    def test_cfg_qty_4_reports_an_unsigned_type_s_own_range_as_unstated(self) -> None:
+        self.queue()["retryCount"] = {"type": "integer", "format": "uint16", "minimum": 0, "maximum": 65535}
+        self.assertFinding(self.repo.run(), "CFG-QTY-4", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/retryCount"))
+
+    def test_cfg_qty_4_accepts_a_bounded_type_whose_stated_minimum_is_zero(self) -> None:
+        self.queue()["leewayMilliseconds"] = {"type": "integer", "format": "uint64", "minimum": 0, "maximum": 300000}
+        self.assertNoFinding(self.repo.run(), "CFG-QTY-4")
+
 
 class ValueTests(ConventionsTestCase):
     def test_cfg_val_6_reports_a_digest_without_the_digest_type(self) -> None:
