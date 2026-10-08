@@ -4,7 +4,7 @@
 # The members are documented at the top of the runner.
 formats:
   breg/module:
-    project: products/breg/acceptance/asset-site-placement
+    project: products/breg/examples/minimal
     init: {command: "bregctl init {directory}", file: modules/record-notes/module.yaml}
   # Journeys are checked against the project whose routes they call, and a
   # reviewed migration file at its place in the project tree.
