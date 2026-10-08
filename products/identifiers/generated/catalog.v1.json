@@ -3296,6 +3296,42 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/evidence/client-contracts/client-contracts.v1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Evidence client reviewed contracts",
+      "description": "Reviewed Evidence client contracts JSON Schema.",
+      "source": {
+        "path": "crates/registry-evidence-client/src/schema.rs",
+        "sha256": "dbb70717b6f3e4241a5b9131a2b828bf861a3a50b10dc7d0941756e3e3f7c210"
+      },
+      "artifact": {
+        "path": "products/evidence/generated/client-contracts/client-contracts.schema.json",
+        "sha256": "338b8b19a61f78e35df00a6ac3118de647145e2f6710cdeef0c9fc2c8d0d0803",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/evidence/client-profile/client-profile.v1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Evidence client profile",
+      "description": "Evidence relying-party client profile JSON Schema.",
+      "source": {
+        "path": "crates/registry-evidence-client/src/schema.rs",
+        "sha256": "dbb70717b6f3e4241a5b9131a2b828bf861a3a50b10dc7d0941756e3e3f7c210"
+      },
+      "artifact": {
+        "path": "products/evidence/generated/client-profile/client-profile.schema.json",
+        "sha256": "1c1f00536fde463395c391c3fe535495793de4342eb0b64403b71e0a70aedda4",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/evidence/oid4vci-runtime/oid4vci-runtime.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",

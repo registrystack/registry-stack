@@ -25,6 +25,9 @@ CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
   cargo run --locked --quiet -p registry-evidence-oid4vci --features schema \
   --example runtime-schema -- --output "$generated_root/oid4vci-runtime"
+CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+  cargo run --locked --quiet -p registry-evidence-client --features schema \
+  --example client-schema -- --output "$generated_root"
 
 if ! diff -ru "$committed_root" "$generated_root"; then
   echo 'Evidence generated contracts differ from the committed artifacts.' >&2

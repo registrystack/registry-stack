@@ -11,7 +11,11 @@ generated set includes `evidence-unsigned-envelope-v1.schema.json`, the closed
 envelope returned when unsigned output is explicitly requested and permitted,
 plus `evidence-request-batch-v1.schema.json` and
 `evidence-request-batch-response-v1.schema.json` for the bounded signed-JWS-only
-multi-subject operation.
+multi-subject operation. It also includes
+`client-profile/client-profile.schema.json` and
+`client-contracts/client-contracts.schema.json`, the closed application-owned
+progressive client profile and the reviewed, requester-scoped client-safe
+contract snapshot, generated from the `registry-evidence-client` readers.
 
 The normative source set is:
 
@@ -23,9 +27,6 @@ The normative source set is:
   and its echo in the Evidence payload, response-format negotiation, payload,
   ES256 service signing, RFC 7638 key identifiers, publication, revocation,
   rotation, and strict verifier rules;
-- `client-profile.schema.yaml` and `client-contracts.schema.yaml`: the closed
-  application-owned progressive client profile and the reviewed,
-  requester-scoped client-safe contract snapshot;
 - `sd-jwt-vc-profile.yaml`: the audience-scoped SD-JWT VC response format, its
   exact claim and disclosure mapping, the optional `cnf` holder key, the
   issuer-metadata path, RFC 9901 and SD-JWT VC draft v18 pins, and its explicit profile non-goals. It adds a

@@ -191,7 +191,7 @@ position.
   standard error before it logs the startup failure. A warning is printed the
   same way and does not stop startup.
 
-### Diagnostic codes
+### `evidence-oid4vci` diagnostic codes
 
 The old messages carried no code. Each maps to the code that reports the same
 problem now.
@@ -251,3 +251,69 @@ New codes with no old message: `evidence.oid4vci.sentinel-item` (warning),
 `evidence.oid4vci.secret-file-root`, `evidence.oid4vci.config-path`,
 `config.missing-envelope`, `config.unsupported-api-version`,
 `config.substitution`, and `config.substitution-not-allowed`.
+
+### BREAKING: the client profile and reviewed contracts have generated schemas
+
+The relying-party client (`registry-evidence-client`, its Node.js and Python
+bindings, and `evidencectl` commands that load a client profile) reads the
+client profile and the reviewed contracts snapshot through the configuration
+reader every Registry Stack product shares. Both files keep their `schema`
+member (`registry.evidence-client-profile/v1`,
+`registry.evidence-client-contracts/v1`) and every member they had.
+
+- The hand-written schemas
+  `products/evidence/contracts/client-profile.schema.yaml`
+  (`https://registrystack.org/schemas/evidence/client-profile-v1.json`) and
+  `products/evidence/contracts/client-contracts.schema.yaml`
+  (`https://registrystack.org/schemas/evidence/client-contracts-v1.json`) are
+  deleted. They are generated from the readers and committed at
+  `products/evidence/generated/client-profile/client-profile.schema.json`
+  (`https://id.registrystack.org/schemas/evidence/client-profile/client-profile.v1.schema.json`)
+  and
+  `products/evidence/generated/client-contracts/client-contracts.schema.json`
+  (`https://id.registrystack.org/schemas/evidence/client-contracts/client-contracts.v1.schema.json`).
+  Migration: point any `$schema` member, editor mapping, or validator that
+  named an old path or identifier at the new one. The contracts schema refers
+  each definition to `evidence-definitions-v1.schema.json`, so a validator
+  loads that document beside it.
+- Minimal valid files are committed at
+  `products/evidence/examples/client-profile/client-profile.json` and
+  `products/evidence/examples/client-contracts/evidence.contracts.json`.
+
+### BREAKING: client profile and contracts values the reader now refuses
+
+- `null` as the value of an optional member is refused as
+  `config.null-value`, where it read as absent. Migration: remove the member
+  to take its default.
+- A reviewed contracts file larger than 1 MiB is refused, where the limit
+  was 4 MiB. Migration: review a snapshot scoped to the definitions the
+  application requests; a requester-scoped snapshot is far below the limit.
+- A `\uD800`-`\uDFFF` surrogate-pair escape in a string is refused as
+  `yaml.unclosed-quote`. Migration: write the character itself in UTF-8.
+- A `clientId` holding a control character is refused. This refuses only a
+  file that was already wrong: no authorization server issues such an
+  identifier.
+- A repeated member was refused before and still is, now as
+  `yaml.duplicate-key` at its position.
+
+The client now also reads what it refused before: a profile up to 1 MiB
+(the limit was 256 KiB), a byte-order mark, and either file written in YAML
+syntax.
+
+### Client diagnostic codes
+
+The public Rust error and the binding errors stay opaque: `from_slice`,
+`from_file`, and the reviewed contracts loader still fail with `the client
+profile is invalid or unavailable`. The added `read_client_profile` and
+`read_reviewed_contracts` functions return the positioned diagnostics, each
+with one of these codes or a shared `config.` or `yaml.` code.
+
+| Old message | New code |
+|---|---|
+| `the client profile is invalid or unavailable` (profile syntax, shape, or type) | The reader's own code at the position: `config.unknown-key`, `config.missing-key`, `config.invalid-value`, `config.out-of-range`, `config.null-value`, or a `yaml.` syntax code |
+| `the client profile is invalid or unavailable` (`baseUrl`) | `evidence.client.base-url-not-origin`, `evidence.client.base-url-not-https`, `evidence.client.base-url-literal-address`, or `evidence.client.base-url-not-loopback` |
+| `the client profile is invalid or unavailable` (another profile rule) | `evidence.client.profile-invalid` |
+| `the client profile is invalid or unavailable` (contracts shape) | `evidence.client.definition-shape` |
+| `the client profile is invalid or unavailable` (contracts with a repeated definition) | `evidence.client.duplicate-definition` |
+| `the client profile is invalid or unavailable` (a definition that breaks a contract rule) | `evidence.client.definition-invalid` |
+| `the client profile is invalid or unavailable` (contracts rules) | `evidence.client.contracts-invalid` |

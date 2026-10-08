@@ -1,0 +1,9 @@
+{
+  "schema": "registry.evidence-client-profile/v1",
+  "baseUrl": "https://evidence.example.org",
+  "clientId": "relying-party",
+  "privateKey": {
+    "source": "environment",
+    "variable": "EVIDENCE_CLIENT_KEY"
+  }
+}

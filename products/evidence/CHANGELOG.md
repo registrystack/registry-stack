@@ -14,6 +14,14 @@
   step, and the old-message-to-code table are in
   `release/notes/config-conventions/evidence.md`, section "Evidence clients
   and OID4VCI".
+- BREAKING: the Evidence client reads its profile and reviewed contracts
+  through the shared configuration reader. Their schemas are generated and
+  published under `id.registrystack.org`, replacing the hand-written
+  `client-profile.schema.yaml` and `client-contracts.schema.yaml`; `null`
+  members, contracts over 1 MiB, and control characters in `clientId` are
+  refused. The added `read_client_profile` and `read_reviewed_contracts`
+  return positioned, coded diagnostics. Migration steps and codes are in the
+  same release-note section.
 
 ## v0.39.0 - 2026-10-06
 

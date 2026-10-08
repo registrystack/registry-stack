@@ -5439,27 +5439,6 @@ exceptions:
   class: stable-move
   reason: the format carries no kind
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Write and check kind: EvidenceClientContracts'
-- rule: CFG-SCHEMA-1
-  format: evidence/client-contracts
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: evidence/client-contracts
-  location: products/evidence/contracts/client-contracts.schema.yaml#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/schemas/evidence/client-contracts-v1.json
-  resolution: Set $id to https://id.registrystack.org/schemas/evidence/client-contracts/client-contracts.v1.schema.json
-- rule: CFG-YAML-1
-  format: evidence/client-contracts
-  location: crates/registry-evidence-client/src/profile.rs#load_reviewed_contracts()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: evidence/client-profile
   location: products/platform/config-formats.yaml#/check
@@ -5481,101 +5460,17 @@ exceptions:
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Write and check kind: EvidenceClientProfile'
 - rule: CFG-ID-7
   format: evidence/client-profile
-  location: products/evidence/contracts/client-profile.schema.yaml#/properties/privateKey
+  location: products/evidence/generated/client-profile/client-profile.schema.json#/$defs/PrivateKeyMember
   class: stable-move
   reason: a union tagged by source, not type
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the variants with a type member, or use single-key mappings'
-- rule: CFG-SCHEMA-1
-  format: evidence/client-profile
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-2
-  format: evidence/client-profile
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the frozen contract has no differential test
-  resolution: Add a differential test holding the reader to the contract
-- rule: CFG-SCHEMA-3
-  format: evidence/client-profile
-  location: products/evidence/contracts/client-profile.schema.yaml#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/schemas/evidence/client-profile-v1.json
-  resolution: Set $id to https://id.registrystack.org/schemas/evidence/client-profile/client-profile.v1.schema.json
 - rule: CFG-SCHEMA-6
   format: evidence/client-profile
   location: editors/configure.py#/SCHEMAS/evidence
   class: pending
   wp: WP6
   reason: the format is not mapped for editors
-  resolution: Map products/evidence/contracts/client-profile.schema.yaml in editors/configure.py
-- rule: CFG-SCHEMA-8
-  format: evidence/client-profile
-  location: crates/registry-evidence-client/src/profile.rs#ContractsProfile
-  class: pending
-  wp: WP3
-  reason: ContractsProfile derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: evidence/client-profile
-  location: crates/registry-evidence-client/src/profile.rs#ContractsProfile/Published
-  class: pending
-  wp: WP3
-  reason: ContractsProfile/Published is a unit variant of a tagged union
-  resolution: Make it a struct variant (Published {})
-- rule: CFG-SCHEMA-8
-  format: evidence/client-profile
-  location: crates/registry-evidence-client/src/profile.rs#PrivateKeyReference
-  class: pending
-  wp: WP3
-  reason: PrivateKeyReference derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: evidence/client-profile
-  location: crates/registry-evidence-client/src/profile.rs#TrustProfile
-  class: pending
-  wp: WP3
-  reason: TrustProfile derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: evidence/client-profile
-  location: crates/registry-evidence-client/src/profile.rs#TrustProfile/HttpsDiscovery
-  class: pending
-  wp: WP3
-  reason: TrustProfile/HttpsDiscovery is a unit variant of a tagged union
-  resolution: Make it a struct variant (HttpsDiscovery {})
-- rule: CFG-SCHEMA-8
-  format: evidence/client-profile
-  location: crates/registry-evidence-client/src/profile.rs#TrustProfile/LocalLoopbackDiscovery
-  class: pending
-  wp: WP3
-  reason: TrustProfile/LocalLoopbackDiscovery is a unit variant of a tagged union
-  resolution: Make it a struct variant (LocalLoopbackDiscovery {})
-- rule: CFG-VAL-7
-  format: evidence/client-profile
-  location: products/evidence/contracts/client-profile.schema.yaml#/properties/baseUrl
-  class: pending
-  wp: WP3
-  reason: baseUrl is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: evidence/client-profile
-  location: products/evidence/contracts/client-profile.schema.yaml#/properties/expected/properties/issuer
-  class: pending
-  wp: WP3
-  reason: issuer is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-YAML-1
-  format: evidence/client-profile
-  location: crates/registry-evidence-client/src/profile.rs#from_slice()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
+  resolution: Map products/evidence/generated/client-profile/client-profile.schema.json in editors/configure.py
 - rule: CFG-ENV-1
   format: evidence/codelist
   location: products/platform/config-formats.yaml#/current/apiVersion

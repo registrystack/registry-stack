@@ -271,6 +271,22 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Evidence OID4VCI delivery runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/evidence/generated/client-profile/*.schema.json",
+      "sourcePath": "crates/registry-evidence-client/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Evidence relying-party client profile JSON Schema."
+    },
+    {
+      "glob": "products/evidence/generated/client-contracts/*.schema.json",
+      "sourcePath": "crates/registry-evidence-client/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Reviewed Evidence client contracts JSON Schema."
     }
   ],
   "records": [

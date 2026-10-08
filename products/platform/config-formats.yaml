@@ -3398,8 +3398,8 @@ formats:
   - id: evidence/client-profile
     product: evidence
     title: Evidence relying-party client profile
-    files: ['*.profile.yaml']
-    syntax: yaml
+    files: [client-profile.json, '*.profile.json']
+    syntax: json
     audience: operator
     stability: promised
     current:
@@ -3413,17 +3413,18 @@ formats:
       apiVersion: id.registrystack.org/formats/evidence/client-profile/v1
       kind: EvidenceClientProfile
     schema:
-      path: products/evidence/contracts/client-profile.schema.yaml
-      id: https://registrystack.org/schemas/evidence/client-profile-v1.json
-      origin: frozen-contract
-      differentialTest: none
+      path: products/evidence/generated/client-profile/client-profile.schema.json
+      id: https://id.registrystack.org/schemas/evidence/client-profile/client-profile.v1.schema.json
+      origin: generated
+      generator: cargo run -p registry-evidence-client --features schema --example client-schema -- --output products/evidence/generated
+      driftCheck: crates/registry-evidence-client/src/schema.rs
     reader:
       crate: registry-evidence-client
-      file: crates/registry-evidence-client/src/profile.rs
-      function: from_slice
-      type: EvidenceClientProfile
+      file: crates/registry-evidence-client/src/profile_file.rs
+      function: read_client_profile
+      type: ProfileDocument
     check: none
-    example: none
+    example: products/evidence/examples/client-profile/client-profile.json
     conformance:
       requiredText: none
       optionalText: none
@@ -3449,17 +3450,18 @@ formats:
       apiVersion: id.registrystack.org/formats/evidence/client-contracts/v1
       kind: EvidenceClientContracts
     schema:
-      path: products/evidence/contracts/client-contracts.schema.yaml
-      id: https://registrystack.org/schemas/evidence/client-contracts-v1.json
-      origin: frozen-contract
-      differentialTest: none
+      path: products/evidence/generated/client-contracts/client-contracts.schema.json
+      id: https://id.registrystack.org/schemas/evidence/client-contracts/client-contracts.v1.schema.json
+      origin: generated
+      generator: cargo run -p registry-evidence-client --features schema --example client-schema -- --output products/evidence/generated
+      driftCheck: crates/registry-evidence-client/src/schema.rs
     reader:
       crate: registry-evidence-client
-      file: crates/registry-evidence-client/src/profile.rs
-      function: load_reviewed_contracts
-      type: EvidenceDefinitionsDocument
+      file: crates/registry-evidence-client/src/profile_file.rs
+      function: read_reviewed_contracts
+      type: ContractsDocument
     check: none
-    example: none
+    example: products/evidence/examples/client-contracts/evidence.contracts.json
     conformance:
       requiredText: none
       optionalText: none

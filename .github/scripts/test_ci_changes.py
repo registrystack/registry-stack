@@ -2506,6 +2506,17 @@ on:
                 self.assertTrue(outputs["docs"])
                 self.assertTrue(outputs["evidence_contracts"])
 
+    def test_evidence_client_schema_change_runs_evidence_contracts(self) -> None:
+        """The contracts job reproduces the client schemas from their readers."""
+        for path in (
+            "crates/registry-evidence-client/src/profile_file.rs",
+            "crates/registry-evidence-client/src/schema.rs",
+            "products/evidence/generated/client-profile/client-profile.schema.json",
+            "products/evidence/generated/client-contracts/client-contracts.schema.json",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["evidence_contracts"])
+
     def test_evidence_configuration_reference_change_runs_docs(self) -> None:
         """Docs tests read the reference that explains each published schema."""
         for path in (
