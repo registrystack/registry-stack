@@ -33,7 +33,7 @@ under `secretProviders`, so the environment cannot choose which secret is read o
 from. It refuses any `${...}` expression in the governed bundle, so the reviewed bundle is the one
 that runs, and in a verification policy, which states every expectation literally. `evidence check`
 checks an expression by its syntax and position only, unless `--environment` substitutes from its
-own environment as startup does.
+own environment as startup does; an expression in a number or boolean member is refused either way.
 
 {/* Evidence: crates/registry-platform-config/src/loader.rs, RuntimeConfigLoader;
 crates/registry-evidence/src/config.rs, RuntimeConfig::loader, BundleExpressions;
