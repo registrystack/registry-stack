@@ -1538,6 +1538,17 @@ settings in Zed. The schema is an editing aid: `bregctl check --file` remains
 the check, and it also refuses what a schema cannot express, such as a
 journey that names a route its project does not declare.
 
+### `bregctl check --format json` carries `status`; `dev grant` carries `diagnostics`
+
+Both changes add a member; no existing member moves or changes meaning.
+
+- The `bregctl check --format json` report opens with `ok`, `command`, and
+  `status`, the head the other Registry Stack ctl reports share. `status` is
+  `complete` (exit 0), `domain-refusal` (exit 1), or `operational-failure`
+  (exit 3). `apiVersion` and `kind` follow when the format moves to stable.
+- The `bregctl dev grant` JSON report carries `diagnostics`, always an empty
+  list on success, like every other report.
+
 ### BREAKING: development clients identifiers, URLs, and exchange mapping (`dev-clients.yaml`)
 
 The development clients schema states the reader's types, so the reader now

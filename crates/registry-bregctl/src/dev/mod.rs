@@ -482,9 +482,11 @@ fn approved_grant(args: GrantArgs) -> Result<Value> {
             &args.client,
             &args.grant,
         ))?;
-    Ok(
-        json!({"ok":true,"command":"dev grant","headerFile":output.header_file,"grantExpiresAt":output.grant_expires_at}),
-    )
+    Ok(grant_report(&output))
+}
+
+fn grant_report(output: &registry_thunderid_tooling::grant_file::GrantOutput) -> Value {
+    json!({"ok":true,"command":"dev grant","headerFile":output.header_file,"grantExpiresAt":output.grant_expires_at,"diagnostics":[]})
 }
 
 fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {

@@ -4625,3 +4625,21 @@ fn retained_clients_round_trip_through_the_shared_reader() {
         "{refusal}"
     );
 }
+
+#[test]
+fn the_grant_report_carries_the_diagnostics_member_every_report_has() {
+    let report = grant_report(&registry_thunderid_tooling::grant_file::GrantOutput {
+        header_file: PathBuf::from("/project/.breg/grant.header"),
+        grant_expires_at: 1_700_000_000,
+    });
+    assert_eq!(
+        report,
+        json!({
+            "ok": true,
+            "command": "dev grant",
+            "headerFile": "/project/.breg/grant.header",
+            "grantExpiresAt": 1_700_000_000,
+            "diagnostics": []
+        })
+    );
+}

@@ -1666,6 +1666,7 @@ fn check_reads_a_runtime_configuration_beside_the_project() {
     assert_eq!(json.status.code(), Some(0), "{json:?}");
     let report = json_stdout(&json);
     assert_eq!(report["ok"], true);
+    assert_eq!(report["status"], "complete");
     assert_eq!(report["diagnostics"], json!([]));
 }
 
@@ -1688,6 +1689,7 @@ fn check_refuses_a_runtime_configuration_in_the_reader_words() {
     assert_eq!(json.status.code(), Some(1), "{json:?}");
     let report = json_stdout(&json);
     assert_eq!(report["ok"], false);
+    assert_eq!(report["status"], "domain-refusal");
     assert!(report.get("registryRevision").is_none(), "{report}");
     let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
     assert_eq!(diagnostics.len(), 1, "{report}");
@@ -1734,6 +1736,7 @@ fn check_cannot_read_a_missing_runtime_configuration() {
     assert_eq!(json.status.code(), Some(3), "{json:?}");
     let report = json_stdout(&json);
     assert_eq!(report["ok"], false);
+    assert_eq!(report["status"], "operational-failure");
     let diagnostic = &report["diagnostics"][0];
     // A file that cannot be read has no document kind to name.
     assert_check_diagnostic(diagnostic, None);

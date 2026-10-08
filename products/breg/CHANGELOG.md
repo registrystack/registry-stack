@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `bregctl check --format json` reports `status` (`complete`, `domain-refusal`,
+  or `operational-failure`) beside `ok` and `command`, and `bregctl dev grant`
+  JSON carries an empty `diagnostics` list. Both are additive.
 - `runtime.yaml` `database` embeds the shared database block, so it accepts
   `trustedRootCertificateRef` (a secret reference to PEM root certificates that
   both the runtime and the migration connection trust in place of the platform

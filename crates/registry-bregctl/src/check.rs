@@ -62,11 +62,14 @@ pub(super) struct Request<'a> {
 
 /// The report `bregctl check --format json` writes: the outcome, the
 /// identities a successful check derives, and every diagnostic (CFG-DIAG-1).
+/// `status` is `complete`, `domain-refusal` (exit 1), or `operational-failure`
+/// (exit 3), the ctl report envelope's head after `ok` and `command`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CheckReport<'a> {
     ok: bool,
     command: &'static str,
+    status: &'static str,
     profile: ProfileArg,
     #[serde(skip_serializing_if = "Option::is_none")]
     revision: Option<&'a str>,
@@ -132,6 +135,13 @@ pub(super) fn run(
         let report = CheckReport {
             ok: passed,
             command: "check",
+            status: if passed {
+                "complete"
+            } else if outcome.unavailable {
+                "operational-failure"
+            } else {
+                "domain-refusal"
+            },
             profile,
             revision: outcome.revision.as_deref().filter(|_| passed),
             registry_revision: outcome.revision.as_deref().filter(|_| passed),
