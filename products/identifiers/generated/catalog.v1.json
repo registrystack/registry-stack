@@ -3764,6 +3764,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Evidence authoring project marker",
+      "description": "Evidence authoring project marker and question JSON Schema.",
+      "source": {
+        "path": "crates/registry-evidence-authoring/src/schema.rs",
+        "sha256": "18a9ad7b1a0be3d04d0e5d31c7219c521158ca7c201df46b2f8c78020d2bb0e6"
+      },
+      "artifact": {
+        "path": "crates/registry-evidencectl/schemas/authoring/project-marker.schema.json",
+        "sha256": "2eeb18977105aac45ab3d5005152b25d456134621eeddf59aca612a9c4cebf6a",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/evidence/client-contracts/client-contracts.v1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3814,6 +3832,24 @@
       "artifact": {
         "path": "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
         "sha256": "1adf66ae738842dd0501175b1d84c935d4a3e07d0595f0312d8030eddf989ff8",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Evidence authored question",
+      "description": "Evidence authoring project marker and question JSON Schema.",
+      "source": {
+        "path": "crates/registry-evidence-authoring/src/schema.rs",
+        "sha256": "18a9ad7b1a0be3d04d0e5d31c7219c521158ca7c201df46b2f8c78020d2bb0e6"
+      },
+      "artifact": {
+        "path": "crates/registry-evidencectl/schemas/authoring/question.schema.json",
+        "sha256": "c096773a527247421c952ca07892169e2082cca843b0d8b2a9352180a053f0d2",
         "mediaType": "application/schema+json"
       }
     },
