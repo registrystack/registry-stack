@@ -110,7 +110,22 @@ source, or retained dev session use a deliberate real refusal fixture, so the
 gate remains database-free while still proving their envelope and diagnostic
 path. The same gate runs the generator in freshness mode.
 
-Regenerate after an intentional contract edit:
+Each report format registers an example in
+`products/casework/examples/formats/reports/`: the output of one command, run
+from the repository root, with the checkout's path removed from `package`'s
+`project`. A command whose successful report needs a database, an issuer, a
+BReg project, or a running development session (`attempt`, `retention erase`, `apply`, `plan`,
+`status`, `doctor`, `source add`, and every `dev` command except
+`dev identity`) has its refusal as its example.
+`crates/registry-caseworkctl/tests/report_examples.rs` fails when an example differs from what its command writes, and the contract
+test validates each example against its schema. Regenerate the examples after
+an intentional report change:
+
+```sh
+CASEWORKCTL_WRITE_REPORT_EXAMPLES=1 cargo test -p registry-caseworkctl --test report_examples
+```
+
+Regenerate the schemas after an intentional contract edit:
 
 ```sh
 python3 products/casework/scripts/generate_cli_schemas.py

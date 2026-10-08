@@ -1489,7 +1489,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/apply-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1519,7 +1519,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/attempt-settlement-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1549,7 +1549,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/attempt-uncertain-marking-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1579,7 +1579,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/check-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1609,7 +1609,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/dev-events-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1639,7 +1639,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/dev-grant-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1669,7 +1669,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/dev-identity-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1699,7 +1699,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/dev-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1729,7 +1729,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/dev-token-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1759,7 +1759,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/doctor-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1789,7 +1789,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/explain-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1819,7 +1819,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/init-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1849,7 +1849,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/lifecycle-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1879,7 +1879,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/package-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1909,7 +1909,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/plan-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1939,7 +1939,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/retention-erase-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1969,7 +1969,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/simulation-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1999,7 +1999,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/source-add-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -2029,7 +2029,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/status-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -2059,7 +2059,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/test-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -2089,7 +2089,7 @@ formats:
       file: crates/registry-caseworkctl/src/lib.rs
       symbol: CLI_API_VERSION
     check: none
-    example: none
+    example: products/casework/examples/formats/reports/usage-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []

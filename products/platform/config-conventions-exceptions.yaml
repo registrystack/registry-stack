@@ -2981,13 +2981,6 @@ exceptions:
   class: stable-move
   reason: kind is ApplyReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkApplyReport'
-- rule: CFG-SCHEMA-1
-  format: casework/apply-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/attempt-settlement-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3000,13 +2993,6 @@ exceptions:
   class: stable-move
   reason: kind is AttemptSettlementReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkAttemptSettlementReport'
-- rule: CFG-SCHEMA-1
-  format: casework/attempt-settlement-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/attempt-uncertain-marking-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3019,13 +3005,6 @@ exceptions:
   class: stable-move
   reason: kind is AttemptUncertainMarkingReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkAttemptUncertainMarkingReport'
-- rule: CFG-SCHEMA-1
-  format: casework/attempt-uncertain-marking-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/breg-source-description
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3050,13 +3029,6 @@ exceptions:
   class: stable-move
   reason: kind is CheckReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkCheckReport'
-- rule: CFG-SCHEMA-1
-  format: casework/check-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-4
   format: casework/check-report
   location: products/casework/contracts/cli/CheckReport.schema.json#/$defs/checkedRequest/properties/target
@@ -3076,13 +3048,6 @@ exceptions:
   class: stable-move
   reason: kind is DevEventsReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDevEventsReport'
-- rule: CFG-SCHEMA-1
-  format: casework/dev-events-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/dev-grant-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3095,13 +3060,6 @@ exceptions:
   class: stable-move
   reason: kind is DevGrantReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDevGrantReport'
-- rule: CFG-SCHEMA-1
-  format: casework/dev-grant-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/dev-identity-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3114,13 +3072,6 @@ exceptions:
   class: stable-move
   reason: kind is DevIdentityReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDevIdentityReport'
-- rule: CFG-SCHEMA-1
-  format: casework/dev-identity-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/dev-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3133,13 +3084,6 @@ exceptions:
   class: stable-move
   reason: kind is DevReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDevReport'
-- rule: CFG-SCHEMA-1
-  format: casework/dev-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-4
   format: casework/dev-report
   location: products/casework/contracts/cli/DevReport.schema.json#/oneOf/0/properties/clients/items
@@ -3166,13 +3110,6 @@ exceptions:
   class: stable-move
   reason: kind is DevTokenReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDevTokenReport'
-- rule: CFG-SCHEMA-1
-  format: casework/dev-token-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/doctor-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3185,13 +3122,6 @@ exceptions:
   class: stable-move
   reason: kind is DoctorReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDoctorReport'
-- rule: CFG-SCHEMA-1
-  format: casework/doctor-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/explain-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3204,13 +3134,6 @@ exceptions:
   class: stable-move
   reason: kind is ExplainReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkExplainReport'
-- rule: CFG-SCHEMA-1
-  format: casework/explain-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/init-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3223,13 +3146,6 @@ exceptions:
   class: stable-move
   reason: kind is InitReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkInitReport'
-- rule: CFG-SCHEMA-1
-  format: casework/init-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/lifecycle-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3266,13 +3182,6 @@ exceptions:
   class: stable-move
   reason: value review_request is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
-- rule: CFG-SCHEMA-1
-  format: casework/lifecycle-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/package-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3285,13 +3194,6 @@ exceptions:
   class: stable-move
   reason: kind is PackageReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkPackageReport'
-- rule: CFG-SCHEMA-1
-  format: casework/package-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/plan-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3322,13 +3224,6 @@ exceptions:
   class: stable-move
   reason: value notRecorded is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
-- rule: CFG-SCHEMA-1
-  format: casework/plan-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/project
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3509,13 +3404,6 @@ exceptions:
   class: stable-move
   reason: kind is RetentionEraseReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkRetentionEraseReport'
-- rule: CFG-SCHEMA-1
-  format: casework/retention-erase-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-EMPTY-2
   format: casework/runtime
   location: products/casework/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
@@ -3594,13 +3482,6 @@ exceptions:
   class: stable-move
   reason: id is not typed as $defs/LocalId
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId'
-- rule: CFG-SCHEMA-1
-  format: casework/simulation-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/source-add-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3619,13 +3500,6 @@ exceptions:
   class: stable-move
   reason: value not_performed is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
-- rule: CFG-SCHEMA-1
-  format: casework/source-add-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-4
   format: casework/source-add-report
   location: products/casework/contracts/cli/SourceAddReport.schema.json#/oneOf/0/properties/bregAuthoringPatch
@@ -3652,13 +3526,6 @@ exceptions:
   class: stable-move
   reason: kind is StatusReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkStatusReport'
-- rule: CFG-SCHEMA-1
-  format: casework/status-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/test-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3677,13 +3544,6 @@ exceptions:
   class: stable-move
   reason: value offline_synthetic is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
-- rule: CFG-SCHEMA-1
-  format: casework/test-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: casework/usage-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3696,13 +3556,6 @@ exceptions:
   class: stable-move
   reason: kind is UsageReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkUsageReport'
-- rule: CFG-SCHEMA-1
-  format: casework/usage-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-1
   format: discovery/evidence-mapping
   location: products/platform/config-formats.yaml#/current/apiVersion

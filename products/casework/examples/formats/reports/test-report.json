@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "command": "test",
+  "status": "passed",
+  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "authoringStatus": "complete",
+  "databaseAccess": false,
+  "diagnostics": [],
+  "filesChecked": 4,
+  "fixtures": [
+    {
+      "file": "fixtures/standalone-decision.yaml",
+      "name": "standalone-decision-offline",
+      "status": "passed"
+    }
+  ],
+  "kind": "TestReport",
+  "networkAccess": false,
+  "productionClosure": false,
+  "project": "products/casework/examples/standalone-decision",
+  "proofBoundary": "offline_synthetic"
+}

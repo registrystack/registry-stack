@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "command": "package",
+  "status": "complete",
+  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "databaseAccess": false,
+  "dryRun": true,
+  "files": [
+    {
+      "bytes": 1551,
+      "path": "casework.yaml",
+      "sha256": "sha256:f1aa77e97267f33c9bee24b4ec86c552524e7840d7b333add642fc193ac3b9b8"
+    }
+  ],
+  "kind": "PackageReport",
+  "networkAccess": false,
+  "packageDigest": "sha256:2553e01c35ffbab48b56732dd700dafe0ca85b5d77668556a18713b3edb414cc",
+  "project": "products/casework/examples/standalone-decision",
+  "revision": null,
+  "runtimeConfigurationIncluded": false,
+  "secretsIncluded": false
+}

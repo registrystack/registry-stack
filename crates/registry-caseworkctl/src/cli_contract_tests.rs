@@ -124,6 +124,24 @@ fn generated_schemas_are_current() {
 }
 
 #[test]
+fn every_committed_report_example_matches_its_schema() {
+    let directory = repo_root().join("products/casework/examples/formats/reports");
+    let mut examples = std::fs::read_dir(&directory)
+        .unwrap_or_else(|error| panic!("examples {directory:?} list: {error}"))
+        .map(|entry| entry.expect("example entry").path())
+        .collect::<Vec<_>>();
+    examples.sort();
+    assert_eq!(examples.len(), 21, "{examples:?}");
+    for path in examples {
+        let report: Value = serde_json::from_slice(&std::fs::read(&path).unwrap())
+            .unwrap_or_else(|error| panic!("example {path:?} parses: {error}"));
+        let kind = report["kind"].as_str().expect("the example names its kind");
+        let label = path.display().to_string();
+        assert_matches_contract(&label, kind, &report);
+    }
+}
+
+#[test]
 fn the_files_checked_bound_is_the_most_files_a_check_reads() {
     // The project file, the runtime configuration, `dev-clients.yaml`, and the
     // retained session state, then the sources and the three directories.

@@ -1,0 +1,641 @@
+{
+  "ok": true,
+  "command": "lifecycle",
+  "status": "complete",
+  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "kind": "LifecycleReport",
+  "lifecycles": [
+    {
+      "enforcement": [
+        {
+          "description": "The bearer token, the selected Casework profile, and its scopes verify; a token that impersonates or carries a registry grant is refused for any non-Requester profile, and the session must be a verified human. Gates the human paths only: the clock-driven release, the operator marking of an expired pending attempt, the operator settlement of an uncertain attempt, and every observation carry no caller.",
+          "events": [
+            "claim",
+            "release",
+            "attempt_reserved",
+            "attempt_uncertain",
+            "attempt_completed",
+            "attempt_refused"
+          ],
+          "id": "caller_authentication"
+        },
+        {
+          "description": "The If-Match header is present and well formed before any row is read, and inside the transaction the locked item row still carries the revision, source binding, and activity the caller saw. Only the header check happens at this position. The comparison against the locked row runs much later: on the claim and release paths it follows both the idempotency admission and the holder-state refusals below, so an exact retry of an operation that already succeeded is answered from its record rather than refused for the revision having moved since; on the reservation path it follows the holder and queue checks and precedes the reducer. Neither recover route carries an If-Match, and neither the operator marking nor any attempt settlement compares the item revision.",
+          "events": [
+            "claim",
+            "release",
+            "attempt_reserved"
+          ],
+          "id": "caller_revision_precondition"
+        },
+        {
+          "description": "Before the source is re-read, a retry naming an item that has already been erased is answered from the retained idempotency record alone: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. A reservation is stricter: any recorded hash matching this one is refused as expired, because an erased item can no longer be reserved even where the stored response survives. It runs only against an erased item and only for a caller who currently serves that item's queue in the role the operation needs, so a live item passes it and reaches the source and queue layers below.",
+          "events": [
+            "claim",
+            "release",
+            "attempt_reserved"
+          ],
+          "id": "erased_item_idempotency_preflight"
+        },
+        {
+          "description": "The caller can see the item's queue, and the source, re-read as this caller, still discloses the subject under the binding the item holds. A subject the source no longer discloses is reported as absent, and that holds on every caller event named here, the recovery settlements included, because the shared caller read settles it before this layer's own comparisons begin. The binding comparison is narrower than it reads: that same shared read returns the item untouched as soon as this caller holds a pending or uncertain attempt on it, skipping both the generation refusal and the active-occurrence refusal, so a moved binding refuses the paths that start an action but not the recovery of such an attempt. The decision path escapes that skip only because it runs a live-attempt check of its own immediately afterwards and refuses an uncertain attempt outright; a recovery has no equivalent and can have none, the live attempt being the one it exists to settle. Standing in this layer's place there is the source adapter's own comparison at execution, which refuses a saved binding that no longer matches the prepared one or the current generation. The further check that the source still offers the operation being attempted is narrower still, and holds only on the reservation, the one path that chooses an operation. A recovery re-executes the operation its attempt already prepared and never re-tests it against the set the source offers now; standing in its place is the saved preparation itself, matched on the recorded binding and idempotency key and executed under a single-flight lease. The operator settlement of an uncertain attempt raises two of these events and the operator marking of an expired pending attempt raises one, both with no caller and reading no source, so those paths pass this layer without being checked here.",
+          "events": [
+            "claim",
+            "release",
+            "attempt_reserved",
+            "attempt_uncertain",
+            "attempt_completed",
+            "attempt_refused"
+          ],
+          "id": "source_authorization"
+        },
+        {
+          "description": "The actor is a staff member of a team serving the item's queue; a supervisor serving that queue may release another person's holding but may not claim or reserve. A claim refuses an item already held. A release refuses an item nobody holds, and refuses a staff member who is not the recorded holder, but the supervisor above may release whoever holds it. A reservation refuses anyone but the recorded holder. On the claim and release paths this layer straddles the idempotency admission below: the queue membership check runs before that admission and the holder-state refusals after it, so an exact retry of a claim that already succeeded is answered from its record rather than refused for the item now being held. A reservation sits on neither side of that split, being admitted by no record at all, and meets the holder check before the queue check.",
+          "events": [
+            "claim",
+            "release",
+            "attempt_reserved"
+          ],
+          "id": "queue_and_holder_authority"
+        },
+        {
+          "description": "With the item row locked, a retried claim or release is answered from its recorded idempotency record: a recorded request hash differing from this one is refused as a conflict, and a retry whose stored response retention has erased, including the item itself, is refused as expired. Against an already erased item the preflight layer above has answered this before the source was read. A reservation is admitted by its own key check below instead, and neither the operator marking nor any attempt settlement reaches an idempotency record on any path.",
+          "events": [
+            "claim",
+            "release"
+          ],
+          "id": "idempotency_admission"
+        },
+        {
+          "description": "An observation is applied only when it is the newest authoritative reading of the subject under the current binding generation: a stale generation is refused, an older revision is dropped, and an unchanged revision and etag reconciles clocks only. A source may never assert the claimed or synchronizing state. A clock effect additionally requires the subject, the observation, and its own recorded generation, revision, and etag to all be current.",
+          "events": [
+            "observe_open",
+            "observe_waiting_applicant",
+            "observe_waiting_application",
+            "complete",
+            "supersede",
+            "cancel",
+            "release"
+          ],
+          "id": "source_binding_currency"
+        },
+        {
+          "description": "A retried reservation is admitted by its own key lookup rather than by the idempotency record above, and that lookup straddles the layers between. It reads the attempt row recorded for this item and key before the source is re-read, comparing the actor, the caller's casework profile, and the request hash the row carries, but its outcome is taken only after the source layer above has run: a difference in any of those is refused as a conflict, an item erased since is refused as expired, and an exact match returns the stored attempt with whatever receipt it holds. A retried reservation is therefore answered from its record, and returns before the holder, operation-offered, and fence checks below are reached. Only where that lookup found no row does the reservation itself lock the row and compare the actor, both profiles, the displayed binding, the recovery evidence, and the operation field by field, refusing a difference as a conflict and an exact match as a still-pending attempt. That locked compare reads no request hash, and is reachable only by a concurrent caller who inserted under the same key in between, so it decides a race and never an ordinary retry.",
+          "events": [
+            "attempt_reserved"
+          ],
+          "id": "reservation_key_admission"
+        },
+        {
+          "description": "No occurrence changes while a pending or uncertain attempt is live on the item: a claim, release, or reservation is refused, and a clock effect is deferred. An observation is fenced wider than that and requeued rather than refused, because its check spans every item the source, subject kind, and subject identifier select: a live attempt on one of a subject's occurrences requeues an observation that would have updated another, and the subject stays queued for reconciliation. An attempt settlement is fenced by the execution token recorded on the attempt; a refusal by the executor also requires its lease to be live, recovery requires it to have expired, and the operator marking of a pending attempt and the operator settlement of an uncertain attempt each require an expired lease and then issue a fresh token that fences the original executor out.",
+          "events": [
+            "claim",
+            "release",
+            "attempt_reserved",
+            "attempt_uncertain",
+            "attempt_completed",
+            "attempt_refused",
+            "observe_open",
+            "observe_waiting_applicant",
+            "observe_waiting_application",
+            "complete",
+            "supersede",
+            "cancel"
+          ],
+          "id": "attempt_fence"
+        },
+        {
+          "description": "The edge's own guard, run by the reducer: the (state, event) pair is in the fixed table. In practice this refuses every event against a completed, superseded, or cancelled occurrence and every caller event raised from the wrong active state. The position reported here is where every event but one reaches it. The reservation is the exception: its reducer runs before the key check and the attempt fence above, so a reservation against a state the table refuses is refused before either of them.",
+          "events": [
+            "claim",
+            "release",
+            "attempt_reserved",
+            "attempt_uncertain",
+            "attempt_completed",
+            "attempt_refused",
+            "observe_open",
+            "observe_waiting_applicant",
+            "observe_waiting_application",
+            "complete",
+            "supersede",
+            "cancel"
+          ],
+          "id": "lifecycle_transition"
+        },
+        {
+          "description": "Every write runs in a transaction that already holds a row lock on the item, and on the subject or clock occurrence where one is involved, so a concurrent writer is serialized behind this one rather than filtered at write time; the clock path claims its effect once only. The first authoritative observation of an unseen occurrence is the exception: it inserts the item, so there is no item row to lock and the subject lock is the whole of its serialization. There is no row-level security and no persist-time state filter on this machine.",
+          "events": [
+            "claim",
+            "release",
+            "attempt_reserved",
+            "attempt_uncertain",
+            "attempt_completed",
+            "attempt_refused",
+            "observe_open",
+            "observe_waiting_applicant",
+            "observe_waiting_application",
+            "complete",
+            "supersede",
+            "cancel"
+          ],
+          "id": "persist_serialization"
+        }
+      ],
+      "id": "occurrence",
+      "label": "Casework occurrence lifecycle",
+      "states": [
+        {
+          "id": "open",
+          "incomingTransitions": 5,
+          "initial": true,
+          "outgoingTransitions": 7,
+          "terminal": false,
+          "unreachable": false
+        },
+        {
+          "id": "claimed",
+          "incomingTransitions": 3,
+          "initial": false,
+          "outgoingTransitions": 8,
+          "terminal": false,
+          "unreachable": false
+        },
+        {
+          "id": "waiting_applicant",
+          "incomingTransitions": 5,
+          "initial": true,
+          "outgoingTransitions": 6,
+          "terminal": false,
+          "unreachable": false
+        },
+        {
+          "id": "waiting_application",
+          "incomingTransitions": 5,
+          "initial": true,
+          "outgoingTransitions": 6,
+          "terminal": false,
+          "unreachable": false
+        },
+        {
+          "id": "synchronizing",
+          "incomingTransitions": 3,
+          "initial": false,
+          "outgoingTransitions": 9,
+          "terminal": false,
+          "unreachable": false
+        },
+        {
+          "id": "completed",
+          "incomingTransitions": 5,
+          "initial": false,
+          "outgoingTransitions": 0,
+          "terminal": true,
+          "unreachable": false
+        },
+        {
+          "id": "superseded",
+          "incomingTransitions": 5,
+          "initial": false,
+          "outgoingTransitions": 0,
+          "terminal": true,
+          "unreachable": false
+        },
+        {
+          "id": "cancelled",
+          "incomingTransitions": 5,
+          "initial": false,
+          "outgoingTransitions": 0,
+          "terminal": true,
+          "unreachable": false
+        }
+      ],
+      "transitions": [
+        {
+          "event": "claim",
+          "from": "open",
+          "guard": "the occurrence is open",
+          "to": "claimed"
+        },
+        {
+          "event": "observe_open",
+          "from": "open",
+          "guard": "the occurrence is in any active state; a claimed occurrence keeps its holding through an open readback",
+          "to": "open"
+        },
+        {
+          "event": "observe_waiting_applicant",
+          "from": "open",
+          "guard": "the occurrence is in any active state",
+          "to": "waiting_applicant"
+        },
+        {
+          "event": "observe_waiting_application",
+          "from": "open",
+          "guard": "the occurrence is in any active state",
+          "to": "waiting_application"
+        },
+        {
+          "event": "complete",
+          "from": "open",
+          "guard": "the occurrence is in any active state",
+          "to": "completed"
+        },
+        {
+          "event": "supersede",
+          "from": "open",
+          "guard": "the occurrence is in any active state",
+          "to": "superseded"
+        },
+        {
+          "event": "cancel",
+          "from": "open",
+          "guard": "the occurrence is in any active state",
+          "to": "cancelled"
+        },
+        {
+          "event": "release",
+          "from": "claimed",
+          "guard": "the occurrence is claimed",
+          "to": "open"
+        },
+        {
+          "event": "attempt_reserved",
+          "from": "claimed",
+          "guard": "the occurrence is claimed",
+          "to": "synchronizing"
+        },
+        {
+          "event": "observe_open",
+          "from": "claimed",
+          "guard": "the occurrence is in any active state; a claimed occurrence keeps its holding through an open readback",
+          "to": "claimed"
+        },
+        {
+          "event": "observe_waiting_applicant",
+          "from": "claimed",
+          "guard": "the occurrence is in any active state",
+          "to": "waiting_applicant"
+        },
+        {
+          "event": "observe_waiting_application",
+          "from": "claimed",
+          "guard": "the occurrence is in any active state",
+          "to": "waiting_application"
+        },
+        {
+          "event": "complete",
+          "from": "claimed",
+          "guard": "the occurrence is in any active state",
+          "to": "completed"
+        },
+        {
+          "event": "supersede",
+          "from": "claimed",
+          "guard": "the occurrence is in any active state",
+          "to": "superseded"
+        },
+        {
+          "event": "cancel",
+          "from": "claimed",
+          "guard": "the occurrence is in any active state",
+          "to": "cancelled"
+        },
+        {
+          "event": "observe_open",
+          "from": "waiting_applicant",
+          "guard": "the occurrence is in any active state; a claimed occurrence keeps its holding through an open readback",
+          "to": "open"
+        },
+        {
+          "event": "observe_waiting_applicant",
+          "from": "waiting_applicant",
+          "guard": "the occurrence is in any active state",
+          "to": "waiting_applicant"
+        },
+        {
+          "event": "observe_waiting_application",
+          "from": "waiting_applicant",
+          "guard": "the occurrence is in any active state",
+          "to": "waiting_application"
+        },
+        {
+          "event": "complete",
+          "from": "waiting_applicant",
+          "guard": "the occurrence is in any active state",
+          "to": "completed"
+        },
+        {
+          "event": "supersede",
+          "from": "waiting_applicant",
+          "guard": "the occurrence is in any active state",
+          "to": "superseded"
+        },
+        {
+          "event": "cancel",
+          "from": "waiting_applicant",
+          "guard": "the occurrence is in any active state",
+          "to": "cancelled"
+        },
+        {
+          "event": "observe_open",
+          "from": "waiting_application",
+          "guard": "the occurrence is in any active state; a claimed occurrence keeps its holding through an open readback",
+          "to": "open"
+        },
+        {
+          "event": "observe_waiting_applicant",
+          "from": "waiting_application",
+          "guard": "the occurrence is in any active state",
+          "to": "waiting_applicant"
+        },
+        {
+          "event": "observe_waiting_application",
+          "from": "waiting_application",
+          "guard": "the occurrence is in any active state",
+          "to": "waiting_application"
+        },
+        {
+          "event": "complete",
+          "from": "waiting_application",
+          "guard": "the occurrence is in any active state",
+          "to": "completed"
+        },
+        {
+          "event": "supersede",
+          "from": "waiting_application",
+          "guard": "the occurrence is in any active state",
+          "to": "superseded"
+        },
+        {
+          "event": "cancel",
+          "from": "waiting_application",
+          "guard": "the occurrence is in any active state",
+          "to": "cancelled"
+        },
+        {
+          "event": "attempt_uncertain",
+          "from": "synchronizing",
+          "guard": "the occurrence is synchronizing",
+          "to": "synchronizing"
+        },
+        {
+          "event": "attempt_completed",
+          "from": "synchronizing",
+          "guard": "the occurrence is synchronizing",
+          "to": "synchronizing"
+        },
+        {
+          "event": "attempt_refused",
+          "from": "synchronizing",
+          "guard": "the occurrence is synchronizing",
+          "to": "claimed"
+        },
+        {
+          "event": "observe_open",
+          "from": "synchronizing",
+          "guard": "the occurrence is in any active state; a claimed occurrence keeps its holding through an open readback",
+          "to": "open"
+        },
+        {
+          "event": "observe_waiting_applicant",
+          "from": "synchronizing",
+          "guard": "the occurrence is in any active state",
+          "to": "waiting_applicant"
+        },
+        {
+          "event": "observe_waiting_application",
+          "from": "synchronizing",
+          "guard": "the occurrence is in any active state",
+          "to": "waiting_application"
+        },
+        {
+          "event": "complete",
+          "from": "synchronizing",
+          "guard": "the occurrence is in any active state",
+          "to": "completed"
+        },
+        {
+          "event": "supersede",
+          "from": "synchronizing",
+          "guard": "the occurrence is in any active state",
+          "to": "superseded"
+        },
+        {
+          "event": "cancel",
+          "from": "synchronizing",
+          "guard": "the occurrence is in any active state",
+          "to": "cancelled"
+        }
+      ]
+    },
+    {
+      "enforcement": [
+        {
+          "description": "The bearer token, the selected Casework profile, and its scopes verify. A reviewer profile additionally refuses a token that impersonates or carries a registry grant and any session that is not a verified human; a Requester producer profile is exempt from both.",
+          "events": [
+            "record_decision",
+            "advance_stage",
+            "settle"
+          ],
+          "id": "caller_authentication"
+        },
+        {
+          "description": "The caller's role and profile are admitted for the path: a decision requires a human staff member or supervisor, while cancellation and creation require a Requester whose profile, issuer, and subject match a declared review producer covering the request's kind and source namespace. A source-profile header is refused outright on the creation and cancellation routes, and on a decision it is refused or required according to the policy's context strategy.",
+          "events": [
+            "record_decision",
+            "advance_stage",
+            "settle"
+          ],
+          "id": "producer_or_reviewer_admission"
+        },
+        {
+          "description": "Where the review kind takes its context from a source, the subject re-read as the deciding caller must still be the subject, binding version, and integrity digest pinned on the request, its disclosure must pass the policy's display rules, and the authoritative occurrence must still be reviewable: active or completed, never synchronizing. A record whose result has been erased or has expired is refused as well. Gates the decision path only: record_decision, advance_stage, and the settle to approved, rejected, changes_requested, or answered, not cancelled or superseded.",
+          "events": [
+            "record_decision",
+            "advance_stage",
+            "settle"
+          ],
+          "id": "review_source_preflight"
+        },
+        {
+          "description": "A producer submitting a new review is admitted here, before any request row is locked. An advisory lock over the producer, the subject, and the review kind serializes that producer's concurrent submissions, and the submission's own idempotency record answers a retry under it: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. The producer's priors that this submission supersedes are selected and locked only after that, so the settlements a supersession raises reach the request lock below having already passed this admission, not the one under the lock. The recovery route is admitted from its idempotency record too, and takes no request lock where that record answers it. It is not lock-free in general: the reservation it falls back to is keyed on the producer, the subject, and the kind alone, with no idempotency key among them, so a retry of an identical submission under a fresh key misses the record, finds the reservation, and locks the request row it names before rebuilding the response.",
+          "events": [
+            "settle"
+          ],
+          "id": "producer_submission_idempotency"
+        },
+        {
+          "description": "On the decision, stage, and cancellation routes the review request row is locked before anything is decided, and an event against a request not still in reviewing is refused; a repeated cancellation returns the terminal result already recorded rather than settling twice. Only the lock is taken at this position: it precedes both layers below, while the reviewing check itself runs after them, so a retry recorded while the request was still reviewing is replayed from its record rather than refused for having settled since. Cancellation also refuses a subject that is not the one the caller named, at that later position. A supersession reaches this lock through the producer's submission above, which selects only that producer's own reviewing requests.",
+          "events": [
+            "record_decision",
+            "advance_stage",
+            "settle"
+          ],
+          "id": "request_lock_and_lifecycle"
+        },
+        {
+          "description": "The reviewer's role is neither Administrator nor Requester, their profile appears in at least one stage's deciding profiles, and they are a staff or supervisor member of a team serving a task this request holds at one of those stages; the task, queue-service, and membership rows are locked together so a concurrent membership change cannot race the decision. That half runs under the request lock and before the idempotency admission below, so a retry whose recorded response is still stored is refused for lost authority rather than replayed. The other half runs later, after the task revision below: the queue the locked task actually carries is re-checked against this reviewer's membership, so a task moved to a queue they do not serve is refused even though the first half passed. Gates the decision path only: record_decision, advance_stage, and the settle to approved, rejected, changes_requested, or answered, not cancelled or superseded.",
+          "events": [
+            "record_decision",
+            "advance_stage",
+            "settle"
+          ],
+          "id": "reviewer_queue_authority"
+        },
+        {
+          "description": "With the request row locked and the reviewer admitted above, a retry on the decision, stage, or cancellation route is answered from its recorded idempotency record before any revision, holder, or decision check runs: a recorded request hash differing from this one is refused as a conflict, and a record whose response has been retained away is refused as expired. A settlement raised by a producer's submission or by the recover route was admitted by the producer submission layer above instead, without this lock.",
+          "events": [
+            "record_decision",
+            "advance_stage",
+            "settle"
+          ],
+          "id": "request_idempotency_admission"
+        },
+        {
+          "description": "Three checks at three positions, not one. The If-Match header is mandatory, and its syntax is settled by the HTTP layer before the decision call is entered at all: a missing or empty value is refused as precondition-required, and an unquoted, non-numeric, or non-positive one as an invalid request, each ahead of the source preflight, the request lock, the reviewer authority, and the idempotency admission above. A caller malformed here and unauthorized below is therefore told only that the header was malformed. The value that parse produced is compared against the locked task row's revision much later, immediately after that admission, and a decision on a task another operation has advanced is refused there as a revision conflict. The holder check runs later still, after the queue re-check above has confirmed the queue the locked task actually carries: an unheld task, a task held by someone else, and a task already decided are each refused. Gates the decision path only: record_decision, advance_stage, and the settle to approved, rejected, changes_requested, or answered, not cancelled or superseded.",
+          "events": [
+            "record_decision",
+            "advance_stage",
+            "settle"
+          ],
+          "id": "task_revision_and_holder"
+        },
+        {
+          "description": "Everything the engine checks before it counts the decision as a vote: the policy verifies, the request is not already settled, the stage, request, and task identities agree, the deciding profile is listed by both the stage and the task, neither this task nor this reviewer has already decided in the stage, the initiator and previous-stage-reviewer exclusions hold, and the decision kind is one the stage's purpose allows, with its outcome validated against the policy. Gates the decision path only: record_decision, advance_stage, and the settle to approved, rejected, changes_requested, or answered, not cancelled or superseded.",
+          "events": [
+            "record_decision",
+            "advance_stage",
+            "settle"
+          ],
+          "id": "decision_eligibility"
+        },
+        {
+          "description": "The edge's own guard, run by the engine once it has accepted the decision: a non-approving decision settles the request at once, and an approval is counted against the stage's required approvals to decide whether the request stays in the stage, advances, or settles as approved. Gates the decision path only: record_decision, advance_stage, and the settle to approved, rejected, changes_requested, or answered, not cancelled or superseded.",
+          "events": [
+            "record_decision",
+            "advance_stage",
+            "settle"
+          ],
+          "id": "stage_quorum_progression"
+        },
+        {
+          "description": "The terminal write updates the request row only where its lifecycle is still reviewing, closes every open or claimed task on the request, and applies the settled status's clock effects. Every caller reaches it holding the row lock and having compared the lifecycle above, so the filter is a backstop rather than the check that refuses.",
+          "events": [
+            "settle"
+          ],
+          "id": "settlement_persist_filter"
+        }
+      ],
+      "id": "review_request",
+      "label": "Casework review request lifecycle",
+      "states": [
+        {
+          "id": "reviewing",
+          "incomingTransitions": 2,
+          "initial": true,
+          "outgoingTransitions": 8,
+          "terminal": false,
+          "unreachable": false
+        },
+        {
+          "id": "approved",
+          "incomingTransitions": 1,
+          "initial": false,
+          "outgoingTransitions": 0,
+          "terminal": true,
+          "unreachable": false
+        },
+        {
+          "id": "rejected",
+          "incomingTransitions": 1,
+          "initial": false,
+          "outgoingTransitions": 0,
+          "terminal": true,
+          "unreachable": false
+        },
+        {
+          "id": "changes_requested",
+          "incomingTransitions": 1,
+          "initial": false,
+          "outgoingTransitions": 0,
+          "terminal": true,
+          "unreachable": false
+        },
+        {
+          "id": "answered",
+          "incomingTransitions": 1,
+          "initial": false,
+          "outgoingTransitions": 0,
+          "terminal": true,
+          "unreachable": false
+        },
+        {
+          "id": "cancelled",
+          "incomingTransitions": 1,
+          "initial": false,
+          "outgoingTransitions": 0,
+          "terminal": true,
+          "unreachable": false
+        },
+        {
+          "id": "superseded",
+          "incomingTransitions": 1,
+          "initial": false,
+          "outgoingTransitions": 0,
+          "terminal": true,
+          "unreachable": false
+        }
+      ],
+      "transitions": [
+        {
+          "event": "record_decision",
+          "from": "reviewing",
+          "guard": "an approval that leaves the active stage's approvals short of the stage's required approvals; it is recorded against the task and moves no stage",
+          "to": "reviewing"
+        },
+        {
+          "event": "advance_stage",
+          "from": "reviewing",
+          "guard": "the approval that meets the active stage's required approvals while a later stage remains; the next stage becomes the active one",
+          "to": "reviewing"
+        },
+        {
+          "event": "settle",
+          "from": "reviewing",
+          "guard": "the approval that meets the required approvals of the last stage",
+          "to": "approved"
+        },
+        {
+          "event": "settle",
+          "from": "reviewing",
+          "guard": "a rejection, which as a non-approving decision settles the request at once regardless of quorum",
+          "to": "rejected"
+        },
+        {
+          "event": "settle",
+          "from": "reviewing",
+          "guard": "a changes-requested decision, which as a non-approving decision settles the request at once regardless of quorum",
+          "to": "changes_requested"
+        },
+        {
+          "event": "settle",
+          "from": "reviewing",
+          "guard": "an answer, which as a non-approving decision settles the request at once regardless of quorum",
+          "to": "answered"
+        },
+        {
+          "event": "settle",
+          "from": "reviewing",
+          "guard": "the producer withdrew its own request; no reviewer, stage, or quorum is consulted",
+          "to": "cancelled"
+        },
+        {
+          "event": "settle",
+          "from": "reviewing",
+          "guard": "the same admitted producer, matched on its id, issuer and subject, created a replacement request for the same subject, type, and policy, so a request one producer creates never supersedes another producer's; no reviewer, stage, or quorum is consulted",
+          "to": "superseded"
+        }
+      ]
+    }
+  ]
+}
