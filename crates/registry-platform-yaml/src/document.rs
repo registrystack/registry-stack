@@ -127,7 +127,12 @@ impl<'h> Reader<'h> {
                 Vec::new(),
             ));
         }
-        let outcome = envelope::check(root.as_ref(), expect);
+        let outcome = envelope::check(root.as_ref(), expect, |pointer| {
+            problems
+                .iter()
+                .chain(&unrepresentable)
+                .any(|problem| problem.pointer == pointer)
+        });
         let artifact: Option<String> = outcome
             .matched
             .as_ref()

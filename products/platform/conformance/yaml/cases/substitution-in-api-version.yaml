@@ -1,6 +1,6 @@
 id: substitution-in-api-version
 rules: [CFG-SEC-2, CFG-ENV-1, CFG-SEC-3]
-summary: A substitution expression in apiVersion is refused, and the apiVersion written is not one the command reads.
+summary: A substitution expression in apiVersion is refused once, and the apiVersion is not then matched against the formats the command reads.
 appliesTo:
   audiences: [operator]
   envelope: true
@@ -11,10 +11,6 @@ expect:
   exit: 1
   diagnostics:
     - code: config.substitution-not-allowed
-      path: /apiVersion
-      from: apiVersion
-      at: {line: 1, column: 1}
-    - code: config.unsupported-api-version
       path: /apiVersion
       from: apiVersion
       at: {line: 1, column: 1}

@@ -175,7 +175,12 @@ pub(crate) struct EnvelopeOutcome {
     pub warnings: Vec<Problem>,
 }
 
-pub(crate) fn check(root: Option<&Node>, expect: &Expect<'_>) -> EnvelopeOutcome {
+/// `reported` says whether a problem was already reported at a pointer.
+pub(crate) fn check(
+    root: Option<&Node>,
+    expect: &Expect<'_>,
+    reported: impl Fn(&str) -> bool,
+) -> EnvelopeOutcome {
     let mut outcome = EnvelopeOutcome {
         matched: None,
         problems: Vec::new(),
@@ -238,6 +243,10 @@ pub(crate) fn check(root: Option<&Node>, expect: &Expect<'_>) -> EnvelopeOutcome
             messages::missing_envelope_members(&missing, &start),
         ));
     }
+    // A member already refused, such as one whose substitution a hook
+    // refused, names no format: matching it would repeat the refusal in other
+    // words.
+    let api_version = api_version.filter(|_| !reported("/apiVersion"));
     let api_version = api_version.and_then(|entry| {
         text_member(
             &entry.value,
@@ -246,9 +255,9 @@ pub(crate) fn check(root: Option<&Node>, expect: &Expect<'_>) -> EnvelopeOutcome
             &mut outcome.problems,
         )
     });
-    let kind_entry = kind;
-    let kind =
-        kind.and_then(|entry| text_member(&entry.value, "/kind", "kind", &mut outcome.problems));
+    let kind_entry = kind.filter(|_| !reported("/kind"));
+    let kind = kind_entry
+        .and_then(|entry| text_member(&entry.value, "/kind", "kind", &mut outcome.problems));
     let Some(kind) = kind else {
         return outcome;
     };
@@ -344,7 +353,7 @@ fn text_member<'n>(
             ));
             None
         }
-        NodeValue::String(text) if node.unrepresentable().is_none() => Some(&text.text),
+        NodeValue::String(text) => Some(&text.text),
         _ => {
             problems.push(Problem::error(
                 "config.expected-string",

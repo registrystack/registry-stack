@@ -1,6 +1,6 @@
 id: substitution-in-kind
 rules: [CFG-SEC-2, CFG-ENV-1, CFG-SEC-3]
-summary: A substitution expression in kind is refused, and the kind written is not one the command reads.
+summary: A substitution expression in kind is refused once, and the kind is not then matched against the formats the command reads.
 appliesTo:
   audiences: [operator]
   envelope: true
@@ -11,10 +11,6 @@ expect:
   exit: 1
   diagnostics:
     - code: config.substitution-not-allowed
-      path: /kind
-      from: kind
-      at: {line: 1, column: 1}
-    - code: config.wrong-kind
       path: /kind
       from: kind
       at: {line: 1, column: 1}

@@ -172,6 +172,68 @@ fn cfg_env_1_envelope_members_never_come_from_substitution() {
     );
 }
 
+/// Refuses every `${...}` value, as a product hook refuses substitution in
+/// an envelope member.
+struct RefuseExpressions;
+
+impl ScalarHook for RefuseExpressions {
+    fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
+        if !site.text.starts_with("${") {
+            return Ok(None);
+        }
+        Err(Refusal {
+            code: "config.substitution-not-allowed".to_string(),
+            message: format!("{} is never filled by substitution", site.pointer),
+            suggested_action: "Write it in the file as plain text.".to_string(),
+        })
+    }
+}
+
+#[test]
+fn cfg_env_1_an_envelope_member_a_hook_refused_is_not_matched_against_the_format() {
+    let refused = |text: &str| -> Vec<(String, String)> {
+        let mut hook = RefuseExpressions;
+        let report = Reader::new(FILE)
+            .with_hook(&mut hook)
+            .read(text.as_bytes(), &EXPECT)
+            .unwrap_err();
+        report
+            .diagnostics()
+            .iter()
+            .map(|d| (d.code.clone(), d.path.clone()))
+            .collect()
+    };
+    let not_allowed = |path: &str| {
+        (
+            "config.substitution-not-allowed".to_string(),
+            path.to_string(),
+        )
+    };
+    assert_eq!(
+        refused("apiVersion: ${A}\nkind: ${B}\n"),
+        [not_allowed("/apiVersion"), not_allowed("/kind")]
+    );
+    assert_eq!(
+        refused(&format!("apiVersion: {API_VERSION}\nkind: ${{B}}\n")),
+        [not_allowed("/kind")]
+    );
+    assert_eq!(
+        refused("apiVersion: ${A}\nkind: ExampleRuntimeConfig\n"),
+        [not_allowed("/apiVersion")]
+    );
+
+    // A number too large to read is refused once, as out of range.
+    let text = format!("apiVersion: {API_VERSION}\nkind: 99999999999999999999999\n");
+    let report = Reader::new(FILE)
+        .decode::<Runtime>(text.as_bytes(), &EXPECT)
+        .unwrap_err();
+    let diagnostic = only(&report);
+    assert_eq!(
+        (diagnostic.code.as_str(), diagnostic.path.as_str()),
+        ("config.out-of-range", "/kind")
+    );
+}
+
 #[test]
 fn cfg_env_1_a_reader_of_several_formats_dispatches_on_kind() {
     const OTHER: FormatSpec = FormatSpec {
