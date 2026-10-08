@@ -79,7 +79,7 @@ pub fn documents() -> Result<BTreeMap<String, String>, serde_json::Error> {
             let file = format!("{}.{version}.schema.json", tool.format);
             let identifier = format!("{SCHEMA_ID_BASE}breg/{}/{file}", tool.format);
             let mut derived = serde_json::to_value((tool.members)())?;
-            refuse_null(&mut derived);
+            registry_breg::schema::refuse_null(&mut derived, "");
             let published = published(
                 with_header(derived, api_version, tool.spec.kind),
                 tool.title,
@@ -152,44 +152,4 @@ fn published(derived: Value, title: &str, identifier: &str) -> Value {
     object.insert("$id".to_owned(), Value::String(identifier.to_owned()));
     object.insert("title".to_owned(), Value::String(title.to_owned()));
     Value::Object(object)
-}
-
-/// The reader refuses `null` in every member of these formats (CFG-EMPTY-1),
-/// so an optional member is written by leaving it out. This drops the `null`
-/// schemars adds to an `Option` and the `default: null` it declares for one.
-/// Instance values under `default`, `const`, `enum`, and `examples` are left
-/// as written.
-fn refuse_null(schema: &mut Value) {
-    match schema {
-        Value::Object(object) => {
-            if object.get("default") == Some(&Value::Null) {
-                object.remove("default");
-            }
-            if let Some(Value::Array(kinds)) = object.get_mut("type") {
-                kinds.retain(|kind| kind != "null");
-                if let [only] = kinds.as_slice() {
-                    let only = only.clone();
-                    object.insert("type".to_owned(), only);
-                }
-            }
-            for keyword in ["anyOf", "oneOf"] {
-                let Some(Value::Array(branches)) = object.get_mut(keyword) else {
-                    continue;
-                };
-                branches.retain(|branch| branch.get("type") != Some(&Value::from("null")));
-                if let [Value::Object(only)] = branches.as_slice() {
-                    let only = only.clone();
-                    object.remove(keyword);
-                    object.extend(only);
-                }
-            }
-            for (key, member) in object.iter_mut() {
-                if !matches!(key.as_str(), "default" | "const" | "enum" | "examples") {
-                    refuse_null(member);
-                }
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(refuse_null),
-        _ => {}
-    }
 }

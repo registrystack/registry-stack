@@ -105,8 +105,9 @@ fn published(mut derived: Value, title: &str, identifier: &str) -> Value {
 /// drops the `null` schemars adds to an `Option` and the `default: null` it
 /// declares for one, everywhere except `$defs/DataLiteral`, the record value
 /// in which `null` means the stored value is null. Instance values under
-/// `default`, `const`, `enum`, and `examples` are left as written.
-fn refuse_null(schema: &mut Value, pointer: &str) {
+/// `default`, `const`, `enum`, and `examples` are left as written. `pointer`
+/// is the schema node's JSON pointer; a caller passes `""` for a document root.
+pub fn refuse_null(schema: &mut Value, pointer: &str) {
     if pointer == "/$defs/DataLiteral" {
         return;
     }
