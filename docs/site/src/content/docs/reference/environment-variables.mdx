@@ -23,10 +23,24 @@ variable only when its runtime file opts in to the environment provider, as its 
 
 ## Configuration expansion
 
-Evidence Gateway substitutes `${VAR}` and `${VAR:-default}` in string values of its runtime file
-after parsing, in `RuntimeConfig::parse_yaml` (`crates/registry-evidence/src/config.rs`). It refuses
-a `${...}` expression in a secret reference or under `secretProviders`, and refuses any `${...}`
-expression in the governed bundle, so the reviewed bundle is the one that runs. Base Registry
+Evidence Gateway substitutes `${NAME}`, `${NAME:-fallback}`, and `${NAME:?message}` in string
+values of its runtime file while the shared configuration reader builds the document, so a
+substituted value is always text: it fills a string member and never a number or boolean. A bare
+`${NAME}` refuses the file when the variable is unset or empty, `${NAME:-fallback}` substitutes the
+fallback in that case, and `${NAME:?message}` refuses the file without repeating the message. It
+refuses an expression in `apiVersion` and `kind`, in a member whose key ends in `Ref` or `Refs`, and
+under `secretProviders`, so the environment cannot choose which secret is read or where it comes
+from. It refuses any `${...}` expression in the governed bundle, so the reviewed bundle is the one
+that runs, and in a verification policy, which states every expectation literally. `evidence check`
+checks an expression by its syntax and position only, unless `--environment` substitutes from its
+own environment as startup does.
+
+{/* Evidence: crates/registry-platform-config/src/loader.rs, RuntimeConfigLoader;
+crates/registry-evidence/src/config.rs, RuntimeConfig::loader, BundleExpressions;
+crates/registry-evidence/src/verification_policy.rs, PolicyExpressions;
+crates/registry-evidence/src/cli.rs, environment. */}
+
+Base Registry
 Engine substitutes `${VAR}`, `${VAR:-default}`, and `${VAR:?message}` in string values of its
 runtime file after parsing, through the shared configuration loader, and refuses any `${...}`
 expression in the authored project or module files, as [its section](#base-registry-engine) records.

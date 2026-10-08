@@ -314,6 +314,7 @@ class ConfigureTests(unittest.TestCase):
             "evidence": ["check", str(project)],
             "platform": ["dev", "check", "task-connection.yaml"],
             "evidence-oid4vci": ["check", "--config", str(document)],
+            "evidence-deployment": ["check", "--runtime-config", "runtime.yaml"],
         }
         for product, args in expected.items():
             with self.subTest(product=product):
@@ -355,6 +356,35 @@ class ConfigureTests(unittest.TestCase):
             ],
             check=False,
         )
+
+    def test_evidence_deployment_maps_runtime_bundle_and_codelists(self):
+        source = ROOT / "products/evidence/reference/request-adapter/deployment-projects/protected-read-evidence"
+        project = self.workspace / "Evidence deployment"
+        shutil.copytree(source, project)
+        configure.configure("evidence-deployment", project, self.workspace, None)
+        schemas = project / ".registry-stack-editor/schemas"
+        settings = json.loads((self.workspace / ".vscode/settings.json").read_text())
+        self.assertEqual(
+            settings["yaml.schemas"],
+            {
+                (schemas / "runtime.schema.yaml").as_uri(): [str(project / "runtime.yaml")],
+                (schemas / "bundle.schema.yaml").as_uri(): [str(project / "bundle/evidence.yaml")],
+                (schemas / "codelist.schema.json").as_uri(): [str(project / "bundle/codelists/*.yaml")],
+            },
+        )
+        self.assertEqual(
+            (schemas / "bundle.schema.yaml").read_bytes(),
+            (ROOT / "products/evidence/contracts/bundle.schema.yaml").read_bytes(),
+        )
+        task = json.loads((self.workspace / ".zed/tasks.json").read_text())[0]
+        self.assertEqual(task["command"], "evidence")
+        self.assertEqual(task["args"], ["check", "--runtime-config", "runtime.yaml"])
+        self.assertEqual(task["cwd"], str(project))
+
+    def test_evidence_deployment_needs_a_runtime_file(self):
+        project = self.project("evidence-deployment", "evidence.yaml")
+        with self.assertRaisesRegex(configure.SetupError, "evidence-deployment project needs runtime.yaml"):
+            configure.configure("evidence-deployment", project, self.workspace, None)
 
     def test_command_line_configures_real_scheduling_example_in_shared_workspace(self):
         source = ROOT / "products/scheduling/examples/standalone-exact-time"

@@ -30,6 +30,7 @@ PRODUCT_FILES = {
     "render": "manifest.yaml",
     "evidence": "evidence-project.yaml",
     "platform": "task-connection.yaml",
+    "evidence-deployment": "runtime.yaml",
 }
 PRODUCTS = (*PRODUCT_FILES, "evidence-oid4vci")
 SCHEMAS = {
@@ -98,6 +99,11 @@ SCHEMAS = {
     "platform": (
         ("products/platform/schemas/task-connection.schema.json", "task-connection.yaml"),
     ),
+    "evidence-deployment": (
+        ("products/evidence/contracts/runtime.schema.yaml", "runtime.yaml"),
+        ("products/evidence/contracts/bundle.schema.yaml", "bundle/evidence.yaml"),
+        ("products/evidence/generated/codelist/codelist.schema.json", "bundle/codelists/*.yaml"),
+    ),
 }
 CHECKS = {
     "breg": ("bregctl", "check", "{project}"),
@@ -112,6 +118,7 @@ CHECKS = {
     "evidence": ("evidencectl", "check", "{project}"),
     "platform": ("evidencectl", "dev", "check", "task-connection.yaml"),
     "evidence-oid4vci": ("evidence-oid4vci", "check", "--config", "{document}"),
+    "evidence-deployment": ("evidence", "check", "--runtime-config", "runtime.yaml"),
 }
 
 

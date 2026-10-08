@@ -63,10 +63,11 @@ python3 editors/configure.py evidence-oid4vci /path/to/issuer --document config/
 ```
 
 The product argument also accepts `casework`, `messaging`, `discovery`,
-`render`, `evidence`, `platform` (a directory holding a task connection file,
-`task-connection.yaml`), and `breg-mcp` and `breg-review` (a directory holding
-the citizen MCP gateway's or review page's `runtime.yaml`). Manifest and
-wallet-delivery setup records the selected document in
+`render`, `evidence`, `evidence-deployment` (an Evidence deployment project
+directory holding `runtime.yaml`), `platform` (a directory holding a task
+connection file, `task-connection.yaml`), and `breg-mcp` and `breg-review` (a
+directory holding the citizen MCP gateway's or review page's `runtime.yaml`).
+Manifest and wallet-delivery setup records the selected document in
 `.registry-stack-editor/project.json`, so an arbitrary configuration filename
 can be recognized without claiming unrelated YAML.
 
@@ -95,6 +96,14 @@ regenerate it when moving a workspace.
 Evidence retains its canonical `tooling editor` schema generator.
 The shared helper invokes the matching Evidence CLI. Schema setup and
 CLI tasks can be used without installing the semantic extension.
+
+`evidence-deployment` configures an Evidence deployment project: the
+`runtime.yaml` the `evidence` runtime reads, beside its bundle in `bundle/`.
+Setup maps the runtime and bundle contracts to `runtime.yaml` and
+`bundle/evidence.yaml`, maps the code list schema to `bundle/codelists/*.yaml`,
+and adds an `evidence check --runtime-config runtime.yaml` task. The runtime
+and bundle contracts are JSON Schema documents written in YAML. Fixture files
+and verification policies are not mapped.
 
 ## Install
 

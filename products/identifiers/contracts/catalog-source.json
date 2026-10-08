@@ -351,6 +351,14 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Evidence authoring project marker and question JSON Schema."
+    },
+    {
+      "glob": "products/evidence/generated/codelist/*.schema.json",
+      "sourcePath": "crates/registry-evidence/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Evidence code list JSON Schema."
     }
   ],
   "records": [

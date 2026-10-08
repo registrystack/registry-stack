@@ -69,17 +69,37 @@ pub(crate) fn declared_identity(bytes: &[u8]) -> Option<(String, String)> {
 /// A codelist file as written. Exactly one form is declared: `codes`, or
 /// `entries` with `allowed_outputs`.
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-struct CodelistDocument {
+pub(crate) struct CodelistDocument {
+    /// The absolute URI identifying the codelist; a bucket concept's
+    /// `bucketScheme` names it.
     id: CodelistId,
+    /// The codelist version; a referencing concept's `codelistVersion` or
+    /// `schemeVersion` repeats it exactly.
     version: CodelistVersion,
+    /// The exact code set, for a code list. Omit it in a mapping.
+    // The shared reader refuses `null` (CFG-EMPTY-1), so the schema names the
+    // member type alone and an absent member is the only way to omit it.
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(with = "UniqueList<Code>"))]
     codes: Option<UniqueList<Code>>,
+    /// The exact source-to-output mapping, for a mapping. Omit it in a code
+    /// list.
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<Code, Code>"))]
     entries: Option<BTreeMap<Code, Code>>,
+    /// The output codes a mapping may produce; every `entries` output is one
+    /// of them. Declared with `entries` and only with it.
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(with = "UniqueList<Code>"))]
     allowed_outputs: Option<UniqueList<Code>>,
 }
+
+/// The most codes, mapping entries, or allowed outputs one codelist holds, as
+/// the generated schema states it.
+#[cfg(feature = "schema")]
+pub(crate) const CODELIST_MAXIMUM_ITEMS: usize = MAXIMUM_CODELIST_ITEMS;
 
 type Refusal = Box<registry_platform_yaml::Diagnostic>;
 
@@ -219,6 +239,61 @@ impl<'de> Deserialize<'de> for CodelistVersion {
 /// letters, digits, `.`, `_`, `:`, or `-`.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Code(String);
+
+#[cfg(feature = "schema")]
+mod schema_impls {
+    use std::borrow::Cow;
+
+    use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
+
+    use super::{Code, CodelistId, CodelistVersion};
+
+    impl JsonSchema for CodelistId {
+        fn schema_name() -> Cow<'static, str> {
+            Cow::Borrowed("CodelistId")
+        }
+
+        fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+            json_schema!({
+                "type": "string",
+                "format": "uri",
+                "minLength": 1,
+                "maxLength": 512,
+                "description": "An absolute URI of at most 512 bytes, such as urn:example:codelist:regions.",
+            })
+        }
+    }
+
+    impl JsonSchema for CodelistVersion {
+        fn schema_name() -> Cow<'static, str> {
+            Cow::Borrowed("CodelistVersion")
+        }
+
+        fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+            json_schema!({
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[^\\u0000]+$",
+                "description": "A version of 1 to 128 bytes without a NUL character, such as '2026-01'.",
+            })
+        }
+    }
+
+    impl JsonSchema for Code {
+        fn schema_name() -> Cow<'static, str> {
+            Cow::Borrowed("Code")
+        }
+
+        fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+            json_schema!({
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                "description": "A code of 1 to 128 ASCII letters, digits, `.`, `_`, `:`, or `-`, starting with a letter or digit.",
+            })
+        }
+    }
+}
 
 impl<'de> Deserialize<'de> for Code {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {

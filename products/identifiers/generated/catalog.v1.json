@@ -3818,6 +3818,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/evidence/codelist/codelist.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Evidence code list",
+      "description": "Evidence code list JSON Schema.",
+      "source": {
+        "path": "crates/registry-evidence/src/schema.rs",
+        "sha256": "8ea09094359751bf477854309f44c44a38aacc50199f1614cd9a74c5d03381f4"
+      },
+      "artifact": {
+        "path": "products/evidence/generated/codelist/codelist.schema.json",
+        "sha256": "da1197c0bf37ae71f81ed25c2726f6dda3c72b4793f83f9f6b7388e3c7fe32c1",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/evidence/oid4vci-runtime/oid4vci-runtime.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",

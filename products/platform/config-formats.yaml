@@ -2886,7 +2886,7 @@ formats:
       function: parse_yaml
       type: EvidenceConfig
     check: evidence check --runtime-config {runtime}
-    example: products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle/evidence.yaml
+    example: products/evidence/fixtures/acceptance/adult-status/evidence.yaml
     conformance:
       requiredText: /issuer/id
       optionalText: /requirements/0/observationTimezone
@@ -2928,7 +2928,7 @@ formats:
       function: parse_yaml
       type: RuntimeConfig
     check: evidence check --runtime-config {file}
-    example: products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/runtime.yaml
+    example: products/evidence/reference/deployment-targets/environments/local/evidence/runtime.yaml
     conformance:
       requiredText: /package/root
       optionalText: /audit/path
@@ -2956,7 +2956,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
       kind: EvidenceCodelist
-    schema: none
+    schema:
+      path: products/evidence/generated/codelist/codelist.schema.json
+      id: https://id.registrystack.org/schemas/evidence/codelist/codelist.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-evidence --features schema --example codelist-schema -- --output products/evidence/generated/codelist
+      driftCheck: products/evidence/scripts/check-contracts.sh
     reader:
       crate: registry-evidence
       file: crates/registry-evidence/src/codelist.rs

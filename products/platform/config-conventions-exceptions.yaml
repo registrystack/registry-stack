@@ -3898,13 +3898,6 @@ exceptions:
   wp: WP6
   reason: $id is https://registrystack.org/schemas/evidence/bundle-v1.json
   resolution: Set $id to https://id.registrystack.org/schemas/evidence/bundle/bundle.v1.schema.json
-- rule: CFG-SCHEMA-6
-  format: evidence/bundle
-  location: editors/configure.py#/SCHEMAS/evidence
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map products/evidence/contracts/bundle.schema.yaml in editors/configure.py
 - rule: CFG-SEC-1
   format: evidence/bundle
   location: products/evidence/contracts/bundle.schema.yaml#/$defs/audit/properties/hashKeyRef
@@ -4022,20 +4015,24 @@ exceptions:
   class: stable-move
   reason: the format carries no kind
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Write and check kind: EvidenceCodelist'
-- rule: CFG-SCHEMA-2
+- rule: CFG-ID-1
   format: evidence/codelist
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
+  location: products/evidence/generated/codelist/codelist.schema.json#/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): The codelist URI is an identifier other files cite, not a local id; rename the member and type it with $defs/ExternalId'
+- rule: CFG-ID-7
   format: evidence/codelist
-  location: editors/configure.py#/SCHEMAS/evidence
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
+  location: products/evidence/generated/codelist/codelist.schema.json#
+  class: stable-move
+  reason: mapping variants that no constant member tells apart
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the code list and mapping forms with a type member'
+- rule: CFG-NAME-1
+  format: evidence/codelist
+  location: products/evidence/generated/codelist/codelist.schema.json#/properties/allowed_outputs
+  class: stable-move
+  reason: key allowed_outputs is not camelCase ASCII
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename allowed_outputs to allowedOutputs'
 - rule: CFG-ENV-1
   format: evidence/ctl-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4234,13 +4231,6 @@ exceptions:
   wp: WP6
   reason: $id is https://registrystack.org/schemas/evidence/runtime-v1.json
   resolution: Set $id to https://id.registrystack.org/schemas/evidence/runtime/runtime.v1alpha1.schema.json
-- rule: CFG-SCHEMA-6
-  format: evidence/runtime
-  location: editors/configure.py#/SCHEMAS/evidence
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map products/evidence/contracts/runtime.schema.yaml in editors/configure.py
 - rule: CFG-SEC-1
   format: evidence/runtime
   location: products/evidence/contracts/runtime.schema.yaml#/properties/signer/oneOf/0/properties/privateKeyRef

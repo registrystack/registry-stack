@@ -1,0 +1,171 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! Generated JSON Schema for the Evidence code list format.
+//!
+//! The schema is derived from the reader types in [`crate::codelist`], never
+//! written by hand. Regenerate the committed document with:
+//!
+//! ```bash
+//! cargo run -p registry-evidence --features schema --example codelist-schema -- \
+//!   --output products/evidence/generated/codelist
+//! ```
+//!
+//! The derived schema states the rules `read_codelist` enforces beyond the
+//! types: one form, `codes` or `entries` with `allowed_outputs`, and from 1
+//! to 4096 items in each list or mapping. That a mapping output appears in
+//! `allowed_outputs` is a cross-member rule the reader alone checks.
+
+use std::collections::BTreeMap;
+
+use registry_platform_yaml::ExternalId;
+use schemars::generate::SchemaSettings;
+use serde_json::{json, Value};
+
+use crate::codelist::{CodelistDocument, CODELIST_MAXIMUM_ITEMS};
+
+/// The committed code list schema file name.
+pub const CODELIST_SCHEMA_FILE: &str = "codelist.schema.json";
+
+/// The code list schema `$id` (CFG-SCHEMA-3).
+pub const CODELIST_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/evidence/codelist/codelist.v1alpha1.schema.json";
+
+/// Every code list schema document, by file name.
+pub fn codelist_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
+    let mut generator = SchemaSettings::draft2020_12().into_generator();
+    // A mapping key is a source code another system issues (CFG-ID-2), so the
+    // schema names the shared definition beside the code spelling it reads.
+    generator.subschema_for::<ExternalId>();
+    let mut derived = serde_json::to_value(generator.into_root_schema_for::<CodelistDocument>())?;
+    install_codelist_rules(&mut derived);
+    let mut object = match derived {
+        Value::Object(object) => object,
+        _ => unreachable!("schemars derives a schema object for CodelistDocument"),
+    };
+    object.insert(
+        "$schema".to_owned(),
+        Value::String("https://json-schema.org/draft/2020-12/schema".to_owned()),
+    );
+    object.insert(
+        "$id".to_owned(),
+        Value::String(CODELIST_SCHEMA_ID.to_owned()),
+    );
+    object.insert(
+        "title".to_owned(),
+        Value::String("Evidence code list".to_owned()),
+    );
+    let mut rendered = serde_json::to_string_pretty(&Value::Object(object))?;
+    rendered.push('\n');
+    Ok([(CODELIST_SCHEMA_FILE, rendered)].into())
+}
+
+/// State the form and size rules `read_codelist` enforces.
+fn install_codelist_rules(schema: &mut Value) {
+    let maximum = CODELIST_MAXIMUM_ITEMS;
+    let properties = schema["properties"]
+        .as_object_mut()
+        .expect("the code list schema has properties");
+    for list in ["codes", "allowed_outputs"] {
+        let member = properties
+            .get_mut(list)
+            .and_then(Value::as_object_mut)
+            .expect("the code list schema declares the list");
+        member.insert("minItems".to_owned(), json!(1));
+        member.insert("maxItems".to_owned(), json!(maximum));
+    }
+    let entries = properties
+        .get_mut("entries")
+        .and_then(Value::as_object_mut)
+        .expect("the code list schema declares entries");
+    entries.insert("minProperties".to_owned(), json!(1));
+    entries.insert("maxProperties".to_owned(), json!(maximum));
+    entries.insert(
+        "propertyNames".to_owned(),
+        json!({"allOf": [{"$ref": "#/$defs/ExternalId"}, {"$ref": "#/$defs/Code"}]}),
+    );
+    let root = schema
+        .as_object_mut()
+        .expect("the code list schema is an object");
+    root.insert(
+        "oneOf".to_owned(),
+        json!([
+            {"required": ["codes"]},
+            {"required": ["entries", "allowed_outputs"]}
+        ]),
+    );
+    root.insert(
+        "dependentRequired".to_owned(),
+        json!({"entries": ["allowed_outputs"], "allowed_outputs": ["entries"]}),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn schema() -> Value {
+        serde_json::from_str(&codelist_documents().unwrap()[CODELIST_SCHEMA_FILE]).unwrap()
+    }
+
+    #[test]
+    fn codelist_schema_is_deterministic_and_identified() {
+        assert_eq!(codelist_documents().unwrap(), codelist_documents().unwrap());
+        let document = schema();
+        assert_eq!(document["$id"], CODELIST_SCHEMA_ID);
+        assert_eq!(
+            document["$schema"],
+            "https://json-schema.org/draft/2020-12/schema"
+        );
+        assert_eq!(document["additionalProperties"], false);
+    }
+
+    #[test]
+    fn the_schema_accepts_what_the_reader_accepts_and_refuses_what_it_refuses() {
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .should_validate_formats(true)
+            .compile(&schema())
+            .expect("the code list schema compiles");
+        let cases: [(&str, &str); 9] = [
+            ("id: urn:example:codelist:status\nversion: '1'\ncodes: [ACTIVE, SUSPENDED]\n", "accepted"),
+            (
+                "id: urn:example:codelist:map\nversion: '2026-01'\nentries:\n  R-101: NORTH\nallowed_outputs: [NORTH]\n",
+                "accepted",
+            ),
+            ("id: urn:example:codelist:status\nversion: '1'\n", "refused"),
+            (
+                "id: urn:example:codelist:status\nversion: '1'\ncodes: [A]\nentries: {B: C}\nallowed_outputs: [C]\n",
+                "refused",
+            ),
+            ("id: urn:example:codelist:status\nversion: '1'\ncodes: [A]\nallowed_outputs: [A]\n", "refused"),
+            ("id: urn:example:codelist:map\nversion: '1'\nentries: {B: C}\n", "refused"),
+            (
+                "id: urn:example:codelist:map\nversion: '1'\nentries: {'-B': C}\nallowed_outputs: [C]\n",
+                "refused",
+            ),
+            ("id: urn:example:codelist:status\nversion: '1'\ncodes: [A, A]\n", "refused"),
+            ("id: urn:example:codelist:status\nversion: '1'\ncodes: [-A]\nsurprise: true\n", "refused"),
+        ];
+        for (text, expected) in cases {
+            let reader = crate::codelist::read_codelist("codelists/case.yaml", text.as_bytes());
+            let instance: Value =
+                serde_json::to_value(serde_norway::from_str::<serde_norway::Value>(text).unwrap())
+                    .unwrap();
+            let schema_accepts = validator.is_valid(&instance);
+            assert_eq!(reader.is_ok(), expected == "accepted", "reader: {text}");
+            assert_eq!(schema_accepts, expected == "accepted", "schema: {text}");
+        }
+    }
+
+    #[test]
+    fn committed_codelist_schema_matches_generated_bytes() {
+        let generated = codelist_documents().unwrap();
+        let committed = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/generated/codelist")
+            .join(CODELIST_SCHEMA_FILE);
+        assert_eq!(
+            std::fs::read_to_string(committed).unwrap(),
+            generated[CODELIST_SCHEMA_FILE]
+        );
+    }
+}

@@ -15,6 +15,11 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[features]
+# Generates the code list JSON Schema from the reader types; see
+# `examples/codelist-schema.rs`.
+schema = ["registry-platform-yaml/schema"]
+
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true

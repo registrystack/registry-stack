@@ -25,6 +25,8 @@ pub mod problem;
 pub mod rate_limit;
 pub mod rhai_runtime;
 pub mod runtime;
+#[cfg(feature = "schema")]
+pub mod schema;
 pub mod secrets;
 pub mod selector;
 pub mod server;

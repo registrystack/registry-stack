@@ -28,6 +28,11 @@ CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
   cargo run --locked --quiet -p registry-evidence-client --features schema \
   --example client-schema -- --output "$generated_root"
+# The code list JSON Schema, products/evidence/generated/codelist/codelist.schema.json,
+# is derived from the reader types in crates/registry-evidence/src/codelist.rs.
+CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+  cargo run --locked --quiet -p registry-evidence --features schema --example codelist-schema -- \
+  --output "$generated_root/codelist"
 
 if ! diff -ru "$committed_root" "$generated_root"; then
   echo 'Evidence generated contracts differ from the committed artifacts.' >&2
