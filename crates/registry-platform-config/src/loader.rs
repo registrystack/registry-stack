@@ -422,7 +422,9 @@ fn pointer_of(dotted: &str) -> String {
 }
 
 /// A loaded runtime configuration and the digest of what the runtime runs.
-#[derive(Clone, Debug)]
+///
+/// `Debug` prints no member: the configuration may hold substituted values.
+#[derive(Clone)]
 pub struct LoadedRuntimeConfig<T> {
     pub config: T,
     /// `sha256:` label over the RFC 8785 canonical JSON of the document after
@@ -430,6 +432,14 @@ pub struct LoadedRuntimeConfig<T> {
     /// spelling of an environment expression that resolved to the same value
     /// carry the same digest.
     pub effective_digest: String,
+}
+
+impl<T> std::fmt::Debug for LoadedRuntimeConfig<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LoadedRuntimeConfig")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Loads one product's runtime configuration under the shared rules.

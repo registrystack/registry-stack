@@ -1210,3 +1210,11 @@ fn cfg_diag_2_display_renders_every_diagnostic_in_the_human_form() {
     }
     assert!(!rendered.ends_with('\n'));
 }
+
+#[test]
+fn debug_of_a_loaded_configuration_prints_no_configuration_value() {
+    let loaded = parse(&format!("{}name: \"${{NAME}}-canary-value\"\n", header())).expect("loads");
+    assert_eq!(loaded.config.name.as_deref(), Some("north-canary-value"));
+    assert_eq!(format!("{loaded:?}"), "LoadedRuntimeConfig { .. }");
+    assert_eq!(format!("{loaded:#?}"), "LoadedRuntimeConfig { .. }");
+}
