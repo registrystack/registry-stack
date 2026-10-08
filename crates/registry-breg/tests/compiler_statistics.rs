@@ -614,6 +614,55 @@ fn statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap() {
 }
 
 #[test]
+fn statistical_period_unions_refuse_at_the_member_inside_the_form() {
+    let period = "project.statisticalDatasets[0].period";
+    let stock = |validity: Value| json!({"kind":"stock","granularity":"month","firstPeriod":"2025-01","validity":validity});
+    for (written, code, path) in [
+        (
+            stock(json!(["temporal"])),
+            "config.invalid-type",
+            format!("{period}.validity"),
+        ),
+        (
+            stock(json!("permanent")),
+            "config.unknown-variant",
+            format!("{period}.validity"),
+        ),
+        (
+            stock(json!({"from":"valid-from","to":"valid-to"})),
+            "config.unknown-key",
+            format!("{period}.validity.to"),
+        ),
+        (
+            json!({"kind":"flow","granularity":"month","firstPeriod":"2025-01"}),
+            "config.missing-key",
+            period.to_owned(),
+        ),
+        (
+            json!({"kind":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01","validity":"temporal"}),
+            "config.unknown-key",
+            format!("{period}.validity"),
+        ),
+        (
+            json!({"kind":"snapshot","granularity":"month","firstPeriod":"2025-01"}),
+            "config.unknown-variant",
+            format!("{period}.kind"),
+        ),
+    ] {
+        let mut value = source();
+        value["statisticalDatasets"][0]["period"] = written;
+        let failure = parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
+            .expect_err("a malformed period is refused when the project is read");
+        let refused = failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(refused, vec![(code, path.as_str())], "{failure:?}");
+    }
+}
+
+#[test]
 fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
     for validity in [
         json!("temporal"),

@@ -1211,7 +1211,8 @@
         {
           "$ref": "#/$defs/ChangeRequestNoReviewSource"
         }
-      ]
+      ],
+      "description": "Either a required review, naming `authority` and `policyId`, or\n`mode: none`. The members present select the form; a review mixing the two\nforms is refused."
     },
     "ChangeRequestSelectorSource": {
       "oneOf": [
@@ -3144,7 +3145,8 @@
           },
           "type": "object"
         }
-      ]
+      ],
+      "description": "One plain string, or a mapping from language tag to text."
     },
     "ManifestProjectionVocabularyConceptSource": {
       "additionalProperties": false,
@@ -3852,7 +3854,8 @@
         {
           "$ref": "#/$defs/StatisticalValidityFieldsSource"
         }
-      ]
+      ],
+      "description": "The scalar `temporal`, or a mapping naming the validity fields."
     },
     "StringFieldKindSchema": {
       "enum": [

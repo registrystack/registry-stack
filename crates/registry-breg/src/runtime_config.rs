@@ -3713,34 +3713,6 @@ fn validate_bounded_list(values: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Serialize a `tagged_union!` enum in its tagged form, so the published
-/// runtime schema states a union member's default the way an operator writes
-/// it. The enum's `remote = "Self"` derive yields the externally tagged value
-/// this turns inside out.
-#[cfg(feature = "schema")]
-pub(crate) fn serialize_tagged_union<S: serde::Serializer>(
-    external: std::result::Result<serde_json::Value, serde_json::Error>,
-    tag: &str,
-    serializer: S,
-) -> std::result::Result<S::Ok, S::Error> {
-    use serde::ser::Error as _;
-    let serde_json::Value::Object(external) = external.map_err(S::Error::custom)? else {
-        return Err(S::Error::custom("a union variant serializes as a mapping"));
-    };
-    let mut variants = external.into_iter();
-    let (Some((name, serde_json::Value::Object(members))), None) =
-        (variants.next(), variants.next())
-    else {
-        return Err(S::Error::custom(
-            "a union variant serializes as one mapping named by its form",
-        ));
-    };
-    let mut tagged = serde_json::Map::new();
-    tagged.insert(tag.to_owned(), serde_json::Value::String(name));
-    tagged.extend(members);
-    serde::Serialize::serialize(&serde_json::Value::Object(tagged), serializer)
-}
-
 /// The token verifier applies leeway in whole seconds, so a value carrying
 /// sub-second precision would be truncated without the operator being told.
 fn oidc_leeway(milliseconds: u64) -> Result<Duration> {

@@ -843,7 +843,7 @@ impl serde::Serialize for RawFieldEncryptionProvider {
         &self,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
-        crate::runtime_config::serialize_tagged_union(
+        crate::contract::serialize_tagged_union(
             Self::serialize(self, serde_json::value::Serializer),
             "kind",
             serializer,

@@ -1118,7 +1118,8 @@
         {
           "$ref": "#/$defs/ChangeRequestNoReviewSource"
         }
-      ]
+      ],
+      "description": "Either a required review, naming `authority` and `policyId`, or\n`mode: none`. The members present select the form; a review mixing the two\nforms is refused."
     },
     "ChangeRequestSelectorSource": {
       "oneOf": [

@@ -29,6 +29,18 @@ first, and an unknown key names the closest accepted key when one is near.
 A tool that matched `source.yaml.invalid` or `source.environment_expression`
 in `bregctl --format json` output must match the reader codes instead.
 
+The members that take one of several forms are read as the shared reader's
+unions, and the forms each accepts are unchanged: an entity constraint and a
+partial unique `when` predicate (named by `kind`), a statistical dataset's
+`period` (named by `kind`) and its `validity` (`temporal` or a mapping), a
+change-request evidence selector (named by `source`), a change request's
+`review` (`mode: none`, or `authority` with `policyId`), and a manifest
+projection text (a string, or a mapping from language tag to text). A problem
+inside the chosen form is reported at its own member: an unknown `kind` as
+`config.unknown-variant` at `kind`, a missing member as `config.missing-key`,
+and a `review` that mixes `mode` with `authority` or `policyId` as
+`config.invalid-value` at the review.
+
 A comparison literal is a record value, and `null` is one: an action
 requirement's `equals`, a change-request predicate's `equals`, and a value
 under a hook condition's `afterEquals` or `beforeEquals` still accept `null`,

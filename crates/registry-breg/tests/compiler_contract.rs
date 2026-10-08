@@ -66,9 +66,7 @@ fn compile_json_with_assets(
     compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)
 }
 
-fn multi_dataset_project() -> registry_breg::contract::RegistryProject {
-    parse_project_json(
-        br#"{
+const MULTI_DATASET_PROJECT: &[u8] = br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
           "registry":{"id":"multi-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test/multi"},
@@ -95,9 +93,47 @@ fn multi_dataset_project() -> registry_breg::contract::RegistryProject {
             {"entity":"person","operations":["get","list"],"readableFields":["name"], "rowBoundaries": []},
             {"entity":"residence","operations":["get","list"],"readableFields":["place","resident"], "rowBoundaries": []}
           ]}]
-        }"#,
-    )
-    .expect("multi-dataset source parses")
+        }"#;
+
+fn multi_dataset_project() -> registry_breg::contract::RegistryProject {
+    parse_project_json(MULTI_DATASET_PROJECT).expect("multi-dataset source parses")
+}
+
+#[test]
+fn manifest_projection_text_is_one_string_or_a_language_mapping() {
+    let title = "project.manifestProjection.catalog.title";
+    let project = |written: Value| {
+        let mut value: Value =
+            serde_json::from_slice(MULTI_DATASET_PROJECT).expect("fixture is JSON");
+        value["manifestProjection"]["catalog"]["title"] = written;
+        parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
+    };
+    for accepted in [
+        json!("Multi Registry"),
+        json!({"en":"Multi Registry","fr":"Registre"}),
+    ] {
+        project(accepted).expect("each text form is read");
+    }
+    for (written, code, path) in [
+        (
+            json!(["Multi Registry"]),
+            "config.invalid-type",
+            title.to_owned(),
+        ),
+        (
+            json!({"en":["Multi Registry"]}),
+            "config.expected-string",
+            format!("{title}.en"),
+        ),
+    ] {
+        let failure = project(written).expect_err("a malformed text is refused");
+        let refused = failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(refused, vec![(code, path.as_str())], "{failure:?}");
+    }
 }
 
 #[test]
@@ -1129,6 +1165,122 @@ fn change_request_retention_mode_is_a_strict_enum() {
         .diagnostics()
         .iter()
         .any(|diagnostic| diagnostic.path.contains("changeRequest")));
+}
+
+#[test]
+fn change_request_review_members_select_its_form() {
+    let review = "project.entities[2].changeRequest.review";
+    let project = |written: &str| {
+        let source = String::from_utf8(change_request_correction_project(
+            "change-request-review-form",
+            "",
+            "",
+            "internal",
+            "internal",
+            "[]",
+            "[]",
+            "[]",
+        ))
+        .expect("fixture is UTF-8")
+        .replacen(
+            r#""review":{"authority":"casework-main","policyId":"placement-correction"}"#,
+            &format!(r#""review":{written}"#),
+            1,
+        );
+        parse_project_yaml(source.as_bytes())
+    };
+    for accepted in [
+        r#"{"mode":"none"}"#,
+        r#"{"authority":"casework-main","policyId":"placement-correction"}"#,
+    ] {
+        project(accepted).expect("each review form is read");
+    }
+    for (written, code, path) in [
+        (
+            r#"{"mode":"none","policyId":"placement-correction"}"#,
+            "config.invalid-value",
+            review.to_owned(),
+        ),
+        (
+            r#"{"authority":"casework-main"}"#,
+            "config.missing-key",
+            review.to_owned(),
+        ),
+        (
+            r#"{"mode":"none","reviewer":"casework-main"}"#,
+            "config.unknown-key",
+            format!("{review}.reviewer"),
+        ),
+        (
+            r#"{"mode":"skip"}"#,
+            "config.unknown-variant",
+            format!("{review}.mode"),
+        ),
+    ] {
+        let failure = project(written).expect_err("a malformed review is refused");
+        let refused = failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(refused, vec![(code, path.as_str())], "{failure:?}");
+    }
+}
+
+#[test]
+fn constraint_unions_refuse_at_the_member_inside_the_form() {
+    let constraint = "project.entities[0].constraints[0]";
+    for (written, code, path) in [
+        (
+            r#"{"kind":"compare","left":"left","operator":"less_than","right":"right","field":"left"}"#,
+            "config.unknown-key",
+            format!("{constraint}.field"),
+        ),
+        (
+            r#"{"kind":"compare","left":"left","right":"right"}"#,
+            "config.missing-key",
+            constraint.to_owned(),
+        ),
+        (
+            r#"{"kind":"unique","fields":["left"],"when":[{"kind":"active_lifecycle","field":"left"}]}"#,
+            "config.unknown-key",
+            format!("{constraint}.when[0].field"),
+        ),
+        (
+            r#"{"kind":"unique","fields":["left"],"when":[{"kind":"field_is_empty","field":"left"}]}"#,
+            "config.unknown-variant",
+            format!("{constraint}.when[0].kind"),
+        ),
+        (
+            r#"{"fields":["left"]}"#,
+            "config.missing-key",
+            constraint.to_owned(),
+        ),
+    ] {
+        let source = format!(
+            r#"{{
+              "apiVersion":"registry.registrystack.org/v1alpha1",
+              "kind":"RegistryProject",
+              "registry":{{"id":"constraint-unions","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+              "entities":[{{
+                "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
+                "fields":[
+                  {{"id":"left","type":"int64","classification":"internal"}},
+                  {{"id":"right","type":"int64","classification":"internal"}}
+                ],
+                "constraints":[{written}]
+              }}]
+            }}"#
+        );
+        let failure = parse_project_yaml(source.as_bytes())
+            .expect_err("a malformed constraint is refused when the project is read");
+        let refused = failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(refused, vec![(code, path.as_str())], "{failure:?}");
+    }
 }
 
 fn correction_with_target_access_requirements() -> serde_json::Value {

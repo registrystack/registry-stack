@@ -20,6 +20,50 @@ use serde_json::Value;
 use crate::diagnostics::{CompileFailure, Diagnostic};
 pub use crate::unique_set::UniqueSet;
 
+/// Serialize a union read by `tagged_union!` in its authored form: one
+/// mapping whose `tag` member names the variant. `external` is the variant as
+/// serde's externally tagged form produces it, the shape the `remote = "Self"`
+/// derive writes. Module digests are computed over this form.
+pub(crate) fn serialize_tagged_union<S: serde::Serializer>(
+    external: std::result::Result<Value, serde_json::Error>,
+    tag: &str,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    use serde::ser::Error as _;
+    let Value::Object(external) = external.map_err(S::Error::custom)? else {
+        return Err(S::Error::custom("a union variant serializes as a mapping"));
+    };
+    let mut variants = external.into_iter();
+    let (Some((name, Value::Object(members))), None) = (variants.next(), variants.next()) else {
+        return Err(S::Error::custom(
+            "a union variant serializes as one mapping named by its form",
+        ));
+    };
+    let mut tagged = serde_json::Map::new();
+    tagged.insert(tag.to_owned(), Value::String(name));
+    tagged.extend(members);
+    Value::Object(tagged).serialize(serializer)
+}
+
+/// Implement `Serialize` for a union read by `tagged_union!`, writing the
+/// authored tagged mapping through [`serialize_tagged_union`].
+macro_rules! serialize_tagged_union {
+    ($type:ty, tag = $tag:literal) => {
+        impl Serialize for $type {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                serialize_tagged_union(
+                    Self::serialize(self, serde_json::value::Serializer),
+                    $tag,
+                    serializer,
+                )
+            }
+        }
+    };
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -75,11 +119,12 @@ pub struct StatisticalDatasetSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(
+    remote = "Self",
     deny_unknown_fields,
-    tag = "kind",
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
 pub enum StatisticalPeriodSource {
     Flow {
         field: String,
@@ -92,6 +137,8 @@ pub enum StatisticalPeriodSource {
         validity: StatisticalValiditySource,
     },
 }
+registry_platform_yaml::tagged_union!(StatisticalPeriodSource, tag = "kind");
+serialize_tagged_union!(StatisticalPeriodSource, tag = "kind");
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -103,12 +150,26 @@ pub enum StatisticalPeriodGranularitySource {
     Year,
 }
 
+/// The scalar `temporal`, or a mapping naming the validity fields.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[cfg_attr(feature = "schema", schemars(untagged))]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StatisticalValiditySource {
     Temporal(StatisticalTemporalValiditySource),
     Fields(StatisticalValidityFieldsSource),
+}
+registry_platform_yaml::shape_union!(StatisticalValiditySource {
+    scalar => Temporal,
+    mapping => Fields,
+});
+
+impl Serialize for StatisticalValiditySource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Temporal(temporal) => temporal.serialize(serializer),
+            Self::Fields(fields) => fields.serialize(serializer),
+        }
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -231,12 +292,26 @@ pub struct ManifestProjectionSource {
     pub vocabularies: Vec<ManifestProjectionVocabularySource>,
 }
 
+/// One plain string, or a mapping from language tag to text.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[cfg_attr(feature = "schema", schemars(untagged))]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ManifestProjectionTextSource {
     Plain(String),
     Localized(BTreeMap<String, String>),
+}
+registry_platform_yaml::shape_union!(ManifestProjectionTextSource {
+    scalar => Plain,
+    mapping => Localized,
+});
+
+impl Serialize for ManifestProjectionTextSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Plain(text) => text.serialize(serializer),
+            Self::Localized(texts) => texts.serialize(serializer),
+        }
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -988,11 +1063,14 @@ pub struct ChangeRequestEvidenceSubjectSource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, tag = "source", rename_all = "snake_case")]
+#[serde(remote = "Self", deny_unknown_fields, rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "source"))]
 pub enum ChangeRequestSelectorSource {
     RequestField { field: String },
     TargetField { target: String, field: String },
 }
+registry_platform_yaml::tagged_union!(ChangeRequestSelectorSource, tag = "source");
+serialize_tagged_union!(ChangeRequestSelectorSource, tag = "source");
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1392,12 +1470,63 @@ pub struct ActionValueSource {
     pub from_effect: Option<String>,
 }
 
+/// Either a required review, naming `authority` and `policyId`, or
+/// `mode: none`. The members present select the form; a review mixing the two
+/// forms is refused.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[cfg_attr(feature = "schema", schemars(untagged))]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ChangeRequestReviewSource {
     Required(ChangeRequestReviewRequirementSource),
     None(ChangeRequestNoReviewSource),
+}
+
+/// Every member either review form may carry, read before the form is chosen.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ChangeRequestReviewMembers {
+    #[serde(default)]
+    authority: Option<String>,
+    #[serde(default)]
+    policy_id: Option<String>,
+    #[serde(default)]
+    mode: Option<ChangeRequestNoReviewModeSource>,
+}
+
+impl<'de> Deserialize<'de> for ChangeRequestReviewSource {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let members = ChangeRequestReviewMembers::deserialize(deserializer)?;
+        match members {
+            ChangeRequestReviewMembers {
+                authority: None,
+                policy_id: None,
+                mode: Some(mode),
+            } => Ok(Self::None(ChangeRequestNoReviewSource { mode })),
+            ChangeRequestReviewMembers {
+                authority,
+                policy_id,
+                mode: None,
+            } => Ok(Self::Required(ChangeRequestReviewRequirementSource {
+                authority: authority.ok_or_else(|| D::Error::missing_field("authority"))?,
+                policy_id: policy_id.ok_or_else(|| D::Error::missing_field("policyId"))?,
+            })),
+            ChangeRequestReviewMembers { mode: Some(_), .. } => {
+                Err(D::Error::custom(Invalid::expected(
+                    "a review with either mode, or authority and policyId",
+                    "Remove mode to require a review, or remove authority and policyId.",
+                )))
+            }
+        }
+    }
+}
+
+impl Serialize for ChangeRequestReviewSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Required(required) => required.serialize(serializer),
+            Self::None(none) => none.serialize(serializer),
+        }
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2806,11 +2935,12 @@ pub enum ValidTimeRole {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(
+    remote = "Self",
     deny_unknown_fields,
-    tag = "kind",
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
 pub enum ConstraintSource {
     Unique {
         #[serde(default)]
@@ -2854,21 +2984,26 @@ pub enum ConstraintSource {
         end_field: Option<String>,
     },
 }
+registry_platform_yaml::tagged_union!(ConstraintSource, tag = "kind");
+serialize_tagged_union!(ConstraintSource, tag = "kind");
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(
+    remote = "Self",
     deny_unknown_fields,
-    tag = "kind",
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
 pub enum UniqueWhenPredicate {
     FieldEquals { field: String, value: Value },
     FieldIsNull { field: String },
     FieldIsNotNull { field: String },
     ActiveLifecycle {},
 }
+registry_platform_yaml::tagged_union!(UniqueWhenPredicate, tag = "kind");
+serialize_tagged_union!(UniqueWhenPredicate, tag = "kind");
 
 impl ConstraintSource {
     pub fn explicit_id(&self) -> Option<&str> {
@@ -4002,6 +4137,7 @@ pub(crate) fn bounded_u16<'de, D: Deserializer<'de>, const MIN: u32, const MAX: 
     bounded_u32::<D, MIN, MAX>(deserializer).map(|value| value as u16)
 }
 
+#[cfg(feature = "runtime")]
 pub(crate) fn bounded_u8<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
     deserializer: D,
 ) -> Result<u8, D::Error> {
@@ -4009,6 +4145,7 @@ pub(crate) fn bounded_u8<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u
     bounded_u32::<D, MIN, MAX>(deserializer).map(|value| value as u8)
 }
 
+#[cfg(feature = "runtime")]
 pub(crate) fn bounded_usize<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
     deserializer: D,
 ) -> Result<usize, D::Error> {
@@ -4021,6 +4158,7 @@ pub(crate) fn optional_bounded_u32<'de, D: Deserializer<'de>, const MIN: u32, co
     bounded_u32::<D, MIN, MAX>(deserializer).map(Some)
 }
 
+#[cfg(feature = "runtime")]
 pub(crate) fn optional_bounded_u64<'de, D: Deserializer<'de>, const MIN: u64, const MAX: u64>(
     deserializer: D,
 ) -> Result<Option<u64>, D::Error> {

@@ -3674,55 +3674,6 @@ exceptions:
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Write an integer with the unit as the last word of the key'
 - rule: CFG-SCHEMA-8
   format: breg/project
-  location: crates/registry-breg/src/contract.rs#ChangeRequestReviewSource
-  class: pending
-  wp: WP3
-  reason: ChangeRequestReviewSource derives an untagged union
-  resolution: Decode it with the shared reader's union helper, with variants that differ by node kind
-- rule: CFG-SCHEMA-8
-  format: breg/project
-  location: crates/registry-breg/src/contract.rs#ChangeRequestSelectorSource
-  class: pending
-  wp: WP3
-  reason: ChangeRequestSelectorSource derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: breg/project
-  location: crates/registry-breg/src/contract.rs#ConstraintSource
-  class: pending
-  wp: WP3
-  reason: ConstraintSource derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: breg/project
-  location: crates/registry-breg/src/contract.rs#ManifestProjectionTextSource
-  class: pending
-  wp: WP3
-  reason: ManifestProjectionTextSource derives an untagged union
-  resolution: Decode it with the shared reader's union helper, with variants that differ by node kind
-- rule: CFG-SCHEMA-8
-  format: breg/project
-  location: crates/registry-breg/src/contract.rs#StatisticalPeriodSource
-  class: pending
-  wp: WP3
-  reason: StatisticalPeriodSource derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: breg/project
-  location: crates/registry-breg/src/contract.rs#StatisticalValiditySource
-  class: pending
-  wp: WP3
-  reason: StatisticalValiditySource derives an untagged union
-  resolution: Decode it with the shared reader's union helper, with variants that differ by node kind
-- rule: CFG-SCHEMA-8
-  format: breg/project
-  location: crates/registry-breg/src/contract.rs#UniqueWhenPredicate
-  class: pending
-  wp: WP3
-  reason: UniqueWhenPredicate derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: breg/project
   location: crates/registry-platform-hooks/src/declaration.rs#HookHandlerSource
   class: pending
   wp: WP3
