@@ -23,10 +23,12 @@ does a recorded one that no longer deviates. Pending entries are counted per
 product and work package, and `--strict` refuses them. CFG-CHANGE-5 compares
 the register, entry by entry (rule, format, location), with the merge base of
 `origin/main` (or `--base`): an entry may be added only in the
-protocol-constant, external-format, and exchange-model classes, no entry
-changes class, and deletion is the only other change. A moved entry is a
-deletion and an addition. An explicit `--base` whose tree lacks the register
-fails; without `--base` that is a note.
+protocol-constant, external-format, and exchange-model classes, or as a
+stable-move entry located in a format's first published schema, which records
+respellings its correct files already write; no entry changes class, and
+deletion is the only other change. A moved entry is a deletion and an
+addition. An explicit `--base` whose tree lacks the register fails; without
+`--base` that is a note.
 
 `--rule-coverage` checks instead that every rule the convention declares has
 one Enforcement summary row and that the gates the row names exist.
@@ -2077,10 +2079,11 @@ class Lint:
     def ratchet(self, entries: list[dict], base: str | None) -> None:
         """CFG-CHANGE-5: compare entries by (rule, format, location) with the base.
 
-        An entry outside the growth classes may not appear, and no entry may
-        change class; deleting an entry is the only change the register takes
-        outside the growth classes. A moved entry is a deletion and an addition,
-        so it is refused like any other new one.
+        An entry outside the growth classes may not appear, except a
+        stable-move entry located in a format's first published schema, and no
+        entry may change class; deleting an entry is the only other change the
+        register takes. A moved entry is a deletion and an addition, so it is
+        refused like any other new one.
         """
         explicit = base is not None
         if base is None:
@@ -2119,14 +2122,27 @@ class Lint:
                 for item in items if isinstance(item, dict)
             }
 
+        revealed = self.first_schemas(base)
+
+        def addable(format_id: str | None, location: str | None, entry_class: str | None) -> bool:
+            if entry_class in GROWTH_CLASSES:
+                return True
+            schema = revealed.get(format_id)
+            return (
+                schema is not None
+                and entry_class == "stable-move"
+                and str(location or "").startswith(f"{schema}#")
+            )
+
         then, now = keyed(before), keyed(entries)
         for key in sorted(now, key=str):
             rule, format_id, location = key
             if key not in then:
-                if now[key] not in GROWTH_CLASSES:
+                if not addable(format_id, location, now[key]):
                     self.report.change5.append(
                         f"CFG-CHANGE-5 {rule} {format_id} {location}: a new {now[key]} entry; only "
-                        f"{', '.join(sorted(GROWTH_CLASSES))} entries may be added, so fix the deviation "
+                        f"{', '.join(sorted(GROWTH_CLASSES))} entries, and stable-move entries in a "
+                        "format's first published schema, may be added, so fix the deviation "
                         "instead of recording it"
                     )
             elif now[key] != then[key]:
@@ -2134,6 +2150,30 @@ class Lint:
                     f"CFG-CHANGE-5 {rule} {format_id} {location}: the class changed from {then[key]} to "
                     f"{now[key]}; an existing entry may only be deleted"
                 )
+
+    def first_schemas(self, base: str) -> dict[str, str]:
+        """The schema path of each format registered at `base` without a schema
+        that registers one now: its first schema records deviations a correct
+        file already wrote, which no earlier register could locate."""
+        shown = git(self.root, "show", f"{base}:{REGISTRY}")
+        if shown.returncode != 0:
+            return {}
+        try:
+            formats = (yaml.safe_load(shown.stdout) or {}).get("formats") or []
+        except yaml.YAMLError:
+            return {}
+        unpublished = {
+            entry.get("id") for entry in formats
+            if isinstance(entry, dict) and not isinstance(entry.get("schema"), dict)
+        }
+        return {
+            format_id: entry["schema"]["path"]
+            for format_id, entry in self.by_id.items()
+            if format_id in unpublished
+            and isinstance(entry.get("schema"), dict)
+            and isinstance(entry["schema"].get("path"), str)
+        }
+
 
 def unconstrained(node: dict) -> bool:
     constraining = ("properties", "patternProperties", "items", "prefixItems", "$ref", "enum", "const",

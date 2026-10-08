@@ -1441,6 +1441,35 @@ class RatchetTests(RegisterTestCase):
             self.assertEqual(len(report.change5), 1, report.change5)
             self.assertIn(f"pending to {cls}", report.change5[0])
 
+    def first_schema(self, **changes) -> str:
+        published = self.repo.fmt()["schema"]
+        self.repo.fmt()["schema"] = "none"
+        base = self.commit()
+        self.repo.fmt()["schema"] = published
+        self.plant()
+        self.repo.exceptions.append(self.entry(**changes))
+        return base
+
+    def test_cfg_change_5_accepts_a_stable_move_a_first_schema_reveals(self) -> None:
+        base = self.first_schema(**{"class": "stable-move", "wp": None})
+        report = self.repo.run(base=base)
+        self.assertEqual(report.change5, [])
+        self.assertEqual(report.errors, [])
+
+    def test_cfg_change_5_refuses_a_pending_entry_a_first_schema_reveals(self) -> None:
+        base = self.first_schema()
+        report = self.repo.run(base=base)
+        self.assertTrue(report.change5, report.change5)
+        self.assertIn("CFG-NAME-3", report.change5[0])
+
+    def test_cfg_change_5_refuses_a_new_stable_move_in_a_published_schema(self) -> None:
+        base = self.commit()
+        self.plant()
+        self.repo.exceptions.append(self.entry(**{"class": "stable-move", "wp": None}))
+        report = self.repo.run(base=base)
+        self.assertTrue(report.change5, report.change5)
+        self.assertIn("CFG-NAME-3", report.change5[0])
+
     def test_cfg_change_5_fails_when_an_explicit_base_lacks_the_register(self) -> None:
         self.git("-c", "user.name=t", "-c", "user.email=t@example.org",
                  "commit", "-q", "--allow-empty", "-m", "empty")
