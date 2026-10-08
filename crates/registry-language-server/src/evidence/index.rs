@@ -16,7 +16,7 @@
 //! `subject.selector` names one of that operation's path parameters, each `source.facts[].path`
 //! selects a leaf of its response, and each key of `source.collectionBounds` names a collection some
 //! fact path visits. They are walked in [`IndexBuilder::walk_openapi_edges`], in the order
-//! `compile_question_plan` (`crates/registry-evidencectl/src/authoring.rs:964-1023`) reaches them,
+//! `compile_question_plan` (`crates/registry-evidencectl/src/authoring.rs`) reaches them,
 //! and a rung that reports stops the ones below it: the compiler stops at its first refusal, and an
 //! author whose operation name has a typo needs one sentence about the typo rather than a sentence
 //! about every field that reads the operation it did not find.
@@ -428,7 +428,7 @@ impl IndexBuilder<'_> {
     /// `question` has already been accepted by `registry_evidence_authoring::validate`, which is the
     /// state `compile_question_plan` reads it in: it takes the inline source out with
     /// `.expect("inline source was validated")`
-    /// (`crates/registry-evidencectl/src/authoring.rs:989`). So a question that is malformed reaches
+    /// (`crates/registry-evidencectl/src/authoring.rs`). So a question that is malformed reaches
     /// nothing here, and the malformed field is reported once, by the check that owns it.
     ///
     /// The rungs below run in the compiler's own order and each one stops the rest. That is not
@@ -461,11 +461,11 @@ impl IndexBuilder<'_> {
 
         // Edge 1. Resolution, and the sentence for an identifier that resolves to none or to two,
         // both come from the reference machinery: `unique_operation`
-        // (`crates/registry-evidencectl/src/authoring.rs:1565-1567`) refuses those two cases with one
+        // (`crates/registry-evidencectl/src/authoring.rs`) refuses those two cases with one
         // sentence, and it is the same condition.
         // The offer is narrower than the resolution on purpose. `unique_operation` looks across every
         // method the description publishes, and `question_operation`
-        // (`crates/registry-evidencectl/src/authoring.rs:1543-1551`) then refuses a resolved
+        // (`crates/registry-evidencectl/src/authoring.rs`) then refuses a resolved
         // operation whose method is not `get`, with a sentence about the method. So the editor must
         // keep finding an operation published under `post`, and must not propose one.
         self.refer_offering(
@@ -484,7 +484,7 @@ impl IndexBuilder<'_> {
             return;
         };
 
-        // Edge 2. `exact_path_selectors` (`crates/registry-evidencectl/src/authoring.rs:1575-1646`)
+        // Edge 2. `exact_path_selectors` (`crates/registry-evidencectl/src/authoring.rs`)
         // requires the question's selectors to be exactly the operation's required string path
         // parameters, so a selector outside that set refuses the project: at the count check when
         // there are as many selectors as parameters, and at the comparison otherwise.
@@ -522,7 +522,7 @@ impl IndexBuilder<'_> {
         }
 
         // Edge 3. The set is the compiler's own: `compile_facts` asks `selectable_leaves` for it at
-        // `crates/registry-evidencectl/src/authoring.rs:1661` and refuses a fact whose path is not in
+        // `crates/registry-evidencectl/src/authoring.rs` and refuses a fact whose path is not in
         // it at :1666-1674. A response that cannot be read or flattened answers `None`, and every
         // fact path is then left alone rather than measured against an empty set.
         let Some(leaves) = description.selectable(&key) else {
@@ -572,7 +572,7 @@ impl IndexBuilder<'_> {
 
         // Edge 4. `compile_facts` settles `source.collectionBounds` against the collections the fact
         // paths visit and refuses a project where either side names something the other does not
-        // (`crates/registry-evidencectl/src/authoring.rs:1681-1705`).
+        // (`crates/registry-evidencectl/src/authoring.rs`).
         //
         // Both directions rest on knowing every visited collection, so they are only drawn when the
         // paths found in the text are the paths the accepted question holds. A path this reading

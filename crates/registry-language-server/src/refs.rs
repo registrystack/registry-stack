@@ -99,7 +99,7 @@ impl SymbolKind {
     /// the same reason.
     ///
     /// An operation is excluded for the opposite reason: nothing refuses it. `unique_operation`
-    /// (`crates/registry-evidencectl/src/authoring.rs:1532-1573`) is asked about one identifier, the
+    /// (`crates/registry-evidencectl/src/authoring.rs`) is asked about one identifier, the
     /// one a question wrote, so a description publishing two operations under an identifier no
     /// question names builds. The sentence for the identifier a question does name belongs at that
     /// question, where the ambiguous reference is, and not at two places in a description the author

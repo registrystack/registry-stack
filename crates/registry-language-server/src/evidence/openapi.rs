@@ -23,8 +23,8 @@
 //! nothing, and refusing to resolve its operation would report a project the compiler builds.
 //!
 //! Everything here is read the way `unique_operation`
-//! (`crates/registry-evidencectl/src/authoring.rs:1532-1573`) and `exact_path_selectors`
-//! (`crates/registry-evidencectl/src/authoring.rs:1575-1646`) read it, and where those two refuse a
+//! (`crates/registry-evidencectl/src/authoring.rs`) and `exact_path_selectors`
+//! (`crates/registry-evidencectl/src/authoring.rs`) read it, and where those two refuse a
 //! document outright this module produces no analysis at all. That is the quiet direction: a
 //! description the compiler will not read is one the editor says nothing about, rather than one it
 //! guesses at.
@@ -51,7 +51,7 @@ use crate::{
 };
 
 /// The eight HTTP methods an `operationId` may be published under, in the order
-/// `crates/registry-evidencectl/src/authoring.rs:1533-1535` spells them.
+/// `crates/registry-evidencectl/src/authoring.rs` spells them.
 ///
 /// All eight, not just `get`. The compiler resolves an identifier across every one of them and only
 /// then refuses a resolved operation whose method is not `get`, with a sentence about the method. An
@@ -80,7 +80,7 @@ const MAX_RETAINED_LEAF_SETS: usize = 32;
 #[derive(Debug)]
 pub(crate) struct PublishedOperation {
     /// The operation as the compiler names it when it reads the response schema:
-    /// `crates/registry-evidencectl/src/authoring.rs:1653-1656` uppercases the method.
+    /// `crates/registry-evidencectl/src/authoring.rs` uppercases the method.
     pub(crate) key: OperationKey,
     /// Where the `operationId` is written, or the start of the file past [`MAX_POSITION_BYTES`].
     pub(crate) range: Range,
@@ -234,7 +234,7 @@ impl Description {
     /// The one operation `operation_id` names, when exactly one operation carries it.
     ///
     /// Exactly one is the compiler's own condition: `unique_operation` refuses none and refuses two
-    /// with the same sentence (`crates/registry-evidencectl/src/authoring.rs:1565-1567`), and it
+    /// with the same sentence (`crates/registry-evidencectl/src/authoring.rs`), and it
     /// reads nothing further about the question in either case.
     pub(crate) fn resolved(&self, operation_id: &str) -> Option<&PublishedOperation> {
         match self.analysis.operations.get(operation_id)?.as_slice() {
@@ -247,7 +247,7 @@ impl Description {
     /// response cannot be read or flattened.
     ///
     /// The set is [`selectable_leaves`], the function the compiler selects against
-    /// (`crates/registry-evidencectl/src/authoring.rs:1661`), asked the same question about the same
+    /// (`crates/registry-evidencectl/src/authoring.rs`), asked the same question about the same
     /// operation. There is no second flattening here and there must never be one: an editor
     /// offering a different set from the compiler's would refuse paths the build accepts.
     pub(crate) fn selectable(&mut self, key: &OperationKey) -> Option<Arc<BTreeSet<String>>> {
@@ -419,7 +419,7 @@ fn published_operations(
 /// The names of one operation's required string path parameters, and `None` when the parameters are
 /// not readable.
 ///
-/// This is `exact_path_selectors` (`crates/registry-evidencectl/src/authoring.rs:1575-1619`) minus
+/// This is `exact_path_selectors` (`crates/registry-evidencectl/src/authoring.rs`) minus
 /// its comparison: the same two owners in the same order, the same refusal of a `$ref`, of a
 /// parameter that is not `in: path`, not `required: true`, or not `schema.type: string`, and of a
 /// name written twice. Every one of those makes the compiler refuse the project, so the answer here

@@ -44,7 +44,7 @@ fn the_worked_compact_form_project_reports_nothing() {
 }
 
 /// Edge 1: `source.operation` names an operationId the description publishes. Paired with
-/// `unique_operation` in `crates/registry-evidencectl/src/authoring.rs:1532-1573`, which scans all
+/// `unique_operation` in `crates/registry-evidencectl/src/authoring.rs`, which scans all
 /// eight HTTP methods of every path item for the exact `operationId` and refuses the project with
 /// "source.operation must resolve to exactly one OpenAPI operationId" when the matches are not
 /// exactly one.
@@ -148,7 +148,7 @@ fn an_operation_identifier_two_operations_publish_is_reported() {
 /// `Description::published` (`crates/registry-language-server/src/evidence/openapi.rs:139`) yields a
 /// repeated `operationId` once per operation on purpose, and every published operation is defined
 /// as a symbol whether or not a question names it, so both definitions really are in the index.
-/// `unique_operation` (`crates/registry-evidencectl/src/authoring.rs:1565-1567`) refuses an
+/// `unique_operation` (`crates/registry-evidencectl/src/authoring.rs`) refuses an
 /// ambiguous identifier only where a question spells it, so nothing refuses this description. The
 /// exemption in `SymbolKind::reports_duplicates` is what keeps the editor quiet over it, and this
 /// test fails if that exemption is removed.
@@ -237,7 +237,7 @@ fn an_operation_published_under_another_method_still_resolves() {
 }
 
 /// Edge 2: `subject.selector` names one of the operation's required string path parameters. Paired
-/// with `exact_path_selectors` in `crates/registry-evidencectl/src/authoring.rs:1575-1646`, which
+/// with `exact_path_selectors` in `crates/registry-evidencectl/src/authoring.rs`, which
 /// gathers the path item's and the operation's `parameters`, keeps the ones that are `in: path`,
 /// `required: true` and `schema.type: string`, and refuses the project with "question selectors must
 /// equal the operation's required string path parameters" when the question's selectors are not
@@ -309,7 +309,7 @@ fn a_selector_of_an_operation_whose_parameters_cannot_be_read_is_left_alone() {
 }
 
 /// Edge 3: each `source.facts[].path` selects a leaf the operation's response offers. Paired with
-/// `compile_facts` in `crates/registry-evidencectl/src/authoring.rs:1648-1679`, which asks
+/// `compile_facts` in `crates/registry-evidencectl/src/authoring.rs`, which asks
 /// `registry_evidence_authoring::openapi::selectable_leaves` for the same set at :1661 and refuses
 /// the project with "source fact `<name>` path `<path>` is not a selectable scalar leaf in the 200
 /// application/json response".
@@ -343,7 +343,7 @@ fn a_fact_path_the_response_does_not_offer_is_reported() {
 /// The same rule where the member really is there. `/records/*` is a member the response has and is
 /// not a scalar, which is the case `compile_facts` refuses at :1666-1674 itself; a member that is
 /// not there at all is refused one check earlier, by `validate_selected_schema_path` at
-/// `crates/registry-evidencectl/src/authoring.rs:1659`, with a sentence of its own. Both are
+/// `crates/registry-evidencectl/src/authoring.rs`, with a sentence of its own. Both are
 /// projects the build will not compile, and the field the author has to change is the same one.
 #[test]
 fn a_fact_path_at_something_that_is_not_a_scalar_leaf_is_reported() {
@@ -384,7 +384,7 @@ fn a_fact_path_of_an_operation_with_no_readable_response_is_left_alone() {
 
 /// Edge 4: every key of `source.collectionBounds` names a collection some fact path visits, and
 /// every collection they visit is bounded. Paired with `compile_facts` in
-/// `crates/registry-evidencectl/src/authoring.rs:1681-1705`, which settles the two sets against each
+/// `crates/registry-evidencectl/src/authoring.rs`, which settles the two sets against each
 /// other and refuses the project with "source.collectionBounds must exactly name every selected
 /// collection (missing: ...; unused: ...)".
 #[test]
@@ -502,7 +502,7 @@ fn two_facts_visiting_one_collection_declare_it_once() {
 /// One mistake, one sentence. An operation that does not resolve leaves the selector, the fact path
 /// and the collection bound with nothing to be read against, and the compiler stops at
 /// `unique_operation` without judging any of them
-/// (`crates/registry-evidencectl/src/authoring.rs:990`).
+/// (`crates/registry-evidencectl/src/authoring.rs`).
 #[test]
 fn an_unresolved_operation_reports_nothing_about_the_fields_that_read_it() {
     let project = EvidenceProject::new(&replacing(
@@ -538,7 +538,7 @@ fn an_unresolved_operation_reports_nothing_about_the_fields_that_read_it() {
 /// The same discipline one rung earlier. A question the authoring form refuses is one
 /// `compile_question_plan` never reads, because it takes its inline source out with
 /// `.expect("inline source was validated")`
-/// (`crates/registry-evidencectl/src/authoring.rs:989`), so the field the form names is the only
+/// (`crates/registry-evidencectl/src/authoring.rs`), so the field the form names is the only
 /// thing the author is told about.
 #[test]
 fn a_question_the_form_refuses_reports_only_its_own_problem() {
@@ -578,7 +578,7 @@ fn a_question_written_in_the_referenced_form_draws_no_operation_edge() {
 /// operations is one the editor says nothing about.
 ///
 /// These two are refused later inside `unique_operation`
-/// (`crates/registry-evidencectl/src/authoring.rs:1536-1547`). Unlike a missing or invalid retained
+/// (`crates/registry-evidencectl/src/authoring.rs`). Unlike a missing or invalid retained
 /// document, they are not reasons to stop the earlier authoring diagnostics.
 #[test]
 fn a_description_unavailable_after_prerequisites_leaves_every_edge_alone() {

@@ -824,7 +824,7 @@ fn a_question_past_its_ceiling_still_lends_its_name_to_the_policy_that_admits_it
 /// across all eight and only then refuses one whose method is not `get`, so an editor looking only
 /// at `get` would call a published name unpublished. Resolution and offering are not the same
 /// question, though, and this surface must not ask them of one set. `unique_operation`
-/// (`crates/registry-evidencectl/src/authoring.rs:1569-1571`) refuses a resolved operation whose
+/// (`crates/registry-evidencectl/src/authoring.rs`) refuses a resolved operation whose
 /// method is not `get` with "the local tutorial source supports only one resolved GET operationId",
 /// so `notePerson` below is a name that refuses the project the moment an author takes it, and a
 /// name the list therefore never puts in front of them.
@@ -897,7 +897,7 @@ fn an_operation_published_under_another_method_is_never_offered_to_a_question() 
 /// A derivation file another question already claims is found, and never offered.
 ///
 /// `registry-evidencectl` requires each question to name its own: `derivation_paths.insert`
-/// (`crates/registry-evidencectl/src/authoring.rs:475-477`) refuses a project where two questions
+/// (`crates/registry-evidencectl/src/authoring.rs`) refuses a project where two questions
 /// point at one file, with "each question must name its own derivation file". `evidence/index.rs`
 /// says as much in its own module documentation and draws no error of its own, which is right: two
 /// questions sharing a file is a project-wide fact, and neither question is the one that is wrong.
