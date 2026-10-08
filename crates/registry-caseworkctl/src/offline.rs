@@ -42,6 +42,10 @@ pub(crate) struct OfflineFiles {
     /// Holiday-set revisions by holiday-set id and revision, the pair the
     /// file name states.
     pub holiday_sets: BTreeMap<(String, u64), Located<CaseworkHolidaySet>>,
+    /// The names of the files under `holiday-sets/` that were read and
+    /// refused. A pin whose file is one of them is not reported missing:
+    /// the file's own diagnostics say why it was not accepted.
+    pub refused_holiday_files: BTreeSet<String>,
     /// How many files were read, accepted or not.
     pub files_read: usize,
 }
@@ -214,7 +218,14 @@ fn scan_directory(
                     report,
                 );
             }
-            Err(refused) => report.extend(refused),
+            Err(refused) => {
+                if kind == OfflineFileKind::HolidaySet {
+                    files
+                        .refused_holiday_files
+                        .insert(name.to_string_lossy().into_owned());
+                }
+                report.extend(refused);
+            }
         }
     }
 }
@@ -244,6 +255,7 @@ fn accept_holiday_set(
             "the file name does not state this holiday set and revision, and a simulation finds a revision by its file name",
             "Rename the file to <holidaySet>-<revision>.yaml, using this file's holidaySet and revision.",
         ));
+        files.refused_holiday_files.insert(name.to_owned());
         return;
     }
     files.holiday_sets.insert(key, located);
@@ -796,6 +808,9 @@ fn resolve_simulation(
         } else if !files
             .holiday_sets
             .contains_key(&(holiday_set.to_string(), revision.get()))
+            && !files
+                .refused_holiday_files
+                .contains(&format!("{holiday_set}-{}.yaml", revision.get()))
         {
             found.push(document.diagnostic_at_value(
                 Severity::Error,
@@ -1327,5 +1342,87 @@ mod tests {
         );
         let diagnostic = &report.diagnostics()[0];
         assert!(diagnostic.suggested_action.contains("1024"), "{report}");
+    }
+
+    /// Scan a copy of the multi-stage example, whose simulations pin
+    /// `office-holidays` revision 7, with that revision's file replaced by
+    /// `holidays`, and resolve it; the codes of both reports.
+    fn check_pinned_holiday_set(holidays: &str) -> Vec<String> {
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/casework/examples/multi-stage-routing-clocks");
+        let root = crate::canonical_tempdir();
+        let holiday_sets = root.path().join("simulations/holiday-sets");
+        fs::create_dir_all(&holiday_sets).unwrap();
+        for simulation in ["friday-review.yaml", "resubmitted-response.yaml"] {
+            fs::copy(
+                example.join("simulations").join(simulation),
+                root.path().join("simulations").join(simulation),
+            )
+            .unwrap();
+        }
+        fs::write(holiday_sets.join("office-holidays-7.yaml"), holidays).unwrap();
+        let project = CaseworkProject::read(
+            "casework.yaml",
+            &fs::read(example.join("casework.yaml")).unwrap(),
+        )
+        .unwrap();
+
+        let (files, scanned) = scan(root.path());
+        let resolved = resolve(&project, &files);
+
+        scanned
+            .diagnostics()
+            .iter()
+            .chain(resolved.diagnostics())
+            .map(|diagnostic| diagnostic.code.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_pinned_holiday_set_file_the_reader_refuses_is_not_also_reported_missing() {
+        let holidays = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../products/casework/examples/multi-stage-routing-clocks/simulations/holiday-sets/office-holidays-7.yaml",
+        ))
+        .unwrap();
+        assert!(check_pinned_holiday_set(&holidays).is_empty());
+
+        let refused = format!("{holidays}conformanceAlias: *conformance\n");
+        assert_eq!(check_pinned_holiday_set(&refused), ["yaml.alias"]);
+
+        let misnamed =
+            holidays.replace("holidaySet: office-holidays", "holidaySet: other-holidays");
+        assert_eq!(
+            check_pinned_holiday_set(&misnamed),
+            ["casework.holiday-set.misnamed"]
+        );
+    }
+
+    #[test]
+    fn a_pinned_holiday_set_with_no_file_is_reported_missing() {
+        let root = crate::canonical_tempdir();
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/casework/examples/multi-stage-routing-clocks");
+        let simulations = root.path().join("simulations");
+        fs::create_dir(&simulations).unwrap();
+        fs::copy(
+            example.join("simulations/friday-review.yaml"),
+            simulations.join("friday-review.yaml"),
+        )
+        .unwrap();
+        let project = CaseworkProject::read(
+            "casework.yaml",
+            &fs::read(example.join("casework.yaml")).unwrap(),
+        )
+        .unwrap();
+
+        let (files, scanned) = scan(root.path());
+        let resolved = resolve(&project, &files);
+
+        assert!(codes(&scanned).is_empty(), "{scanned}");
+        assert_eq!(
+            codes(&resolved),
+            [(MISSING_HOLIDAY_SET, Severity::Error)],
+            "{resolved}"
+        );
     }
 }
