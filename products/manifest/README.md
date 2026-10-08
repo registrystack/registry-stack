@@ -64,6 +64,17 @@ Validate a metadata manifest:
 cargo run --locked -p registry-manifest-cli -- validate profiles/example-civil-registration/fixtures/metadata.yaml
 ```
 
+`validate` and `validate-profiles` are the offline checks for the metadata
+manifest and the profile descriptor: they print every finding with its code,
+location, and fix, accept `--format json`, and exit 0, 1 (refused), 2 (usage),
+or 3 (unreadable). `schemas/metadata.schema.json` and
+`schemas/profile.schema.json` are generated from the reader types for editors;
+regenerate them with:
+
+```sh
+cargo run -p registry-manifest-cli --features schema --example manifest-schema -- --output products/manifest/schemas
+```
+
 Render one artifact:
 
 ```sh

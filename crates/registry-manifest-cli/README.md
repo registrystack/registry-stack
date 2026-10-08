@@ -61,6 +61,17 @@ Validate all checked-in profile descriptors and fixtures:
 cargo run -p registry-manifest-cli -- validate-profiles products/manifest/profiles
 ```
 
+`validate` and `validate-profiles` read through `registry-platform-yaml` and
+print every finding as `severity[code] file:line:column /pointer` with the fix.
+Both accept `--format json` and `--deny-warnings`, and exit 0 when nothing was
+refused, 1 on a refusal, 2 on a usage error, and 3 when a file cannot be read.
+
+Regenerate the editor schemas after changing a reader type:
+
+```sh
+cargo run -p registry-manifest-cli --features schema --example manifest-schema -- --output products/manifest/schemas
+```
+
 Run the commons contract-kernel check, optionally with consumer manifests:
 
 ```sh

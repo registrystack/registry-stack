@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "command": "validate",
+  "status": "complete",
+  "apiVersion": "id.registrystack.org/formats/manifest/ctl-report/v1alpha1",
+  "kind": "ManifestCtlReport",
+  "filesChecked": 1,
+  "errors": 0,
+  "warnings": 0,
+  "sourceManifestDigest": "sha256:30c5b80a39e577e04abe5aa9909672e4cf495636cc77c4768321117c1bc71c48",
+  "diagnostics": []
+}

@@ -135,7 +135,8 @@ class ConfigureTests(unittest.TestCase):
         settings.parent.mkdir()
         content = '{ // preserved workspace comment\n}\n'
         settings.write_text(content)
-        configure.configure("manifest", project, self.workspace, "metadata.yaml")
+        with patch.dict(configure.SCHEMAS, {"manifest": ()}):
+            configure.configure("manifest", project, self.workspace, "metadata.yaml")
         self.assertEqual(settings.read_text(), content)
         tasks = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"]
         self.assertEqual(tasks[0]["command"], "registry-manifest")
@@ -204,6 +205,27 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             (managed / "labels.schema.json").read_bytes(),
             (ROOT / "products/render/schemas/labels.schema.json").read_bytes(),
+        )
+
+    def test_manifest_maps_its_document_and_profile_descriptors(self):
+        project = self.project(
+            "manifest",
+            "catalog.metadata.yaml",
+            "products/manifest/profiles/example-benefits-sync/fixtures/metadata.yaml",
+        )
+        configure.configure("manifest", project, self.workspace, "catalog.metadata.yaml")
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            schemas,
+            {
+                (managed / "metadata.schema.json").as_uri(): [str(project / "catalog.metadata.yaml")],
+                (managed / "profile.schema.json").as_uri(): [str(project / "**/profile.yaml")],
+            },
+        )
+        self.assertEqual(
+            (managed / "profile.schema.json").read_bytes(),
+            (ROOT / "products/manifest/schemas/profile.schema.json").read_bytes(),
         )
 
     def test_check_task_uses_product_cli_shape(self):

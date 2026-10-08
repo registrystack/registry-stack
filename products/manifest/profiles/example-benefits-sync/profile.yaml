@@ -71,4 +71,3 @@ fixtures:
     manifest: true
     expect: valid
     description: Minimal benefits sync disability registry metadata fixture.
-generator_command: null

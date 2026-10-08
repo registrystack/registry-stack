@@ -3522,14 +3522,22 @@ formats:
       apiVersion: none
       kind: none
       otherHeader: 'schema_version: registry-manifest/v1'
-      checkedBy: none
+      checkedBy:
+        file: crates/registry-manifest-cli/src/lib.rs
+        symbol: METADATA_SCHEMA_VERSION
     target: none
-    schema: none
+    schema:
+      path: products/manifest/schemas/metadata.schema.json
+      id: https://id.registrystack.org/schemas/manifest/metadata/metadata.v1.schema.json
+      origin: generated
+      generator: cargo run -p registry-manifest-cli --features schema --example manifest-schema -- --output products/manifest/schemas
+      driftCheck: crates/registry-manifest-cli/src/schema.rs
+      differentialTest: crates/registry-manifest-cli/src/schema.rs
     reader:
       crate: registry-manifest-cli
-      file: crates/registry-manifest-cli/src/main.rs
-      function: load_manifest
-      type: MetadataManifest
+      file: crates/registry-manifest-cli/src/metadata.rs
+      function: read_metadata
+      type: MetadataManifestFields
     check: registry-manifest validate {file}
     example: products/manifest/profiles/example-benefits-sync/fixtures/metadata.yaml
     conformance:
@@ -3552,13 +3560,21 @@ formats:
       apiVersion: none
       kind: none
       otherHeader: 'schema_version: registry-manifest-profile/v1'
-      checkedBy: none
+      checkedBy:
+        file: crates/registry-manifest-cli/src/lib.rs
+        symbol: PROFILE_SCHEMA_VERSION
     target: none
-    schema: none
+    schema:
+      path: products/manifest/schemas/profile.schema.json
+      id: https://id.registrystack.org/schemas/manifest/profile/profile.v1.schema.json
+      origin: generated
+      generator: cargo run -p registry-manifest-cli --features schema --example manifest-schema -- --output products/manifest/schemas
+      driftCheck: crates/registry-manifest-cli/src/schema.rs
+      differentialTest: crates/registry-manifest-cli/src/schema.rs
     reader:
       crate: registry-manifest-cli
-      file: crates/registry-manifest-cli/src/main.rs
-      function: load_profile_descriptor
+      file: crates/registry-manifest-cli/src/profile.rs
+      function: check_profiles
       type: ProfileDescriptor
     check: registry-manifest validate-profiles {directory}
     example: products/manifest/profiles/example-benefits-sync/profile.yaml
@@ -3568,6 +3584,32 @@ formats:
       integer: none
       boolean: none
       relativePath: /fixtures/0/path
+    securityMembers: []
+    restrictingMembers: []
+  - id: manifest/ctl-report
+    product: manifest
+    title: registry-manifest --format json report
+    files: []
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/manifest/ctl-report/v1alpha1
+      kind: ManifestCtlReport
+      checkedBy:
+        file: crates/registry-manifest-cli/src/lib.rs
+        symbol: CTL_REPORT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/manifest/ctl-report/v1alpha1
+      kind: ManifestCtlReport
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-manifest-cli/src/main.rs
+      symbol: write_report
+    check: none
+    example: products/manifest/examples/ctl-report/validate.json
+    conformance: none
     securityMembers: []
     restrictingMembers: []
 

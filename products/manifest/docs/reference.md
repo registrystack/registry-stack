@@ -9,13 +9,26 @@ Source:
 
 ### `validate`
 
-Parses and validates a manifest. Prints `"metadata manifest valid: <path>"` and the
-canonical `source_manifest_digest` on success. Exits non-zero and prints all errors
-on failure.
+Checks one metadata manifest offline. Prints `"metadata manifest valid: <path>"`, the
+canonical `source_manifest_digest`, and a summary line on success. On a refusal it
+prints one sentence and then every finding to standard error, each placed at the
+member it names:
 
 ```text
-validate <metadata.yaml>
+error[config.unknown-key] metadata.yaml:10:1 /unexpected
+  ...
 ```
+
+```text
+validate <metadata.yaml> [--format human|json] [--deny-warnings]
+```
+
+`--format json` writes one `ManifestCtlReport` document (`apiVersion:
+id.registrystack.org/formats/manifest/ctl-report/v1alpha1`) to standard output
+instead, carrying `ok`, `command`, `status`, `filesChecked`, `errors`, `warnings`,
+`sourceManifestDigest` on success, and the `diagnostics` themselves.
+`--deny-warnings` refuses a manifest that has warnings. See
+[Check exit codes and diagnostics](#check-exit-codes-and-diagnostics).
 
 ### `render`
 
@@ -39,11 +52,57 @@ under `--site-root` instead of `--out`; every other artifact still writes under 
 
 ### `validate-profiles`
 
-Scans `profiles-dir` for `profile.yaml` descriptors, validates descriptor schema, and validates all referenced fixture manifests.
+Checks every `<profile>/profile.yaml` descriptor under `profiles-dir` (default
+`profiles`), every fixture manifest each descriptor lists, and each fixture
+against the expectations its descriptor declares. A YAML file under
+`profiles-dir` that is neither a descriptor nor a listed fixture is reported as a
+`manifest.profile.unlisted-file` warning, since no check reads it.
 
 ```text
-validate-profiles [profiles-dir]
+validate-profiles [profiles-dir] [--format human|json] [--deny-warnings]
 ```
+
+`--format json` writes the same `ManifestCtlReport` document as `validate`, with a
+`profiles` count instead of the digest.
+
+### Check exit codes and diagnostics
+
+`validate` and `validate-profiles` are the offline checks for the metadata
+manifest and the profile descriptor. Both exit with:
+
+| Exit | `status` | Meaning |
+| --- | --- | --- |
+| 0 | `complete` | Nothing was refused. Warnings, if any, are printed. |
+| 1 | `domain-refusal` | A file was refused, or `--deny-warnings` was given and a warning was found. |
+| 2 | `usage-error` | The arguments were not understood. Every subcommand uses this exit. |
+| 3 | `operational-failure` | A file or directory could not be read. |
+
+Every finding is `severity[code] file:line:column /json/pointer`, then the problem,
+then `next:` with the fix. Findings never repeat the value that was refused. The
+reader refuses, before any manifest rule runs:
+
+- a file larger than 1 MiB (`yaml.too-large`), YAML that does not parse
+  (`yaml.syntax`), and anchors or aliases (`yaml.anchor`, `yaml.alias`);
+- a key the format does not model (`config.unknown-key`, which lists the
+  accepted keys), a duplicate key, and an explicit `null` (`config.null-value`):
+  omit an optional member instead;
+- `${...}` in any text (`config.substitution-not-allowed`): a manifest is a
+  portable description, and nothing substitutes values into it.
+
+The manifest rules then report `manifest.metadata.*` codes, such as
+`manifest.metadata.unsupported-version`, `manifest.metadata.runtime-only-key`,
+`manifest.metadata.secret-bearing-key`, `manifest.metadata.missing-member`, and
+`manifest.metadata.invalid-url`. Profile checks report `manifest.profile.*` codes,
+such as `manifest.profile.id-mismatch`, `manifest.profile.missing-fixture`, and
+`manifest.profile.claim-missing`.
+
+`render` and `publish` read the manifest the same way and print the same findings
+when they refuse it.
+
+JSON Schemas generated from the reader types are published at
+`products/manifest/schemas/metadata.schema.json` and
+`products/manifest/schemas/profile.schema.json` for editors. The checks remain the
+authority: a schema cannot express every manifest rule.
 
 ### Render format values
 
@@ -443,13 +502,15 @@ Manifest-owned JSON-LD maps these bare keys to stable Registry Manifest RDF term
 
 `registry-manifest/v1` and the manifest-owned `*/v1` generated formats reject an
 unknown key at parse time (issue #249). `MetadataManifestFields` and its nested
-manifest structs carry `deny_unknown_fields`, and the manifest's hand-written
-`Deserialize` impl reports the offending key by its full dotted path, for example
+manifest structs carry `deny_unknown_fields`. The command line reports the offending
+key as `config.unknown-key` at its JSON Pointer, line, and column, for example
+`/catalog/publisher/x_post_beta_publisher_hint`; the library's `Deserialize` impl
+reports it by its full dotted path, for example
 `catalog.publisher.x_post_beta_publisher_hint: unknown field`. A manifest that
 carries a misspelled or ad-hoc key fails `validate`, `render`, and `publish` instead
 of parsing with the key silently dropped.
 
-The runtime-only and secret-bearing key checks run first, over the raw parsed value,
+The runtime-only and secret-bearing key checks run first, over the read document,
 before the strict key check runs. Readers must reject unrecognized or extension keys
 that look credential-bearing, including keys such as `client_secret`, `password`,
 `credential`, `credentials`, `api_key`, `private_key`, `token`, or `secret`, plus

@@ -30,7 +30,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "a3f450f6903b1d00818c05818c5276c04f0996e0df8f5a65bc11437b820a7c28"
+        "sha256": "b9a3e3234041b6bf18c076d2c62b3d6af0dcfbce2df926e8f7174f61b0d54182"
       }
     },
     {
@@ -3022,6 +3022,42 @@
       "artifact": {
         "path": "products/identifiers/contracts/catalog.v1.schema.json",
         "sha256": "e45632976b2436dc468805b78e6ac35d4cb05340b260370d011eee68fcf28c5d",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/manifest/metadata/metadata.v1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-manifest",
+      "title": "Registry Manifest metadata manifest",
+      "description": "Registry Manifest metadata manifest and profile descriptor JSON Schema.",
+      "source": {
+        "path": "crates/registry-manifest-cli/src/schema.rs",
+        "sha256": "93cd355b9b825c0949006e7bce4113ce4112518403807f706bf8ef4d240657ff"
+      },
+      "artifact": {
+        "path": "products/manifest/schemas/metadata.schema.json",
+        "sha256": "6429f6d8818e60ab42bacefb63f43d766cee16d1d08492a8ce85efdfed928ac3",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/manifest/profile/profile.v1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-manifest",
+      "title": "Registry Manifest profile descriptor",
+      "description": "Registry Manifest metadata manifest and profile descriptor JSON Schema.",
+      "source": {
+        "path": "crates/registry-manifest-cli/src/schema.rs",
+        "sha256": "93cd355b9b825c0949006e7bce4113ce4112518403807f706bf8ef4d240657ff"
+      },
+      "artifact": {
+        "path": "products/manifest/schemas/profile.schema.json",
+        "sha256": "3c704dfc737572014189a3294aecee5de377377e1330d56a8aaaabdb4a532ab8",
         "mediaType": "application/schema+json"
       }
     },

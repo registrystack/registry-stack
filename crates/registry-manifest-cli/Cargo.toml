@@ -10,16 +10,32 @@ keywords = ["registry", "metadata", "manifest", "cli", "publish"]
 categories = ["command-line-utilities", "encoding"]
 publish = false
 
-# not opted into [workspace.lints]: uses unsafe (libyaml FFI in src/main.rs)
+[lints]
+workspace = true
+
+[features]
+schema = [
+  "dep:schemars",
+  "registry-manifest-core/schema",
+  "registry-platform-yaml/schema",
+]
 
 [[bin]]
 name = "registry-manifest"
 path = "src/main.rs"
 
+[[example]]
+name = "manifest-schema"
+required-features = ["schema"]
+
 [dependencies]
 registry-manifest-core = { workspace = true }
 registry-platform-buildinfo.workspace = true
+registry-platform-config.workspace = true
+registry-platform-yaml.workspace = true
+schemars = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml_ng = { workspace = true }
-unsafe-libyaml = { version = "0.2.11" }
+
+[dev-dependencies]
+jsonschema = { workspace = true }

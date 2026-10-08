@@ -5717,12 +5717,14 @@ dependencies = [
 name = "registry-manifest-cli"
 version = "0.40.0"
 dependencies = [
+ "jsonschema",
  "registry-manifest-core",
  "registry-platform-buildinfo",
+ "registry-platform-config",
+ "registry-platform-yaml",
+ "schemars",
  "serde",
  "serde_json",
- "serde_yaml_ng",
- "unsafe-libyaml",
 ]
 
 [[package]]

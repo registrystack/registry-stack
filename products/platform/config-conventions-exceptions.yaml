@@ -9584,48 +9584,6 @@ exceptions:
   wp: WP3
   reason: the reader does not read through registry-platform-yaml
   resolution: Read through registry-platform-yaml
-- rule: CFG-SCHEMA-2
-  format: manifest/metadata
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: manifest/metadata
-  location: editors/configure.py#/SCHEMAS/manifest
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: manifest/metadata
-  location: crates/registry-manifest-cli/src/main.rs#load_manifest()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
-- rule: CFG-SCHEMA-2
-  format: manifest/profile
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: manifest/profile
-  location: editors/configure.py#/SCHEMAS/manifest
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: manifest/profile
-  location: crates/registry-manifest-cli/src/main.rs#load_profile_descriptor()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: messaging/ctl-report
   location: products/platform/config-formats.yaml#/current/apiVersion

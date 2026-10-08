@@ -59,6 +59,10 @@ SCHEMAS = {
         ("products/render/schemas/labels.schema.json", "labels/*.yaml"),
         ("products/render/schemas/runtime.schema.json", "runtime.yaml"),
     ),
+    "manifest": (
+        ("products/manifest/schemas/metadata.schema.json", "{document}"),
+        ("products/manifest/schemas/profile.schema.json", "**/profile.yaml"),
+    ),
 }
 CHECKS = {
     "breg": ("bregctl", "check", "{project}"),
@@ -314,7 +318,8 @@ def configure(product: str, project: Path, workspace: Path, document_arg: str | 
             if expected_hash is None or current_hash != expected_hash:
                 raise SetupError(f"managed schema was edited or not owned: {destination}")
         schema_bytes[destination] = content
-        mappings.setdefault(destination.as_uri(), []).append(str(project / relative_pattern))
+        pattern = document_name if relative_pattern == "{document}" else relative_pattern
+        mappings.setdefault(destination.as_uri(), []).append(str(project / pattern))
 
     task_pair = task_for(product, project, document)
     vscode_task, zed_task = task_pair if task_pair else (None, None)

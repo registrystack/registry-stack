@@ -184,6 +184,14 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/manifest/schemas/*.schema.json",
+      "sourcePath": "crates/registry-manifest-cli/src/schema.rs",
+      "owner": "registry-manifest",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Registry Manifest metadata manifest and profile descriptor JSON Schema."
     }
   ],
   "records": [

@@ -1,65 +1,376 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::process::ExitCode;
 
-use registry_manifest_cli::{reject_yaml_anchors_and_aliases, YamlPrepassError, YAML_MAX_BYTES};
-use registry_manifest_core::{
-    canonicalize_json, compile_manifest, is_runtime_only_key, render_base_dcat,
-    render_breg_dcat_ap, render_catalog, render_cpsv_ap, render_dataset_policy_document,
-    render_dcat_profile, render_entity_schema_draft_2020_12, render_evidence_offering,
-    render_evidence_offerings, render_form_schema_draft_2020_12, render_ogc_records_items,
-    render_policy_collection, render_shacl, sha256_uri, source_manifest_digest, MetadataError,
-    MetadataManifest,
+use registry_manifest_cli::{
+    check_metadata_file, check_profiles, manifest_digest, metadata_error_diagnostics, ReadManifest,
+    CTL_REPORT_API_VERSION, CTL_REPORT_KIND,
 };
-use serde::{de::DeserializeOwned, Deserialize};
-use serde_yaml_ng::Value;
+use registry_manifest_core::{
+    canonicalize_json, compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog,
+    render_cpsv_ap, render_dataset_policy_document, render_dcat_profile,
+    render_entity_schema_draft_2020_12, render_evidence_offering, render_evidence_offerings,
+    render_form_schema_draft_2020_12, render_ogc_records_items, render_policy_collection,
+    render_shacl, sha256_uri, CompiledMetadata,
+};
+use registry_platform_yaml::{Diagnostic, Report};
+use serde::Serialize;
 
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("{error}");
-        std::process::exit(1);
+/// The command line was incomplete, conflicting, or unsupported.
+const USAGE_EXIT: u8 = 2;
+/// A file or directory the command reads could not be read.
+const UNAVAILABLE_EXIT: u8 = 3;
+const USAGE_CODE: &str = "manifest.usage.invalid-arguments";
+const USAGE_ACTION: &str =
+    "Run registry-manifest --help, or the command with --help, and retry with the documented \
+     arguments.";
+
+fn main() -> ExitCode {
+    let args = env::args().skip(1).collect::<Vec<_>>();
+    ExitCode::from(run(&args))
+}
+
+/// Why a command stopped.
+enum Failure {
+    /// The arguments do not match the command's synopsis. The message never
+    /// repeats an argument.
+    Usage(&'static str),
+    /// A refusal from rendering or publication.
+    Refused(String),
+    /// Findings from reading the manifest.
+    Diagnostics {
+        report: Report,
+        exit: u8,
+        sentence: &'static str,
+    },
+}
+
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self::Refused(message)
     }
 }
 
-fn run() -> Result<(), String> {
-    let args = env::args().skip(1).collect::<Vec<_>>();
-    match args.first().map(String::as_str) {
+fn run(args: &[String]) -> u8 {
+    let command = args.first().map(String::as_str);
+    if matches!(
+        command,
+        Some("validate" | "validate-profiles" | "render" | "publish")
+    ) && args[1..].iter().any(|arg| arg == "--help" || arg == "-h")
+    {
+        println!("{}", usage());
+        return 0;
+    }
+    let result = match command {
         Some("--version") => {
             println!(
                 "registry-manifest {}",
                 registry_platform_buildinfo::DISPLAY_VERSION
             );
-            Ok(())
+            Ok(0)
         }
-        Some("validate") => {
-            let path = args.get(1).ok_or_else(usage)?;
-            let manifest = load_manifest(path)?;
-            registry_manifest_core::validate_manifest(&manifest).map_err(format_metadata_error)?;
-            let digest = source_manifest_digest(&manifest).map_err(|error| error.to_string())?;
-            println!("metadata manifest valid: {path}");
-            println!("source_manifest_digest: {digest}");
-            Ok(())
-        }
-        Some("render") => render_command(&args[1..]),
-        Some("publish") => publish_command(&args[1..]),
-        Some("validate-profiles") => validate_profiles_command(&args[1..]),
-        Some("--help") | Some("-h") | Some("help") => {
+        Some("--help" | "-h" | "help") => {
             println!("{}", usage());
-            Ok(())
+            Ok(0)
         }
-        _ => Err(usage()),
+        Some("validate") => validate_command(&args[1..]),
+        Some("validate-profiles") => validate_profiles_command(&args[1..]),
+        Some("render") => render_command(&args[1..]).map(|()| 0),
+        Some("publish") => publish_command(&args[1..]).map(|()| 0),
+        Some(_) => Err(Failure::Usage(
+            "the command is not one registry-manifest runs",
+        )),
+        None => Err(Failure::Usage("registry-manifest needs a command")),
+    };
+    match result {
+        Ok(exit) => exit,
+        Err(Failure::Usage(message)) => {
+            let diagnostic = Diagnostic::error(USAGE_CODE, "", message, USAGE_ACTION);
+            if machine_readable(args) {
+                let mut report = Report::new(vec![diagnostic]);
+                report.set_files_checked(0);
+                write_report(&CtlReport::new("usage", USAGE_EXIT, &report));
+            } else {
+                eprint!("{}", diagnostic.render_human());
+                eprintln!("{}", usage());
+            }
+            USAGE_EXIT
+        }
+        Err(Failure::Refused(message)) => {
+            eprintln!("{message}");
+            1
+        }
+        Err(Failure::Diagnostics {
+            report,
+            exit,
+            sentence,
+        }) => {
+            eprintln!("{sentence}");
+            eprint!("{}", report.render_human());
+            exit
+        }
     }
 }
 
-fn render_command(args: &[String]) -> Result<(), String> {
-    let manifest_path = args.first().ok_or_else(usage)?;
-    let format = option_value(args, "--format").ok_or_else(usage)?;
+/// Whether a usage error is reported as JSON: `--format json` was asked of a
+/// command whose `--format` selects the report format.
+fn machine_readable(args: &[String]) -> bool {
+    !matches!(args.first().map(String::as_str), Some("render" | "publish"))
+        && args.iter().enumerate().any(|(index, arg)| {
+            arg == "--format=json"
+                || (arg == "--format" && args.get(index + 1).map(String::as_str) == Some("json"))
+        })
+}
+
+/// The options `validate` and `validate-profiles` share.
+struct CheckOptions {
+    path: Option<String>,
+    json: bool,
+    deny_warnings: bool,
+}
+
+impl CheckOptions {
+    fn parse(args: &[String]) -> Result<Self, Failure> {
+        let mut options = Self {
+            path: None,
+            json: false,
+            deny_warnings: false,
+        };
+        let mut args = args.iter();
+        while let Some(arg) = args.next() {
+            let format = match arg.as_str() {
+                "--deny-warnings" => {
+                    options.deny_warnings = true;
+                    continue;
+                }
+                "--format" => args.next().map(String::as_str),
+                other => match other.strip_prefix("--format=") {
+                    Some(value) => Some(value),
+                    None if other.starts_with('-') => {
+                        return Err(Failure::Usage("an option is not one this command accepts"))
+                    }
+                    None if options.path.is_some() => {
+                        return Err(Failure::Usage("this command takes one path"))
+                    }
+                    None => {
+                        options.path = Some(other.to_owned());
+                        continue;
+                    }
+                },
+            };
+            options.json = match format {
+                Some("json") => true,
+                Some("human") => false,
+                _ => return Err(Failure::Usage("--format accepts human or json")),
+            };
+        }
+        Ok(options)
+    }
+}
+
+/// The exit code for a finished check.
+fn check_exit(report: &Report, unavailable: bool, deny_warnings: bool) -> u8 {
+    if unavailable {
+        UNAVAILABLE_EXIT
+    } else if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+        1
+    } else {
+        0
+    }
+}
+
+/// The report `validate --format json` and `validate-profiles --format
+/// json` write (`manifest/ctl-report`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CtlReport<'a> {
+    ok: bool,
+    command: &'a str,
+    status: &'static str,
+    api_version: &'static str,
+    kind: &'static str,
+    files_checked: usize,
+    errors: usize,
+    warnings: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_manifest_digest: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profiles: Option<usize>,
+    diagnostics: &'a [Diagnostic],
+}
+
+impl<'a> CtlReport<'a> {
+    fn new(command: &'a str, exit: u8, report: &'a Report) -> Self {
+        Self {
+            ok: exit == 0,
+            command,
+            status: match exit {
+                0 => "complete",
+                USAGE_EXIT => "usage-error",
+                UNAVAILABLE_EXIT => "operational-failure",
+                _ => "domain-refusal",
+            },
+            api_version: CTL_REPORT_API_VERSION,
+            kind: CTL_REPORT_KIND,
+            files_checked: report.files_checked().unwrap_or(0),
+            errors: report.error_count(),
+            warnings: report.warning_count(),
+            source_manifest_digest: None,
+            profiles: None,
+            diagnostics: report.diagnostics(),
+        }
+    }
+}
+
+fn write_report(report: &CtlReport<'_>) {
+    match serde_json::to_string_pretty(report) {
+        Ok(json) => println!("{json}"),
+        Err(_) => eprintln!("registry-manifest could not write its JSON report."),
+    }
+}
+
+/// `validate`: check one metadata manifest offline (CFG-CHECK-1).
+fn validate_command(args: &[String]) -> Result<u8, Failure> {
+    let options = CheckOptions::parse(args)?;
+    let path = options.path.ok_or(Failure::Usage(
+        "validate needs the path of a metadata manifest",
+    ))?;
+    let check = check_metadata_file(Path::new(&path));
+    let mut report = check.report;
+    let digest = match check.manifest.as_ref().map(manifest_digest) {
+        Some(Ok(digest)) => Some(digest),
+        Some(Err(diagnostic)) => {
+            report.push(*diagnostic);
+            None
+        }
+        None => None,
+    };
+    let exit = check_exit(&report, check.unavailable, options.deny_warnings);
+    if options.json {
+        let mut written = CtlReport::new("validate", exit, &report);
+        written.source_manifest_digest = digest.as_deref();
+        write_report(&written);
+    } else if exit == 0 {
+        println!("metadata manifest valid: {path}");
+        if let Some(digest) = &digest {
+            println!("source_manifest_digest: {digest}");
+        }
+        print!("{}", report.render_human());
+    } else {
+        eprintln!(
+            "{}",
+            if check.unavailable {
+                "registry-manifest validate could not read the manifest."
+            } else {
+                "registry-manifest validate refused the manifest."
+            }
+        );
+        eprint!("{}", report.render_human());
+    }
+    Ok(exit)
+}
+
+/// `validate-profiles`: check every profile descriptor and the fixtures it
+/// lists offline (CFG-CHECK-1).
+fn validate_profiles_command(args: &[String]) -> Result<u8, Failure> {
+    let options = CheckOptions::parse(args)?;
+    let root = PathBuf::from(options.path.as_deref().unwrap_or("profiles"));
+    let check = check_profiles(&root);
+    let exit = check_exit(&check.report, check.unavailable, options.deny_warnings);
+    if options.json {
+        let mut written = CtlReport::new("validate-profiles", exit, &check.report);
+        written.profiles = Some(check.profiles);
+        write_report(&written);
+    } else if exit == 0 {
+        println!(
+            "validated {} profile descriptors and fixtures",
+            check.profiles
+        );
+        print!("{}", check.report.render_human());
+    } else {
+        eprintln!(
+            "{}",
+            if check.unavailable {
+                "registry-manifest validate-profiles could not read every profile descriptor \
+                 and fixture."
+            } else {
+                "registry-manifest validate-profiles refused a profile descriptor or fixture."
+            }
+        );
+        eprint!("{}", check.report.render_human());
+    }
+    Ok(exit)
+}
+
+/// The manifest at `path`, read and validated, for `render` and `publish`.
+/// Warnings go to standard error, so standard output carries only the
+/// command's own output.
+fn load_manifest(path: &str, sentences: Sentences) -> Result<ReadManifest, Failure> {
+    let check = check_metadata_file(Path::new(path));
+    let exit = check_exit(&check.report, check.unavailable, false);
+    match check.manifest {
+        Some(read) if exit == 0 => {
+            if check.report.warning_count() > 0 {
+                eprint!("{}", check.report.render_human());
+            }
+            Ok(read)
+        }
+        _ => Err(Failure::Diagnostics {
+            report: check.report,
+            exit,
+            sentence: if check.unavailable {
+                sentences.unreadable
+            } else {
+                sentences.refused
+            },
+        }),
+    }
+}
+
+/// What `render` or `publish` says before the findings that stopped it.
+#[derive(Clone, Copy)]
+struct Sentences {
+    refused: &'static str,
+    unreadable: &'static str,
+}
+
+const RENDER: Sentences = Sentences {
+    refused: "registry-manifest render refused the manifest.",
+    unreadable: "registry-manifest render could not read the manifest.",
+};
+
+const PUBLISH: Sentences = Sentences {
+    refused: "registry-manifest publish refused the manifest.",
+    unreadable: "registry-manifest publish could not read the manifest.",
+};
+
+/// The compiled manifest, or the rules compilation refused, placed in the
+/// manifest.
+fn compile(read: &ReadManifest, sentences: Sentences) -> Result<CompiledMetadata, Failure> {
+    compile_manifest(&read.manifest).map_err(|error| {
+        let mut report = Report::new(metadata_error_diagnostics(&read.document, error));
+        report.set_files_checked(1);
+        Failure::Diagnostics {
+            report,
+            exit: 1,
+            sentence: sentences.refused,
+        }
+    })
+}
+
+fn render_command(args: &[String]) -> Result<(), Failure> {
+    let manifest_path = args.first().ok_or(Failure::Usage(
+        "render needs the path of a metadata manifest",
+    ))?;
+    let format = option_value(args, "--format").ok_or(Failure::Usage(
+        "render needs --format and the artifact to render",
+    ))?;
     let profile = option_value(args, "--profile");
-    let manifest = load_manifest(manifest_path)?;
-    let compiled = compile_manifest(&manifest).map_err(format_metadata_error)?;
+    let read = load_manifest(manifest_path, RENDER)?;
+    let compiled = compile(&read, RENDER)?;
     let value = match format.as_str() {
         "catalog" => render_catalog(&compiled),
         "evidence-offerings" => render_evidence_offerings(&compiled),
@@ -111,17 +422,27 @@ fn render_command(args: &[String]) -> Result<(), String> {
                 .ok_or_else(|| format!("form not found: {form}"))?
         }
         "ogc-records" => render_ogc_records_items(&compiled),
-        other => return Err(format!("unsupported render format: {other}")),
+        other => return Err(format!("unsupported render format: {other}").into()),
     };
-    print_json(&value)
+    Ok(print_json(&value)?)
 }
 
-fn publish_command(args: &[String]) -> Result<(), String> {
-    let manifest_path = args.first().ok_or_else(usage)?;
+fn publish_command(args: &[String]) -> Result<(), Failure> {
+    let manifest_path = args.first().ok_or(Failure::Usage(
+        "publish needs the path of a metadata manifest",
+    ))?;
     let out = option_value(args, "--out").unwrap_or_else(|| "public/metadata".to_string());
-    let manifest = load_manifest(manifest_path)?;
-    let compiled = compile_manifest(&manifest).map_err(format_metadata_error)?;
-    let source_digest = source_manifest_digest(&manifest).map_err(|error| error.to_string())?;
+    let read = load_manifest(manifest_path, PUBLISH)?;
+    let compiled = compile(&read, PUBLISH)?;
+    let source_digest = manifest_digest(&read).map_err(|diagnostic| {
+        let mut report = Report::new(vec![*diagnostic]);
+        report.set_files_checked(1);
+        Failure::Diagnostics {
+            report,
+            exit: 1,
+            sentence: PUBLISH.refused,
+        }
+    })?;
     let out = PathBuf::from(out);
     let out_root = prepare_publish_root(&out, "metadata.publish.out_not_directory")?;
     let site_root = option_value(args, "--site-root")
@@ -568,499 +889,6 @@ fn write_legacy_registry_manifest_discovery(
     )
 }
 
-fn validate_profiles_command(args: &[String]) -> Result<(), String> {
-    let root = PathBuf::from(
-        args.first()
-            .cloned()
-            .unwrap_or_else(|| "profiles".to_string()),
-    );
-    let profile_paths = profile_descriptor_paths(&root)?;
-    let mut errors = Vec::new();
-    for profile_path in &profile_paths {
-        match load_profile_descriptor(profile_path) {
-            Ok(descriptor) => {
-                validate_profile_descriptor(profile_path, &descriptor, &mut errors);
-                for fixture in &descriptor.fixtures {
-                    validate_profile_fixture(profile_path, &descriptor, fixture, &mut errors);
-                }
-            }
-            Err(error) => errors.push(error),
-        }
-    }
-
-    if errors.is_empty() {
-        println!(
-            "validated {} profile descriptors and fixtures",
-            profile_paths.len()
-        );
-        Ok(())
-    } else {
-        Err(errors.join("\n"))
-    }
-}
-
-fn profile_descriptor_paths(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut paths = Vec::new();
-    let entries = fs::read_dir(root)
-        .map_err(|error| format!("metadata.profile.directory_read_failed: {error}"))?;
-    for entry in entries {
-        let entry =
-            entry.map_err(|error| format!("metadata.profile.directory_read_failed: {error}"))?;
-        let path = entry.path().join("profile.yaml");
-        if path.is_file() {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-    if paths.is_empty() {
-        Err(format!(
-            "metadata.profile.descriptor_missing: no profile.yaml files under {}",
-            root.display()
-        ))
-    } else {
-        Ok(paths)
-    }
-}
-
-fn load_profile_descriptor(path: &Path) -> Result<ProfileDescriptor, String> {
-    let raw = load_yaml_source(path, YamlInput::ProfileDescriptor)?;
-    deserialize_yaml(&raw, path, YamlInput::ProfileDescriptor)
-}
-
-fn validate_profile_descriptor(
-    path: &Path,
-    descriptor: &ProfileDescriptor,
-    errors: &mut Vec<String>,
-) {
-    if descriptor.schema_version != "registry-manifest-profile/v1" {
-        errors.push(format!(
-            "{}: metadata.profile.version_unsupported",
-            path.display()
-        ));
-    }
-    if descriptor.profile.id.trim().is_empty() {
-        errors.push(format!("{}: metadata.profile.id_missing", path.display()));
-    }
-    if let Some(directory_name) = path
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-    {
-        if !descriptor.profile.id.is_empty() && descriptor.profile.id != directory_name {
-            errors.push(format!(
-                "{}: metadata.profile.id_mismatch expected directory id {directory_name}, found {}",
-                path.display(),
-                descriptor.profile.id
-            ));
-        }
-    }
-    if descriptor.profile.version.trim().is_empty() {
-        errors.push(format!(
-            "{}: metadata.profile.version_missing",
-            path.display()
-        ));
-    }
-    if descriptor.supported_input_artifacts.is_empty() {
-        errors.push(format!(
-            "{}: metadata.profile.supported_input_artifacts_missing",
-            path.display()
-        ));
-    }
-    if descriptor.conformance_checks.is_empty() {
-        errors.push(format!(
-            "{}: metadata.profile.conformance_checks_missing",
-            path.display()
-        ));
-    }
-    if descriptor.fixtures.is_empty() {
-        errors.push(format!(
-            "{}: metadata.profile.fixtures_missing",
-            path.display()
-        ));
-    }
-}
-
-fn validate_profile_fixture(
-    profile_path: &Path,
-    descriptor: &ProfileDescriptor,
-    fixture: &ProfileFixture,
-    errors: &mut Vec<String>,
-) {
-    let fixture_path = profile_path
-        .parent()
-        .expect("profile path has parent")
-        .join(&fixture.path);
-    let yaml_kind = YamlInput::ProfileFixture {
-        profile_path,
-        fixture: &fixture.path,
-    };
-    let raw = match load_yaml_source(&fixture_path, yaml_kind) {
-        Ok(raw) => raw,
-        Err(error) => {
-            errors.push(error);
-            return;
-        }
-    };
-    let manifest: MetadataManifest = match deserialize_yaml(&raw, &fixture_path, yaml_kind) {
-        Ok(manifest) => manifest,
-        Err(error) => {
-            errors.push(error);
-            return;
-        }
-    };
-    if let Err(error) = registry_manifest_core::validate_manifest(&manifest) {
-        errors.push(format!(
-            "{}: {}",
-            fixture_path.display(),
-            format_metadata_error(error)
-        ));
-        return;
-    }
-    let raw_value = match serde_yaml_ng::from_str::<Value>(&raw) {
-        Ok(value) => value,
-        Err(error) => {
-            errors.push(format!(
-                "{}: metadata.profile.fixture_parse_failed: {error}",
-                fixture_path.display()
-            ));
-            return;
-        }
-    };
-    collect_runtime_only_keys(&raw_value, &fixture_path.display().to_string(), errors);
-
-    if !manifest.profiles.iter().any(|claim| {
-        claim.id == descriptor.profile.id && claim.version == descriptor.profile.version
-    }) {
-        errors.push(format!(
-            "{}: metadata.profile.claim_missing: {} {}",
-            fixture_path.display(),
-            descriptor.profile.id,
-            descriptor.profile.version
-        ));
-    }
-
-    let concepts = manifest_concepts(&manifest);
-    for required in &descriptor.required_concepts {
-        if !concepts.contains(&required.iri) {
-            errors.push(format!(
-                "{}: metadata.profile.required_concept_missing: {}",
-                fixture_path.display(),
-                required.iri
-            ));
-        }
-    }
-
-    let entities = manifest_entities(&manifest);
-    for required in &descriptor.required_identifiers {
-        let identifiers = entities
-            .iter()
-            .find(|entity| entity.name == required.entity)
-            .map(|entity| entity.identifiers.as_slice())
-            .unwrap_or_default();
-        if !identifiers
-            .iter()
-            .any(|identifier| identifier.name == required.name && identifier.kind == required.kind)
-        {
-            errors.push(format!(
-                "{}: metadata.profile.identifier_missing: {}.{}",
-                fixture_path.display(),
-                required.entity,
-                required.name
-            ));
-        }
-    }
-
-    for expected in &descriptor.cardinality_expectations {
-        let count = entities
-            .iter()
-            .find(|entity| entity.name == expected.entity)
-            .map(|entity| {
-                entity
-                    .fields
-                    .iter()
-                    .filter(|field| field.name == expected.field)
-                    .count()
-            })
-            .unwrap_or_default();
-        if count < expected.min || count > expected.max {
-            errors.push(format!(
-                "{}: metadata.profile.cardinality_mismatch: {}.{} expected {}..{}, found {}",
-                fixture_path.display(),
-                expected.entity,
-                expected.field,
-                expected.min,
-                expected.max,
-                count
-            ));
-        }
-    }
-
-    let codelists = manifest_codelists(&manifest);
-    for expected in &descriptor.codelist_expectations {
-        let actual = codelists.get(&expected.id).cloned().unwrap_or_default();
-        let missing = expected
-            .required_codes
-            .iter()
-            .filter(|code| !actual.contains(*code))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            errors.push(format!(
-                "{}: metadata.profile.codelist_mismatch: {} missing {}",
-                fixture_path.display(),
-                expected.id,
-                missing.join(", ")
-            ));
-        }
-    }
-}
-
-fn load_manifest(path: impl AsRef<Path>) -> Result<MetadataManifest, String> {
-    let path = path.as_ref();
-    let raw = load_yaml_source(path, YamlInput::Manifest)?;
-    let raw_value = serde_yaml_ng::from_str::<Value>(&raw)
-        .map_err(|error| YamlInput::Manifest.parse_error(path, error))?;
-    let mut runtime_key_errors = Vec::new();
-    collect_runtime_only_keys(
-        &raw_value,
-        &path.display().to_string(),
-        &mut runtime_key_errors,
-    );
-    if !runtime_key_errors.is_empty() {
-        return Err(runtime_key_errors.join("\n"));
-    }
-    deserialize_yaml(&raw, path, YamlInput::Manifest)
-}
-
-#[derive(Clone, Copy)]
-enum YamlInput<'a> {
-    Manifest,
-    ProfileDescriptor,
-    ProfileFixture {
-        profile_path: &'a Path,
-        fixture: &'a str,
-    },
-}
-
-impl YamlInput<'_> {
-    fn read_error(self, path: &Path, error: std::io::Error) -> String {
-        match self {
-            YamlInput::Manifest => format!("metadata.manifest.file_not_found: {error}"),
-            YamlInput::ProfileDescriptor => {
-                format!(
-                    "metadata.profile.file_not_found: {}: {error}",
-                    path.display()
-                )
-            }
-            YamlInput::ProfileFixture {
-                profile_path,
-                fixture,
-            } => {
-                format!(
-                    "{}: metadata.profile.fixture_missing: {fixture}: {error}",
-                    profile_path.display()
-                )
-            }
-        }
-    }
-
-    fn too_large_error(self, path: &Path) -> String {
-        match self {
-            YamlInput::Manifest | YamlInput::ProfileFixture { .. } => format!(
-                "metadata.manifest.too_large: {} exceeds {YAML_MAX_BYTES} bytes",
-                path.display()
-            ),
-            YamlInput::ProfileDescriptor => format!(
-                "metadata.profile.too_large: {} exceeds {YAML_MAX_BYTES} bytes",
-                path.display()
-            ),
-        }
-    }
-
-    fn aliases_error(self, path: &Path) -> String {
-        match self {
-            YamlInput::Manifest | YamlInput::ProfileFixture { .. } => {
-                format!("metadata.manifest.aliases_unsupported: {}", path.display())
-            }
-            YamlInput::ProfileDescriptor => {
-                format!("metadata.profile.aliases_unsupported: {}", path.display())
-            }
-        }
-    }
-
-    fn parse_error(self, path: &Path, error: impl std::fmt::Display) -> String {
-        match self {
-            YamlInput::Manifest => format!("metadata.manifest.parse_failed: {error}"),
-            YamlInput::ProfileDescriptor => {
-                format!("metadata.profile.parse_failed: {}: {error}", path.display())
-            }
-            YamlInput::ProfileFixture { .. } => {
-                format!(
-                    "{}: metadata.manifest.parse_failed: {error}",
-                    path.display()
-                )
-            }
-        }
-    }
-}
-
-fn load_yaml_source(path: &Path, kind: YamlInput<'_>) -> Result<String, String> {
-    let metadata = fs::metadata(path).map_err(|error| kind.read_error(path, error))?;
-    if metadata.len() > YAML_MAX_BYTES {
-        return Err(kind.too_large_error(path));
-    }
-    let raw = fs::read_to_string(path).map_err(|error| kind.read_error(path, error))?;
-    if raw.len() as u64 > YAML_MAX_BYTES {
-        return Err(kind.too_large_error(path));
-    }
-    reject_yaml_anchors_and_aliases(&raw).map_err(|error| match error {
-        YamlPrepassError::AliasesUnsupported => kind.aliases_error(path),
-        YamlPrepassError::Parse(error) => kind.parse_error(path, error),
-    })?;
-    Ok(raw)
-}
-
-fn deserialize_yaml<T: DeserializeOwned>(
-    raw: &str,
-    path: &Path,
-    kind: YamlInput<'_>,
-) -> Result<T, String> {
-    serde_yaml_ng::from_str(raw).map_err(|error| kind.parse_error(path, error))
-}
-
-fn manifest_entities(manifest: &MetadataManifest) -> Vec<&registry_manifest_core::EntityManifest> {
-    manifest
-        .datasets
-        .iter()
-        .flat_map(|dataset| dataset.entities.iter())
-        .collect()
-}
-
-fn manifest_concepts(manifest: &MetadataManifest) -> BTreeSet<String> {
-    manifest_entities(manifest)
-        .into_iter()
-        .flat_map(|entity| entity.fields.iter())
-        .flat_map(|field| field.concepts.iter().cloned())
-        .collect()
-}
-
-fn manifest_codelists(manifest: &MetadataManifest) -> BTreeMap<String, BTreeSet<String>> {
-    manifest
-        .codelists
-        .iter()
-        .map(|codelist| {
-            (
-                codelist.id.clone(),
-                codelist
-                    .concepts
-                    .iter()
-                    .map(|concept| concept.code.clone())
-                    .collect(),
-            )
-        })
-        .collect()
-}
-
-fn collect_runtime_only_keys(value: &Value, path: &str, errors: &mut Vec<String>) {
-    match value {
-        Value::Mapping(mapping) => {
-            for (key, child) in mapping {
-                if let Value::String(key) = key {
-                    if is_runtime_only_key(key) {
-                        errors.push(format!(
-                            "{path}: metadata.profile.runtime_key_present: {key}"
-                        ));
-                    }
-                }
-                collect_runtime_only_keys(child, path, errors);
-            }
-        }
-        Value::Sequence(sequence) => {
-            for child in sequence {
-                collect_runtime_only_keys(child, path, errors);
-            }
-        }
-        Value::Tagged(tagged) => collect_runtime_only_keys(&tagged.value, path, errors),
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct ProfileDescriptor {
-    schema_version: String,
-    profile: ProfileMetadata,
-    supported_input_artifacts: Vec<Value>,
-    required_concepts: Vec<ConceptExpectation>,
-    required_identifiers: Vec<IdentifierExpectation>,
-    cardinality_expectations: Vec<CardinalityExpectation>,
-    codelist_expectations: Vec<CodelistExpectation>,
-    unsupported_mappings: Vec<Value>,
-    conformance_checks: Vec<Value>,
-    fixtures: Vec<ProfileFixture>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct ProfileMetadata {
-    id: String,
-    version: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct ConceptExpectation {
-    iri: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct IdentifierExpectation {
-    entity: String,
-    name: String,
-    kind: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct CardinalityExpectation {
-    entity: String,
-    field: String,
-    min: usize,
-    max: usize,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct CodelistExpectation {
-    id: String,
-    required_codes: Vec<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct ProfileFixture {
-    path: String,
-}
-
-fn format_metadata_error(error: MetadataError) -> String {
-    match error {
-        MetadataError::VersionUnsupported => "metadata.manifest.version_unsupported".to_string(),
-        MetadataError::Validation { errors } => {
-            let details = errors
-                .into_iter()
-                .map(|error| format!("{}: {}", error.path, error.message))
-                .collect::<Vec<_>>()
-                .join("; ");
-            if details.is_empty() {
-                "metadata.manifest.validation_failed".to_string()
-            } else {
-                format!("metadata.manifest.validation_failed: {details}")
-            }
-        }
-    }
-}
-
 fn option_value(args: &[String], name: &str) -> Option<String> {
     args.windows(2)
         .find_map(|window| (window[0] == name).then(|| window[1].clone()))
@@ -1219,5 +1047,5 @@ fn print_json(value: &serde_json::Value) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage: registry-manifest validate <metadata.yaml> | validate-profiles [profiles-dir] | render <metadata.yaml> --format <catalog|evidence-offerings|evidence-offering|policies|policy|dcat|bregdcat-ap|cpsv-ap|shacl|json-schema|form-json-schema|ogc-records> [--profile <id>] [--dataset <id> --entity <name>] [--form <id>] [--offering <id>] | publish <metadata.yaml> --out <dir> [--site-root <dir>]".to_string()
+    "usage: registry-manifest validate <metadata.yaml> [--format human|json] [--deny-warnings] | validate-profiles [profiles-dir] [--format human|json] [--deny-warnings] | render <metadata.yaml> --format <catalog|evidence-offerings|evidence-offering|policies|policy|dcat|bregdcat-ap|cpsv-ap|shacl|json-schema|form-json-schema|ogc-records> [--profile <id>] [--dataset <id> --entity <name>] [--form <id>] [--offering <id>] | publish <metadata.yaml> --out <dir> [--site-root <dir>]".to_string()
 }
