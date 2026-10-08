@@ -12,6 +12,9 @@ on:
       - release/manifests/**
       - release/scripts/rehearse-upgrade.py
       - release/scripts/test_rehearse_upgrade.py
+      - release/scripts/upgrade_steps.py
+      - release/scripts/test_upgrade_steps.py
+      - release/notes/config-conventions/upgrade-steps.yaml
       - .github/workflows/release-upgrade-rehearsal.yml
   workflow_dispatch:
     inputs:
