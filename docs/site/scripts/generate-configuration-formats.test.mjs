@@ -67,7 +67,7 @@ test('states each header, schema, check, and stability as the registry records i
   assert.equal(formats.get('breg/linkml-schema').exceptionClass, 'external-format');
   assert.equal(formats.get('manifest/metadata').exceptionClass, 'exchange-model');
   const discovery = formats.get('discovery/runtime');
-  assert.equal(discovery.check, null);
+  assert.equal(discovery.check, 'discoveryctl check --runtime-config <file>');
   assert.equal(discovery.kind, 'DiscoveryRuntimeConfig');
   assert.equal(formats.get('casework/project').schemaId, null);
   assert.equal(formats.get('casework/project').schemaPath, null);
