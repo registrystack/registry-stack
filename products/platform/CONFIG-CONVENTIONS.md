@@ -270,9 +270,10 @@ accepts both. A value outside the member's bounds, or a number no binary64
 value can hold, is refused with `config.out-of-range`, naming the bounds.
 
 Quoted and block scalars (`'...'`, `"..."`, `|`, `>`) are always strings.
-A string holds no C0 control character other than tab, line feed, and
-carriage return, whether written raw or as an escape (`"\0"`, `"\a"`,
-`"\x01"`); such a value is refused with `yaml.control-character`.
+A string holds no control character (C0, DEL, or C1, NEL included) other
+than tab, line feed, and carriage return, whether written raw or as an escape
+(`"\0"`, `"\a"`, `"\x01"`, `"\x7f"`, `"\N"`); such a value is refused with
+`yaml.control-character`.
 
 **CFG-VAL-2 (MUST). A member typed as text accepts only a string.** A plain
 scalar that resolves to null, a boolean, or a number in a text position is

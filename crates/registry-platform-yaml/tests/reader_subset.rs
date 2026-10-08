@@ -717,6 +717,39 @@ fn cfg_val_1_a_control_character_in_a_text_value_is_refused() {
 }
 
 #[test]
+fn cfg_val_1_delete_and_a_c1_control_character_in_a_text_value_are_refused() {
+    let report = scan_refusal(
+        "a: \"x\\x7fy\"\nb: \"x\\x80y\"\nc: \"x\\Ny\"\nd: \"x\\u009fy\"\ne: \"x\u{7f}y\"\nf: \"x\u{85}y\"\ng: \"x\u{9b}y\"\n",
+    );
+    let found: Vec<(&str, &str)> = report
+        .diagnostics()
+        .iter()
+        .map(|d| (d.code.as_str(), d.path.as_str()))
+        .collect();
+    let code = "yaml.control-character";
+    assert_eq!(
+        found,
+        [
+            (code, "/a"),
+            (code, "/b"),
+            (code, "/c"),
+            (code, "/d"),
+            (code, "/e"),
+            (code, "/f"),
+            (code, "/g"),
+        ]
+    );
+}
+
+#[test]
+fn cfg_val_1_text_around_the_c1_range_is_accepted() {
+    let NodeValue::Mapping(entries) = scan_ok("a: \"~\\xa0\"\nb: \"\u{a0}\u{e9}\"\n") else {
+        panic!("a mapping");
+    };
+    assert_eq!(entries.len(), 2);
+}
+
+#[test]
 fn cfg_val_1_tab_line_feed_and_carriage_return_are_text() {
     let NodeValue::Mapping(entries) = scan_ok("a: \"x\\ty\\nz\\r\"\nb: \"x\ty\"\nc: |\n  x\n  y\n")
     else {

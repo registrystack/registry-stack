@@ -924,11 +924,12 @@ fn convert_style(style: EventStyle) -> ScalarStyle {
     }
 }
 
-/// Whether text holds a C0 control character other than tab, line feed, and
-/// carriage return, written raw or as an escape (CFG-VAL-1).
+/// Whether text holds a control character (C0, DEL, or C1, NEL included)
+/// other than tab, line feed, and carriage return, written raw or as an
+/// escape (CFG-VAL-1).
 fn holds_control_character(text: &str) -> bool {
     text.chars()
-        .any(|c| c < '\u{20}' && !matches!(c, '\t' | '\n' | '\r'))
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
 }
 
 fn refusal_problem(refusal: Refusal, pointer: String, at: Position) -> Problem {

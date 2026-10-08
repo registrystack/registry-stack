@@ -207,8 +207,9 @@ Plain scalars resolve through one table (CFG-VAL-1), documented in
   `yaml.ambiguous-number`;
 - everything else, including `1_000` and `09:00`, is text.
 
-Text holds no C0 control character other than tab, line feed, and carriage
-return, whether written raw or as an escape such as `"\0"` or `"\x01"`:
+Text holds no control character (C0, DEL, or C1, NEL included) other than
+tab, line feed, and carriage return, whether written raw or as an escape
+such as `"\0"`, `"\x01"`, or `"\N"`:
 such a value is refused as `yaml.control-character` before a hook sees it,
 since no configuration value needs one and a NUL or an escape sequence
 read back into a log, a terminal, or a C library changes what it means.
