@@ -103,11 +103,25 @@ formats:
     removedKeys:
       - /capabilities/concurrencyLimit
     init: {command: "messagingctl init {directory}", file: providers/sms-gateway/provider.yaml}
-  # The removed key the Messaging runtime refuses by name; the registry does
-  # not declare it yet.
+  # The removed keys and the retired apiVersion the Messaging runtime refuses
+  # by name; the registry does not declare them. The runtime file is checked
+  # against the editable project, with no built package.
   messaging/runtime:
+    project: products/messaging/examples/starter
     removedKeys:
       - /authentication/oidc/jwksUri
+      - /providers/sms-gateway/attemptTimeoutSeconds
+      - /providers/sms-gateway/timeoutMilliseconds
+      - /providers/sms-gateway/concurrencyLimit
+      - /providers/sms-gateway/kind
+      - /providers/sms-gateway/authentication/kind
+      - /providers/sms-gateway/callbackVerifier/kind
+      - /retention/payloadDays
+      - /retention/recordDays
+      - /retention/submissionReceiptDays
+      - /audit/retainDays
+    retiredApiVersions:
+      - registry.registrystack.org/messaging-runtime/v1alpha1
     init: {command: "messagingctl init {directory}", file: runtime.example.yaml}
 
   discovery/evidence-mapping:
