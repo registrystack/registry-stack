@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 use registry_platform_yaml::{
     Document, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Report, Severity, UniqueList,
 };
-use serde::de;
 use serde::{Deserialize, Deserializer};
 
 use crate::bundle::Codelist;
@@ -191,10 +190,11 @@ impl<'de> Deserialize<'de> for CodelistId {
         if text.len() <= 512 && url::Url::parse(&text).is_ok() {
             return Ok(Self(text));
         }
-        Err(de::Error::custom(Invalid::expected(
+        Err(Invalid::expected(
             "an absolute URI of at most 512 bytes",
             "Write the codelist identifier as an absolute URI, such as urn:example:codelist:regions.",
-        )))
+        )
+        .into_error())
     }
 }
 
@@ -207,10 +207,11 @@ impl<'de> Deserialize<'de> for CodelistVersion {
         if !text.is_empty() && text.len() <= 128 && !text.contains('\0') {
             return Ok(Self(text));
         }
-        Err(de::Error::custom(Invalid::expected(
+        Err(Invalid::expected(
             "a version of 1 to 128 bytes without a NUL character",
             "Write the codelist version as short text, such as '2026-01'.",
-        )))
+        )
+        .into_error())
     }
 }
 
@@ -232,10 +233,11 @@ impl<'de> Deserialize<'de> for Code {
         if valid {
             return Ok(Self(text));
         }
-        Err(de::Error::custom(Invalid::expected(
+        Err(Invalid::expected(
             "a code of 1 to 128 ASCII letters, digits, `.`, `_`, `:`, or `-`, starting with a letter or digit",
             "Spell the code with letters, digits, `.`, `_`, `:`, and `-` only.",
-        )))
+        )
+        .into_error())
     }
 }
 

@@ -655,10 +655,11 @@ where
                 let mut seen = BTreeSet::new();
                 while let Some((key, value)) = map.next_entry::<String, T>()? {
                     if !seen.insert(key.clone()) {
-                        return Err(de::Error::custom(Invalid::expected(
+                        return Err(Invalid::expected(
                             "a mapping that names each key once",
                             "Remove the repeated key.",
-                        )));
+                        )
+                        .into_error());
                     }
                     entries.push((key, value));
                 }
@@ -2987,10 +2988,11 @@ impl<'de> Deserialize<'de> for PublicJwkPath {
         if is_public_jwk_path(&value) {
             Ok(Self(value))
         } else {
-            Err(de::Error::custom(Invalid::expected(
+            Err(Invalid::expected(
                 "a path public-keys/<name>.jwk.json, where the name uses ASCII letters, digits, dots, underscores, or hyphens",
                 "Name a public key file under public-keys/ ending in .jwk.json.",
-            )))
+            )
+            .into_error())
         }
     }
 }
@@ -3130,10 +3132,11 @@ impl<'de> Deserialize<'de> for ArtifactPath {
     {
         let value = String::deserialize(deserializer)?;
         Self::parse(&value).map_err(|_| {
-            de::Error::custom(Invalid::expected(
+            Invalid::expected(
                 "a relative path under adapters/, derivations/, schemas/, codelists/, fixtures/, or queries/, using ASCII letters, digits, dots, underscores, hyphens, and slashes, without . or .. segments",
                 "Name a package file by its relative path under one of the package directories.",
-            ))
+            )
+            .into_error()
         })
     }
 }
