@@ -48,6 +48,8 @@ pub(crate) struct OfflineFiles {
     pub refused_holiday_files: BTreeSet<String>,
     /// How many files were read, accepted or not.
     pub files_read: usize,
+    /// The warnings the readers reported for the files a simulation names.
+    pub warnings: Report,
 }
 
 impl OfflineFiles {
@@ -317,6 +319,7 @@ pub(crate) fn read_simulation_file(file: &Path) -> Result<OfflineFiles, Report> 
     if report.has_errors() {
         Err(report)
     } else {
+        files.warnings = report;
         Ok(files)
     }
 }

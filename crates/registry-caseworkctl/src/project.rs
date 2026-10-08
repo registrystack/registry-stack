@@ -924,7 +924,11 @@ pub(super) fn simulate(project: &Path, file: &Path) -> Result<Value> {
             &offline.holiday_documents(),
         )?;
         if outcome.failures.is_empty() {
-            return Ok(outcome.report);
+            let mut warnings = decoded.document.warnings();
+            warnings.extend(offline.warnings);
+            let mut simulated = outcome.report;
+            simulated["diagnostics"] = warnings.to_json_value();
+            return Ok(simulated);
         }
         for failure in outcome.failures {
             report.push(failure);

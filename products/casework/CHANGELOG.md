@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `caseworkctl simulate --format json` carries `diagnostics`, the warnings the
+  readers reported for `casework.yaml`, the simulation, and its holiday sets.
 - `caseworkctl dev grant --format json` carries `diagnostics`, an empty list,
   like every other Casework report.
 - BREAKING: `authentication.oidc.assertionIssuers: {}` is refused: delete the

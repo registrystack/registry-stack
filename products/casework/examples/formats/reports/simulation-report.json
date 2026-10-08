@@ -17,6 +17,7 @@
     "id": "review-deadline"
   },
   "databaseAccess": false,
+  "diagnostics": [],
   "fixture": "friday-review",
   "kind": "SimulationReport",
   "networkAccess": false,
