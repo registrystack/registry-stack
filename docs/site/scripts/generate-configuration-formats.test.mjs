@@ -62,8 +62,8 @@ test('states each header, schema, check, and stability as the registry records i
   assert.equal(module.apiVersion, null);
   assert.equal(module.kind, null);
   const journeys = formats.get('breg/journeys');
-  assert.equal(journeys.apiVersion, 'registry.registrystack.org/breg-journeys/v1');
-  assert.equal(journeys.kind, null);
+  assert.equal(journeys.apiVersion, 'id.registrystack.org/formats/breg/journeys/v1');
+  assert.equal(journeys.kind, 'BRegJourneys');
   assert.equal(formats.get('breg/linkml-schema').exceptionClass, 'external-format');
   assert.equal(formats.get('manifest/metadata').exceptionClass, 'exchange-model');
   const discovery = formats.get('discovery/runtime');
