@@ -199,7 +199,8 @@
         },
         "maximumObservationAgeSeconds": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 300,
+          "minimum": 1,
           "type": "integer"
         },
         "outputs": {
@@ -343,12 +344,14 @@
           "properties": {
             "maxLength": {
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 1000000,
+              "minimum": 1,
               "type": "integer"
             },
             "minLength": {
               "default": 0,
               "format": "uint32",
+              "maximum": 1000000,
               "minimum": 0,
               "type": "integer"
             },
@@ -367,7 +370,8 @@
           "properties": {
             "maxLength": {
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 10000000,
+              "minimum": 1,
               "type": "integer"
             },
             "type": {
@@ -402,14 +406,14 @@
               "type": "string"
             },
             "precision": {
-              "format": "uint8",
-              "maximum": 255,
-              "minimum": 0,
+              "format": "uint32",
+              "maximum": 38,
+              "minimum": 1,
               "type": "integer"
             },
             "scale": {
-              "format": "uint8",
-              "maximum": 255,
+              "format": "uint32",
+              "maximum": 38,
               "minimum": 0,
               "type": "integer"
             },
@@ -510,8 +514,8 @@
               "$ref": "#/$defs/Crs84BboxSource"
             },
             "precision": {
-              "format": "uint8",
-              "maximum": 255,
+              "format": "uint32",
+              "maximum": 9,
               "minimum": 0,
               "type": "integer"
             },
@@ -530,7 +534,8 @@
           "properties": {
             "maxBytes": {
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 1048576,
+              "minimum": 1,
               "type": "integer"
             },
             "schema": {
@@ -728,7 +733,8 @@
         },
         "maximumBytes": {
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 16777216,
+          "minimum": 1,
           "type": "integer"
         },
         "required": {
@@ -749,13 +755,14 @@
       "properties": {
         "maximumBytes": {
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 2097152,
+          "minimum": 1,
           "type": "integer"
         },
         "maximumItems": {
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
+          "format": "uint32",
+          "maximum": 100,
+          "minimum": 1,
           "type": "integer"
         }
       },
@@ -877,10 +884,14 @@
       "properties": {
         "atLeast": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": "integer"
         },
         "atMost": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": "integer"
         },
         "equals": true,
@@ -904,7 +915,8 @@
         },
         "maximumObservationAgeSeconds": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 300,
+          "minimum": 1,
           "type": "integer"
         },
         "provider": {
@@ -1130,10 +1142,14 @@
       "properties": {
         "atLeast": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": "integer"
         },
         "atMost": {
           "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
           "type": "integer"
         },
         "currentDate": {
@@ -1522,10 +1538,14 @@
             },
             "maximum": {
               "format": "int64",
+              "maximum": 9223372036854775807,
+              "minimum": -9223372036854775808,
               "type": "integer"
             },
             "minimum": {
               "format": "int64",
+              "maximum": 9223372036854775807,
+              "minimum": -9223372036854775808,
               "type": "integer"
             }
           },
@@ -1639,8 +1659,8 @@
           "type": "string"
         },
         "precision": {
-          "format": "uint8",
-          "maximum": 255,
+          "format": "uint32",
+          "maximum": 9,
           "minimum": 0,
           "type": "integer"
         },
@@ -1747,9 +1767,9 @@
           "type": "string"
         },
         "precision": {
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
+          "format": "uint32",
+          "maximum": 38,
+          "minimum": 1,
           "type": "integer"
         },
         "required": {
@@ -1757,8 +1777,8 @@
           "type": "boolean"
         },
         "scale": {
-          "format": "uint8",
-          "maximum": 255,
+          "format": "uint32",
+          "maximum": 38,
           "minimum": 0,
           "type": "integer"
         },
@@ -1802,12 +1822,14 @@
           "properties": {
             "maxLength": {
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 1000000,
+              "minimum": 1,
               "type": "integer"
             },
             "minLength": {
               "default": 0,
               "format": "uint32",
+              "maximum": 1000000,
               "minimum": 0,
               "type": "integer"
             },
@@ -1826,7 +1848,8 @@
           "properties": {
             "maxLength": {
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 10000000,
+              "minimum": 1,
               "type": "integer"
             },
             "type": {
@@ -1861,14 +1884,14 @@
               "type": "string"
             },
             "precision": {
-              "format": "uint8",
-              "maximum": 255,
-              "minimum": 0,
+              "format": "uint32",
+              "maximum": 38,
+              "minimum": 1,
               "type": "integer"
             },
             "scale": {
-              "format": "uint8",
-              "maximum": 255,
+              "format": "uint32",
+              "maximum": 38,
               "minimum": 0,
               "type": "integer"
             },
@@ -1969,8 +1992,8 @@
               "$ref": "#/$defs/Crs84BboxSource"
             },
             "precision": {
-              "format": "uint8",
-              "maximum": 255,
+              "format": "uint32",
+              "maximum": 9,
               "minimum": 0,
               "type": "integer"
             },
@@ -1989,7 +2012,8 @@
           "properties": {
             "maxBytes": {
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 1048576,
+              "minimum": 1,
               "type": "integer"
             },
             "schema": {
@@ -3700,12 +3724,14 @@
       "properties": {
         "minimumCount": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 9007199254740991,
+          "minimum": 2,
           "type": "integer"
         },
         "roundingBase": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 9007199254740991,
+          "minimum": 2,
           "type": "integer"
         }
       },
@@ -3855,12 +3881,14 @@
         },
         "maxLength": {
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 1000000,
+          "minimum": 1,
           "type": "integer"
         },
         "minLength": {
           "default": 0,
           "format": "uint32",
+          "maximum": 1000000,
           "minimum": 0,
           "type": "integer"
         },
@@ -3913,7 +3941,8 @@
         },
         "maxBytes": {
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 1048576,
+          "minimum": 1,
           "type": "integer"
         },
         "required": {
@@ -4001,7 +4030,8 @@
         },
         "maxLength": {
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 10000000,
+          "minimum": 1,
           "type": "integer"
         },
         "pattern": {

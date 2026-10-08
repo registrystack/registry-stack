@@ -9,6 +9,7 @@ use serde_json::json;
 use crate::contract::{
     AccessProfileSource, FieldTypeSource, Operation, RegistryProject,
     StatisticalPeriodGranularitySource, StatisticalPeriodSource, StatisticalValiditySource,
+    MAX_EXACT_JSON_INTEGER,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{
@@ -20,7 +21,6 @@ use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal};
 use crate::statistics::{period_for_code, DisclosureParameters, PeriodGranularity};
 
 pub const MAX_STATISTICAL_CELLS_PER_PERIOD: usize = 10_000;
-const MAX_EXACT_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 
 pub(super) fn compile(
     project: &RegistryProject,

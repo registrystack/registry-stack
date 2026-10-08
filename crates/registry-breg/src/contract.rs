@@ -7,8 +7,8 @@ use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_config::contains_environment_expression;
 pub use registry_platform_hooks::{HookHandlerSource, HookPhase};
 use registry_platform_yaml::{
-    ApiVersion, DataLiteral, Digest, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Refusal,
-    ScalarHook, ScalarSite, Severity, Url,
+    ApiVersion, BoundedU32, BoundedU64, DataLiteral, Digest, EnvelopeRule, Expect, FormatSpec,
+    Invalid, Reader, Refusal, ScalarHook, ScalarSite, Severity, Url,
 };
 pub use registry_platform_yaml::{Decoded, Report};
 use serde::{
@@ -130,9 +130,23 @@ pub struct StatisticalValidityFieldsSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatisticalDisclosureSource {
+    #[serde(deserialize_with = "bounded_u64::<_, 2, MAX_EXACT_JSON_INTEGER>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<2, MAX_EXACT_JSON_INTEGER>")
+    )]
     pub minimum_count: u64,
+    #[serde(deserialize_with = "bounded_u64::<_, 2, MAX_EXACT_JSON_INTEGER>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<2, MAX_EXACT_JSON_INTEGER>")
+    )]
     pub rounding_base: u64,
 }
+
+/// The largest integer a JSON number carries exactly, the bound of a
+/// statistical disclosure parameter.
+pub const MAX_EXACT_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -700,6 +714,11 @@ pub const MAX_ATTACHMENT_CONTENT_TYPES: usize = 16;
 pub struct AttachmentSlotSource {
     pub id: String,
     pub required: bool,
+    #[serde(deserialize_with = "bounded_u32::<_, 1, MAX_ATTACHMENT_BYTES>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, MAX_ATTACHMENT_BYTES>")
+    )]
     pub maximum_bytes: u32,
     pub content_types: Vec<String>,
     pub classification: Classification,
@@ -709,7 +728,17 @@ pub struct AttachmentSlotSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct BatchSource {
+    #[serde(deserialize_with = "bounded_u16::<_, 1, { crate::compiler::MAX_BATCH_ITEMS as u32 }>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, { crate::compiler::MAX_BATCH_ITEMS as u32 }>")
+    )]
     pub maximum_items: u16,
+    #[serde(deserialize_with = "bounded_u32::<_, 1, { crate::compiler::MAX_BATCH_BYTES }>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, { crate::compiler::MAX_BATCH_BYTES }>")
+    )]
     pub maximum_bytes: u32,
 }
 
@@ -907,8 +936,10 @@ pub struct ChangeRequestPredicateSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_from_request_field: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(range(min = i64::MIN, max = i64::MAX)))]
     pub at_least: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(range(min = i64::MIN, max = i64::MAX)))]
     pub at_most: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_date: Option<ChangeRequestCurrentDatePredicateSource>,
@@ -932,6 +963,15 @@ pub struct ChangeRequestEvidenceSource {
     pub subjects: BTreeMap<String, ChangeRequestEvidenceSubjectSource>,
     #[serde(default)]
     pub requires: Vec<ChangeRequestEvidenceRequirementSource>,
+    #[serde(
+        deserialize_with = "bounded_u64::<_, 1, { crate::action_evidence_contracts::MAX_EVIDENCE_OBSERVATION_AGE_SECONDS }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BoundedU64<1, { crate::action_evidence_contracts::MAX_EVIDENCE_OBSERVATION_AGE_SECONDS }>"
+        )
+    )]
     pub maximum_observation_age_seconds: u64,
 }
 
@@ -967,8 +1007,10 @@ pub struct ChangeRequestEvidenceRequirementSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_from_request_field: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(range(min = i64::MIN, max = i64::MAX)))]
     pub at_least: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(range(min = i64::MIN, max = i64::MAX)))]
     pub at_most: Option<i64>,
 }
 
@@ -1553,7 +1595,9 @@ struct StringFieldSourceSchema {
     #[serde(default)]
     valid_time_role: Option<ValidTimeRole>,
     #[serde(default)]
+    #[schemars(with = "BoundedU32<0, MAX_STRING_FIELD_LENGTH>")]
     min_length: u32,
+    #[schemars(with = "BoundedU32<1, MAX_STRING_FIELD_LENGTH>")]
     max_length: u32,
     #[serde(default)]
     pattern: Option<String>,
@@ -1578,6 +1622,7 @@ struct TextFieldSourceSchema {
     classification: Classification,
     #[serde(default)]
     valid_time_role: Option<ValidTimeRole>,
+    #[schemars(with = "BoundedU32<1, MAX_TEXT_FIELD_LENGTH>")]
     max_length: u32,
     #[serde(default)]
     pattern: Option<String>,
@@ -1619,7 +1664,9 @@ struct DecimalFieldSourceSchema {
     classification: Classification,
     #[serde(default)]
     valid_time_role: Option<ValidTimeRole>,
+    #[schemars(with = "BoundedU32<1, MAX_DECIMAL_PRECISION>")]
     precision: u8,
+    #[schemars(with = "BoundedU32<0, MAX_DECIMAL_PRECISION>")]
     scale: u8,
     #[serde(default)]
     minimum: Option<String>,
@@ -1741,6 +1788,7 @@ struct Crs84PointFieldSourceSchema {
     classification: Classification,
     #[serde(default)]
     valid_time_role: Option<ValidTimeRole>,
+    #[schemars(with = "BoundedU32<0, MAX_CRS84_PRECISION>")]
     precision: u8,
     #[serde(default)]
     bbox: Option<Crs84BboxSource>,
@@ -1761,6 +1809,7 @@ struct StructuredFieldSourceSchema {
     classification: Classification,
     #[serde(default)]
     valid_time_role: Option<ValidTimeRole>,
+    #[schemars(with = "BoundedU32<1, MAX_STRUCTURED_VALUE_BYTES>")]
     max_bytes: u32,
     #[schemars(extend("x-registry-foreign" = "json-schema-2020-12"))]
     schema: Value,
@@ -1970,14 +2019,21 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
         }
         RawFieldKind::String => {
             reject_type_options::<E>(raw, TypeOptionAllowances::STRING)?;
+            let max_length = raw.max_length.ok_or_else(|| {
+                E::custom(Invalid::expected(
+                    "a string field with maxLength",
+                    "Declare maxLength on the string field.",
+                ))
+            })?;
+            if max_length > MAX_STRING_FIELD_LENGTH {
+                return Err(E::custom(Invalid::expected(
+                    "a string field with maxLength from 1 to 1000000",
+                    "Lower maxLength to at most 1000000, or declare the field as text.",
+                )));
+            }
             FieldTypeSource::String {
                 min_length: raw.min_length.unwrap_or_default(),
-                max_length: raw.max_length.ok_or_else(|| {
-                    E::custom(Invalid::expected(
-                        "a string field with maxLength",
-                        "Declare maxLength on the string field.",
-                    ))
-                })?,
+                max_length,
             }
         }
         RawFieldKind::Text => {
@@ -1997,13 +2053,20 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
         }
         RawFieldKind::Decimal => {
             reject_type_options::<E>(raw, TypeOptionAllowances::DECIMAL)?;
+            let precision = raw.precision.ok_or_else(|| {
+                E::custom(Invalid::expected(
+                    "a decimal field with precision",
+                    "Declare precision on the decimal field.",
+                ))
+            })?;
+            if precision == 0 {
+                return Err(E::custom(Invalid::expected(
+                    "a decimal field with precision from 1 to 38",
+                    "Declare a precision of at least 1 on the decimal field.",
+                )));
+            }
             FieldTypeSource::Decimal {
-                precision: raw.precision.ok_or_else(|| {
-                    E::custom(Invalid::expected(
-                        "a decimal field with precision",
-                        "Declare precision on the decimal field.",
-                    ))
-                })?,
+                precision,
                 scale: raw.scale.ok_or_else(|| {
                     E::custom(Invalid::expected(
                         "a decimal field with scale",
@@ -2052,13 +2115,20 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
         }
         RawFieldKind::Crs84Point => {
             reject_type_options::<E>(raw, TypeOptionAllowances::CRS84_POINT)?;
+            let precision = raw.precision.ok_or_else(|| {
+                E::custom(Invalid::expected(
+                    "a crs84-point field with precision",
+                    "Declare precision on the crs84-point field.",
+                ))
+            })?;
+            if u32::from(precision) > MAX_CRS84_PRECISION {
+                return Err(E::custom(Invalid::expected(
+                    "a crs84-point field with precision from 0 to 9",
+                    "Lower precision on the crs84-point field to at most 9.",
+                )));
+            }
             FieldTypeSource::Crs84Point {
-                precision: raw.precision.ok_or_else(|| {
-                    E::custom(Invalid::expected(
-                        "a crs84-point field with precision",
-                        "Declare precision on the crs84-point field.",
-                    ))
-                })?,
+                precision,
                 bbox: raw.bbox.clone(),
             }
         }
@@ -2096,13 +2166,29 @@ struct RawFieldSource {
     classification: Classification,
     #[serde(default)]
     valid_time_role: Option<ValidTimeRole>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "optional_bounded_u32::<_, 0, MAX_STRING_FIELD_LENGTH>"
+    )]
     min_length: Option<u32>,
-    #[serde(default)]
+    // The widest bound of the two kinds that take it; `parse_field_type`
+    // holds a string to its own.
+    #[serde(
+        default,
+        deserialize_with = "optional_bounded_u32::<_, 1, MAX_TEXT_FIELD_LENGTH>"
+    )]
     max_length: Option<u32>,
-    #[serde(default)]
+    // The widest bound of the two kinds that take it; `parse_field_type`
+    // holds each kind to its own.
+    #[serde(
+        default,
+        deserialize_with = "optional_bounded_u8::<_, 0, MAX_DECIMAL_PRECISION>"
+    )]
     precision: Option<u8>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "optional_bounded_u8::<_, 0, MAX_DECIMAL_PRECISION>"
+    )]
     scale: Option<u8>,
     #[serde(default)]
     minimum: Option<String>,
@@ -2110,7 +2196,10 @@ struct RawFieldSource {
     maximum: Option<String>,
     #[serde(default)]
     bbox: Option<Crs84BboxSource>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "optional_bounded_u32::<_, 1, MAX_STRUCTURED_VALUE_BYTES>"
+    )]
     max_bytes: Option<u32>,
     #[serde(default)]
     schema: Option<Value>,
@@ -2288,15 +2377,35 @@ pub enum FieldTypeSource {
     Boolean,
     String {
         #[serde(default)]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<0, MAX_STRING_FIELD_LENGTH>")
+        )]
         min_length: u32,
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<1, MAX_STRING_FIELD_LENGTH>")
+        )]
         max_length: u32,
     },
     Text {
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<1, MAX_TEXT_FIELD_LENGTH>")
+        )]
         max_length: u32,
     },
     Int64,
     Decimal {
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<1, MAX_DECIMAL_PRECISION>")
+        )]
         precision: u8,
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<0, MAX_DECIMAL_PRECISION>")
+        )]
         scale: u8,
         #[serde(skip_serializing_if = "Option::is_none")]
         minimum: Option<String>,
@@ -2319,11 +2428,19 @@ pub enum FieldTypeSource {
     },
     #[serde(rename = "crs84-point")]
     Crs84Point {
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<0, MAX_CRS84_PRECISION>")
+        )]
         precision: u8,
         #[serde(skip_serializing_if = "Option::is_none")]
         bbox: Option<Crs84BboxSource>,
     },
     Structured {
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<1, MAX_STRUCTURED_VALUE_BYTES>")
+        )]
         max_bytes: u32,
         #[cfg_attr(
             feature = "schema",
@@ -2415,6 +2532,14 @@ pub struct Crs84BboxSource {
 
 pub(crate) const MAX_STRUCTURED_SCHEMA_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_STRUCTURED_VALUE_BYTES: u32 = 1024 * 1024;
+/// The longest `maxLength` a string field or action input declares.
+pub const MAX_STRING_FIELD_LENGTH: u32 = 1_000_000;
+/// The longest `maxLength` a text field or action input declares.
+pub const MAX_TEXT_FIELD_LENGTH: u32 = 10_000_000;
+/// The largest decimal `precision` and `scale`.
+pub const MAX_DECIMAL_PRECISION: u32 = 38;
+/// The largest CRS84 point `precision`, in decimal places.
+pub const MAX_CRS84_PRECISION: u32 = 9;
 
 pub(crate) fn decimal_scaled_value(value: &str, precision: u8, scale: u8) -> Option<i128> {
     if !(1..=38).contains(&precision) || scale > precision {
@@ -2705,8 +2830,10 @@ pub enum ConstraintSource {
         id: Option<String>,
         field: String,
         #[serde(default)]
+        #[cfg_attr(feature = "schema", schemars(range(min = i64::MIN, max = i64::MAX)))]
         minimum: Option<i64>,
         #[serde(default)]
+        #[cfg_attr(feature = "schema", schemars(range(min = i64::MIN, max = i64::MAX)))]
         maximum: Option<i64>,
     },
     Vocabulary {
@@ -3849,6 +3976,41 @@ fn optional_digest_text<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<String>, D::Error> {
     Digest::deserialize(deserializer).map(|digest| Some(digest.into_string()))
+}
+
+// An integer member the published schema bounds (CFG-QTY-4) is read through
+// the shared bounded type and kept as the plain integer, so the serialized
+// source a digest covers is unchanged.
+pub(crate) fn bounded_u32<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
+    deserializer: D,
+) -> Result<u32, D::Error> {
+    BoundedU32::<MIN, MAX>::deserialize(deserializer).map(BoundedU32::get)
+}
+
+pub(crate) fn bounded_u64<'de, D: Deserializer<'de>, const MIN: u64, const MAX: u64>(
+    deserializer: D,
+) -> Result<u64, D::Error> {
+    BoundedU64::<MIN, MAX>::deserialize(deserializer).map(BoundedU64::get)
+}
+
+fn bounded_u16<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
+    deserializer: D,
+) -> Result<u16, D::Error> {
+    const { assert!(MAX <= u16::MAX as u32) };
+    bounded_u32::<D, MIN, MAX>(deserializer).map(|value| value as u16)
+}
+
+fn optional_bounded_u32<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
+    deserializer: D,
+) -> Result<Option<u32>, D::Error> {
+    bounded_u32::<D, MIN, MAX>(deserializer).map(Some)
+}
+
+fn optional_bounded_u8<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
+    deserializer: D,
+) -> Result<Option<u8>, D::Error> {
+    const { assert!(MAX <= u8::MAX as u32) };
+    bounded_u32::<D, MIN, MAX>(deserializer).map(|value| Some(value as u8))
 }
 
 // An omitted predicate differs from an explicit JSON null equality literal.

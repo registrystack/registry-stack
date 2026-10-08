@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::{parse_project_json, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_SLOTS};
+use registry_breg::contract::{
+    parse_project_json, parse_project_yaml, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_SLOTS,
+};
 use registry_breg::diagnostics::CompileFailure;
 use registry_breg::CompiledRegistry;
 use serde_json::{json, Value};
@@ -170,10 +172,20 @@ fn attachment_declarations_enforce_request_scope_bounds_and_closed_shape() {
     for maximum in [0, MAX_ATTACHMENT_BYTES + 1] {
         let mut candidate = source();
         candidate["entities"][1]["attachments"][0]["maximumBytes"] = json!(maximum);
-        assert_diagnostic(
-            &candidate,
-            "attachment.maximum_bytes.bounds_invalid",
-            "entities[id=request].attachments[0].maximumBytes",
+        let failure = parse_project_yaml(&serde_json::to_vec(&candidate).unwrap())
+            .expect_err("an attachment byte bound outside its range is refused when read");
+        let refused = failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            refused,
+            vec![(
+                "config.out-of-range",
+                "project.entities[1].attachments[0].maximumBytes"
+            )],
+            "{failure:?}"
         );
     }
     let mut candidate = source();

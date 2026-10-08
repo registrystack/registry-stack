@@ -41,6 +41,14 @@
   that is not an absolute `http` or `https` URL without user information, or
   that is empty, is refused as `config.invalid-value`. The code table is in
   `release/notes/config-conventions/breg.md`.
+- BREAKING: every integer member of `registry.yaml` and `module.yaml` states
+  its minimum and maximum in the published schemas, and a value outside them
+  is refused at read as `config.out-of-range` (or `config.invalid-value` at
+  the field, for a string `maxLength` above 1000000, a decimal `precision` of
+  0, and a CRS84 `precision` above 9) rather than at compile under a field,
+  batch, attachment, statistical disclosure, or action evidence code. No
+  value that compiled before is refused. The code table is in
+  `release/notes/config-conventions/breg.md`.
 - The project, module, and runtime JSON Schemas admit `null` only in a
   comparison literal, as the reader does, and declare no `default: null`. The
   project schema states its `apiVersion` and `kind` as constants, an embedded

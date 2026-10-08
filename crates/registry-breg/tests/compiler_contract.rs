@@ -2200,12 +2200,12 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
         r#", "batch":{"maximumItems":1,"maximumBytes":0}"#,
         r#", "batch":{"maximumItems":1,"maximumBytes":2097153}"#,
     ] {
-        let failure = compile_json(source(batch, r#"["create","batch"]"#).as_bytes())
-            .expect_err("out-of-range Batch bounds are refused");
+        let failure = parse_project_yaml(source(batch, r#"["create","batch"]"#).as_bytes())
+            .expect_err("out-of-range Batch bounds are refused when the project is read");
         assert!(failure
             .diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code == "entity.batch.bounds_invalid"));
+            .any(|diagnostic| diagnostic.code == "config.out-of-range"));
     }
 
     let configured = compile_json(
@@ -3867,6 +3867,176 @@ fn project_urls_and_module_digests_are_read_as_url_and_digest() {
 }
 
 #[test]
+fn integer_members_are_read_within_their_stated_bounds() {
+    let fixture = |project: &str| -> Value {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance")
+            .join(project)
+            .join("registry.yaml");
+        serde_norway::from_slice(&fs::read(path).expect("the fixture is readable"))
+            .expect("the fixture is YAML")
+    };
+    let field = |written: Value| {
+        move |source: &mut Value| {
+            let mut field = json!({"id": "probe", "classification": "internal"});
+            for (key, value) in written.as_object().expect("a field is a mapping") {
+                field[key] = value.clone();
+            }
+            source["entities"][0]["fields"][0] = field;
+        }
+    };
+    let set = |pointer: &'static str, written: Value| {
+        move |source: &mut Value| {
+            *source
+                .pointer_mut(pointer)
+                .expect("the fixture has the member") = written.clone();
+        }
+    };
+    let cases: Vec<(&str, Box<dyn Fn(&mut Value)>, &str, &str)> = vec![
+        (
+            "asset-site-placement",
+            Box::new(field(json!({"type": "string", "maxLength": 0}))),
+            "config.out-of-range",
+            "project.entities[0].fields[0].maxLength",
+        ),
+        (
+            "asset-site-placement",
+            Box::new(field(json!({"type": "text", "maxLength": 10_000_001}))),
+            "config.out-of-range",
+            "project.entities[0].fields[0].maxLength",
+        ),
+        (
+            "asset-site-placement",
+            Box::new(field(
+                json!({"type": "string", "minLength": 1_000_001, "maxLength": 64}),
+            )),
+            "config.out-of-range",
+            "project.entities[0].fields[0].minLength",
+        ),
+        (
+            "asset-site-placement",
+            Box::new(field(json!({"type": "string", "maxLength": 1_000_001}))),
+            "config.invalid-value",
+            "project.entities[0].fields[0]",
+        ),
+        (
+            "asset-site-placement",
+            Box::new(field(
+                json!({"type": "decimal", "precision": 39, "scale": 0}),
+            )),
+            "config.out-of-range",
+            "project.entities[0].fields[0].precision",
+        ),
+        (
+            "asset-site-placement",
+            Box::new(field(
+                json!({"type": "decimal", "precision": 0, "scale": 0}),
+            )),
+            "config.invalid-value",
+            "project.entities[0].fields[0]",
+        ),
+        (
+            "asset-site-placement",
+            Box::new(field(
+                json!({"type": "decimal", "precision": 10, "scale": 39}),
+            )),
+            "config.out-of-range",
+            "project.entities[0].fields[0].scale",
+        ),
+        (
+            "asset-site-placement",
+            Box::new(field(json!({"type": "crs84-point", "precision": 10}))),
+            "config.invalid-value",
+            "project.entities[0].fields[0]",
+        ),
+        (
+            "asset-site-placement",
+            Box::new(field(
+                json!({"type": "structured", "maxBytes": 1_048_577, "schema": {"type": "object"}}),
+            )),
+            "config.out-of-range",
+            "project.entities[0].fields[0].maxBytes",
+        ),
+        (
+            "asset-site-placement",
+            Box::new(set("/entities/0/batch/maximumItems", json!(101))),
+            "config.out-of-range",
+            "project.entities[0].batch.maximumItems",
+        ),
+        (
+            "asset-site-placement",
+            Box::new(set("/entities/0/batch/maximumItems", json!(0))),
+            "config.out-of-range",
+            "project.entities[0].batch.maximumItems",
+        ),
+        (
+            "asset-site-placement",
+            Box::new(set("/entities/0/batch/maximumBytes", json!(2_097_153))),
+            "config.out-of-range",
+            "project.entities[0].batch.maximumBytes",
+        ),
+        (
+            "farmer-landholding-evidence",
+            Box::new(set(
+                "/actions/0/evidence/0/maximumObservationAgeSeconds",
+                json!(301),
+            )),
+            "config.out-of-range",
+            "project.actions[0].evidence[0].maximumObservationAgeSeconds",
+        ),
+        (
+            "farmer-landholding-evidence",
+            Box::new(set(
+                "/actions/0/evidence/0/maximumObservationAgeSeconds",
+                json!(0),
+            )),
+            "config.out-of-range",
+            "project.actions[0].evidence[0].maximumObservationAgeSeconds",
+        ),
+        (
+            "request-attachments",
+            Box::new(set("/entities/1/attachments/0/maximumBytes", json!(0))),
+            "config.out-of-range",
+            "project.entities[1].attachments[0].maximumBytes",
+        ),
+        (
+            "facility",
+            Box::new(set(
+                "/statisticalDatasets/0/disclosure/minimumCount",
+                json!(1),
+            )),
+            "config.out-of-range",
+            "project.statisticalDatasets[0].disclosure.minimumCount",
+        ),
+        (
+            "facility",
+            Box::new(set(
+                "/statisticalDatasets/0/disclosure/roundingBase",
+                json!(9_007_199_254_740_992_u64),
+            )),
+            "config.out-of-range",
+            "project.statisticalDatasets[0].disclosure.roundingBase",
+        ),
+    ];
+    for (project, mutate, code, path) in cases {
+        let mut source = fixture(project);
+        mutate(&mut source);
+        let failure = parse_project_yaml(
+            serde_norway::to_string(&source)
+                .expect("the project serializes")
+                .as_bytes(),
+        )
+        .expect_err("a value outside the stated bounds is refused");
+        let refused = failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(refused, vec![(code, path)], "{failure:?}");
+    }
+}
+
+#[test]
 fn source_parse_diagnostics_name_the_member_the_alternatives_and_the_location() {
     let unknown_yaml_member = parse_project_yaml(
         br#"
@@ -4160,7 +4330,7 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
     let cases = [
         (
             r#"{"id":"amount","type":"decimal","precision":39,"scale":2,"classification":"internal"}"#,
-            "field.decimal.bounds_invalid",
+            "config.out-of-range",
         ),
         (
             r#"{"id":"amount","type":"decimal","precision":4,"scale":2,"minimum":"01.00","classification":"internal"}"#,
@@ -4168,7 +4338,7 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
         ),
         (
             r#"{"id":"location","type":"crs84-point","precision":10,"classification":"internal"}"#,
-            "field.crs84_point.bounds_invalid",
+            "config.invalid-value",
         ),
         (
             r#"{"id":"location","type":"crs84-point","precision":4,"bbox":{"west":"110.0000","south":"10.0000","east":"100.0000","north":"20.0000"},"classification":"internal"}"#,
@@ -4176,7 +4346,7 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
         ),
         (
             r#"{"id":"payload","type":"structured","maxBytes":0,"classification":"internal","schema":{"type":"object","additionalProperties":false}}"#,
-            "field.structured.schema_invalid",
+            "config.out-of-range",
         ),
         (
             r#"{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{"type":"object","properties":{"code":{"type":"string"}}}}"#,
@@ -4212,13 +4382,21 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
                 "payload"
             }
         );
-        let project = parse_project_json(source.as_bytes()).expect("source shape parses");
-        let failure = compile_project(&project, &[], CompileProfile::Authoring)
-            .expect_err("invalid generic scalar configuration fails compilation");
-        assert!(failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == code));
+        // A bound the reader states is refused when the project is read; a
+        // rule that relates members or reads the embedded schema is refused
+        // when it compiles.
+        let failure = match parse_project_yaml(source.as_bytes()) {
+            Ok(project) => compile_project(&project, &[], CompileProfile::Authoring)
+                .expect_err("invalid generic scalar configuration fails compilation"),
+            Err(failure) => failure,
+        };
+        assert!(
+            failure
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == code),
+            "{failure:?}"
+        );
     }
 }
 

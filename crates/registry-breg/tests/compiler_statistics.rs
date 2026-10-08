@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
-use registry_breg::contract::{parse_project_json, ModuleAssetSource};
+use registry_breg::contract::{parse_project_json, parse_project_yaml, ModuleAssetSource};
 #[cfg(feature = "runtime")]
 use registry_breg::package::{
     compiled_registry_change_set, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
@@ -218,28 +218,6 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
             "statistical_dataset.dimension.duplicate",
         ),
         (
-            Box::new(|v| v["statisticalDatasets"][0]["disclosure"]["minimumCount"] = json!(1)),
-            "statistical_dataset.disclosure.minimum_count",
-        ),
-        (
-            Box::new(|v| v["statisticalDatasets"][0]["disclosure"]["roundingBase"] = json!(1)),
-            "statistical_dataset.disclosure.rounding_base",
-        ),
-        (
-            Box::new(|v| {
-                v["statisticalDatasets"][0]["disclosure"]["minimumCount"] =
-                    json!(9_007_199_254_740_992_u64)
-            }),
-            "statistical_dataset.disclosure.minimum_count_exceeded",
-        ),
-        (
-            Box::new(|v| {
-                v["statisticalDatasets"][0]["disclosure"]["roundingBase"] =
-                    json!(9_007_199_254_740_992_u64)
-            }),
-            "statistical_dataset.disclosure.rounding_base_exceeded",
-        ),
-        (
             Box::new(|v| {
                 v["statisticalDatasets"][0]
                     .as_object_mut()
@@ -311,6 +289,32 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
     ];
     for (mutator, code) in cases {
         assert_refused(mutator, code);
+    }
+}
+
+#[test]
+fn statistical_disclosure_bounds_are_refused_when_the_project_is_read() {
+    for (member, written) in [
+        ("minimumCount", json!(1)),
+        ("roundingBase", json!(1)),
+        ("minimumCount", json!(9_007_199_254_740_992_u64)),
+        ("roundingBase", json!(9_007_199_254_740_992_u64)),
+    ] {
+        let mut value = source();
+        value["statisticalDatasets"][0]["disclosure"][member] = written;
+        let failure = parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
+            .expect_err("a disclosure bound outside 2 to 2^53 - 1 is refused");
+        let refused = failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        let path = format!("project.statisticalDatasets[0].disclosure.{member}");
+        assert_eq!(
+            refused,
+            vec![("config.out-of-range", path.as_str())],
+            "{failure:?}"
+        );
     }
 }
 

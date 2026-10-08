@@ -310,9 +310,12 @@ mod tests {
     }
 
     fn every_document() -> Vec<(&'static str, Value)> {
-        let mut rendered = documents().expect("the authoring schemas generate");
+        let rendered = documents().expect("the authoring schemas generate");
         #[cfg(feature = "runtime")]
-        rendered.extend(runtime_documents().expect("the runtime schema generates"));
+        let rendered = rendered
+            .into_iter()
+            .chain(runtime_documents().expect("the runtime schema generates"))
+            .collect::<Vec<_>>();
         rendered
             .into_iter()
             .map(|(file, document)| {

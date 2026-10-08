@@ -91,6 +91,37 @@ credential has no place in it. A package whose sealed project carries one of
 these values no longer loads; correct the source project and rebuild the
 package as described above.
 
+### BREAKING: integer bounds in `registry.yaml` and `module.yaml` are refused when read
+
+Every integer member of the project and module formats now states its
+minimum and maximum in the published schemas, and the reader refuses a value
+outside them when it reads the file, at the member, rather than the compiler
+refusing it later at the enclosing object. No value that compiled before is
+refused now; what changes is the code and the path a tool matching
+`bregctl --format json` output sees.
+
+| A file that writes | was refused at compile as | is refused at read as |
+|---|---|---|
+| a string field `maxLength` of 0, or a `minLength` above 1000000 | `field.string.bounds_invalid` at the field | `config.out-of-range` at `maxLength` or `minLength` |
+| a string field `maxLength` from 1000001 to 10000000 | `field.string.bounds_invalid` | `config.invalid-value` at the field, which names `text` for longer values; above 10000000, `config.out-of-range` at `maxLength` |
+| a text field `maxLength` of 0 or above 10000000 | `field.text.bound_invalid` | `config.out-of-range` at `maxLength` |
+| a decimal field `precision` or `scale` above 38 | `field.decimal.bounds_invalid` | `config.out-of-range` at the member |
+| a decimal field `precision` of 0 | `field.decimal.bounds_invalid` | `config.invalid-value` at the field |
+| a CRS84 point field `precision` from 10 to 38 | `field.crs84_point.bounds_invalid` | `config.invalid-value` at the field; above 38, `config.out-of-range` at `precision` |
+| a structured field `maxBytes` of 0 or above 1048576 | `field.structured.schema_invalid` | `config.out-of-range` at `maxBytes` |
+| an entity `batch.maximumItems` of 0 or above 100, or `batch.maximumBytes` of 0 or above 2097152 | `entity.batch.bounds_invalid` at the batch | `config.out-of-range` at the member |
+| an attachment slot `maximumBytes` of 0 or above 16777216 | `attachment.maximum_bytes.bounds_invalid` | `config.out-of-range` at `maximumBytes` |
+| a statistical dataset `disclosure.minimumCount` or `roundingBase` below 2 or above 9007199254740991 | `statistical_dataset.disclosure.minimum_count`, `minimum_count_exceeded`, `rounding_base`, or `rounding_base_exceeded` | `config.out-of-range` at the member |
+| an action evidence `maximumObservationAgeSeconds` of 0 or above 300 | `action.evidence.capability.invalid` | `config.out-of-range` at the member |
+
+The compile-time codes stay for the conditions the reader cannot decide
+alone: a string `minLength` above its `maxLength`, a decimal `scale` above
+its `precision` or bounds that do not fit them, a CRS84 bounding box, a
+structured field's schema, and a statistical dataset with no `disclosure`.
+A change-request or action-requirement `atLeast` or `atMost`, and an integer
+constraint's `minimum` and `maximum`, state the signed 64-bit range in the
+schema, the range the reader already enforced.
+
 ### BREAKING: `runtime.yaml` is decoded by the shared reader
 
 `breg` and every `bregctl` command that takes `--runtime-config` decode
