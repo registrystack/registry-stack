@@ -250,18 +250,36 @@ mod tests {
     }
 
     #[test]
+    fn a_retired_header_without_the_envelope_is_refused_and_named() {
+        let text = format!(
+            "fixture: registry.evidence.reference.{CANARY}/v1\nsynthetic_only: true\ncases:\n{}",
+            complete_cases()
+        );
+        let report = read_fixture("fixtures/cases.yaml", text.as_bytes(), false)
+            .expect_err("the fixture is refused");
+        assert!(
+            !report.render_human().contains(CANARY),
+            "the refusal repeats no value"
+        );
+        let refusals: Vec<(&str, &str)> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(
+            refusals,
+            [
+                ("config.missing-envelope", ""),
+                ("config.removed-key", "/fixture")
+            ]
+        );
+    }
+
+    #[test]
     fn refuses_each_rule_at_its_member_without_the_value() {
         let cases = complete_cases();
         let without_ambiguous = cases.replace("  - {id: ambiguous}\n", "");
         let table: Vec<(&str, String, bool, &str, &str, usize)> = vec![
-            (
-                "retired identifier header",
-                format!("fixture: registry.evidence.reference.{CANARY}/v1\nsynthetic_only: true\ncases:\n{cases}"),
-                false,
-                "config.missing-envelope",
-                "",
-                1,
-            ),
             (
                 "retired identifier beside the envelope",
                 format!("{HEADER}fixture: registry.evidence.reference.{CANARY}/v1\nsynthetic_only: true\ncases:\n{cases}"),
