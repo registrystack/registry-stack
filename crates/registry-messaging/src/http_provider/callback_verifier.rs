@@ -16,7 +16,7 @@ use registry_messaging_core::{
     MAXIMUM_CALLBACK_URL_BYTES,
 };
 use registry_platform_yaml::Invalid;
-use serde::{de::Error as _, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer};
 
 use crate::config::secret_reference;
 
@@ -121,12 +121,13 @@ where
     if valid_callback_url(&url) {
         Ok(url)
     } else {
-        Err(D::Error::custom(Invalid::expected(
+        Err(Invalid::expected(
             "an http or https URL of at most 2048 bytes with a host and a path, and no \
              credentials, query, or fragment",
             "Write the callback URL the provider was given, without its query string or \
              fragment.",
-        )))
+        )
+        .into_error())
     }
 }
 
@@ -139,11 +140,12 @@ where
     if valid_header_name(&header) {
         Ok(header)
     } else {
-        Err(D::Error::custom(Invalid::expected(
+        Err(Invalid::expected(
             "an HTTP header name of 1 to 128 token characters",
             "Write the name of the header the provider carries the signature in, such as \
              X-Signature.",
-        )))
+        )
+        .into_error())
     }
 }
 

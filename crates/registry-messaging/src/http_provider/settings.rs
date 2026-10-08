@@ -206,10 +206,7 @@ impl<'de> Deserialize<'de> for ScriptPath {
         if valid_script_path(&path) {
             Ok(Self(path))
         } else {
-            Err(serde::de::Error::custom(Invalid::expected(
-                SCRIPT_PATH_EXPECTED,
-                SCRIPT_PATH_ACTION,
-            )))
+            Err(Invalid::expected(SCRIPT_PATH_EXPECTED, SCRIPT_PATH_ACTION).into_error())
         }
     }
 }
@@ -249,11 +246,12 @@ impl<'de> Deserialize<'de> for RequestHeaderName {
         if script_may_set(&name) {
             Ok(Self(name))
         } else {
-            Err(serde::de::Error::custom(Invalid::expected(
+            Err(Invalid::expected(
                 "a header a script may set, not one the runtime sets: authorization, host, \
                  content, cookie, and forwarding headers are the runtime's",
                 "Remove the header from request.headers; the runtime sets it.",
-            )))
+            )
+            .into_error())
         }
     }
 }
@@ -268,10 +266,11 @@ impl<'de> Deserialize<'de> for ResponseHeaderName {
         if is_script_visible_response_header_name(&name) {
             Ok(Self(name))
         } else {
-            Err(serde::de::Error::custom(Invalid::expected(
+            Err(Invalid::expected(
                 "a response header scripts may read, not one the runtime withholds",
                 "Remove the header from responseHeaders; scripts cannot read it.",
-            )))
+            )
+            .into_error())
         }
     }
 }
@@ -313,10 +312,11 @@ fn lowercase_header_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<S
     if valid_lowercase_header_name(&name) {
         Ok(name)
     } else {
-        Err(serde::de::Error::custom(Invalid::expected(
+        Err(Invalid::expected(
             "a lowercase HTTP header name",
             "Write the header name in lowercase, such as x-request-id.",
-        )))
+        )
+        .into_error())
     }
 }
 
@@ -326,10 +326,7 @@ const HEADERS_ACTION: &str = "Remove the headers no script sets or reads.";
 fn request_headers<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
     let names = UniqueList::<RequestHeaderName>::deserialize(deserializer)?.into_vec();
     if names.len() > MAXIMUM_SCRIPT_HEADERS {
-        return Err(serde::de::Error::custom(Invalid::expected(
-            HEADERS_EXPECTED,
-            HEADERS_ACTION,
-        )));
+        return Err(Invalid::expected(HEADERS_EXPECTED, HEADERS_ACTION).into_error());
     }
     Ok(names.into_iter().map(|name| name.0).collect())
 }
@@ -337,10 +334,7 @@ fn request_headers<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Str
 fn response_headers<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
     let names = UniqueList::<ResponseHeaderName>::deserialize(deserializer)?.into_vec();
     if names.len() > MAXIMUM_SCRIPT_HEADERS {
-        return Err(serde::de::Error::custom(Invalid::expected(
-            HEADERS_EXPECTED,
-            HEADERS_ACTION,
-        )));
+        return Err(Invalid::expected(HEADERS_EXPECTED, HEADERS_ACTION).into_error());
     }
     Ok(names.into_iter().map(|name| name.0).collect())
 }

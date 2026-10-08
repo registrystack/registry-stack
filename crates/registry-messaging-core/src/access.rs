@@ -168,10 +168,7 @@ impl<'de> Deserialize<'de> for UnrestrictedKeyword {
         if String::deserialize(deserializer)? == "unrestricted" {
             Ok(Self)
         } else {
-            Err(serde::de::Error::custom(Invalid::expected(
-                SCOPES_EXPECTED,
-                SCOPES_ACTION,
-            )))
+            Err(Invalid::expected(SCOPES_EXPECTED, SCOPES_ACTION).into_error())
         }
     }
 }
@@ -207,9 +204,7 @@ impl ListedNames {
     ) -> Result<Self, D::Error> {
         let items = UniqueList::<ExternalId>::deserialize(deserializer)?.into_vec();
         if items.is_empty() {
-            return Err(serde::de::Error::custom(Invalid::expected(
-                expected, action,
-            )));
+            return Err(Invalid::expected(expected, action).into_error());
         }
         Ok(Self(
             items.into_iter().map(ExternalId::into_string).collect(),

@@ -106,10 +106,11 @@ impl<'de> Deserialize<'de> for LocaleTag {
         if valid_locale(&tag) {
             Ok(Self(tag))
         } else {
-            Err(serde::de::Error::custom(Invalid::expected(
+            Err(Invalid::expected(
                 "a language tag of the form ll, ll-RR, or ll-Ssss-RR",
                 "Write a tag such as en, fr-FR, es-419, or zh-Hant-TW.",
-            )))
+            )
+            .into_error())
         }
     }
 }
@@ -135,10 +136,11 @@ impl schemars::JsonSchema for LocaleTag {
 fn locales<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
     let tags = UniqueList::<LocaleTag>::deserialize(deserializer)?.into_vec();
     if tags.is_empty() {
-        return Err(serde::de::Error::custom(Invalid::expected(
+        return Err(Invalid::expected(
             "a list of at least one language tag",
             "List each locale the template ships.",
-        )));
+        )
+        .into_error());
     }
     Ok(tags.into_iter().map(|LocaleTag(tag)| tag).collect())
 }
@@ -146,10 +148,11 @@ fn locales<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D:
 fn parts<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<PartKind>, D::Error> {
     let parts = UniqueList::<PartKind>::deserialize(deserializer)?.into_vec();
     if parts.is_empty() {
-        return Err(serde::de::Error::custom(Invalid::expected(
+        return Err(Invalid::expected(
             "a list of at least one part",
             "List the parts every locale renders: subject and text for email, text for SMS.",
-        )));
+        )
+        .into_error());
     }
     Ok(parts)
 }

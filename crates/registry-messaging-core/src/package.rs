@@ -333,11 +333,12 @@ where
     if valid_template_version(&version) {
         Ok(version)
     } else {
-        Err(serde::de::Error::custom(Invalid::expected(
+        Err(Invalid::expected(
             "a version label: 1 to 32 lowercase letters, digits, dots, or hyphens, starting with \
              a letter or digit",
             "Write a version such as \"1\" or \"2026.1\".",
-        )))
+        )
+        .into_error())
     }
 }
 
@@ -395,10 +396,11 @@ where
 {
     let profiles = crate::typed::unique_id_list::<D, AccessProfile>(deserializer)?;
     if profiles.is_empty() {
-        return Err(serde::de::Error::custom(Invalid::expected(
+        return Err(Invalid::expected(
             "a list of at least one access profile",
             "Declare the access profile each calling client resolves to.",
-        )));
+        )
+        .into_error());
     }
     Ok(profiles)
 }
