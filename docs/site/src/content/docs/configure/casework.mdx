@@ -104,7 +104,7 @@ A Requester profile is a calling system rather than a person.
 The separate `reviewProducers` policy binds that profile to an exact issuer, subject, source namespace, and set of review kinds.
 
 {/* Evidence: crates/registry-casework-core/src/config.rs, AccessProfile and
-    access_roles_are_separately_scoped(). */}
+    profiles_without_a_separate_scope(). */}
 
 ### Queues
 
@@ -370,7 +370,7 @@ A clock occurrence reads the source fresh, may append a reminder or apply a rout
 The person who held the item loses the claim and the item reappears in the new queue; the decision itself is still a human action.
 
 {/* Evidence: crates/registry-casework-core/src/policy.rs, ClockPolicy, ClockStep, and
-    check_clock_policies(); crates/registry-casework/src/clocks.rs, apply_clock_claim(). */}
+    clock_policy_findings(); crates/registry-casework/src/clocks.rs, apply_clock_claim(). */}
 
 ### Calendars and holiday revisions
 

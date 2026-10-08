@@ -38,7 +38,7 @@ Casework coordinates source-owned work items and unified review requests. A proj
 | What stays with the source | Eligibility, current visibility, and the record change itself | The producer's business object and correlation reference |
 | How it finishes | An accountable attempt against the source, made by a person | An approved, rejected, changes-requested, answered, cancelled, or superseded result |
 
-{/* Evidence: crates/registry-casework-core/src/config.rs, CaseworkProject and NoConfiguredWork. */}
+{/* Evidence: crates/registry-casework-core/src/config.rs, CaseworkProject and casework.project.no-work. */}
 
 A source-backed item mirrors work that a Base Registry Engine (BReg) already governs.
 Casework reaches that registry through one source adapter, and the adapter is the only place the registry's protocol exists: it verifies a lifecycle transition, reads authoritative state under a service reader profile, discovers active requests, reads one request as the calling person, prepares an action, and executes a prepared action.
@@ -74,7 +74,7 @@ Four profiles exist, and a request selects exactly one of them.
 | Administrator | Maintain the directory and publish holiday revisions while the service runs. |
 | Requester | Act as an admitted producer, read its own requests and results, page its result feed, and cancel an active request. It cannot claim or decide. |
 
-{/* Evidence: crates/registry-casework-core/src/config.rs, AccessProfile and access_roles_are_separately_scoped;
+{/* Evidence: crates/registry-casework-core/src/config.rs, AccessProfile and profiles_without_a_separate_scope;
     products/casework/README.md. */}
 
 Staff, Supervisor, and Administrator are the three profiles a person holds, and Casework admits them only when the token carries the human-identity assertion the deployment names: one claim, one exact string value, set by the issuer for an interactive session.
