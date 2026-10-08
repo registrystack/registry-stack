@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The `breg-review` binary as an operator runs it: `check` and `serve`, their
-//! startup refusals, shutdown on SIGINT and SIGTERM, and a full sign-in and
-//! submit whose operational log and audit journal carry no credential, code,
-//! state, cookie, or CSRF value.
+//! The `breg-review` binary as an operator runs it: `check` reads the runtime
+//! configuration offline, resolving no secret and opening no socket, and
+//! reports every finding in the shared diagnostic shape; `serve` resolves the
+//! secrets the file names before it listens. Also its startup refusals,
+//! shutdown on SIGINT and SIGTERM, and a full sign-in and submit whose
+//! operational log and audit journal carry no credential, code, state,
+//! cookie, or CSRF value.
 
 mod support;
 
@@ -80,14 +83,60 @@ fn spawn(environment: &Environment) -> Running {
     Running { child, log, errors }
 }
 
-fn run(environment: &Environment, subcommand: &str) -> std::process::Output {
+fn check(environment: &Environment, arguments: &[&str]) -> std::process::Output {
     Command::new(BINARY)
         .arg("--runtime-config")
         .arg(&environment.config_path)
-        .arg(subcommand)
+        .arg("check")
+        .args(arguments)
+        .env_remove("BREG_REVIEW_LOG")
         .stdin(Stdio::null())
         .output()
         .expect("run breg-review")
+}
+
+/// The JSON report `check --format json` writes, with its exit status.
+fn report(environment: &Environment) -> (Option<i32>, serde_json::Value) {
+    let output = check(environment, &["--format", "json"]);
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = serde_json::from_slice(&output.stdout).expect("the report is JSON");
+    (output.status.code(), report)
+}
+
+fn codes(report: &serde_json::Value) -> Vec<(String, String)> {
+    report["diagnostics"]
+        .as_array()
+        .expect("the report lists its diagnostics")
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic["code"].as_str().expect("code").to_owned(),
+                diagnostic["path"].as_str().expect("path").to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// Run `serve` to a startup failure. Startup fetches discovery from the
+/// in-process provider, so the binary runs off the test's runtime thread.
+async fn serve_failing(environment: &Environment) -> std::process::Output {
+    let config_path = environment.config_path.clone();
+    tokio::task::spawn_blocking(move || {
+        Command::new(BINARY)
+            .arg("--runtime-config")
+            .arg(config_path)
+            .arg("serve")
+            .env_remove("BREG_REVIEW_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .expect("run breg-review")
+    })
+    .await
+    .unwrap()
 }
 
 fn replace_client_key_with_inline_canary(environment: &Environment) {
@@ -240,36 +289,53 @@ async fn an_inline_client_key_stops_startup_without_echoing_it() {
     let environment = Environment::prepare(free_address().await, &Options::default()).await;
     replace_client_key_with_inline_canary(&environment);
 
-    let output = run(&environment, "serve");
+    let output = serve_failing(&environment).await;
 
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("signIn.clientKeyRef"), "{stderr}");
+    assert!(
+        stderr.starts_with("breg-review: the runtime configuration was refused\n"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("/signIn/clientKeyRef"), "{stderr}");
     assert!(!stderr.contains("inline-canary-value"), "{stderr}");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(!stdout.contains("inline-canary-value"), "{stdout}");
+    assert!(stdout.is_empty(), "{stdout}");
 }
 
 #[tokio::test]
-async fn check_accepts_a_valid_configuration_without_serving() {
+async fn check_accepts_a_valid_configuration_without_reading_its_secrets() {
     let environment = Environment::prepare(free_address().await, &Options::default()).await;
+    // `check` resolves no secret, so it passes with every secret file gone.
+    for name in ["client-key.jwk", "audit-key"] {
+        std::fs::remove_file(environment.directory.path().join("secrets").join(name)).unwrap();
+    }
 
-    let output = run(&environment, "check");
+    let output = check(&environment, &[]);
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(output.status.success(), "{stdout}{stderr}");
-    assert!(
-        stdout.contains("the runtime configuration is valid"),
-        "{stdout}"
-    );
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert_eq!(stdout, "0 errors, 0 warnings in 1 file\n");
     assert!(stderr.is_empty(), "{stderr}");
-    assert_json_lines(&stdout);
     // `check` opens no journal: the audit directory stays empty.
     assert!(
         harness_audit_is_empty(&environment),
         "check wrote to the audit journal"
     );
+
+    let (code, report) = report(&environment);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(
+        report["apiVersion"],
+        "id.registrystack.org/formats/breg/review-ctl-report/v1alpha1"
+    );
+    assert_eq!(report["kind"], "BRegReviewCtlReport");
+    assert_eq!(report["command"], "check");
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["filesChecked"], 1);
+    assert!(codes(&report).is_empty(), "{report}");
 }
 
 #[tokio::test]
@@ -277,22 +343,77 @@ async fn check_refuses_an_invalid_configuration_without_echoing_it() {
     let environment = Environment::prepare(free_address().await, &Options::default()).await;
     replace_client_key_with_inline_canary(&environment);
 
-    let output = run(&environment, "check");
+    let output = check(&environment, &[]);
 
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("signIn.clientKeyRef"), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.starts_with("breg-review check refused the input.\n"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("/signIn/clientKeyRef"), "{stderr}");
     assert!(!stderr.contains("inline-canary-value"), "{stderr}");
-    assert!(!stdout.contains("inline-canary-value"), "{stdout}");
-    assert!(!stdout.contains("is valid"), "{stdout}");
+
+    let (code, report) = report(&environment);
+    assert_eq!(code, Some(1), "{report}");
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(
+        codes(&report),
+        [(
+            "config.invalid-value".to_owned(),
+            "/signIn/clientKeyRef".to_owned()
+        )]
+    );
+    assert!(
+        !report.to_string().contains("inline-canary-value"),
+        "{report}"
+    );
+}
+
+/// Decoding stops at the first refused value; once the file decodes, every
+/// semantic finding is reported together.
+#[tokio::test]
+async fn check_reports_every_semantic_finding_by_code() {
+    let environment = Environment::prepare(free_address().await, &Options::default()).await;
+    let document = std::fs::read_to_string(&environment.config_path).unwrap();
+    let bind = document
+        .lines()
+        .find(|line| line.trim_start().starts_with("bind: "))
+        .expect("the document binds an address")
+        .to_owned();
+    let refused = document.replace(&bind, "  bind: 0.0.0.0:8115").replacen(
+        "scopes: [",
+        "scopes: [openid, ",
+        1,
+    );
+    assert_eq!(refused.matches("openid").count(), 1, "{refused}");
+    std::fs::write(&environment.config_path, refused).unwrap();
+
+    let (code, report) = report(&environment);
+
+    assert_eq!(code, Some(1), "{report}");
+    assert_eq!(
+        codes(&report),
+        [
+            (
+                "breg.review-runtime.public-bind".to_owned(),
+                "/listener/bind".to_owned()
+            ),
+            (
+                "breg.review-runtime.openid-scope".to_owned(),
+                "/signIn/scopes/0".to_owned()
+            ),
+        ]
+    );
 }
 
 /// A client key that parses but cannot authenticate the sign-in client, here
-/// one without a key identifier, is refused by `check` exactly as `serve`
-/// refuses it, and neither echoes the key.
+/// one without a key identifier, is refused when `serve` starts. `check`
+/// reads no secret, so it cannot see the key.
 #[tokio::test]
-async fn check_refuses_a_client_key_serve_would_refuse() {
+async fn serve_refuses_a_client_key_without_a_key_identifier() {
     let environment = Environment::prepare(free_address().await, &Options::default()).await;
     let key_path = environment.directory.path().join("secrets/client-key.jwk");
     let mut key: serde_json::Value =
@@ -301,42 +422,27 @@ async fn check_refuses_a_client_key_serve_would_refuse() {
     assert!(key.as_object_mut().unwrap().remove("kid").is_some());
     std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
 
-    let checked = run(&environment, "check");
-    // `serve` fetches discovery from the in-process provider, so it runs off
-    // the test's runtime thread.
-    let config_path = environment.config_path.clone();
-    let served = tokio::task::spawn_blocking(move || {
-        Command::new(BINARY)
-            .arg("--runtime-config")
-            .arg(config_path)
-            .arg("serve")
-            .stdin(Stdio::null())
-            .output()
-            .expect("run breg-review")
-    })
-    .await
-    .unwrap();
+    assert_eq!(check(&environment, &[]).status.code(), Some(0));
+    let served = serve_failing(&environment).await;
 
-    for output in [&checked, &served] {
-        assert_eq!(output.status.code(), Some(1));
-        let stdout = String::from_utf8(output.stdout.clone()).unwrap();
-        let stderr = String::from_utf8(output.stderr.clone()).unwrap();
-        assert!(
-            stderr.contains("the client key must carry a key identifier"),
-            "{stderr}"
-        );
-        assert!(!stderr.contains(&private), "{stderr}");
-        assert!(!stdout.contains(&private), "{stdout}");
-        assert!(!stdout.contains("is valid"), "{stdout}");
-    }
+    assert_eq!(served.status.code(), Some(1));
+    let stdout = String::from_utf8(served.stdout).unwrap();
+    let stderr = String::from_utf8(served.stderr).unwrap();
+    assert!(
+        stderr.contains("the client key must carry a key identifier"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(&private), "{stderr}");
+    assert!(!stdout.contains(&private), "{stdout}");
 }
 
 #[tokio::test]
-async fn check_refuses_an_unreadable_secret_by_its_safe_reference() {
+async fn serve_refuses_an_unreadable_secret_by_its_safe_reference() {
     let environment = Environment::prepare(free_address().await, &Options::default()).await;
     std::fs::remove_file(environment.directory.path().join("secrets/audit-key")).unwrap();
 
-    let output = run(&environment, "check");
+    assert_eq!(check(&environment, &[]).status.code(), Some(0));
+    let output = serve_failing(&environment).await;
 
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
@@ -353,7 +459,7 @@ async fn check_refuses_an_unreadable_secret_by_its_safe_reference() {
 }
 
 #[tokio::test]
-async fn check_reports_a_missing_configuration_file_without_a_root_path_suffix() {
+async fn a_missing_configuration_file_is_an_operational_failure() {
     let directory = tempfile::tempdir().unwrap();
     let missing = directory
         .path()
@@ -363,14 +469,22 @@ async fn check_reports_a_missing_configuration_file_without_a_root_path_suffix()
     let output = Command::new(BINARY)
         .arg("--runtime-config")
         .arg(&missing)
-        .arg("check")
+        .args(["check", "--format", "json"])
         .stdin(Stdio::null())
         .output()
         .expect("run breg-review");
 
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(!stderr.contains("(at /)"), "{stderr}");
+    assert_eq!(output.status.code(), Some(3));
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("the report is JSON");
+    assert_eq!(report["status"], "operational-failure");
+    assert_eq!(
+        codes(&report),
+        [(
+            "platform.runtime-config.unavailable".to_owned(),
+            String::new()
+        )]
+    );
 }
 
 #[tokio::test]
@@ -387,21 +501,32 @@ async fn a_missing_subcommand_is_a_usage_error() {
     assert!(stderr.contains("serve"), "{stderr}");
 }
 
+/// `serve` refuses an unknown level with exit status 2 before any work.
+/// `check` logs nothing and reads no level.
 #[tokio::test]
 async fn an_unknown_log_level_stops_startup() {
     let environment = Environment::prepare(free_address().await, &Options::default()).await;
-    for subcommand in ["check", "serve"] {
-        let output = Command::new(BINARY)
+    let run = |subcommand: &str| {
+        Command::new(BINARY)
             .arg("--runtime-config")
             .arg(&environment.config_path)
             .arg(subcommand)
             .env("BREG_REVIEW_LOG", "debug")
             .output()
-            .expect("run breg-review");
-        assert_eq!(output.status.code(), Some(2), "{subcommand}");
-        let stderr = String::from_utf8(output.stderr).unwrap();
-        assert!(stderr.contains("BREG_REVIEW_LOG"), "{stderr}");
-    }
+            .expect("run breg-review")
+    };
+    let served = run("serve");
+    assert_eq!(served.status.code(), Some(2));
+    let stderr = String::from_utf8(served.stderr).unwrap();
+    assert_eq!(
+        stderr,
+        "breg-review: BREG_REVIEW_LOG must be one of error, warn, or info\n"
+    );
+    assert!(served.stdout.is_empty());
+
+    let checked = run("check");
+    assert_eq!(checked.status.code(), Some(0));
+    assert_eq!(checked.stdout, b"0 errors, 0 warnings in 1 file\n");
 }
 
 #[tokio::test]

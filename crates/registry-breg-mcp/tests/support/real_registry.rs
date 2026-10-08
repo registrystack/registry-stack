@@ -801,7 +801,7 @@ impl ReviewPage {
         fs::write(
             &path,
             format!(
-                "apiVersion: registry.registrystack.org/breg-review-runtime/v1alpha1\n\
+                "apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1\n\
                  kind: BRegReviewRuntimeConfig\n\
                  listener:\n  bind: \"{address}\"\n  tlsTermination: development-loopback\n\
                  publicOrigin: {origin}\n\

@@ -14,15 +14,21 @@
 // so its error is an HTTP response, carried to the handler once and returned.
 #![allow(clippy::result_large_err)]
 
+pub mod check;
 mod config;
 mod journal;
 mod pages;
 mod registry;
+#[cfg(feature = "schema")]
+pub mod schema;
 mod session;
 mod signin;
 mod templates;
 
-pub use config::{RuntimeConfig, RuntimeConfigError};
+pub use config::{
+    check_runtime, RuntimeCheck, RuntimeConfig, RuntimeConfigError, RUNTIME_API_VERSION,
+    RUNTIME_KIND,
+};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,7 +39,7 @@ use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, MethodRouter};
 use axum::Router;
-use clap::{value_parser, Arg, Command};
+use clap::{value_parser, Arg, ArgAction, Command};
 use jsonwebtoken::Algorithm;
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig};
 use registry_platform_audit::{AuditProfile, AuditWriter};
@@ -52,7 +58,8 @@ use thiserror::Error;
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::config::{allowed_discovered_endpoint, describe_secret_failure, RateConfig};
+use crate::check::OutputFormat;
+use crate::config::{allowed_discovered_endpoint, describe_secret_failure, RateLimitConfig};
 use crate::journal::Journal;
 use crate::session::{well_formed_token, Store};
 use crate::templates::Templates;
@@ -90,16 +97,41 @@ pub fn command() -> Command {
                 .value_parser(value_parser!(PathBuf)),
         )
         .subcommand_required(true)
-        .subcommand(Command::new("check").about(
-            "Validate the runtime configuration and resolve its secrets without opening a socket",
-        ))
+        .subcommand(
+            Command::new("check")
+                .about(
+                    "Check the runtime configuration offline, reading no secret and opening no \
+                     socket",
+                )
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .help("How to write the findings")
+                        .value_parser(value_parser!(OutputFormat))
+                        .default_value("human"),
+                )
+                .arg(
+                    Arg::new("deny-warnings")
+                        .long("deny-warnings")
+                        .help("Refuse warnings as well as errors (exit 1)")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("environment")
+                        .long("environment")
+                        .help(
+                            "Substitute `${NAME}` expressions from this environment and check \
+                             every value. Without it, each expression is checked by syntax and \
+                             position only",
+                        )
+                        .action(ArgAction::SetTrue),
+                ),
+        )
         .subcommand(Command::new("serve").about("Serve the review page until it is terminated"))
 }
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
-    #[error(transparent)]
-    Config(#[from] RuntimeConfigError),
     #[error("{0}")]
     Secret(String),
     #[error("signIn.clientKeyRef does not hold a private JWK the page can sign with")]
@@ -114,7 +146,7 @@ pub enum RuntimeError {
     Audit(String),
     #[error("the page templates could not be compiled: {0}")]
     Templates(String),
-    #[error("limits could not be configured")]
+    #[error("rateLimits could not be configured")]
     Limits,
 }
 
@@ -438,10 +470,10 @@ fn resolve_secret(
         .map_err(|error| RuntimeError::Secret(describe_secret_failure(field, reference, &error)))
 }
 
-fn limiter(rate: RateConfig) -> Result<TokenBucketLimiter, RuntimeError> {
+fn limiter(rate: RateLimitConfig) -> Result<TokenBucketLimiter, RuntimeError> {
     TokenBucketLimiter::new(TokenBucketConfig {
-        requests_per_minute: rate.requests_per_minute,
-        burst: rate.burst,
+        requests_per_minute: rate.requests_per_minute.get(),
+        burst: rate.burst.get(),
     })
     .map_err(|_| RuntimeError::Limits)
 }
@@ -481,13 +513,27 @@ fn sign_in_client(
     policy: FetchUrlPolicy,
 ) -> Result<PrivateKeyJwt, RuntimeError> {
     PrivateKeyJwt::new(
-        PrivateKeyJwtConfig::new(token_endpoint, config.sign_in.client_id.clone(), client_key)
-            .with_audience(config.sign_in.issuer.clone())
-            .with_resource(config.registry.resource.clone())
-            .with_scopes(config.sign_in.scopes.clone())
-            .with_fetch_url_policy(policy),
+        PrivateKeyJwtConfig::new(
+            token_endpoint,
+            config.sign_in.client_id.as_str().to_owned(),
+            client_key,
+        )
+        .with_audience(config.sign_in.issuer.as_str().to_owned())
+        .with_resource(config.registry.resource.as_str().to_owned())
+        .with_scopes(scopes(config))
+        .with_fetch_url_policy(policy),
     )
     .map_err(|error| RuntimeError::SignInClient(error.to_string()))
+}
+
+/// The scopes the page requests beside `openid`, as written.
+fn scopes(config: &RuntimeConfig) -> Vec<String> {
+    config
+        .sign_in
+        .scopes
+        .iter()
+        .map(|scope| scope.as_str().to_owned())
+        .collect()
 }
 
 /// Everything startup derives from the configuration without a network call
@@ -502,16 +548,21 @@ struct Offline {
     global_sign_in: TokenBucketLimiter,
 }
 
-/// Validate the configuration, read and parse its secrets, and compile the
+/// Read and parse the secrets of a loaded configuration and compile the
 /// templates, failing on the first fault. It neither calls the provider nor
 /// opens the audit journal.
 fn offline(config: &RuntimeConfig) -> Result<Offline, RuntimeError> {
-    config.check()?;
-    let secrets = config.secret_resolver()?;
+    let secrets = config.secret_providers.resolver().map_err(|error| {
+        RuntimeError::Secret(describe_secret_failure(
+            "secretProviders",
+            "secret providers",
+            &error,
+        ))
+    })?;
     let client_key = resolve_secret(
         &secrets,
         "signIn.clientKeyRef",
-        &config.sign_in.client_key_ref,
+        config.sign_in.client_key_ref.as_str(),
     )?;
     let client_key = std::str::from_utf8(client_key.expose_secret())
         .ok()
@@ -528,8 +579,7 @@ fn offline(config: &RuntimeConfig) -> Result<Offline, RuntimeError> {
     .map_err(|error| RuntimeError::Audit(error.to_string()))?;
     drop(audit_key);
 
-    let base_url = Url::parse(&config.registry.base_url)
-        .map_err(|_| RuntimeError::Config(RuntimeConfigError::InvalidRegistry))?;
+    let base_url = config.registry.base_url.to_url();
     // The page owns same-key recovery: after an uncertain submit the person
     // retries the original action under the same key from the retained view.
     // Client resends stacked under each submit would multiply the wait of a
@@ -543,38 +593,12 @@ fn offline(config: &RuntimeConfig) -> Result<Offline, RuntimeError> {
     Ok(Offline {
         client_key,
         audit_profile,
-        redirect_uri: config.redirect_uri()?,
+        redirect_uri: config.redirect_uri(),
         registry,
         templates,
-        per_citizen: limiter(config.limits.per_citizen)?,
-        global_sign_in: limiter(config.limits.global_sign_in)?,
+        per_citizen: limiter(config.rate_limits.per_citizen)?,
+        global_sign_in: limiter(config.rate_limits.global_sign_in)?,
     })
-}
-
-/// Validate a runtime configuration the way startup does, without serving:
-/// check the document, read and parse its secrets, build the sign-in client
-/// from its key, and compile the templates.
-/// It neither fetches the provider's discovery document nor opens the audit
-/// journal, so it needs no network and writes nothing.
-pub fn check(config: &RuntimeConfig) -> Result<(), RuntimeError> {
-    let Offline { client_key, .. } = offline(config)?;
-    // The token endpoint comes from discovery, which `check` does not fetch,
-    // so the issuer stands in for it. Every other part of the sign-in client,
-    // the key's identifier and signing ability above all, is refused here
-    // exactly as `serve` refuses it.
-    let stand_in_endpoint = Url::parse(&config.sign_in.issuer)
-        .map_err(|_| RuntimeError::Config(RuntimeConfigError::InvalidSignIn))?;
-    sign_in_client(
-        config,
-        stand_in_endpoint,
-        client_key,
-        fetch_url_policy(config),
-    )?;
-    config
-        .audit
-        .destination()?
-        .check_writable()
-        .map_err(|error| RuntimeError::Audit(error.operator_description()))
 }
 
 /// Build the page from a validated runtime configuration. Startup reads the
@@ -608,7 +632,7 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
     let development = config.development();
     let policy = fetch_url_policy(&config);
 
-    let issuer = config.sign_in.issuer.clone();
+    let issuer = config.sign_in.issuer.as_str().to_owned();
     let discovery = fetch_discovery_with_policy(
         &OidcDiscoveryConfig {
             issuer: issuer.clone(),
@@ -639,11 +663,11 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
     let verifier = TokenVerifier::new(
         TokenVerifierConfig::access_token_profile(
             issuer.clone(),
-            vec![config.sign_in.client_id.clone()],
+            vec![config.sign_in.client_id.as_str().to_owned()],
             ID_TOKEN_ALGORITHMS.to_vec(),
             Vec::new(),
         )
-        .with_allowed_clients(vec![config.sign_in.client_id.clone()])
+        .with_allowed_clients(vec![config.sign_in.client_id.as_str().to_owned()])
         .with_leeway(ID_TOKEN_LEEWAY),
         jwks,
     );
@@ -651,26 +675,31 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
 
     let writer = match writer {
         Some(writer) => writer,
-        None => AuditWriter::open(config.audit.destination()?)
-            .await
-            .map_err(|error| RuntimeError::Audit(error.operator_description()))?,
+        None => AuditWriter::open(
+            config
+                .audit
+                .destination()
+                .map_err(|error| RuntimeError::Audit(error.to_string()))?,
+        )
+        .await
+        .map_err(|error| RuntimeError::Audit(error.operator_description()))?,
     };
     let journal = Journal::new(
         writer,
         audit_profile.key_hasher(),
         &issuer,
-        &config.sign_in.client_id,
+        config.sign_in.client_id.as_str(),
     )
     .map_err(|_| RuntimeError::Audit("the client pseudonym could not be derived".to_owned()))?;
 
     let app = Arc::new(App {
         issuer,
-        client_id: config.sign_in.client_id.clone(),
-        scopes: config.sign_in.scopes.clone(),
-        resource: config.registry.resource.clone(),
-        entity: config.registry.entity.clone(),
-        target_field: config.registry.target_field.clone(),
-        access_profile: config.registry.access_profile.clone(),
+        client_id: config.sign_in.client_id.as_str().to_owned(),
+        scopes: scopes(&config),
+        resource: config.registry.resource.as_str().to_owned(),
+        entity: config.registry.entity.as_str().to_owned(),
+        target_field: config.registry.target_field.as_str().to_owned(),
+        access_profile: config.registry.access_profile.as_str().to_owned(),
         authorization_endpoint,
         requires_iss,
         redirect_uri,
@@ -678,16 +707,13 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
         verifier,
         registry,
         templates,
-        sessions: Store::new(
-            config.session.maximum_sessions,
-            config.session.maximum_pending_sign_ins,
-        ),
+        sessions: Store::new(config.session.sessions(), config.session.pending_sign_ins()),
         journal,
         per_citizen,
         global_sign_in,
         cookies: Cookies::for_mode(development),
-        maximum_session: Duration::from_secs(config.session.maximum_lifetime_seconds),
-        sign_in_lifetime: Duration::from_secs(config.session.sign_in_lifetime_seconds),
+        maximum_session: Duration::from_secs(config.session.maximum_lifetime_seconds.get()),
+        sign_in_lifetime: Duration::from_secs(config.session.sign_in_lifetime_seconds.get()),
     });
 
     let csp = CspBuilder::deny_by_default()

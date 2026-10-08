@@ -1,0 +1,450 @@
+{
+  "$defs": {
+    "AuditConfig": {
+      "additionalProperties": false,
+      "description": "The audit block every Registry Stack product shares: the hash key, then a\n`file` (the default) or `stdout` destination, with rotation and retention\nfor a file.",
+      "else": {
+        "required": [
+          "path"
+        ]
+      },
+      "if": {
+        "properties": {
+          "destination": {
+            "const": "stdout"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/AuditDestinationKind",
+          "default": "file",
+          "description": "Where audit lines go: `file` or `stdout`."
+        },
+        "hashKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the audit hash key."
+        },
+        "path": {
+          "default": null,
+          "description": "The absolute path of the active audit file, for a `file` destination.",
+          "pattern": "^/+(?:(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+)?)/+)*(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+))$",
+          "type": "string"
+        },
+        "retentionDays": {
+          "default": null,
+          "description": "Days a rotated file is kept, for a `file` destination. Default: 90.",
+          "format": "uint32",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "rotateBytes": {
+          "default": null,
+          "description": "Size at which the active file rotates, in bytes, for a `file`\ndestination. Default: 100 MiB.",
+          "format": "uint64",
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hashKeyRef"
+      ],
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "required": [
+                "rotateBytes"
+              ]
+            },
+            {
+              "required": [
+                "retentionDays"
+              ]
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AuditDestinationKind": {
+      "description": "The configured audit destination kind, as written in product configuration.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Durable, rotated JSON Lines file.",
+          "type": "string"
+        },
+        {
+          "const": "stdout",
+          "description": "One JSON line per entry on standard output, flushed per entry.",
+          "type": "string"
+        }
+      ]
+    },
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "ListenerBind": {
+      "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ListenerNetworkExposure": {
+      "description": "The operator-declared private network placement of an HTTP listener.",
+      "enum": [
+        "private-address",
+        "container-private"
+      ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "PrivateListenerConfig": {
+      "additionalProperties": false,
+      "description": "The listener of a runtime that declares its TLS termination and network\nexposure.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure",
+          "default": "private-address"
+        },
+        "tlsTermination": {
+          "$ref": "#/$defs/TlsTermination"
+        }
+      },
+      "required": [
+        "bind",
+        "tlsTermination"
+      ],
+      "type": "object"
+    },
+    "RateLimitConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "burst": {
+          "description": "Requests admitted at once before the average applies.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "requestsPerMinute": {
+          "description": "Requests admitted per minute, on average.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requestsPerMinute",
+        "burst"
+      ],
+      "type": "object"
+    },
+    "RateLimitsConfig": {
+      "additionalProperties": false,
+      "description": "The page's own request limits. It reads neither peer addresses nor\nforwarded headers, so it cannot tell one browser from another before\nsign-in: a per-client limit belongs at the edge proxy.",
+      "properties": {
+        "globalSignIn": {
+          "$ref": "#/$defs/RateLimitConfig",
+          "description": "One limit shared by everyone on the unauthenticated sign-in routes,\n`/signin` and `/signin/callback`. Default: 600 a minute, burst 120."
+        },
+        "perCitizen": {
+          "$ref": "#/$defs/RateLimitConfig",
+          "description": "One limit for each signed-in person, shared by all their sessions,\non every request that presents a session. Default: 120 a minute,\nburst 30."
+        }
+      },
+      "type": "object"
+    },
+    "RegistryConfig": {
+      "additionalProperties": false,
+      "description": "The Base Registry Engine deployment and the one access profile the page\nreads and submits through.",
+      "properties": {
+        "accessProfile": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The registry access profile every read and submit names."
+        },
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "description": "The registry deployment's base URL. An https URL with no query or\nfragment; plain http is accepted only on a loopback host under\n`development-loopback`."
+        },
+        "entity": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The change-request entity identifier."
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceUri",
+          "description": "The RFC 8707 resource indicator the person's access token names."
+        },
+        "targetField": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The reference field naming the record the request changes. The page\nreads that record under the person's own token before it offers the\nsubmit form, because the registry does not tie a request's target to\nits requester."
+        }
+      },
+      "required": [
+        "baseUrl",
+        "resource",
+        "entity",
+        "targetField",
+        "accessProfile"
+      ],
+      "type": "object"
+    },
+    "ResourceUri": {
+      "description": "An RFC 8707 resource indicator: an absolute URI without a fragment. The reader also refuses user information and a URI it cannot parse.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9._~:/?\\[\\]@!$&'()*+,;=-]|%[0-9A-Fa-f]{2})*$",
+      "type": "string"
+    },
+    "ScopeToken": {
+      "description": "An RFC 6749 scope token: printable ASCII other than space, `\"`, and `\\`.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[!#-\\[\\]-~]+$",
+      "type": "string"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "SessionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumLifetimeSeconds": {
+          "default": 3600,
+          "description": "The longest a session lasts. A session also ends when the access\ntoken it holds expires, whichever comes first. Default: 3600.",
+          "format": "uint64",
+          "maximum": 86400,
+          "minimum": 60,
+          "type": "integer"
+        },
+        "maximumPendingSignIns": {
+          "default": 10000,
+          "description": "The most sign-ins in progress the page holds at once. It must hold\nevery sign-in `rateLimits.globalSignIn` admits within\n`signInLifetimeSeconds`. Default: 10000.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumSessions": {
+          "default": 10000,
+          "description": "The most signed-in sessions the page holds at once. Default: 10000.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "signInLifetimeSeconds": {
+          "default": 600,
+          "description": "How long a started sign-in may take to return from the provider.\nDefault: 600.",
+          "format": "uint64",
+          "maximum": 3600,
+          "minimum": 60,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SignInConfig": {
+      "additionalProperties": false,
+      "description": "The OpenID Provider the page signs people in with, and the confidential\nclient it authenticates as.",
+      "properties": {
+        "clientId": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The page's client identifier at the provider."
+        },
+        "clientKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the client's private JWK, used for\n`private_key_jwt` client authentication, under a declared provider."
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url",
+          "description": "The provider's issuer. An https URL with no query or fragment; plain\nhttp is accepted only on a loopback host under `development-loopback`."
+        },
+        "scopes": {
+          "description": "Scopes requested beside `openid`, such as the review scope the\nregistry profile requires. The page always requests `openid`, so the\nlist does not name it.",
+          "items": {
+            "$ref": "#/$defs/ScopeToken"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "not": {
+            "contains": {
+              "const": "openid"
+            }
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "issuer",
+        "clientId",
+        "clientKeyRef",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "TlsTermination": {
+      "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
+      "enum": [
+        "operator-controlled-upstream",
+        "development-loopback"
+      ],
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/breg/review-runtime/review-runtime.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The operator runtime configuration document.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/breg/review-runtime/v1alpha1",
+      "type": "string"
+    },
+    "audit": {
+      "$ref": "#/$defs/AuditConfig"
+    },
+    "kind": {
+      "const": "BRegReviewRuntimeConfig",
+      "type": "string"
+    },
+    "listener": {
+      "$ref": "#/$defs/PrivateListenerConfig"
+    },
+    "publicOrigin": {
+      "$ref": "#/$defs/Url",
+      "description": "The browser-facing origin, such as `https://review.example`: an https\nURL with no path, query, or fragment; plain http is accepted only on\na loopback host under `development-loopback`. The sign-in redirect\nURI is this origin with `/signin/callback`."
+    },
+    "rateLimits": {
+      "$ref": "#/$defs/RateLimitsConfig"
+    },
+    "registry": {
+      "$ref": "#/$defs/RegistryConfig"
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig"
+    },
+    "session": {
+      "$ref": "#/$defs/SessionConfig"
+    },
+    "signIn": {
+      "$ref": "#/$defs/SignInConfig"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "listener",
+    "publicOrigin",
+    "secretProviders",
+    "signIn",
+    "registry",
+    "audit"
+  ],
+  "title": "Base Registry Engine citizen review page runtime configuration",
+  "type": "object"
+}

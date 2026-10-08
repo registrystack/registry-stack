@@ -1135,7 +1135,7 @@ async fn narrow_scope_token(State(state): State<Arc<NarrowScopeState>>, body: By
 
 pub struct Options {
     pub token_lifetime: Duration,
-    /// Top-level blocks appended to the runtime document, such as `limits`.
+    /// Top-level blocks appended to the runtime document, such as `rateLimits`.
     pub extra_document: String,
 }
 
@@ -1197,7 +1197,7 @@ impl Environment {
         let audit_path = audit_directory.join("audit.jsonl");
         let config_path = root.join("runtime.yaml");
         let document = format!(
-            "apiVersion: registry.registrystack.org/breg-review-runtime/v1alpha1\n\
+            "apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1\n\
              kind: BRegReviewRuntimeConfig\n\
              listener:\n  bind: \"{address}\"\n  tlsTermination: development-loopback\n\
              publicOrigin: {origin}\n\
