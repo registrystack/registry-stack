@@ -10219,13 +10219,6 @@ exceptions:
   wp: WP3
   reason: the reader does not read through registry-platform-yaml
   resolution: Read through registry-platform-yaml
-- rule: CFG-ENV-2
-  format: render/bundle
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is render.registrystack.org/v1alpha1
-  resolution: Read and write id.registrystack.org/formats/render/bundle/v1alpha1; refuse the old value with config.retired-api-version
 - rule: CFG-SCHEMA-2
   format: render/bundle
   location: products/platform/config-formats.yaml#/schema
@@ -10240,27 +10233,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: render/bundle
-  location: crates/registry-render/src/manifest.rs#parse()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
-- rule: CFG-ENV-1
-  format: render/labels
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/render/labels/v1alpha1'
-- rule: CFG-ENV-1
-  format: render/labels
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: RenderLabels'
 - rule: CFG-SCHEMA-1
   format: render/labels
   location: products/platform/config-formats.yaml#/example
@@ -10282,20 +10254,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: render/labels
-  location: crates/registry-render/src/bundle.rs#assemble()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
-- rule: CFG-ENV-2
-  format: render/runtime
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is registry.registrystack.org/render-runtime/v1alpha1
-  resolution: Read and write id.registrystack.org/formats/render/runtime/v1alpha1; refuse the old value with config.retired-api-version
 - rule: CFG-SCHEMA-1
   format: render/runtime
   location: products/platform/config-formats.yaml#/example

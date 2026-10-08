@@ -112,6 +112,6 @@ exits 101):
   caller's `Idempotency-Key` is echoed only as the record's `correlationId`,
   since two calls may carry the same key. The
   runtime's `audit` block names a `file` (the default, with `path` and
-  optional `rotateBytes` and `retainDays`) or `stdout` destination. The log
+  optional `rotateBytes` and `retentionDays`) or `stdout` destination. The log
   carries no hash chain or signature, so it is not tamper-evident on the
   host; ship it to append-only storage when that matters.

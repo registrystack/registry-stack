@@ -739,7 +739,7 @@ fn serve_deployment() -> (PathBuf, PathBuf, u16) {
         .unwrap()
         .port();
     let runtime = format!(
-        "apiVersion: registry.registrystack.org/render-runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauth:\n  apiKeyRef: secret:file/api.key\nlimits:\n  renderTimeoutSeconds: 20\naudit:\n  path: {}\n",
+        "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauth:\n  apiKeyRef: secret:file/api.key\nlimits:\n  renderTimeoutSeconds: 20\naudit:\n  path: {}\n",
         bundle.display(),
         home.display(),
         home.join("audit/render.jsonl").display()

@@ -134,7 +134,7 @@ under the declared `secretProviders.file.root`:
 ```sh
 work="$(cd render-work && pwd -P)"
 cat > render-work/deploy/runtime.yaml <<EOF
-apiVersion: registry.registrystack.org/render-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1
 kind: RenderRuntimeConfig
 listener:
   bind: 127.0.0.1:64123
@@ -147,9 +147,9 @@ auth:
   apiKeyRef: secret:file/api.key
 limits:
   renderTimeoutSeconds: 20
-  maxOutputBytes: 8388608
-  maxRequestBodyBytes: 8388608
-  maxConcurrency: 2
+  maximumOutputBytes: 8388608
+  maximumRequestBytes: 8388608
+  maximumConcurrentRenders: 2
 audit:
   path: $work/audit/render.jsonl
 EOF
@@ -169,8 +169,9 @@ You know it is serving when health answers with the package hash and the rendere
 {"bundleHash":"<package digest without sha256:>","bundleVersion":1,"rendererVersion":"<version> (typst 0.15.1)","status":"ok","typstPin":"0.15.1"}
 ```
 
-If startup fails instead, the refusal names the file and the field: check that `package.root` is
-the package directory and that the API key file sits under `secretProviders.file.root`.
+If startup fails instead, the refusal names the file, the line, and the field, with the fix on its
+`next:` line: check that `package.root` is the package directory and that the API key file sits
+under `secretProviders.file.root`.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, RenderRuntime and validate_bind;
     crates/registry-render/src/audit.rs, RenderAudit. */}

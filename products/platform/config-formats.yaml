@@ -2552,7 +2552,7 @@ formats:
     stability: experimental
     topLevel: bundle
     current:
-      apiVersion: render.registrystack.org/v1alpha1
+      apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
       kind: RenderBundle
       checkedBy:
         file: crates/registry-render/src/manifest.rs
@@ -2564,8 +2564,8 @@ formats:
     reader:
       crate: registry-render
       file: crates/registry-render/src/manifest.rs
-      function: parse
-      type: Manifest
+      function: read_manifest
+      type: ManifestFile
     check: registry-render check --bundle {project}
     example: products/render/bundles/receipt/manifest.yaml
     conformance:
@@ -2586,18 +2586,20 @@ formats:
     audience: authored
     stability: experimental
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/render/labels/v1alpha1
+      kind: RenderLabels
+      checkedBy:
+        file: crates/registry-render/src/labels.rs
+        symbol: LABELS_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/render/labels/v1alpha1
       kind: RenderLabels
     schema: none
     reader:
       crate: registry-render
-      file: crates/registry-render/src/bundle.rs
-      function: assemble
-      type: untyped
+      file: crates/registry-render/src/labels.rs
+      function: read_labels
+      type: LabelsFile
     check: registry-render check --bundle {project}
     example: none
     conformance:
@@ -2615,7 +2617,7 @@ formats:
     audience: operator
     stability: experimental
     current:
-      apiVersion: registry.registrystack.org/render-runtime/v1alpha1
+      apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1
       kind: RenderRuntimeConfig
       checkedBy:
         file: crates/registry-render/src/runtime.rs

@@ -111,11 +111,11 @@ Serve mode reads one YAML file, selected with `--runtime-config`. Every field is
 unknown fields are refused:
 
 ```yaml
-apiVersion: registry.registrystack.org/render-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1
 kind: RenderRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
-  shutdownGraceSeconds: 30
+  shutdownGraceMilliseconds: 30000
 package:
   # The directory written by `registry-render package`.
   root: /var/lib/registry-render/package
@@ -129,18 +129,19 @@ auth:
   apiKeyRef: secret:file/render-api-key
 limits:
   renderTimeoutSeconds: 20
-  maxOutputBytes: 8388608
-  maxRequestBodyBytes: 8388608
-  maxConcurrency: 4
+  maximumOutputBytes: 8388608
+  maximumRequestBytes: 8388608
+  maximumConcurrentRenders: 4
 audit:
   path: /var/lib/registry-render/audit/render.jsonl
   rotateBytes: 67108864
-  retainDays: 90
+  retentionDays: 90
 ```
 
 The runtime file path, `package.root`, `audit.path`, and `secretProviders.file.root` are
 absolute, and the runtime file path must not pass through a symbolic link, so the same file behaves
-identically wherever the process is launched from. `listener.bind` is required. A `secret:file/name`
+identically wherever the process is launched from. `listener.bind` is required and must be a
+loopback, private, or link-local address. A `secret:file/name`
 reference resolves under `secretProviders.file.root`, and a `secret:env/NAME` reference only when
 `secretProviders.environment: {}` is declared; a reference to an undeclared provider refuses
 startup. String values may take a deployment value from the environment with `${VAR}`,
@@ -151,13 +152,26 @@ same expected/found message as every other Registry Stack runtime. `GET /health`
 same digest without the `sha256:` label as `bundleHash` for compatibility with Render's response
 and audit fields.
 `audit.destination` is `file` by default; set it to `stdout`, without `path`, `rotateBytes`, or
-`retainDays`, to hand the entries to your log collector instead.
-The limits carry hard ceilings the runtime refuses to exceed: the output cap cannot exceed 8 MiB
-and the request body cap 64 MiB, so a configuration mistake cannot unbound the process. On
-shutdown the process drains in-flight renders for one grace period, gives open connections a
-second one, and then abandons the rest; `shutdownGraceSeconds` is therefore the number to align
-with your stop timeout, not a decorative field. It must be between 1 and 3600 seconds: zero would
-drop the renders it exists to protect, and startup refuses both ends.
+`retentionDays`, to hand the entries to your log collector instead.
+Every limit is bounded, so a configuration mistake cannot unbound the process:
+`renderTimeoutSeconds` is 1 to 3600 (20 by default), `maximumOutputBytes` 1 to 8388608 (8 MiB, the
+default), `maximumRequestBytes` 1 to 67108864 (8 MiB by default), and `maximumConcurrentRenders` 1
+to 64 (the CPU count, at most 8, by default). On shutdown the process drains in-flight renders for
+one grace period, gives open connections a second one, and then abandons the rest;
+`shutdownGraceMilliseconds` is therefore the number to align with your stop timeout, not a
+decorative field. It is 1000 to 3600000 (30000 by default): less than a second would drop the
+renders it exists to protect.
+
+When serve refuses the file, it prints every finding on standard error before it exits, each with
+its position and its fix, in the shape every Registry Stack product uses:
+
+```text
+registry-render: runtime-invalid: the runtime configuration was refused
+error[render.runtime.public-bind] /etc/registry-render/runtime.yaml:4:9 /listener/bind
+  listener.bind is not a loopback, private, or link-local address; Render never listens publicly or on all interfaces
+  next: Bind the private address your proxy forwards to; the proxy terminates TLS.
+1 error, 0 warnings in 1 file
+```
 
 {/* Evidence: crates/registry-render/src/runtime.rs, LimitsRuntime, AuditRuntime, and validate_bind;
     crates/registry-render/src/server.rs, serve. */}
@@ -236,7 +250,7 @@ jq -c '{correlation, phase, outcome: .record.outcome}' /var/lib/registry-render/
 
 When the active file would pass `rotateBytes` (100 MiB by default), it is renamed to
 `<path>.<sequence>` with an eight-digit sequence and a fresh file opens. At startup and at each
-rotation, sealed files last modified more than `retainDays` ago (90 by default) are deleted.
+rotation, sealed files last modified more than `retentionDays` ago (90 by default) are deleted.
 Never rename, edit, or truncate the active file while the process runs; the writer then stops and
 every render fails closed until a restart.
 

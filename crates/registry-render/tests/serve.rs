@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 const API_KEY: &str = "test-key-0123456789abcdef0123456789abcdef";
 
-const DEFAULT_LIMITS: &str = "limits:\n  renderTimeoutSeconds: 20\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 8388608\n  maxConcurrency: 2\n";
+const DEFAULT_LIMITS: &str = "limits:\n  renderTimeoutSeconds: 20\n  maximumOutputBytes: 8388608\n  maximumRequestBytes: 8388608\n  maximumConcurrentRenders: 2\n";
 
 struct Server {
     child: Child,
@@ -82,7 +82,7 @@ fn deployment(limits: &str, bundle_source: &Path) -> (PathBuf, PathBuf, u16) {
     std::fs::create_dir(home.join("audit")).unwrap();
     let port = free_port();
     let runtime = format!(
-        "apiVersion: registry.registrystack.org/render-runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\n  shutdownGraceSeconds: 5\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauth:\n  apiKeyRef: secret:file/api.key\n{limits}audit:\n  path: {}\n",
+        "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\n  shutdownGraceMilliseconds: 5000\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauth:\n  apiKeyRef: secret:file/api.key\n{limits}audit:\n  path: {}\n",
         bundle.display(),
         home.display(),
         audit_file(&home).display()
@@ -328,7 +328,7 @@ fn the_runtime_file_serves_the_same_from_any_working_directory() {
     std::fs::write(
         deploy.join("runtime.yaml"),
         format!(
-            "apiVersion: registry.registrystack.org/render-runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\npackage:\n  root: {bundle}\nsecretProviders:\n  file:\n    root: {deploy}\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: {audit}\n",
+            "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{port}\npackage:\n  root: {bundle}\nsecretProviders:\n  file:\n    root: {deploy}\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: {audit}\n",
             bundle = bundle.display(),
             deploy = deploy.display(),
             audit = home.join("audit/render.jsonl").display(),
@@ -475,22 +475,31 @@ fn a_refused_bind_is_caught_before_startup_touches_the_filesystem() {
         &format!("path: {}", audit.join("render.jsonl").display()),
     );
     std::fs::write(&runtime, text).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
         .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+        .stdin(Stdio::null())
+        .output()
         .unwrap();
-    let code = wait_for_exit(&mut child);
     assert_eq!(
-        code,
-        registry_render::ProblemKind::RuntimeInvalid.exit_code(),
+        output.status.code(),
+        Some(registry_render::ProblemKind::RuntimeInvalid.exit_code()),
         "a public bind must refuse startup"
     );
     assert!(
         !audit.exists(),
         "startup must not create the audit directory before the bind is accepted"
     );
+    // The operator reads the refusal in the shared diagnostic shape
+    // (CFG-DIAG-2), positioned at the member, on standard error.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "error[render.runtime.public-bind] {}:4:9 /listener/bind\n",
+            runtime.display()
+        )),
+        "{stderr}"
+    );
+    assert!(stderr.contains("\n  next: "), "{stderr}");
 }
 
 #[test]
@@ -1084,7 +1093,7 @@ fn bundle_drift_after_serve_starts_is_refused_per_render() {
 #[test]
 fn oversized_bodies_are_refused_after_auth_as_problems() {
     let (home, runtime, _) = deployment(
-        "limits:\n  renderTimeoutSeconds: 20\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 1024\n  maxConcurrency: 2\n",
+        "limits:\n  renderTimeoutSeconds: 20\n  maximumOutputBytes: 8388608\n  maximumRequestBytes: 1024\n  maximumConcurrentRenders: 2\n",
         &repo_root().join("products/render/bundles/receipt"),
     );
     let server = start_server(&runtime);
@@ -1128,7 +1137,7 @@ fn oversized_bodies_are_refused_after_auth_as_problems() {
 #[test]
 fn chunked_bodies_are_refused_upfront_as_problems() {
     let (home, runtime, _) = deployment(
-        "limits:\n  renderTimeoutSeconds: 20\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 1024\n  maxConcurrency: 2\n",
+        "limits:\n  renderTimeoutSeconds: 20\n  maximumOutputBytes: 8388608\n  maximumRequestBytes: 1024\n  maximumConcurrentRenders: 2\n",
         &repo_root().join("products/render/bundles/receipt"),
     );
     let server = start_server(&runtime);
@@ -1236,7 +1245,7 @@ fn pathological_renders_are_bounded_and_the_service_recovers() {
     .unwrap();
 
     let (home, runtime, _) = deployment(
-        "limits:\n  renderTimeoutSeconds: 2\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 8388608\n  maxConcurrency: 2\n",
+        "limits:\n  renderTimeoutSeconds: 2\n  maximumOutputBytes: 8388608\n  maximumRequestBytes: 8388608\n  maximumConcurrentRenders: 2\n",
         &bundle,
     );
     let server = start_server(&runtime);
@@ -1340,14 +1349,17 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
     .unwrap();
 
     let (home, runtime, port) = deployment(
-        "limits:\n  renderTimeoutSeconds: 120\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 8388608\n  maxConcurrency: 2\n",
+        "limits:\n  renderTimeoutSeconds: 120\n  maximumOutputBytes: 8388608\n  maximumRequestBytes: 8388608\n  maximumConcurrentRenders: 2\n",
         &bundle,
     );
     // Tighten the grace: the deployment default is 5s.
     let text = std::fs::read_to_string(&runtime).unwrap();
     std::fs::write(
         &runtime,
-        text.replace("shutdownGraceSeconds: 5", "shutdownGraceSeconds: 1"),
+        text.replace(
+            "shutdownGraceMilliseconds: 5000",
+            "shutdownGraceMilliseconds: 1000",
+        ),
     )
     .unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
