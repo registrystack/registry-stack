@@ -139,7 +139,6 @@ struct CredentialBindingDocument {
 )]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 enum CredentialDocumentMode {
-    Anonymous {},
     Bearer { token_ref: SecretReference },
 }
 tagged_union!(CredentialDocumentMode);
@@ -355,9 +354,6 @@ fn load_credentials(
             continue;
         }
         match binding.credential {
-            CredentialDocumentMode::Anonymous {} => {
-                bindings.push(SchemaTestCredentialBinding::anonymous(journey_id, step_id))
-            }
             CredentialDocumentMode::Bearer { token_ref } => {
                 let pointer = format!("/bindings/{index}/credential/tokenRef");
                 let token = resolver
@@ -391,7 +387,7 @@ fn load_credentials(
             Severity::Error,
             "breg.credentials.incomplete-bindings",
             "/bindings",
-            "the bindings do not give exactly one credential to every step of the packaged journeys; anonymous steps require an anonymous binding and protected steps require a well-formed bearer token",
+            "the bindings do not give exactly one credential to every step of the packaged journeys; every step requires a well-formed bearer token",
             CREDENTIALS_ACTION,
         )])
     })
@@ -748,11 +744,10 @@ mod tests {
             .bindings
             .iter()
             .map(|binding| match &binding.credential {
-                CredentialDocumentMode::Anonymous {} => "anonymous",
                 CredentialDocumentMode::Bearer { .. } => "bearer",
             })
             .collect::<Vec<_>>();
-        assert_eq!(modes, ["bearer", "bearer", "anonymous"]);
+        assert_eq!(modes, ["bearer", "bearer", "bearer"]);
     }
 
     #[test]
@@ -798,8 +793,9 @@ bindings:
   - journeyId: journey
     stepId: step
     credential:
-      type: anonymous
-      tokenRef: secret:file/unused
+      type: bearer
+      tokenRef: secret:file/token
+      scope: unused
     note: unused
 ";
         assert_eq!(
@@ -807,13 +803,13 @@ bindings:
             [
                 (
                     "config.unknown-key".to_owned(),
-                    "/bindings/0/credential/tokenRef".to_owned(),
-                    Some(8)
+                    "/bindings/0/credential/scope".to_owned(),
+                    Some(9)
                 ),
                 (
                     "config.unknown-key".to_owned(),
                     "/bindings/0/note".to_owned(),
-                    Some(9)
+                    Some(10)
                 ),
             ]
         );
@@ -835,6 +831,12 @@ bindings:
         let codes = credentials_codes(&binding(
             "      type: Bearer\n      tokenRef: secret:file/token\n",
         ));
+        assert_eq!(codes[0].0, "config.unknown-variant");
+        assert_eq!(codes[0].1, "/bindings/0/credential/type");
+
+        // The registry serves authenticated callers only, so a step has no
+        // credential other than a bearer token.
+        let codes = credentials_codes(&binding("      type: anonymous\n"));
         assert_eq!(codes[0].0, "config.unknown-variant");
         assert_eq!(codes[0].1, "/bindings/0/credential/type");
 

@@ -451,13 +451,6 @@ fn validate_requirements(
             "requireConsent supports get, lookup, list, revisions and snapshot only; use a separate profile for writes",
         ));
     }
-    if profile.anonymous {
-        errors.push(Diagnostic::error(
-            "breg.consent.require-anonymous",
-            &location,
-            "requireConsent needs a verified requester client; anonymous profiles cannot carry it",
-        ));
-    }
     if profile.spatial_queries.is_some() {
         errors.push(Diagnostic::error(
             "breg.consent.require-spatial-unsupported",

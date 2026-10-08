@@ -16,7 +16,7 @@ use std::process::{Command, Output};
 use jsonschema::{Draft, JSONSchema};
 use serde_json::{json, Value};
 
-const API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha3";
+const API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha4";
 
 /// Fixture directories the gate replays, each an on-disk registry project
 /// under `products/breg/`. Chosen to cover every subject's optional

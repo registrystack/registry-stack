@@ -160,7 +160,7 @@ check must hold.
 
 A gated profile needs `actorKind`, `requesterClients` that a declared
 recipient organization lists, and `requiredPurposes` drawn from the consent
-record's purpose vocabulary. It cannot be anonymous.
+record's purpose vocabulary.
 
 ### The recipient feed
 

@@ -489,6 +489,111 @@ fn reseal(package: &Path) {
     .expect("rewritten package envelope is closed");
 }
 
+/// Replace one listed file of a package copy, rebind its manifest entry to
+/// the new bytes, and reseal the package.
+fn rewrite_packaged_file(package: &Path, path: &str, bytes: &[u8]) {
+    fs::write(package.join(path), bytes).unwrap();
+    let manifest_path = package.join("package.json");
+    let mut envelope: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    let entry = envelope["manifest"]["files"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["path"] == path)
+        .expect("the manifest lists the rewritten file");
+    entry["sha256"] = json!(digest(bytes));
+    entry["size"] = json!(bytes.len());
+    fs::write(
+        &manifest_path,
+        canonicalize_json(&envelope).expect("rebound envelope canonicalizes"),
+    )
+    .unwrap();
+    reseal(package);
+}
+
+/// Set the retired `anonymous` member of every access profile `profile_id`
+/// names in a packaged governed model or migration baseline.
+fn set_retired_anonymous(entities: &mut Value, profile_id: &str, anonymous: bool) {
+    let mut changed = 0;
+    for entity in entities.as_object_mut().unwrap().values_mut() {
+        if let Some(profile) = entity["accessProfiles"].get_mut(profile_id) {
+            profile["anonymous"] = json!(anonymous);
+            changed += 1;
+        }
+    }
+    assert!(changed > 0, "the model carries the profile");
+}
+
+#[test]
+fn a_predecessor_that_granted_unauthenticated_access_is_refused() {
+    // Packages an earlier release built carry `anonymous: false` on every
+    // profile, which a predecessor read accepts. A predecessor whose model
+    // granted unauthenticated access is refused: a successor planned over that
+    // baseline would keep row policies that admit a caller without a
+    // principal.
+    let package = legacy_frozen_copy();
+    let model_path = package.path().join("effective-model.json");
+    let mut model: Value = serde_json::from_slice(&fs::read(&model_path).unwrap()).unwrap();
+    for entity in model["entities"].as_object().unwrap().values() {
+        for profile in entity["accessProfiles"].as_object().unwrap().values() {
+            assert_eq!(profile["anonymous"], json!(false));
+        }
+    }
+    set_retired_anonymous(&mut model["entities"], "person-reader", true);
+    rewrite_packaged_file(
+        package.path(),
+        "effective-model.json",
+        &canonicalize_json(&model).unwrap(),
+    );
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    assert!(matches!(
+        load_predecessor_package(package.path(), &context),
+        Err(PackageError::Derivation)
+    ));
+}
+
+#[test]
+fn a_predecessor_migration_baseline_reads_the_retired_anonymous_member() {
+    // A successor an earlier release built embeds its own predecessor's
+    // baseline, with the retired member on every profile. Read as the
+    // predecessor of the next upgrade, `false` is accepted and `true` refused.
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    let legacy = legacy_frozen_copy();
+    let legacy_predecessor = load_predecessor_package(legacy.path(), &context)
+        .expect("the legacy package is a verified predecessor");
+    let (directory, _) = verified_successor(&legacy_predecessor);
+    let successor = directory.path().join("package");
+
+    for (anonymous, readable) in [(false, true), (true, false)] {
+        let copy = fixture_copy(&successor);
+        let manifest_path = copy.path().join("package.json");
+        let mut envelope: Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let baseline = &mut envelope["manifest"]["migrationPlan"]["priorBaseline"];
+        set_retired_anonymous(&mut baseline["entities"], "person-reader", anonymous);
+        for action in baseline["actions"]["actions"].as_array_mut().unwrap() {
+            for permission in action["permissions"].as_array_mut().unwrap() {
+                permission["anonymous"] = json!(false);
+            }
+        }
+        fs::write(
+            &manifest_path,
+            canonicalize_json(&envelope).expect("rebound envelope canonicalizes"),
+        )
+        .unwrap();
+        reseal(copy.path());
+        assert_eq!(
+            load_predecessor_package(copy.path(), &context).is_ok(),
+            readable,
+            "anonymous: {anonymous}"
+        );
+    }
+}
+
 /// Build the frozen project as a successor of `predecessor` and load it the
 /// way `bregctl apply` loads its target.
 fn verified_successor(

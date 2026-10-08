@@ -3071,8 +3071,6 @@ pub struct AccessProfileSource {
     pub id: String,
     #[serde(default)]
     pub default: bool,
-    #[serde(default)]
-    pub anonymous: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<ActorKindSource>,
     #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
@@ -3090,7 +3088,7 @@ pub struct AccessProfileSource {
     pub operations: UniqueSet<Operation>,
     #[serde(default)]
     pub readable_fields: UniqueSet<String>,
-    /// Readable change-request decision detail. Anonymous profiles never receive reason text.
+    /// Readable change-request decision detail.
     #[serde(
         default = "default_readable_request_fields",
         skip_serializing_if = "is_default_readable_request_fields"
@@ -3444,8 +3442,6 @@ pub struct ProjectAccessProfileSource {
     pub id: String,
     #[serde(default)]
     pub default: bool,
-    #[serde(default)]
-    pub anonymous: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<ActorKindSource>,
     #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
@@ -3499,7 +3495,7 @@ pub struct AccessPermissionSource {
     pub operations: BTreeSet<Operation>,
     #[serde(default)]
     pub readable_fields: BTreeSet<String>,
-    /// Readable change-request decision detail. Anonymous profiles never receive reason text.
+    /// Readable change-request decision detail.
     #[serde(
         default = "default_readable_request_fields",
         skip_serializing_if = "is_default_readable_request_fields"
@@ -3559,7 +3555,7 @@ struct RawAccessPermissionSource {
     operations: UniqueSet<Operation>,
     #[serde(default)]
     readable_fields: UniqueSet<String>,
-    /// Readable change-request decision detail. Anonymous profiles never receive reason text.
+    /// Readable change-request decision detail.
     #[serde(
         default = "default_readable_request_fields",
         skip_serializing_if = "is_default_readable_request_fields"
@@ -3683,7 +3679,7 @@ struct EntityAccessPermissionSourceSchema {
     operations: UniqueSet<Operation>,
     #[serde(default)]
     readable_fields: UniqueSet<String>,
-    /// Readable change-request decision detail. Anonymous profiles never receive reason text.
+    /// Readable change-request decision detail.
     #[serde(
         default = "default_readable_request_fields",
         skip_serializing_if = "is_default_readable_request_fields"
@@ -3868,10 +3864,38 @@ pub const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
 
 /// Members `registry.yaml` no longer accepts, each with the member that
 /// replaced it.
-const PROJECT_REMOVED_KEYS: [RemovedKey<'static>; 1] = [RemovedKey {
-    pointer: "/statisticalDatasets/*/period/kind",
-    replacement: "Rename `kind` to `type`, keeping its value: `type: flow` or `type: stock`.",
-}];
+const PROJECT_REMOVED_KEYS: [RemovedKey<'static>; 3] = [
+    RemovedKey {
+        pointer: "/statisticalDatasets/*/period/kind",
+        replacement: "Rename `kind` to `type`, keeping its value: `type: flow` or `type: stock`.",
+    },
+    RemovedKey {
+        pointer: "/accessProfiles/*/anonymous",
+        replacement: ANONYMOUS_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/accessProfiles/*/anonymous",
+        replacement: ANONYMOUS_REPLACEMENT,
+    },
+];
+
+/// Members a module no longer accepts, each with the member that replaced it.
+const MODULE_REMOVED_KEYS: [RemovedKey<'static>; 2] = [
+    RemovedKey {
+        pointer: "/entities/*/accessProfiles/*/anonymous",
+        replacement: ANONYMOUS_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/extendEntities/*/accessProfiles/*/anonymous",
+        replacement: ANONYMOUS_REPLACEMENT,
+    },
+];
+
+/// The registry serves authenticated callers only: no profile admits a
+/// caller without a verified token.
+const ANONYMOUS_REPLACEMENT: &str = "Delete `anonymous`: the registry serves authenticated \
+     callers only. Give the profile the principalClaim and requiredScopes its callers' tokens \
+     carry.";
 
 /// A module's `module.yaml`. A module carries no envelope: its project's
 /// module lock names it by identifier, version, and digest. Its diagnostics
@@ -3882,7 +3906,7 @@ pub const MODULE_FORMAT: FormatSpec<'static> = FormatSpec {
         reason: "a module is named by its project's module lock, which records its \
                  identifier, version, and digest",
     },
-    removed_keys: &[],
+    removed_keys: &MODULE_REMOVED_KEYS,
 };
 
 /// Read an authored project through the shared reader. `file` is the name

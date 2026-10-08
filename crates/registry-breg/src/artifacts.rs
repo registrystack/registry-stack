@@ -1295,10 +1295,7 @@ pub(crate) fn openapi_action_operation(
             "x-registry-routeKind".to_owned(),
             json!(action_route_kind_name(route.kind)),
         ),
-        (
-            "security".to_owned(),
-            action_operation_security(action, route, access_profiles),
-        ),
+        ("security".to_owned(), bearer_security()),
     ]);
     match access_profiles {
         OpenApiAccessProfiles::All => {
@@ -1617,42 +1614,10 @@ fn immediate_action_result_reference_schema() -> Value {
     })
 }
 
-fn action_operation_security(
-    action: &CompiledAction,
-    route: &CompiledActionRoute,
-    access_profiles: OpenApiAccessProfiles<'_>,
-) -> Value {
-    let profiles = match access_profiles {
-        OpenApiAccessProfiles::All => route.access_profiles.clone(),
-        OpenApiAccessProfiles::Selected(profile) => vec![profile.to_owned()],
-    };
-    let mut allows_anonymous = false;
-    let mut requires_bearer = false;
-    for profile in &profiles {
-        let Some(grant) = action
-            .permissions
-            .iter()
-            .find(|grant| grant.profile_id == *profile)
-        else {
-            continue;
-        };
-        if grant.anonymous {
-            allows_anonymous = true;
-        } else {
-            requires_bearer = true;
-        }
-    }
-    let mut alternatives = Vec::new();
-    if allows_anonymous {
-        alternatives.push(json!({}));
-    }
-    if requires_bearer {
-        alternatives.push(json!({"bearerAuth": []}));
-    }
-    if alternatives.is_empty() {
-        alternatives.push(json!({"bearerAuth": []}));
-    }
-    Value::Array(alternatives)
+/// Every governed operation requires a bearer credential: the registry serves
+/// authenticated callers only.
+fn bearer_security() -> Value {
+    json!([{"bearerAuth": []}])
 }
 
 fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledAction) -> Value {
@@ -2421,7 +2386,7 @@ pub(crate) fn openapi_operation(spec: OpenApiOperationSpec<'_>) -> Value {
             "x-registry-operation".to_owned(),
             json!(operation_name(spec.route.operation)),
         ),
-        ("security".to_owned(), operation_security(spec)),
+        ("security".to_owned(), bearer_security()),
     ]);
     if geojson_profiles.is_empty() {
         operation.insert(
@@ -2655,36 +2620,6 @@ fn request_action_preconditions(operation: Operation) -> Vec<&'static str> {
         preconditions.push("effectDigest");
     }
     preconditions
-}
-
-fn operation_security(spec: OpenApiOperationSpec<'_>) -> Value {
-    let profiles = match spec.access_profiles {
-        OpenApiAccessProfiles::All => spec.route.access_profiles.clone(),
-        OpenApiAccessProfiles::Selected(profile) => vec![profile.to_owned()],
-    };
-    let mut allows_anonymous = false;
-    let mut requires_bearer = false;
-    for profile_id in profiles {
-        let Some(profile) = spec.entity.access_profiles.get(&profile_id) else {
-            continue;
-        };
-        if profile.anonymous {
-            allows_anonymous = true;
-        } else {
-            requires_bearer = true;
-        }
-    }
-    let mut alternatives = Vec::new();
-    if allows_anonymous {
-        alternatives.push(json!({}));
-    }
-    if requires_bearer {
-        alternatives.push(json!({"bearerAuth": []}));
-    }
-    if alternatives.is_empty() {
-        alternatives.push(json!({"bearerAuth": []}));
-    }
-    Value::Array(alternatives)
 }
 
 fn operation_parameters(

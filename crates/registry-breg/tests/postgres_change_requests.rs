@@ -4539,26 +4539,27 @@ async fn attachment_download_journey(
             .await
             .is_empty()
     );
+    let unauthenticated = send(&app, Method::GET, &download_uri, None, &[], vec![]).await;
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
     for (uri, actor) in [
         (
             download_uri.clone(),
-            Some(claims("submitter", OTHER_SUBMITTER, None)),
+            claims("submitter", OTHER_SUBMITTER, None),
         ),
-        (download_uri.clone(), None),
         (
             download_uri.replace("accessProfile=submitter", "accessProfile=hidden-owner"),
-            Some(submitter.clone()),
+            submitter.clone(),
         ),
         (
             download_uri.replace("proposalVersion=1", "proposalVersion=2"),
-            Some(submitter.clone()),
+            submitter.clone(),
         ),
         (
             download_uri.replace("/evidence?", "/undeclared?"),
-            Some(submitter.clone()),
+            submitter.clone(),
         ),
     ] {
-        let denied = send(&app, Method::GET, &uri, actor, &[], vec![]).await;
+        let denied = send(&app, Method::GET, &uri, Some(actor), &[], vec![]).await;
         assert_eq!(denied.status(), StatusCode::NOT_FOUND);
     }
     let submitted = run_action(

@@ -108,7 +108,7 @@ fn assert_refused(value: &Value, code: &str) {
     );
 }
 
-fn add_relationship_reader(value: &mut Value, anonymous: bool) {
+fn add_relationship_reader(value: &mut Value) {
     value["entities"]
         .as_array_mut()
         .unwrap()
@@ -136,9 +136,8 @@ fn add_relationship_reader(value: &mut Value, anonymous: bool) {
                 {"id": "person", "type": "reference", "target": "person", "required": true, "classification": "restricted"}
             ]
         })]);
-    let mut profile = json!({
+    let profile = json!({
         "id": "relationship-investigator",
-        "anonymous": anonymous,
         "principalClaim": "registry_principal",
         "permissions": [{
             "entity": "case",
@@ -148,9 +147,6 @@ fn add_relationship_reader(value: &mut Value, anonymous: bool) {
             "readPaths": [{"path": "people", "readableFields": ["display-name"]}]
         }]
     });
-    if anonymous {
-        profile.as_object_mut().unwrap().remove("principalClaim");
-    }
     value["accessProfiles"]
         .as_array_mut()
         .unwrap()
@@ -357,7 +353,7 @@ fn exemptions_name_read_profiles_and_bounded_policy_text() {
 #[test]
 fn relationship_exemptions_bind_the_authority_entity_and_read_path() {
     let mut value = source();
-    add_relationship_reader(&mut value, false);
+    add_relationship_reader(&mut value);
     value["entities"][0]["accessLog"]["exemptions"]["relationship-investigator"] = json!({
         "sourceEntity": "case",
         "reason": "active-investigation",
@@ -383,19 +379,4 @@ fn relationship_exemptions_bind_the_authority_entity_and_read_path() {
     unknown_source["entities"][0]["accessLog"]["exemptions"]["relationship-investigator"]
         ["sourceEntity"] = json!("missing");
     assert_refused(&unknown_source, "breg.access-log.exemption-profile-invalid");
-}
-
-#[test]
-fn anonymous_profiles_cannot_read_logged_entities() {
-    let mut value = source();
-    value["accessProfiles"][0]["anonymous"] = json!(true);
-    value["accessProfiles"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("principalClaim");
-    assert_refused(&value, "breg.access-log.anonymous-read-forbidden");
-
-    let mut relationship = source();
-    add_relationship_reader(&mut relationship, true);
-    assert_refused(&relationship, "breg.access-log.anonymous-read-forbidden");
 }

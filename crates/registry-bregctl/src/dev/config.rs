@@ -1958,8 +1958,7 @@ fn local_review_executors(
                             entity.id
                         )
                     })?;
-                if profile.anonymous
-                    || profile.actor_kind != Some(ActorKindSource::Service)
+                if profile.actor_kind != Some(ActorKindSource::Service)
                     || !profile.operations.contains(&Operation::ApplyRequest)
                     || (!profile.requester_clients.is_empty()
                         && !profile.requester_clients.contains(&client.id))

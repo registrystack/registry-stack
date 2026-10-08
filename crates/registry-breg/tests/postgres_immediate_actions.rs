@@ -1263,7 +1263,7 @@ async fn action_conditions_and_invocation_refuse_aliases_wrong_records_and_bound
     let app = action_router(&database, registry.clone(), identity);
     let claims = action_claims();
 
-    let unauthorized = response_parts(
+    let unauthenticated = response_parts(
         send(
             &app,
             Method::POST,
@@ -1276,7 +1276,7 @@ async fn action_conditions_and_invocation_refuse_aliases_wrong_records_and_bound
         .await,
     )
     .await;
-    assert_eq!(unauthorized.status, StatusCode::NOT_FOUND);
+    assert_eq!(unauthenticated.status, StatusCode::UNAUTHORIZED);
 
     let extra_condition_input = response_parts(
         send(

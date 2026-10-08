@@ -229,15 +229,15 @@ curl --silent --show-error \
 ```
 
 ```text test-expect
-HTTP 404
+HTTP 401
 ```
 
-Open `tutorial-work/problem.json`: its code is `resource.not_found`.
-BReg conceals a protected route from an unauthenticated caller by answering as if the route did not
-exist, and naming a profile in the query granted nothing.
+Open `tutorial-work/problem.json`: its code is `authentication.refused`.
+BReg serves authenticated callers only: a request without a verified bearer token is refused
+before any access profile is selected, so naming a profile in the query granted nothing.
 
-{/* Evidence: crates/registry-breg/src/auth.rs; crates/registry-breg/src/api/mod.rs;
-    crates/registry-breg/tests/http_auth.rs; crates/registry-bregctl/src/lib.rs, init_files(). */}
+{/* Evidence: crates/registry-breg/src/auth.rs, authenticate_request();
+    crates/registry-breg/tests/startup_http.rs; crates/registry-bregctl/src/lib.rs, init_files(). */}
 
 ## Create a record
 

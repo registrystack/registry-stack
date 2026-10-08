@@ -245,20 +245,6 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
             "breg.statistical-dataset.grants-empty",
         ),
         (
-            Box::new(|v| {
-                v["accessProfiles"][0]["anonymous"] = json!(true);
-                v["accessProfiles"][0]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("principalClaim");
-                v["entities"][0]["classification"] = json!("public");
-                for field in v["entities"][0]["fields"].as_array_mut().unwrap() {
-                    field["classification"] = json!("public");
-                }
-            }),
-            "breg.statistical-dataset.profile-anonymous",
-        ),
-        (
             Box::new(|v| v["accessProfiles"][0]["permissions"][0]["allowCount"] = json!(false)),
             "breg.statistical-dataset.count-grant-count-required",
         ),
@@ -314,26 +300,6 @@ fn statistical_disclosure_bounds_are_refused_when_the_project_is_read() {
             refused,
             vec![("config.out-of-range", path.as_str())],
             "{failure:?}"
-        );
-    }
-}
-
-#[test]
-fn statistical_dataset_refuses_anonymous_live_publisher_and_reader_profiles() {
-    for profile_index in [0_usize, 1, 2] {
-        assert_refused(
-            |value| {
-                value["accessProfiles"][profile_index]["anonymous"] = json!(true);
-                value["accessProfiles"][profile_index]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("principalClaim");
-                value["entities"][0]["classification"] = json!("public");
-                for field in value["entities"][0]["fields"].as_array_mut().unwrap() {
-                    field["classification"] = json!("public");
-                }
-            },
-            "breg.statistical-dataset.profile-anonymous",
         );
     }
 }

@@ -161,14 +161,14 @@ fn block_on<F: Future>(future: F) -> F::Output {
 }
 
 #[test]
-fn data_export_requires_explicit_nonanonymous_profile_permission() {
+fn data_export_requires_explicit_profile_permission() {
     let ordinary_list = compiled(false);
     assert_eq!(
         DataExportPlan::from_compiled(&ordinary_list, ENTITY, PROFILE, ["code"]),
         Err(DataError::InvalidBinding)
     );
 
-    let base = |anonymous: bool, operations: Value, readable: Value| {
+    let base = |operations: Value, readable: Value| {
         json!({
             "apiVersion": "registry.registrystack.org/v1alpha1",
             "kind": "RegistryProject",
@@ -179,8 +179,7 @@ fn data_export_requires_explicit_nonanonymous_profile_permission() {
                             "classification": "internal"}]
             }],
             "accessProfiles": [{
-                "id": PROFILE, "anonymous": anonymous,
-                "principalClaim": if anonymous { Value::Null } else { json!("principal") },
+                "id": PROFILE, "principalClaim": "principal",
                 "permissions": [{
                     "rowBoundaries": [], "entity": ENTITY,
                     "operations": operations, "readableFields": readable,
@@ -190,9 +189,8 @@ fn data_export_requires_explicit_nonanonymous_profile_permission() {
         })
     };
     for invalid in [
-        base(true, json!(["list"]), json!(["code"])),
-        base(false, json!(["get"]), json!(["code"])),
-        base(false, json!(["list"]), json!([])),
+        base(json!(["get"]), json!(["code"])),
+        base(json!(["list"]), json!([])),
     ] {
         let diagnostics = compile_source(invalid).expect_err("invalid export authority is refused");
         assert!(diagnostics

@@ -60,11 +60,6 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
             "breg.access.membership-read-only",
         ),
         (
-            "/accessProfiles/0/anonymous",
-            json!(true),
-            "breg.access.membership-authentication",
-        ),
-        (
             "/accessProfiles/0/requiredScopes",
             json!(["records:read"]),
             "breg.access.requirements-scope-missing",

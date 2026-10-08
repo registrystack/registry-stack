@@ -32,16 +32,16 @@ use tower::util::ServiceExt as _;
 use tower::Service as _;
 use zeroize::Zeroizing;
 
-const PACKAGE_ID: &str = "anonymous-refusal-registry";
-const DATABASE_ID: &str = "anonymous-refusal-database";
-const PACKAGE_REVISION: &str = "package-anonymous-refusal-1";
-const PRINCIPAL_CANARY: &str = "principal-value-must-not-enter-anonymous-refusal-metrics";
+const PACKAGE_ID: &str = "unauthenticated-refusal-registry";
+const DATABASE_ID: &str = "unauthenticated-refusal-database";
+const PACKAGE_REVISION: &str = "package-unauthenticated-refusal-1";
+const PRINCIPAL_CANARY: &str = "principal-value-must-not-enter-refusal-metrics";
 
 const PROJECT: &str = r#"
 apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
-  id: anonymous-refusal-registry
+  id: unauthenticated-refusal-registry
   version: 0.1.0
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
@@ -58,7 +58,8 @@ entities:
 accessProfiles:
   - id: public
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: [registry.public]
     permissions:
       - entity: case
         rowBoundaries: []
@@ -81,11 +82,11 @@ accessProfiles:
 "#;
 
 /// An unauthenticated caller must not be able to append to the audit
-/// journal. Anonymous pre-admission refusals are counted on the operator
-/// metrics listener instead, while a refusal that carries a principal is
-/// journaled exactly as before.
+/// journal: it is refused before any profile is resolved or row is read,
+/// while a refusal that carries a principal is journaled exactly as before.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn anonymous_refusals_are_counted_while_principal_refusals_are_journaled() {
+async fn unauthenticated_requests_are_refused_before_any_read_while_principal_refusals_are_journaled(
+) {
     let database = TestDatabase::create(8).await;
     let (migration, migration_task) = database.connect_migration().await;
     let registry = Arc::new(compiled_registry());
@@ -144,34 +145,32 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_are_journaled()
         Some(Arc::clone(&metrics)),
     );
 
-    // An admitted anonymous read still brackets its release in the journal:
-    // this change only stops journaling refusals that name no principal.
-    let admitted = send(&app, "/v1/records/cases", None).await;
-    assert_eq!(admitted.status(), StatusCode::OK);
-    let admitted_rows = audit_count(&database);
-    assert_eq!(
-        admitted_rows, 2,
-        "an admitted anonymous read keeps its attempt and terminal records"
-    );
-
-    // Anonymous pre-admission refusals: a profile the caller cannot hold, an
-    // unknown profile, and an invalid query on a route it can otherwise reach.
+    // A request that reaches the router without verified claims is refused
+    // before any profile is resolved or any row is read, and it names no
+    // principal, so it appends no audit entry.
     for uri in [
+        "/v1/records/cases",
         "/v1/records/cases?accessProfile=caseworker",
         "/v1/records/cases?accessProfile=unknown",
         "/v1/records/cases?$select=jurisdiction",
         "/v1/records/cases?pageSize=not-a-number",
     ] {
         let response = send(&app, uri, None).await;
-        assert!(
-            response.status().is_client_error(),
-            "{uri} is refused before admission"
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{uri} is refused without a verified credential"
         );
+        let body = to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("refusal body reads");
+        let problem: Value = serde_json::from_slice(&body).expect("refusal is a problem document");
+        assert_eq!(problem["code"], "authentication.refused", "{problem}");
     }
     assert_eq!(
         audit_count(&database),
-        admitted_rows,
-        "anonymous pre-admission refusals append no audit entry"
+        0,
+        "an unauthenticated refusal appends no audit entry"
     );
 
     // The same refusals from an authenticated principal stay journaled.
@@ -189,7 +188,7 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_are_journaled()
     let after_principal_refusals = audit_count(&database);
     assert_eq!(
         after_principal_refusals,
-        admitted_rows + refusals.len() as i64,
+        refusals.len() as i64,
         "a refusal that names a principal still appends one audit entry"
     );
 
@@ -202,8 +201,8 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_are_journaled()
     )
     .await;
     assert_eq!(served.status(), StatusCode::OK);
-    let anonymous = send(&app, "/v1/records/cases?accessProfile=caseworker", None).await;
-    assert_eq!(anonymous.status(), StatusCode::NOT_FOUND);
+    let unauthenticated = send(&app, "/v1/records/cases?accessProfile=caseworker", None).await;
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
 
     let entries = database.audit_entries();
     assert_eq!(
@@ -225,18 +224,14 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_are_journaled()
     assert_eq!(
         phases,
         vec![
-            ("request", "attempt"),
-            ("response", "terminal"),
             ("response", "refusal"),
             ("response", "refusal"),
             ("request", "attempt"),
             ("response", "terminal"),
         ],
-        "the audit holds the admitted reads and the principal refusals only"
+        "the audit holds the principal refusals and the admitted read only"
     );
-    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
-    assert_eq!(entries[4]["correlation"], entries[5]["correlation"]);
-    assert_ne!(entries[0]["correlation"], entries[4]["correlation"]);
+    assert_eq!(entries[2]["correlation"], entries[3]["correlation"]);
     let audit_text = entries
         .iter()
         .map(Value::to_string)
@@ -244,31 +239,8 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_are_journaled()
         .join("\n");
     assert!(!audit_text.contains(PRINCIPAL_CANARY));
 
-    // The operational signal the journal no longer carries: one bounded
-    // counter series per route, method, and refusal reason.
+    // No request value reaches a metric label.
     let body = scrape(&metrics).await;
-    assert!(
-        body.contains("# TYPE breg_anonymous_refusals_total counter\n"),
-        "the anonymous refusal counter is exposed: {body}"
-    );
-    assert!(
-        body.contains(
-            "breg_anonymous_refusals_total{route=\"/v1/records/cases\",method=\"GET\",reason=\"read_concealed\"} 3\n"
-        ),
-        "concealed anonymous reads are counted under the matched template: {body}"
-    );
-    assert!(
-        body.contains(
-            "breg_anonymous_refusals_total{route=\"/v1/records/cases\",method=\"GET\",reason=\"read_request_invalid\"} 1\n"
-        ),
-        "an unparsable anonymous query is counted under its own reason: {body}"
-    );
-    assert!(
-        body.contains(
-            "breg_anonymous_refusals_total{route=\"/v1/records/cases\",method=\"GET\",reason=\"read_refused\"} 1\n"
-        ),
-        "an admitted-surface anonymous refusal is counted under its own reason: {body}"
-    );
     assert!(
         !body.contains(PRINCIPAL_CANARY),
         "no request value reaches a counter label"
@@ -282,9 +254,8 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_are_journaled()
 }
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
-    let project = parse_project_yaml(PROJECT.as_bytes()).expect("anonymous refusal fixture parses");
-    compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("anonymous refusal fixture compiles")
+    let project = parse_project_yaml(PROJECT.as_bytes()).expect("refusal fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("refusal fixture compiles")
 }
 
 fn caseworker_claims<const N: usize>(jurisdictions: [&str; N]) -> VerifiedRequestClaims {

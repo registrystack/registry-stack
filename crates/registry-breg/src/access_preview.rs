@@ -135,15 +135,6 @@ fn synthetic_claims(
         return Err(invalid);
     }
     match (claims.principal_claim, claims.principal) {
-        (None, None)
-            if claims.scopes.is_empty()
-                && claims.purpose.is_none()
-                && claims.direct_claims.is_empty()
-                && claims.actor_kind.is_none()
-                && claims.requester_client.is_none() =>
-        {
-            Ok(VerifiedRequestClaims::anonymous())
-        }
         (Some(name), Some(principal)) => {
             let mut supplied = claims.direct_claims;
             let principal_value = Value::String(principal.clone());

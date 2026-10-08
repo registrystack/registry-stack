@@ -177,26 +177,38 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         None,
     );
 
-    // Anonymous concealment must not depend on the authenticated refusal journal.
-    let before_anonymous = database.audit_records().len();
+    // A request without verified claims is refused before any dataset is
+    // read, and the refusal must not depend on the authenticated refusal
+    // journal. A declared dataset route answers that authentication is
+    // required; an undeclared path keeps the concealed answer.
+    let before_unauthenticated = database.audit_records().len();
     for faulted in [false, true] {
         if faulted {
             database
                 .audit_capture()
                 .fail_on(registry_breg::audit::AUDIT_SCHEMA, "refusal");
         }
-        for path in [
-            "/v1/statistics/records-by-category:live",
-            "/v1/statistics/unknown-id-canary:live",
-            "/v1/statistics/unknown/route/garbage",
+        for (path, status) in [
+            (
+                "/v1/statistics/records-by-category:live",
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "/v1/statistics/unknown-id-canary:live",
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                "/v1/statistics/unknown/route/garbage",
+                StatusCode::NOT_FOUND,
+            ),
         ] {
-            let anonymous = send(&app, Method::GET, path, None, &[], Vec::new()).await;
-            assert_eq!(anonymous.status(), StatusCode::NOT_FOUND, "{path}");
+            let unauthenticated = send(&app, Method::GET, path, None, &[], Vec::new()).await;
+            assert_eq!(unauthenticated.status(), status, "{path}");
         }
-        assert_eq!(database.audit_records().len(), before_anonymous);
+        assert_eq!(database.audit_records().len(), before_unauthenticated);
         assert!(
             trace.lock().unwrap().is_empty(),
-            "anonymous refusal performs no database work"
+            "an unauthenticated refusal performs no database work"
         );
     }
     database.audit_capture().restore();

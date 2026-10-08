@@ -102,7 +102,6 @@ These are all the findings the compiler can report, each attached to the documen
 
 | Finding | Meaning | What to do |
 |---|---|---|
-| `breg.access.profile-anonymous-collection` | `list` is granted to unauthenticated callers, so every row the profile can read is public. | Confirm the whole collection is meant to be public. |
 | `breg.access.profile-data-export` | Bulk export is enabled, and disabling it later cannot recall downloaded data. | Review the readable fields and row boundaries first. |
 | `breg.access.profile-higher-classification` | A readable field is more sensitive than its entity's classification. | Verify the profile's scope and purpose before disclosing it. |
 | `breg.access.profile-no-required-scope` | No scope restricts who may select the profile. | Add a required scope unless that is intended. |

@@ -10,7 +10,7 @@ views {
       approver are distinct identifiers. Casework human profiles require the configured
       human-identity claim; coordination checks current team and queue authority.
       Casework Requester and task-machine
-      endpoints have separate rules. BReg may allow anonymous profiles.
+      endpoints have separate rules. BReg serves authenticated callers only.
       BReg and Casework support static JWKS; Evidence fetches the configured JWKS URI.
       A shared issuer creates no shared permissions. The task exchange view covers
       the optional Casework-approved path. Local development uses pinned stock

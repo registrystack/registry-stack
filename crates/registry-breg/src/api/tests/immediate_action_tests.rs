@@ -447,7 +447,6 @@ fn action_authority_has_no_crud_requirement_or_profile_fallback() {
         .result_effects()
         .is_empty());
     for denied in [
-        VerifiedRequestClaims::anonymous(),
         claims("sub", ["case.rename"], Some("case-management"), true),
         claims("registry_principal", ["case.rename"], None, true),
         claims(
@@ -622,7 +621,7 @@ async fn action_only_discovery_is_profile_filtered_without_entity_read_access() 
 
     let response = super::super::registry_metadata(
         State(service.clone()),
-        Some(Extension(registrar)),
+        Authenticated(registrar),
         RawQuery(None),
     )
     .await;
@@ -639,7 +638,7 @@ async fn action_only_discovery_is_profile_filtered_without_entity_read_access() 
 
     let response = super::super::openapi(
         State(service.clone()),
-        Some(Extension(supervisor)),
+        Authenticated(supervisor),
         RawQuery(Some("accessProfile=supervisor".to_owned())),
     )
     .await;
@@ -659,14 +658,19 @@ async fn action_only_discovery_is_profile_filtered_without_entity_read_access() 
     );
     assert!(!body.to_string().contains("registrar"));
 
-    // An anonymous caller with no visible operation or action receives the
-    // same value-free 404 as on record routes.
-    let anonymous =
-        super::super::registry_metadata(State(service.clone()), None, RawQuery(None)).await;
-    assert_eq!(anonymous.status(), StatusCode::NOT_FOUND);
+    // A caller whose token matches no profile has no visible operation or
+    // action and receives the same value-free 404 as on record routes.
+    let unmatched = claims("sub", ["case.rename"], Some("case-management"), true);
+    let hidden = super::super::registry_metadata(
+        State(service.clone()),
+        Authenticated(unmatched.clone()),
+        RawQuery(None),
+    )
+    .await;
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
     let refused = super::super::openapi(
         State(service),
-        None,
+        Authenticated(unmatched),
         RawQuery(Some("accessProfile=supervisor".to_owned())),
     )
     .await;

@@ -101,8 +101,6 @@ pub enum AuthenticationConfigError {
     InvalidClaimMapping,
     #[error("a contextual authority claim overlaps another configured claim role")]
     ConflictingClaimMapping,
-    #[error("a compiled anonymous access profile carries a principal claim, required scopes, required purposes, or row boundaries")]
-    AnonymousProfileCarriesAuthority,
     #[error("the configured principal claim is not the principal claim a compiled access profile requires")]
     PrincipalClaimMismatch,
     #[error("a compiled row boundary selects a field the compiled entity does not declare")]
@@ -376,9 +374,9 @@ impl fmt::Debug for RegistryAuthenticator {
 }
 
 /// Authenticate a presented bearer before any Registry route authorization.
-/// Absence is preserved for anonymous profiles, while every invalid presented
-/// credential fails closed. Any caller-supplied authority extension is removed
-/// before either branch.
+/// A missing credential and every invalid presented credential fail closed:
+/// the registry serves authenticated callers only. Any caller-supplied
+/// authority extension is removed first.
 pub(crate) async fn authenticate_request(
     State(authenticator): State<Arc<RegistryAuthenticator>>,
     mut request: Request<Body>,
@@ -386,7 +384,7 @@ pub(crate) async fn authenticate_request(
 ) -> Response {
     request.extensions_mut().remove::<VerifiedRequestClaims>();
     let token = match bearer_token(request.headers()) {
-        Ok(None) => return next.run(request).await,
+        Ok(None) => return authentication_refused(),
         Ok(Some(token)) => token,
         Err(_) => return authentication_refused(),
     };
@@ -518,9 +516,6 @@ fn validate_claim_mapping(
         }
     }
     let inventory = authority_inventory(registry).map_err(|error| match error {
-        AuthorityInventoryError::AnonymousProfileCarriesAuthority => {
-            AuthenticationConfigError::AnonymousProfileCarriesAuthority
-        }
         AuthorityInventoryError::PrincipalClaimMissing => {
             AuthenticationConfigError::PrincipalClaimMismatch
         }
@@ -799,7 +794,7 @@ fn mapped_scalar_claim(
     Ok(value)
 }
 
-fn authentication_refused() -> Response {
+pub(crate) fn authentication_refused() -> Response {
     crate::correlation::problem_response(
         StatusCode::UNAUTHORIZED,
         "Unauthorized",

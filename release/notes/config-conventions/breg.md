@@ -412,7 +412,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `access.membership.source_recursive` | `breg.access.membership-source-recursive` |
 | `access.membership.source_row_requirement` | `breg.access.membership-source-row-requirement` |
 | `access.membership.spatial_unsupported` | `breg.access.membership-spatial-unsupported` |
-| `access.profile.anonymous_collection` | `breg.access.profile-anonymous-collection` |
 | `access.profile.create_required_field_not_writable` | `breg.access.profile-create-required-field-not-writable` |
 | `access.profile.data_export` | `breg.access.profile-data-export` |
 | `access.profile.higher_classification` | `breg.access.profile-higher-classification` |
@@ -425,7 +424,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `access.profile.unrestricted_collection` | `breg.access.profile-unrestricted-collection` |
 | `access.profile.unrestricted_rows` | `breg.access.profile-unrestricted-rows` |
 | `access.profile.writable_row_boundary` | `breg.access.profile-writable-row-boundary` |
-| `access.requirements.authentication` | `breg.access.requirements-authentication` |
 | `access.requirements.empty` | `breg.access.requirements-empty` |
 | `access.requirements.empty_value` | `breg.access.requirements-empty-value` |
 | `access.requirements.purpose_widened` | `breg.access.requirements-purpose-widened` |
@@ -434,7 +432,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `access.requirements.row_boundary_missing` | `breg.access.requirements-row-boundary-missing` |
 | `access.requirements.scope_missing` | `breg.access.requirements-scope-missing` |
 | `access.target.unrestricted_rows` | `breg.access.target-unrestricted-rows` |
-| `access_log.anonymous_read_forbidden` | `breg.access-log.anonymous-read-forbidden` |
 | `access_log.exemption.delay_invalid` | `breg.access-log.exemption-delay-invalid` |
 | `access_log.exemption.profile_invalid` | `breg.access-log.exemption-profile-invalid` |
 | `access_log.exemption.reason_invalid` | `breg.access-log.exemption-reason-invalid` |
@@ -444,8 +441,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `access_log.trusted_intermediaries.too_many` | `breg.access-log.trusted-intermediaries-too-many` |
 | `access_log.trusted_intermediary.invalid` | `breg.access-log.trusted-intermediary-invalid` |
 | `access_profile.actor_client.binding_required` | `breg.access-profile.actor-client-binding-required` |
-| `access_profile.anonymous.claim_requirements_forbidden` | `breg.access-profile.anonymous-claim-requirements-forbidden` |
-| `access_profile.anonymous.mutation_forbidden` | `breg.access-profile.anonymous-mutation-forbidden` |
 | `access_profile.batch.underlying_operation_required` | `breg.access-profile.batch-underlying-operation-required` |
 | `access_profile.claim_value.invalid` | `breg.access-profile.claim-value-invalid` |
 | `access_profile.count.unavailable` | `breg.access-profile.count-unavailable` |
@@ -465,13 +460,11 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `access_profile.permission.entity_unknown` | `breg.access-profile.permission-entity-unknown` |
 | `access_profile.permission.target_exclusive` | `breg.access-profile.permission-target-exclusive` |
 | `access_profile.permission.target_missing` | `breg.access-profile.permission-target-missing` |
-| `access_profile.principal_claim.forbidden` | `breg.access-profile.principal-claim-forbidden` |
 | `access_profile.principal_claim.required` | `breg.access-profile.principal-claim-required` |
 | `access_profile.processing.encrypted` | `breg.access-profile.processing-encrypted` |
 | `access_profile.processing.wider_than_read` | `breg.access-profile.processing-wider-than-read` |
 | `access_profile.project_entity_local.forbidden` | `breg.access-profile.project-entity-local-forbidden` |
 | `access_profile.provenance_fields.invalid` | `breg.access-profile.provenance-fields-invalid` |
-| `access_profile.public.processing_non_public` | `breg.access-profile.public-processing-non-public` |
 | `access_profile.read_path.count_without_fields` | `breg.access-profile.read-path-count-without-fields` |
 | `access_profile.read_path.duplicate` | `breg.access-profile.read-path-duplicate` |
 | `access_profile.read_path.field_unknown` | `breg.access-profile.read-path-field-unknown` |
@@ -485,7 +478,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `access_profile.row_boundary.encrypted` | `breg.access-profile.row-boundary-encrypted` |
 | `access_profile.row_boundary.invalid` | `breg.access-profile.row-boundary-invalid` |
 | `access_profile.row_boundary.type_unsupported` | `breg.access-profile.row-boundary-type-unsupported` |
-| `access_profile.snapshot.anonymous_forbidden` | `breg.access-profile.snapshot-anonymous-forbidden` |
 | `access_profile.spatial_queries.bbox.geometry_not_readable` | `breg.access-profile.spatial-queries-bbox-geometry-not-readable` |
 | `access_profile.spatial_queries.bbox.geometry_required` | `breg.access-profile.spatial-queries-bbox-geometry-required` |
 | `access_profile.spatial_queries.bbox.list_required` | `breg.access-profile.spatial-queries-bbox-list-required` |
@@ -587,7 +579,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `action.input.vocabulary.values_invalid` | `breg.action.input-vocabulary-values-invalid` |
 | `action.inputs.empty` | `breg.action.inputs-empty` |
 | `action.permission.action_unknown` | `breg.action.permission-action-unknown` |
-| `action.permission.anonymous_forbidden` | `breg.action.permission-anonymous-forbidden` |
 | `action.permission.duplicate` | `breg.action.permission-duplicate` |
 | `action.permission.entity_fields_forbidden` | `breg.action.permission-entity-fields-forbidden` |
 | `action.permission.exclusive` | `breg.action.permission-exclusive` |
@@ -610,7 +601,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `action.requires.value_invalid` | `breg.action.requires-value-invalid` |
 | `action.route_access.default_multiple` | `breg.action.route-access-default-multiple` |
 | `artifact.canonicalization_failed` | `breg.artifact.canonicalization-failed` |
-| `attachment.access.authentication_required` | `breg.attachment.access-authentication-required` |
 | `attachment.access.processing_unsupported` | `breg.attachment.access-processing-unsupported` |
 | `attachment.content_type.duplicate` | `breg.attachment.content-type-duplicate` |
 | `attachment.content_type.invalid` | `breg.attachment.content-type-invalid` |
@@ -716,8 +706,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `change_request.preconditions.target_field_unknown` | `breg.change-request.preconditions-target-field-unknown` |
 | `change_request.preconditions.target_fields_exceeded` | `breg.change-request.preconditions-target-fields-exceeded` |
 | `change_request.preconditions.target_reference_invalid` | `breg.change-request.preconditions-target-reference-invalid` |
-| `change_request.presence.anonymous_claim_boundary` | `breg.change-request.presence-anonymous-claim-boundary` |
-| `change_request.presence.anonymous_non_public` | `breg.change-request.presence-anonymous-non-public` |
 | `change_request.presence.request_type_unknown` | `breg.change-request.presence-request-type-unknown` |
 | `change_request.presence.target_unaffected` | `breg.change-request.presence-target-unaffected` |
 | `change_request.submit_operation.missing` | `breg.change-request.submit-operation-missing` |
@@ -738,7 +726,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `consent.record.mutation_mode` | `breg.consent.record-mutation-mode` |
 | `consent.record.plaintext` | `breg.consent.record-plaintext` |
 | `consent.record.values` | `breg.consent.record-values` |
-| `consent.require.anonymous` | `breg.consent.require-anonymous` |
 | `consent.require.clients` | `breg.consent.require-clients` |
 | `consent.require.evidence_source_unsupported` | `breg.consent.require-evidence-source-unsupported` |
 | `consent.require.export_unsupported` | `breg.consent.require-export-unsupported` |
@@ -930,7 +917,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `query.filter.field_type_unsupported` | `breg.query.filter-field-type-unsupported` |
 | `query.sort.field_type_unsupported` | `breg.query.sort-field-type-unsupported` |
 | `query.temporal.field_not_readable` | `breg.query.temporal-field-not-readable` |
-| `query.temporal.public_processing_non_public` | `breg.query.temporal-public-processing-non-public` |
 | `read_path.cycle` | `breg.read-path.cycle` |
 | `read_path.id.duplicate` | `breg.read-path.id-duplicate` |
 | `read_path.references.ambiguous` | `breg.read-path.references-ambiguous` |
@@ -1024,7 +1010,6 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `statistical_dataset.period.temporal_missing` | `breg.statistical-dataset.period-temporal-missing` |
 | `statistical_dataset.population.field_unknown` | `breg.statistical-dataset.population-field-unknown` |
 | `statistical_dataset.population.invalid` | `breg.statistical-dataset.population-invalid` |
-| `statistical_dataset.profile.anonymous` | `breg.statistical-dataset.profile-anonymous` |
 | `statistical_dataset.profile.duplicate` | `breg.statistical-dataset.profile-duplicate` |
 | `statistical_dataset.profile.unknown` | `breg.statistical-dataset.profile-unknown` |
 | `statistical_dataset.publisher.caller_dependent` | `breg.statistical-dataset.publisher-caller-dependent` |
@@ -1517,15 +1502,15 @@ pins the old identifiers, replaces each with its new one:
 
 | `kind` | Old `$id` | New `$id` |
 |---|---|---|
-| `AccessExplanation` | `https://registrystack.org/breg-explain/v1alpha3/AccessExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha3.schema.json` |
-| `AccessPreview` | `https://registrystack.org/breg-explain/v1alpha3/AccessPreview.schema.json` | `https://id.registrystack.org/schemas/breg/access-preview/access-preview.v1alpha3.schema.json` |
-| `ActionsExplanation` | `https://registrystack.org/breg-explain/v1alpha3/ActionsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha3.schema.json` |
-| `ChangeRequestsExplanation` | `https://registrystack.org/breg-explain/v1alpha3/ChangeRequestsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/change-requests-explanation/change-requests-explanation.v1alpha3.schema.json` |
-| `EventsExplanation` | `https://registrystack.org/breg-explain/v1alpha3/EventsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha3.schema.json` |
-| `LifecycleExplanation` | `https://registrystack.org/breg-explain/v1alpha3/LifecycleExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha3.schema.json` |
-| `ModelExplanation` | `https://registrystack.org/breg-explain/v1alpha3/ModelExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha3.schema.json` |
-| `QueriesExplanation` | `https://registrystack.org/breg-explain/v1alpha3/QueriesExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha3.schema.json` |
-| `RoutesExplanation` | `https://registrystack.org/breg-explain/v1alpha3/RoutesExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha3.schema.json` |
+| `AccessExplanation` | `https://registrystack.org/breg-explain/v1alpha3/AccessExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha4.schema.json` |
+| `AccessPreview` | `https://registrystack.org/breg-explain/v1alpha3/AccessPreview.schema.json` | `https://id.registrystack.org/schemas/breg/access-preview/access-preview.v1alpha4.schema.json` |
+| `ActionsExplanation` | `https://registrystack.org/breg-explain/v1alpha3/ActionsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha4.schema.json` |
+| `ChangeRequestsExplanation` | `https://registrystack.org/breg-explain/v1alpha3/ChangeRequestsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/change-requests-explanation/change-requests-explanation.v1alpha4.schema.json` |
+| `EventsExplanation` | `https://registrystack.org/breg-explain/v1alpha3/EventsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha4.schema.json` |
+| `LifecycleExplanation` | `https://registrystack.org/breg-explain/v1alpha3/LifecycleExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha4.schema.json` |
+| `ModelExplanation` | `https://registrystack.org/breg-explain/v1alpha3/ModelExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha4.schema.json` |
+| `QueriesExplanation` | `https://registrystack.org/breg-explain/v1alpha3/QueriesExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha4.schema.json` |
+| `RoutesExplanation` | `https://registrystack.org/breg-explain/v1alpha3/RoutesExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha4.schema.json` |
 
 The schemas also state what `bregctl` already writes. Every integer has a
 minimum and a maximum: the range of the Rust type `bregctl` writes, or 0 to
@@ -1534,8 +1519,100 @@ is wider. Lists that are sets declare `uniqueItems`, a module digest is
 `sha256:` followed by 64 lowercase hex digits, the request lifecycle pin
 refuses a member the lifecycle does not declare, and
 `requests[].fields[].schema` is marked as an embedded JSON Schema. The
-output and its `apiVersion`, `registry.registrystack.org/breg-explain/v1alpha3`,
-are unchanged.
+`apiVersion` moves from `registry.registrystack.org/breg-explain/v1alpha3` to
+`registry.registrystack.org/breg-explain/v1alpha4` for the reasons the
+"BReg access" section gives.
+
+## BReg access
+
+A registry serves authenticated callers only. Every change in this section
+is security-sensitive: it removes the configuration and the runtime paths
+that admitted a caller without a verified token.
+
+### BREAKING: anonymous access profiles are removed
+
+`anonymous` is refused wherever an access profile was written, with
+`true` or `false`, as `config.removed-key` when the file is read. The
+diagnostic names the fix: delete the member and give the profile the
+`principalClaim` and `requiredScopes` its callers' tokens carry.
+
+| File | Refused member |
+|---|---|
+| `registry.yaml` | `/accessProfiles/*/anonymous` |
+| `registry.yaml` | `/entities/*/accessProfiles/*/anonymous` |
+| `module.yaml` | `/entities/*/accessProfiles/*/anonymous` |
+| `module.yaml` | `/extendEntities/*/accessProfiles/*/anonymous` |
+
+Every route except `/health`, `/healthz`, `/ready`, and the review
+completion receiver now refuses a request without a verified bearer token
+with `401 authentication.refused` before any access profile, query, or
+record is read. That covers the record, revision, action, change-request,
+attachment, statistics, ingestion, access log, and GIS routes, the discovery
+surfaces (`/openapi.json`, `/v1/registry`, and the published JSON Schemas),
+and a path the registry does not declare. A request without a token used to
+reach the route, where an anonymous profile could serve it or the route
+answered `404 resource.not_found`. A presented and rejected token keeps its
+`401`, and a verified token that does not satisfy the profile keeps its
+concealed `404`. The OpenAPI document drops the unauthenticated security
+alternative: each operation lists `bearerAuth` only.
+
+Such a refusal names no principal, so it is counted in the
+`breg_http_requests_total` `client_error` series and never journaled. The
+`breg_anonymous_refusals_total` counter is removed with its nine `reason`
+values; move an alert on it to the `client_error` rate of the record routes.
+
+A `tests/journeys.yaml` step that writes `claims: {}` now has to carry the
+claims its profile requires, and the schema-test credentials file refuses
+`type: anonymous` as `config.unknown-variant`: bind every step with
+`type: bearer` and a `tokenRef`.
+
+`bregctl explain` reports `registry.registrystack.org/breg-explain/v1alpha4`.
+An immediate-action permission in `ActionsExplanation` has no `anonymous`
+member, and `claimContractError` in `AccessExplanation` no longer takes
+`anonymous_profile_carries_authority`. A consumer that pins `v1alpha3`
+moves to the `v1alpha4` schemas and stops reading the member.
+
+The compiled model changes, so a project's compiled revision changes while
+its tables and its action fingerprints do not. A package an earlier release
+built reads as a predecessor when every profile in it was authenticated. A
+predecessor that granted unauthenticated access is refused when `bregctl
+test` or `bregctl package` reads it through `--baseline-package`, because a
+successor planned over it would keep row policies that admit a caller
+without a principal.
+
+These configuration diagnostics are no longer reported, because nothing can
+reach them. The second column is the name the code table above gave them:
+
+| Was | Renamed to, now removed |
+|---|---|
+| `access.profile.anonymous_collection` | `breg.access.profile-anonymous-collection` |
+| `access.requirements.authentication` | `breg.access.requirements-authentication` |
+| `access_log.anonymous_read_forbidden` | `breg.access-log.anonymous-read-forbidden` |
+| `access_profile.anonymous.claim_requirements_forbidden` | `breg.access-profile.anonymous-claim-requirements-forbidden` |
+| `access_profile.anonymous.mutation_forbidden` | `breg.access-profile.anonymous-mutation-forbidden` |
+| `access_profile.principal_claim.forbidden` | `breg.access-profile.principal-claim-forbidden` |
+| `access_profile.public.processing_non_public` | `breg.access-profile.public-processing-non-public` |
+| `access_profile.snapshot.anonymous_forbidden` | `breg.access-profile.snapshot-anonymous-forbidden` |
+| `action.permission.anonymous_forbidden` | `breg.action.permission-anonymous-forbidden` |
+| `attachment.access.authentication_required` | `breg.attachment.access-authentication-required` |
+| `change_request.presence.anonymous_claim_boundary` | `breg.change-request.presence-anonymous-claim-boundary` |
+| `change_request.presence.anonymous_non_public` | `breg.change-request.presence-anonymous-non-public` |
+| `consent.require.anonymous` | `breg.consent.require-anonymous` |
+| `query.temporal.public_processing_non_public` | `breg.query.temporal-public-processing-non-public` |
+| `statistical_dataset.profile.anonymous` | `breg.statistical-dataset.profile-anonymous` |
+
+To migrate a registry that served anonymous callers:
+
+1. Decide who the callers are, and have the identity provider issue them
+   tokens. A public directory becomes a profile whose `requiredScopes`
+   names a scope every directory client carries.
+2. On the earlier release, delete `anonymous` from every access profile, give
+   each profile a `principalClaim` and the scopes above, and `bregctl test`,
+   `package`, and `apply` that package.
+3. Upgrade the binaries, rebuild the package from the same sources, and apply
+   it. Clients send a bearer token on every request, discovery included.
+4. Replace alerts on `breg_anonymous_refusals_total`, and update scripts that
+   expected `404` from a request without a token to expect `401`.
 
 ## BReg citizen services
 

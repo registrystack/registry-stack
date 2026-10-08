@@ -69,7 +69,7 @@ The refusals keep a membership boundary from being read as broader authority tha
 
 | Combination | Diagnostic |
 | --- | --- |
-| An anonymous profile, or one without a verified `principalClaim` | `breg.access.membership-authentication` |
+| A profile without a verified `principalClaim` | `breg.access.membership-authentication` |
 | Writes, actions, reviewed changes, or request lifecycle grants | `breg.access.membership-read-only` |
 | A spatial bbox permission, which uses a separate database authority role | `breg.access.membership-spatial-unsupported` |
 | A membership entity with a change-request lifecycle | `breg.access.membership-request-unsupported` |
@@ -158,7 +158,6 @@ codes, so a recipient is retired by removing its clients, not its entry.
 | Combination | Diagnostic |
 | --- | --- |
 | Writes, actions, reviewed changes, or request lifecycle grants on a gated permission | `breg.consent.require-read-only` |
-| An anonymous gated profile | `breg.consent.require-anonymous` |
 | A gated profile without `requesterClients`, or with a client no recipient organization lists | `breg.consent.require-clients` |
 | A spatial bbox permission, which uses a separate database authority role | `breg.consent.require-spatial-unsupported` |
 | Bulk data export of a gated permission | `breg.consent.require-export-unsupported` |

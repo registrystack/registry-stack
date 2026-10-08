@@ -75,7 +75,8 @@ entities:
 accessProfiles:
   - id: public
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: [registry.read]
     permissions:
       - entity: case
         operations: [get]
@@ -1567,7 +1568,7 @@ async fn discovery_key_misses_and_denied_keys_do_not_diagnose_rotation() {
 }
 
 #[tokio::test]
-async fn malformed_or_duplicate_bearer_never_downgrades_to_anonymous() {
+async fn malformed_or_duplicate_bearer_is_refused_before_record_io() {
     let harness = Harness::new().await;
     for values in [
         vec![HeaderValue::from_static("Bearer malformed")],
@@ -1592,29 +1593,8 @@ async fn malformed_or_duplicate_bearer_never_downgrades_to_anonymous() {
 }
 
 #[tokio::test]
-async fn anonymous_without_a_token_succeeds_but_injected_authority_is_removed() {
+async fn a_request_without_a_bearer_is_refused_on_every_registry_route() {
     let harness = Harness::new().await;
-    let public = harness
-        .send(
-            "/v1/records/cases/00000000-0000-4000-8000-000000000001",
-            &[],
-            None,
-        )
-        .await;
-    assert_eq!(public.status(), StatusCode::OK);
-    assert_eq!(body_json(public).await["data"], json!({"label": "Visible"}));
-
-    let before = harness.records.calls.load(Ordering::SeqCst);
-    let missing = harness
-        .send(
-            "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
-            &[],
-            None,
-        )
-        .await;
-    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
-    assert_eq!(harness.records.calls.load(Ordering::SeqCst), before);
-
     let injected = VerifiedRequestClaims::authenticated(
         "registry_principal",
         PRINCIPAL,
@@ -1623,16 +1603,27 @@ async fn anonymous_without_a_token_succeeds_but_injected_authority_is_removed() 
         BTreeMap::new(),
     )
     .expect("low-level fixture claims");
-    let before = harness.records.calls.load(Ordering::SeqCst);
-    let response = harness
-        .send(
-            "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
-            &[],
-            Some(injected),
-        )
-        .await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert_eq!(harness.records.calls.load(Ordering::SeqCst), before);
+    for path in [
+        "/openapi.json",
+        "/v1/registry",
+        "/v1/schemas/case",
+        "/v1/records/cases/00000000-0000-4000-8000-000000000001",
+        "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker",
+        "/v1/records/cases",
+        "/v1/not-a-route",
+    ] {
+        for injected in [None, Some(injected.clone())] {
+            let before = harness.records.calls.load(Ordering::SeqCst);
+            let response = harness.send(path, &[], injected).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+            assert_eq!(body_json(response).await["code"], "authentication.refused");
+            assert_eq!(harness.records.calls.load(Ordering::SeqCst), before);
+        }
+    }
+    for probe in ["/health", "/healthz", "/ready"] {
+        let response = harness.send(probe, &[], None).await;
+        assert_eq!(response.status(), StatusCode::OK, "{probe}");
+    }
 }
 
 #[tokio::test]
@@ -2385,7 +2376,11 @@ async fn ambiguous_route_without_default_requires_explicit_selection_without_gue
         .await;
     assert_eq!(response.status(), StatusCode::OK);
     let response = harness
-        .send(&format!("{path}?accessProfile=public"), &[], None)
+        .send(
+            &format!("{path}?accessProfile=public"),
+            &[bearer(&token)],
+            None,
+        )
         .await;
     assert_eq!(response.status(), StatusCode::OK);
 }

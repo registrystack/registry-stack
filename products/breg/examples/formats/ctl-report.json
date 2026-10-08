@@ -2,11 +2,11 @@
   "ok": true,
   "command": "explain",
   "profile": "authoring",
-  "revision": "sha256:05230d021ecfa00e4811cbfd4719c0a8d985098ce01b7e3673b65a8f16112303",
+  "revision": "sha256:ff250a45b4d2404b6aeff02efb5952452c208cff3b05ad0b6c32118e5dc04c82",
   "findings": [],
   "explanation": {
     "actions": [],
-    "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+    "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
     "kind": "ActionsExplanation"
   }
 }

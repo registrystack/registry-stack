@@ -1,11 +1,11 @@
 {
-  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
   "kind": "LifecycleExplanation",
   "lifecycles": [
     {
       "enforcement": [
         {
-          "description": "Every route the engine serves runs behind one bearer admission. A credential that is presented and does not verify is refused here, before any route is matched, with a single 401 that names no cause: malformed header, malformed token, expired, not yet valid, unknown or disallowed key, disallowed algorithm, wrong issuer, and wrong audience are deliberately indistinguishable to the caller. Presenting no credential at all is not refused here. That request continues as anonymous, and where the profile it resolves to does not permit the operation anonymously the route admission below is what refuses it, so for a missing credential this layer is not the first refusal.",
+          "description": "Every registry route runs behind one bearer admission. A request that presents no credential, and a credential that is presented and does not verify, are refused here, before any route is matched, with a single 401 that names no cause: missing credential, malformed header, malformed token, expired, not yet valid, unknown or disallowed key, disallowed algorithm, wrong issuer, and wrong audience are deliberately indistinguishable to the caller. No route serves a caller without a verified token.",
           "events": [
             "submit",
             "revise",
@@ -16,7 +16,7 @@
           "id": "caller_authentication"
         },
         {
-          "description": "The action arrives on a POST route the caller's access profile lists, for an entity that declares change requests, with the route's operation matching the action and the requested response fields inside the profile's readable fields. The profile is resolved from the identity the layer above established, or from the anonymous fallback where no credential was presented. Refused as an invalid request before any row is read.",
+          "description": "The action arrives on a POST route the caller's access profile lists, for an entity that declares change requests, with the route's operation matching the action and the requested response fields inside the profile's readable fields. The profile is resolved from the identity the layer above established. Refused as an invalid request before any row is read.",
           "events": [
             "submit",
             "revise",

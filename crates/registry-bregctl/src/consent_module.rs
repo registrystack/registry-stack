@@ -83,8 +83,8 @@ const SCOPE_PROBE: &str = "bregctl-module-add-probe";
 /// each.
 const CONSENT_DATASET_ID: &str = "consent";
 
-/// Principal claim used when the project has no non-anonymous profile to take
-/// it from.
+/// Principal claim used when the project has no access profile to take it
+/// from.
 const FALLBACK_PRINCIPAL_CLAIM: &str = "principal";
 
 const MODULE_FILE: &str = "module.yaml";
@@ -375,14 +375,13 @@ fn subject_owner(source: &CapturedProjectSource, subject: &str) -> Option<Option
 }
 
 /// The claim the generated profiles bind principals with: the default
-/// profile's, else the first authenticated profile's.
+/// profile's, else the first profile's.
 fn principal_claim(source: &CapturedProjectSource) -> String {
     let profiles = &source.project.access_profiles;
     profiles
         .iter()
         .filter(|profile| profile.default)
         .chain(profiles.iter())
-        .filter(|profile| !profile.anonymous)
         .find_map(|profile| profile.principal_claim.clone())
         .filter(|claim| !claim.is_empty())
         .unwrap_or_else(|| FALLBACK_PRINCIPAL_CLAIM.to_owned())

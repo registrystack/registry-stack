@@ -120,12 +120,12 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
     vec![
         EnforcementLayer {
             id: "caller_authentication",
-            description: "Every route the engine serves runs behind one bearer admission. A credential that is presented and does not verify is refused here, before any route is matched, with a single 401 that names no cause: malformed header, malformed token, expired, not yet valid, unknown or disallowed key, disallowed algorithm, wrong issuer, and wrong audience are deliberately indistinguishable to the caller. Presenting no credential at all is not refused here. That request continues as anonymous, and where the profile it resolves to does not permit the operation anonymously the route admission below is what refuses it, so for a missing credential this layer is not the first refusal.",
+            description: "Every registry route runs behind one bearer admission. A request that presents no credential, and a credential that is presented and does not verify, are refused here, before any route is matched, with a single 401 that names no cause: missing credential, malformed header, malformed token, expired, not yet valid, unknown or disallowed key, disallowed algorithm, wrong issuer, and wrong audience are deliberately indistinguishable to the caller. No route serves a caller without a verified token.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
             id: "route_admission",
-            description: "The action arrives on a POST route the caller's access profile lists, for an entity that declares change requests, with the route's operation matching the action and the requested response fields inside the profile's readable fields. The profile is resolved from the identity the layer above established, or from the anonymous fallback where no credential was presented. Refused as an invalid request before any row is read.",
+            description: "The action arrives on a POST route the caller's access profile lists, for an entity that declares change requests, with the route's operation matching the action and the requested response fields inside the profile's readable fields. The profile is resolved from the identity the layer above established. Refused as an invalid request before any row is read.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
@@ -522,25 +522,26 @@ mod tests {
         );
     }
 
-    /// Bearer admission refuses a credential that does not verify, but it lets a
-    /// request carrying no credential through as anonymous. Reporting it as the
-    /// place a missing credential is refused would send a reader looking for a
-    /// 401 that the route admission below actually raises.
+    /// Bearer admission refuses a request that presents no credential as it
+    /// refuses one whose credential does not verify, so it is the first
+    /// refusal for both and route admission never sees an unauthenticated
+    /// caller.
     #[test]
-    fn the_authentication_layer_says_a_missing_credential_is_not_refused_there() {
+    fn the_authentication_layer_says_a_missing_credential_is_refused_there() {
         let lifecycle = request_lifecycle();
         assert_eq!(lifecycle.enforcement[0].id, "caller_authentication");
         let description = layer(&lifecycle, "caller_authentication").description;
         assert!(
-            description.contains("not refused here"),
-            "the anonymous passthrough stopped being reported: {description}"
+            description.contains("presents no credential"),
+            "the missing-credential refusal stopped being reported: {description}"
         );
-        assert!(
-            layer(&lifecycle, "route_admission")
-                .description
-                .contains("anonymous fallback"),
-            "route admission no longer names where an anonymous caller comes from"
-        );
+        for layer in &lifecycle.enforcement {
+            assert!(
+                !layer.description.contains("anonymous"),
+                "layer {} still describes an anonymous caller",
+                layer.id
+            );
+        }
     }
 
     /// An apply against a request already in the applied state short-circuits the

@@ -657,58 +657,6 @@ fn rhai_planner_output_abi_is_closed_and_symbolic() {
 }
 
 #[test]
-fn anonymous_presence_rejects_a_non_public_rhai_target_link() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/acceptance/person-name-change-rhai");
-    let project_bytes = std::fs::read(root.join("registry.yaml")).expect("fixture project reads");
-    let mut project: serde_json::Value =
-        serde_norway::from_slice(&project_bytes).expect("fixture YAML converts");
-    project["entities"][0]["classification"] = json!("public");
-    project["entities"][0]["fields"][0]["classification"] = json!("public");
-    project["entities"][1]["classification"] = json!("public");
-    for field in project["entities"][1]["fields"]
-        .as_array_mut()
-        .expect("request fields are an array")
-    {
-        field["classification"] = json!("public");
-    }
-    project["entities"][1]["fields"][0]["classification"] = json!("internal");
-    project["accessProfiles"]
-        .as_array_mut()
-        .expect("profiles are an array")
-        .push(json!({
-            "id": "public-person-reader",
-            "anonymous": true,
-            "permissions": [{
-                "entity": "person",
-                "operations": ["get", "list"],
-                "readableFields": ["person-code"],
-                "requestPresence": [{"requestType": "person-name-change-request", "rowBoundaries": []}],
-              "rowBoundaries": []
-            }]
-        }));
-    let project = registry_breg::contract::parse_project_json(
-        &serde_json::to_vec(&project).expect("test project serializes"),
-    )
-    .expect("strict project parses");
-    let failure = compile_project_with_assets(
-        &project,
-        &[],
-        &[ModuleAssetSource {
-            module: None,
-            path: "scripts/person-name-change.rhai".to_owned(),
-            bytes: std::fs::read(root.join("scripts/person-name-change.rhai"))
-                .expect("planner reads"),
-        }],
-        CompileProfile::Authoring,
-    )
-    .expect_err("anonymous presence cannot process a classified Rhai target link");
-    assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.change-request.presence-anonymous-non-public"
-    }));
-}
-
-#[test]
 fn automatic_apply_keeps_the_executor_separate_from_source_profiles() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/acceptance/person-name-change-rhai");

@@ -648,7 +648,7 @@ receipt that `package` later binds to. Prepare three inputs:
    schema-test database and `package.root` an empty directory.
 2. Real access tokens from your issuer for each journey principal, stored as owner-only files under
    the secret root.
-3. A credentials document binding every journey step to a token or to anonymous access:
+3. A credentials document binding every journey step to a bearer token:
 
 ```yaml
 apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
@@ -667,7 +667,8 @@ bindings:
   - journeyId: record-lifecycle
     stepId: list-records
     credential:
-      type: anonymous
+      type: bearer
+      tokenRef: secret:file/schema-test-token
 ```
 
 Then run the test:
@@ -1178,7 +1179,6 @@ scraper's network boundary rather than a public one.
 | --- | --- | --- |
 | `breg_http_requests_total` | counter | `route`, `method`, `status` |
 | `breg_http_request_duration_seconds` | histogram | `route`, `method`, `status` |
-| `breg_anonymous_refusals_total` | counter | `route`, `method`, `reason` |
 | `breg_pool_connections` | gauge | `state`: `max_size`, `size`, `available`, `waiting` |
 | `breg_worker_last_success_age_seconds` | gauge | `worker` |
 | `breg_queue_oldest_pending_age_seconds` | gauge | `queue` |
@@ -1195,25 +1195,20 @@ Startup refuses a package the activation ledger does not name as active, so the 
 reports an earlier digest after an apply has not restarted onto the successor. Anyone who reaches
 the metrics listener can read that digest.
 
-`breg_anonymous_refusals_total` counts requests that presented no credential and were refused
-before admission: a profile the caller cannot hold, a route it cannot see, an absent scope or
-purpose, or a query the route cannot parse. `reason` is one of nine fixed values,
-`read_request_invalid`, `read_concealed`, `read_refused`, `revision_request_invalid`,
-`revision_concealed`, `revision_refused`, `mutation_concealed`, `mutation_refused`, and
-`action_refused`, derived from the refusal itself rather than from anything the request carried.
-These refusals are counted rather than journaled, because a caller with no principal names nobody
-the journal could hold accountable; refusals of an authenticated principal are journaled, and so
-is every admitted request. Alert on a sharp rise in this counter the way you would on a rise in
-`client_error` responses: it is the signal the journal no longer carries.
+A request that presents no verified bearer token is refused with `401` and the problem code
+`authentication.refused` before any access profile, query, or record is read. It names nobody the
+journal could hold accountable, so it is counted as a `client_error` response in
+`breg_http_requests_total` rather than journaled; refusals of an authenticated principal are
+journaled, and so is every admitted request. Alert on a sharp rise in `client_error` responses on
+the record routes: for unauthenticated traffic it is the signal the journal does not carry. The
+runtime enforces no request-rate limit of its own, so put the registry behind an upstream rate
+limit.
 
-An admitted anonymous read writes the same pre-I/O audit envelope as any admitted request, and the
-runtime enforces no request-rate limit of its own, so put a registry that admits anonymous reads
-behind an upstream rate limit.
-
-{/* Evidence: crates/registry-breg/src/metrics.rs, AnonymousRefusalReason;
-    crates/registry-breg/src/api/mod.rs, anonymous_refusal();
+{/* Evidence: crates/registry-breg/src/metrics.rs;
+    crates/registry-breg/src/auth.rs, authentication_refused();
+    crates/registry-breg/src/api/context.rs, Authenticated;
     crates/registry-breg/src/postgres/read.rs, record_pre_io_audit() call in execute();
-    crates/registry-breg/tests/postgres_anonymous_refusals.rs;
+    crates/registry-breg/tests/postgres_unauthenticated_refusals.rs;
     crates/registry-breg/src/runtime_config.rs, MetricsListenerConfig;
     crates/registry-breg/src/startup.rs. */}
 

@@ -4,7 +4,7 @@ model {
   qgis = external 'QGIS or spatial client' {
     #optional
     technology 'Optional / GeoJSON'
-    description 'Reads permitted collections through the in-process /v1/gis adapter with profile-dependent authentication, including anonymous profiles. Advertised collections require direct list authority, a readable primary CRS84 Point and an explicit bbox capability. The operator supplies publicOrigin; bbox predicates require PostGIS. This interface does not establish full OGC API Features conformance.'
+    description 'Reads permitted collections through the in-process /v1/gis adapter with bearer authentication and profile-dependent authorization. Advertised collections require direct list authority, a readable primary CRS84 Point and an explicit bbox capability. The operator supplies publicOrigin; bbox predicates require PostGIS. This interface does not establish full OGC API Features conformance.'
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/SPATIAL-QUERIES.md 'Spatial query contract'
   }
   publicschema = artifact 'PublicSchema snapshot' {

@@ -4481,9 +4481,9 @@ literal: aaa.bbb.ccc
             credential_source("type: bearer\n"),
         ),
         (
-            "extra-token-ref",
-            "config.unknown-key",
-            "/bindings/0/credential/tokenRef",
+            "anonymous-credential",
+            "config.unknown-variant",
+            "/bindings/0/credential/type",
             credential_source("type: anonymous\n      tokenRef: secret:file/operator-token\n"),
         ),
         (

@@ -45,8 +45,8 @@ exceptions:
   format: breg/access-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
   class: stable-move
-  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha3
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/access-explanation/v1alpha3; refuse the old value with config.retired-api-version'
+  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha4
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/access-explanation/v1alpha4; refuse the old value with config.retired-api-version'
 - rule: CFG-ENV-3
   format: breg/access-explanation
   location: products/platform/config-formats.yaml#/current/kind
@@ -65,12 +65,6 @@ exceptions:
   class: stable-move
   reason: id is not typed as $defs/LocalId
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId'
-- rule: CFG-NAME-2
-  format: breg/access-explanation
-  location: products/breg/contracts/explain/AccessExplanation.schema.json#/properties/claimContractError/enum/anonymous_profile_carries_authority
-  class: stable-move
-  reason: value anonymous_profile_carries_authority is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
 - rule: CFG-NAME-2
   format: breg/access-explanation
   location: products/breg/contracts/explain/AccessExplanation.schema.json#/properties/claimContractError/enum/boundary_field_not_compiled
@@ -176,8 +170,8 @@ exceptions:
   format: breg/access-preview
   location: products/platform/config-formats.yaml#/current/apiVersion
   class: stable-move
-  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha3
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/access-preview/v1alpha3; refuse the old value with config.retired-api-version'
+  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha4
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/access-preview/v1alpha4; refuse the old value with config.retired-api-version'
 - rule: CFG-ENV-3
   format: breg/access-preview
   location: products/platform/config-formats.yaml#/current/kind
@@ -207,8 +201,8 @@ exceptions:
   format: breg/actions-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
   class: stable-move
-  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha3
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/actions-explanation/v1alpha3; refuse the old value with config.retired-api-version'
+  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha4
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/actions-explanation/v1alpha4; refuse the old value with config.retired-api-version'
 - rule: CFG-ENV-3
   format: breg/actions-explanation
   location: products/platform/config-formats.yaml#/current/kind
@@ -356,8 +350,8 @@ exceptions:
   format: breg/change-requests-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
   class: stable-move
-  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha3
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/change-requests-explanation/v1alpha3; refuse the old value with config.retired-api-version'
+  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha4
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/change-requests-explanation/v1alpha4; refuse the old value with config.retired-api-version'
 - rule: CFG-ENV-3
   format: breg/change-requests-explanation
   location: products/platform/config-formats.yaml#/current/kind
@@ -492,8 +486,8 @@ exceptions:
   format: breg/events-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
   class: stable-move
-  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha3
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/events-explanation/v1alpha3; refuse the old value with config.retired-api-version'
+  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha4
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/events-explanation/v1alpha4; refuse the old value with config.retired-api-version'
 - rule: CFG-ENV-3
   format: breg/events-explanation
   location: products/platform/config-formats.yaml#/current/kind
@@ -525,8 +519,8 @@ exceptions:
   format: breg/lifecycle-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
   class: stable-move
-  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha3
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha3; refuse the old value with config.retired-api-version'
+  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha4
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4; refuse the old value with config.retired-api-version'
 - rule: CFG-ENV-3
   format: breg/lifecycle-explanation
   location: products/platform/config-formats.yaml#/current/kind
@@ -888,8 +882,8 @@ exceptions:
   format: breg/model-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
   class: stable-move
-  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha3
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/model-explanation/v1alpha3; refuse the old value with config.retired-api-version'
+  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha4
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/model-explanation/v1alpha4; refuse the old value with config.retired-api-version'
 - rule: CFG-ENV-3
   format: breg/model-explanation
   location: products/platform/config-formats.yaml#/current/kind
@@ -2536,8 +2530,8 @@ exceptions:
   format: breg/queries-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
   class: stable-move
-  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha3
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/queries-explanation/v1alpha3; refuse the old value with config.retired-api-version'
+  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha4
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/queries-explanation/v1alpha4; refuse the old value with config.retired-api-version'
 - rule: CFG-ENV-3
   format: breg/queries-explanation
   location: products/platform/config-formats.yaml#/current/kind
@@ -2681,8 +2675,8 @@ exceptions:
   format: breg/routes-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
   class: stable-move
-  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha3
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/routes-explanation/v1alpha3; refuse the old value with config.retired-api-version'
+  reason: apiVersion is registry.registrystack.org/breg-explain/v1alpha4
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/breg/routes-explanation/v1alpha4; refuse the old value with config.retired-api-version'
 - rule: CFG-ENV-3
   format: breg/routes-explanation
   location: products/platform/config-formats.yaml#/current/kind

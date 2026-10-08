@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/access-preview/access-preview.v1alpha3.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/access-preview/access-preview.v1alpha4.schema.json",
   "title": "AccessPreview",
   "description": "Wire shape of `explanation` for `bregctl explain access --scenario <file>`. The offline synthetic-admission result is a small hand-written struct and is pinned in full, except `effectiveProfile`, which is a passthrough of a compiled access profile and is declared opaque.",
   "type": "object",
@@ -20,7 +20,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha3"
+      "const": "registry.registrystack.org/breg-explain/v1alpha4"
     },
     "kind": {
       "const": "AccessPreview"

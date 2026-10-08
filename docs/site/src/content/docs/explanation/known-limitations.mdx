@@ -87,8 +87,8 @@ package an operator activates deliberately. Its current limits are:
 - `history erase` has no dry run or undo and refuses more than 10,000 revisions in one transaction.
   `history rebaseline` verifies every live row in one transaction and holds writes to every entity
   table until it commits.
-- The runtime enforces timeouts and connection-pool bounds but has no request-rate limit. Put a
-  registry that admits anonymous reads behind an upstream limiter.
+- The runtime enforces timeouts and connection-pool bounds but has no request-rate limit. Put the
+  registry behind an upstream limiter.
 - The load-test harness tests a profile on the operator's hardware. No supported throughput or
   latency figure is committed.
 - A release provides binaries and a container image, not a Helm chart, Compose deployment,

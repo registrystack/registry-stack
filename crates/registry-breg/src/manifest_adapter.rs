@@ -259,11 +259,9 @@ fn project_manifest(
                     description: dataset.source.description.as_ref().map(localized_text),
                     owner: dataset.source.owner.clone(),
                     sensitivity: sensitivity(dataset.effective_classification_ceiling),
-                    access_rights: if selected_profile_is_anonymous(dataset, visible_entities) {
-                        AccessRights::Public
-                    } else {
-                        AccessRights::Restricted
-                    },
+                    // The registry serves authenticated callers only, so no
+                    // projected dataset is open to the public.
+                    access_rights: AccessRights::Restricted,
                     update_frequency: Default::default(),
                     conforms_to: dataset.source.conforms_to.clone(),
                     applicable_legislation: dataset.source.applicable_legislation.clone(),
@@ -316,18 +314,6 @@ fn visible_entities<'a>(
                 })
         })
         .collect()
-}
-
-fn selected_profile_is_anonymous(
-    dataset: &CompiledManifestDataset,
-    visible_entities: &[&CompiledEntity],
-) -> bool {
-    visible_entities.iter().all(|entity| {
-        entity
-            .access_profiles
-            .get(&dataset.effective_access_profile)
-            .is_some_and(|profile| profile.anonymous)
-    })
 }
 
 fn project_entity(
@@ -714,7 +700,7 @@ mod tests {
              ]}
           ],
           "accessProfiles":[
-            {"id":"public-reader","anonymous":true,"permissions":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":[]}]},
+            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":[]}]},
             {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":[{"entity":"protected-case","operations":["get"],"readableFields":["status","sealing-reason"],"rowBoundaries":[]}]}
           ]
         });

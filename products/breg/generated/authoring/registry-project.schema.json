@@ -2153,7 +2153,7 @@
           "uniqueItems": true
         },
         "readableRequestFields": {
-          "description": "Readable change-request decision detail. Anonymous profiles never receive reason text.",
+          "description": "Readable change-request decision detail.",
           "items": {
             "$ref": "#/$defs/RequestMetadataFieldSource"
           },
@@ -3319,10 +3319,6 @@
       "properties": {
         "actorKind": {
           "$ref": "#/$defs/ActorKindSource"
-        },
-        "anonymous": {
-          "default": false,
-          "type": "boolean"
         },
         "default": {
           "default": false,

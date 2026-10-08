@@ -20,8 +20,8 @@ use serde_json::{json, Map, Value};
 use super::{
     audited_read_concealment, audited_read_refusal, authorize_route, concealed, data_field_type,
     exact_non_record_no_store, invalid_query, percent_decode, read_query, unavailable,
-    AuthorizedSurface, HttpService, QueryOptions, QueryParseError, ReadQueryError, RecordReadKind,
-    RecordReadRequest, VerifiedRequestClaims, MAX_RAW_QUERY_BYTES,
+    Authenticated, AuthorizedSurface, HttpService, QueryOptions, QueryParseError, ReadQueryError,
+    RecordReadKind, RecordReadRequest, VerifiedRequestClaims, MAX_RAW_QUERY_BYTES,
 };
 use crate::contract::{FieldTypeSource, Operation};
 use crate::correlation::RequestCorrelation;
@@ -56,15 +56,12 @@ pub(crate) fn routes() -> Router<Arc<HttpService>> {
 
 async fn landing(
     State(service): State<Arc<HttpService>>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     if parse_metadata_query(raw_query.as_deref()).is_err() {
         return invalid_query();
     }
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Some(origin) = public_origin(&service) else {
         return unavailable();
     };
@@ -88,15 +85,12 @@ async fn landing(
 
 async fn conformance(
     State(service): State<Arc<HttpService>>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    _: Authenticated,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     if parse_metadata_query(raw_query.as_deref()).is_err() {
         return invalid_query();
     }
-    let _claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     if public_origin(&service).is_none() {
         return unavailable();
     }
@@ -105,15 +99,12 @@ async fn conformance(
 
 async fn api(
     State(service): State<Arc<HttpService>>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     if parse_metadata_query(raw_query.as_deref()).is_err() {
         return invalid_query();
     }
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Some(origin) = public_origin(&service) else {
         return unavailable();
     };
@@ -231,15 +222,12 @@ async fn api(
 
 async fn collections(
     State(service): State<Arc<HttpService>>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     if parse_metadata_query(raw_query.as_deref()).is_err() {
         return invalid_query();
     }
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Some(origin) = public_origin(&service) else {
         return unavailable();
     };
@@ -255,13 +243,10 @@ async fn collections(
 
 async fn collection(
     State(service): State<Arc<HttpService>>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     Path(collection): Path<String>,
 ) -> Response {
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Some(collection) = authorize_gis_collection(&service, &claims, &collection) else {
         return concealed();
     };
@@ -277,14 +262,11 @@ async fn collection(
 async fn items(
     State(service): State<Arc<HttpService>>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     Path(collection): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Some(mut authorized) = authorize_gis_collection(&service, &claims, &collection) else {
         return concealed();
     };

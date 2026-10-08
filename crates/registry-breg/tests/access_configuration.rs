@@ -127,7 +127,7 @@ fn requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles() {
 }
 
 #[test]
-fn requirements_validate_even_without_profiles_and_reject_anonymous_access() {
+fn requirements_validate_even_without_profiles() {
     for (requirements, code) in [
         (json!({}), "breg.access.requirements-empty"),
         (
@@ -144,9 +144,60 @@ fn requirements_validate_even_without_profiles_and_reject_anonymous_access() {
         value["accessProfiles"] = json!([]);
         assert_refused(&value, code);
     }
-    let mut value = source();
-    value["accessProfiles"][0]["anonymous"] = json!(true);
-    assert_refused(&value, "breg.access.requirements-authentication");
+}
+
+fn read_refusals(failure: &registry_breg::CompileFailure) -> Vec<(&str, &str)> {
+    failure
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect()
+}
+
+#[test]
+fn an_anonymous_member_is_refused_when_the_project_is_read_with_its_fix_named() {
+    use registry_breg::contract::parse_project_yaml;
+    for written in [json!(true), json!(false)] {
+        let mut value = source();
+        value["accessProfiles"][0]["anonymous"] = written;
+        let failure = parse_project_yaml(&serde_json::to_vec(&value).unwrap())
+            .expect_err("an anonymous member is refused when the project is read");
+        assert_eq!(
+            read_refusals(&failure),
+            vec![("config.removed-key", "project.accessProfiles[0].anonymous")],
+            "{failure:?}"
+        );
+        let message = &failure.diagnostics()[0].message;
+        assert!(
+            message.contains("authenticated") && message.contains("requiredScopes"),
+            "the refusal names the fix: {message}"
+        );
+    }
+}
+
+#[test]
+fn an_anonymous_member_on_a_module_profile_is_refused_when_the_module_is_read() {
+    use registry_breg::contract::parse_module_yaml;
+    let profile = json!({"id":"public","anonymous":true,"operations":["get"],"rowBoundaries":[]});
+    for (module, path) in [
+        (
+            json!({"id":"extra","version":"1","entities":[{"id":"place","primaryDataset":"test-dataset",
+              "route":"places","mutationMode":"mutable","accessProfiles":[profile.clone()]}]}),
+            "module.entities[0].accessProfiles[0].anonymous",
+        ),
+        (
+            json!({"id":"extra","version":"1","extendEntities":[{"entity":"entry",
+              "accessProfiles":[profile.clone()]}]}),
+            "module.extendEntities[0].accessProfiles[0].anonymous",
+        ),
+    ] {
+        let failure = parse_module_yaml(&serde_json::to_vec(&module).unwrap())
+            .expect_err("an anonymous member is refused when the module is read");
+        assert!(
+            read_refusals(&failure).contains(&("config.removed-key", path)),
+            "{failure:?}"
+        );
+    }
 }
 
 #[test]
@@ -665,56 +716,8 @@ fn default_profile_refusals_name_the_entity_the_operation_and_the_profiles() {
     compile(&one_default).expect("exactly one default profile per operation compiles");
 }
 
-fn anonymous_source() -> Value {
-    json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"public-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://public-example.example.test"},
-        "entities":[{"id":"place","primaryDataset":"test-dataset","route":"places","mutationMode":"mutable",
-          "fields":[{"id":"code","type":"string","maxLength":32,"classification":"public"},
-                    {"id":"note","type":"string","maxLength":32,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"public-map","default":true,"anonymous":true,
-          "permissions":[{"entity":"place","operations":["list"],"readableFields":["code"], "rowBoundaries": []}]}]
-    })
-}
-
 #[test]
-fn anonymous_processing_refusals_name_the_entity_or_field_that_is_not_public() {
-    let failure = compile(&anonymous_source()).unwrap_err();
-    let diagnostic = diagnostic_for(
-        &failure,
-        "breg.access-profile.public-processing-non-public",
-        "entity `place`",
-    );
-    assert!(
-        diagnostic.message.contains("classified `internal`"),
-        "{diagnostic:?}"
-    );
-    assert!(
-        diagnostic.message.contains("`public-map`"),
-        "{diagnostic:?}"
-    );
-
-    let mut public_entity = anonymous_source();
-    public_entity["entities"][0]["classification"] = json!("public");
-    compile(&public_entity).expect("a public entity with public readable fields compiles");
-
-    let mut hidden_field = public_entity;
-    hidden_field["accessProfiles"][0]["permissions"][0]["readableFields"] = json!(["code", "note"]);
-    let failure = compile(&hidden_field).unwrap_err();
-    let diagnostic = diagnostic_for(
-        &failure,
-        "breg.access-profile.public-processing-non-public",
-        "field `note`",
-    );
-    assert!(
-        diagnostic.message.contains("classified `internal`"),
-        "{diagnostic:?}"
-    );
-    assert!(!diagnostic.message.contains("`code`"), "{diagnostic:?}");
-}
-
-#[test]
-fn write_grants_without_writable_fields_and_anonymous_collections_are_reported() {
+fn write_grants_without_writable_fields_are_reported() {
     let mut value = source();
     value["accessProfiles"][0]["permissions"][0]["operations"] =
         json!(["get", "list", "create", "patch"]);
@@ -738,33 +741,6 @@ fn write_grants_without_writable_fields_and_anonymous_collections_are_reported()
         .findings()
         .iter()
         .any(|d| d.code == "breg.access.profile-no-writable-fields"));
-
-    let mut public = anonymous_source();
-    public["entities"][0]["classification"] = json!("public");
-    let compiled = compile(&public).unwrap();
-    let finding = compiled
-        .findings()
-        .iter()
-        .find(|d| d.code == "breg.access.profile-anonymous-collection")
-        .expect("an anonymous list grant is reported");
-    assert_eq!(
-        finding.path,
-        "entities[id=place].accessProfiles[id=public-map].operations"
-    );
-    assert!(finding.message.contains("`list`"), "{finding:?}");
-    assert!(
-        !compiled
-            .findings()
-            .iter()
-            .any(|d| d.code == "breg.access.profile-unrestricted-collection"),
-        "a public entity keeps the authenticated-only collection finding out of the report"
-    );
-    public["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get"]);
-    assert!(!compile(&public)
-        .unwrap()
-        .findings()
-        .iter()
-        .any(|d| d.code == "breg.access.profile-anonymous-collection"));
 }
 
 #[test]

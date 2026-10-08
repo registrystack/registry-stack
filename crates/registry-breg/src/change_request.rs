@@ -639,7 +639,6 @@ pub(crate) fn compile_change_requests(
                                         && target_profile.require_consent.is_empty()
                                 })
                     })
-                    && !profile.anonymous
                     && !profile.operations.contains(&Operation::Batch)
                     && !profile.operations.contains(&Operation::Import)
             });
@@ -2136,55 +2135,6 @@ fn compile_presence_permissions(
                     ));
                     continue;
                 }
-                if profile.anonymous {
-                    // Presence processes the request's existence and target
-                    // linkage even when no intake values are disclosed.
-                    let public_links = plans.get(&grant.request_type).is_some_and(|plan| {
-                        let declarative_links_are_public = plan
-                            .effects
-                            .iter()
-                            .filter(|effect| effect.target.entity_id == target_entity.id)
-                            .all(|effect| match &effect.target.binding {
-                                CompiledChangeRequestTargetBinding::Existing { from_field } => {
-                                    request_entity.fields.get(from_field).is_some_and(|field| {
-                                        field.classification == Classification::Public
-                                    })
-                                }
-                                CompiledChangeRequestTargetBinding::ReservedCreate { .. } => true,
-                            });
-                        let planner_links_are_public =
-                            plan.planner.as_ref().is_none_or(|planner| {
-                                planner
-                                    .writes
-                                    .iter()
-                                    .filter(|write| write.target_entity_id == target_entity.id)
-                                    .all(|write| {
-                                        write.target_from_field.as_ref().is_none_or(|from_field| {
-                                            request_entity.fields.get(from_field).is_some_and(
-                                                |field| {
-                                                    field.classification == Classification::Public
-                                                },
-                                            )
-                                        })
-                                    })
-                            });
-                        declarative_links_are_public && planner_links_are_public
-                    });
-                    if request_entity.classification != Classification::Public || !public_links {
-                        errors.push(Diagnostic::error(
-                            "breg.change-request.presence-anonymous-non-public",
-                            presence_path.as_str(),
-                            "anonymous request presence requires a public request type and public target-link fields",
-                        ));
-                    }
-                    if !grant.row_boundaries.is_empty() {
-                        errors.push(Diagnostic::error(
-                            "breg.change-request.presence-anonymous-claim-boundary",
-                            format!("{presence_path}.rowBoundaries"),
-                            "anonymous request presence cannot depend on verified claim boundaries",
-                        ));
-                    }
-                }
                 if let Some(plan) = plans.get_mut(&grant.request_type) {
                     plan.presence_permissions
                         .push(CompiledChangeRequestPresencePermission {
@@ -2557,7 +2507,6 @@ fn authority_payload<const N: usize>(
             (
                 profile.id.clone(),
                 json!({
-                    "anonymous": profile.anonymous,
                     "principalClaim": profile.principal_claim,
                     "requiredScopes": profile.required_scopes,
                     "requiredPurposes": profile.required_purposes,

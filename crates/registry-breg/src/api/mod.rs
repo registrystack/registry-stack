@@ -34,7 +34,7 @@ use registry_platform_httpsec::{security_headers, CspBuilder};
 use serde_json::{json, Map, Value};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
-pub(crate) use context::VerifiedRequestActionAuthority;
+pub(crate) use context::{Authenticated, VerifiedRequestActionAuthority};
 pub use context::{
     AuthorizedActionContext, AuthorizedRequestContext, RowBoundaryOperator, VerifiedClaimValue,
     VerifiedContextError, VerifiedRequestAction, VerifiedRequestClaims, VerifiedRequestPresence,
@@ -56,8 +56,8 @@ pub use service::{
 
 use crate::auth::{authenticate_request, RegistryAuthenticator};
 use crate::contract::{
-    AccessProfileSource, BoundaryOperator, Classification, FieldTypeSource, LookupValueOrigin,
-    Operation, RowBoundarySource,
+    AccessProfileSource, BoundaryOperator, FieldTypeSource, LookupValueOrigin, Operation,
+    RowBoundarySource,
 };
 use crate::correlation::RequestCorrelation;
 use crate::cursor::{
@@ -66,7 +66,6 @@ use crate::cursor::{
     CursorProjectionField, CursorQueryScope, CursorRepresentation, CursorSpatialQuery,
 };
 use crate::idempotency::{HeldResponse, PermittedResponseHeader};
-use crate::metrics::{AnonymousRefusal, AnonymousRefusalReason};
 use crate::model::{
     request_query_field_id_for_api, request_query_field_type, CompiledEntity,
     CompiledMetadataEntity, CompiledMetadataEntry, CompiledQueryKind, CompiledQueryOperation,
@@ -116,7 +115,8 @@ pub fn set_request_deadline_for_test(
 }
 
 pub fn router(service: Arc<HttpService>) -> Router {
-    route_set(service)
+    route_set(Arc::clone(&service))
+        .merge(probe_routes(service))
         .layer(middleware::from_fn(metadata::no_store))
         .layer(middleware::from_fn(crate::correlation::observe))
         .layer(security_headers(CspBuilder::restrictive()))
@@ -223,14 +223,25 @@ fn route_set(service: Arc<HttpService>) -> Router {
             Arc::clone(&service),
             refuse_head,
         ))
-        // The operational probes return no registry data and are added after
-        // the HEAD refusal, so probe tooling may still send HEAD to them.
-        .route("/health", get(health))
-        .route("/healthz", get(health))
-        .route("/ready", get(ready))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
         .with_state(service)
+}
+
+/// The operational probes return no registry data. They sit outside both the
+/// bearer admission layer, so an orchestrator probes without a credential, and
+/// the HEAD refusal, so probe tooling may still send HEAD to them.
+fn probe_routes(service: Arc<HttpService>) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/healthz", get(health))
+        .route("/ready", get(ready))
+        .method_not_allowed_fallback(probe_method_not_allowed)
+        .with_state(service)
+}
+
+async fn probe_method_not_allowed() -> Response {
+    concealed()
 }
 
 /// axum's `get` also answers HEAD by running the whole read under the
@@ -249,18 +260,21 @@ async fn refuse_head(
 }
 
 /// Construct the production network router. Bearer admission and complete
-/// configured OIDC verification wrap every route, including anonymous and
-/// discovery surfaces, so an invalid presented credential never downgrades to
-/// anonymous access.
+/// configured OIDC verification wrap every registry route, discovery surfaces
+/// and the unknown-route fallback included, so a missing or invalid credential
+/// is refused before any route runs. Only the operational probes and the
+/// review-completion receiver, which carries its own credential, sit outside.
 pub fn authenticated_router(
     service: Arc<HttpService>,
     authenticator: Arc<RegistryAuthenticator>,
 ) -> Router {
     let completion_receiver = service.review_completions.is_some();
-    let authenticated = route_set(Arc::clone(&service)).layer(middleware::from_fn_with_state(
-        authenticator,
-        authenticate_request,
-    ));
+    let authenticated = route_set(Arc::clone(&service))
+        .layer(middleware::from_fn_with_state(
+            authenticator,
+            authenticate_request,
+        ))
+        .merge(probe_routes(Arc::clone(&service)));
     let app = if completion_receiver {
         authenticated.merge(
             Router::new()
@@ -374,15 +388,12 @@ async fn ready(State(service): State<Arc<HttpService>>) -> Response {
 
 async fn openapi(
     State(service): State<Arc<HttpService>>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let visible = visible_surfaces(&service, &claims, &options);
     let visible_actions = actions::visible_actions(&service, &claims, &options);
     let imports = ingestion::import_surfaces(&service, &claims, &options);
@@ -519,15 +530,12 @@ async fn openapi(
 
 async fn registry_metadata(
     State(service): State<Arc<HttpService>>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let surfaces = visible_surfaces(&service, &claims, &options);
     let operations = metadata::operations(&service, &surfaces);
     let visible = visible_metadata_entries(&service, &claims, &options);
@@ -634,15 +642,12 @@ async fn registry_metadata(
 async fn entity_schema(
     State(service): State<Arc<HttpService>>,
     Path(entity_id): Path<String>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let surfaces = visible_surfaces(&service, &claims, &options)
         .into_iter()
         .filter(|surface| surface.response_entity.id == entity_id)
@@ -670,14 +675,11 @@ async fn read_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
     Path(path): Path<HashMap<String, String>>,
 ) -> Response {
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let options = match QueryOptions::parse(raw_query.as_deref(), true) {
         Ok(options) => options,
         Err(error) => {
@@ -958,14 +960,11 @@ async fn lookup_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
     body: Body,
 ) -> Response {
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let options = match QueryOptions::parse(raw_query.as_deref(), true) {
         Ok(options) => options,
         Err(error) => {
@@ -1144,7 +1143,7 @@ async fn revision_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
     Path(path): Path<HashMap<String, String>>,
@@ -1152,9 +1151,6 @@ async fn revision_dispatch(
     let Some(revisions) = &service.revisions else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let options = match QueryOptions::parse(raw_query.as_deref(), false) {
         Ok(options) => options,
         Err(error) => {
@@ -1302,16 +1298,13 @@ async fn snapshot_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
     let Some(snapshots) = &service.snapshots else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let options = match QueryOptions::parse_snapshot(raw_query.as_deref()) {
         Ok(options) => options,
         Err(_) => {
@@ -1395,9 +1388,6 @@ async fn audited_known_revision_refusal(
     response: Response,
     correlation: &RequestCorrelation,
 ) -> Response {
-    if claims.principal().is_none() {
-        return anonymous_refusal(response, AnonymousRefusalReason::RevisionRequestInvalid);
-    }
     match revisions
         .refusal(RevisionReadRefusal {
             method: route.method,
@@ -1423,9 +1413,6 @@ async fn audited_revision_refusal(
     response: Response,
     correlation: &RequestCorrelation,
 ) -> Response {
-    if surface.context.principal().is_none() {
-        return anonymous_refusal(response, AnonymousRefusalReason::RevisionRefused);
-    }
     match revisions
         .refusal(RevisionReadRefusal {
             method: route.method,
@@ -1451,9 +1438,6 @@ async fn audited_revision_concealment(
     target_record: Option<&String>,
     correlation: &RequestCorrelation,
 ) -> Response {
-    if claims.principal().is_none() {
-        return anonymous_refusal(concealed(), AnonymousRefusalReason::RevisionConcealed);
-    }
     let selected_access_profile = options.access_profile().and_then(|profile| {
         route
             .access_profiles
@@ -1486,9 +1470,6 @@ async fn audited_known_read_refusal(
     response: Response,
     correlation: &RequestCorrelation,
 ) -> Response {
-    if claims.principal().is_none() {
-        return anonymous_refusal(response, AnonymousRefusalReason::ReadRequestInvalid);
-    }
     match service
         .read_refusal(
             route.operation,
@@ -1517,9 +1498,6 @@ async fn audited_read_refusal(
     response: Response,
     correlation: &RequestCorrelation,
 ) -> Response {
-    if surface.context.principal().is_none() {
-        return anonymous_refusal(response, AnonymousRefusalReason::ReadRefused);
-    }
     match service
         .read_refusal(
             route.operation,
@@ -1548,9 +1526,6 @@ async fn audited_read_concealment(
     target_record: Option<&String>,
     correlation: &RequestCorrelation,
 ) -> Response {
-    if claims.principal().is_none() {
-        return anonymous_refusal(concealed(), AnonymousRefusalReason::ReadConcealed);
-    }
     let selected_access_profile = options.access_profile().and_then(|profile| {
         route
             .access_profiles
@@ -1582,7 +1557,7 @@ async fn create_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
     body: Body,
@@ -1590,9 +1565,6 @@ async fn create_dispatch(
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return audited_mutation_concealment(
             mutations,
@@ -1704,7 +1676,7 @@ async fn patch_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
     headers: HeaderMap,
@@ -1713,9 +1685,6 @@ async fn patch_dispatch(
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Some(record_id) = path.get("record_id") else {
         return invalid_request();
     };
@@ -1866,7 +1835,7 @@ async fn batch_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
     body: Body,
@@ -1874,9 +1843,6 @@ async fn batch_dispatch(
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return audited_mutation_concealment(
             mutations,
@@ -2004,7 +1970,7 @@ async fn tombstone_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
     headers: HeaderMap,
@@ -2013,9 +1979,6 @@ async fn tombstone_dispatch(
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Some(record_id) = path.get("record_id") else {
         return invalid_request();
     };
@@ -2139,7 +2102,7 @@ async fn request_action_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
     headers: HeaderMap,
@@ -2148,9 +2111,6 @@ async fn request_action_dispatch(
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Some(record_id) = path.get("record_id") else {
         return invalid_request();
     };
@@ -2446,9 +2406,6 @@ async fn audited_mutation_refusal(
     response: Response,
     correlation: &RequestCorrelation,
 ) -> Response {
-    if context.principal().is_none() {
-        return anonymous_refusal(response, AnonymousRefusalReason::MutationRefused);
-    }
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
             grant: context.grant_audit().cloned(),
@@ -2476,9 +2433,6 @@ async fn audited_mutation_concealment(
     target_record: Option<&str>,
     correlation: &RequestCorrelation,
 ) -> Response {
-    if claims.principal().is_none() {
-        return anonymous_refusal(concealed(), AnonymousRefusalReason::MutationConcealed);
-    }
     // Only a profile the compiled route grants may reach the journal, so an
     // unknown caller-supplied value is recorded as absent.
     let selected_profile = match options.access_profile() {
@@ -2515,13 +2469,16 @@ async fn not_found(
     uri: axum::http::Uri,
     method: axum::http::Method,
 ) -> Response {
-    if uri.path().starts_with("/v1/statistics/") && service.statistics.is_some() {
-        let claims = claims
-            .map(|Extension(c)| c)
-            .unwrap_or_else(VerifiedRequestClaims::anonymous);
-        return statistics::unknown(&service, &claims, &correlation, &method).await;
+    // Without verified claims there is no caller whose statistics refusal the
+    // journal could hold, so the request takes the concealed answer.
+    match claims {
+        Some(Extension(claims))
+            if uri.path().starts_with("/v1/statistics/") && service.statistics.is_some() =>
+        {
+            statistics::unknown(&service, &claims, &correlation, &method).await
+        }
+        _ => concealed(),
     }
-    concealed()
 }
 
 struct AuthorizedSurface<'a> {
@@ -2688,24 +2645,7 @@ fn authorize_direct_route_base<'a>(
     if !profile.operations.contains(&route.operation) {
         return None;
     }
-    if route.operation == Operation::Revisions && (profile.anonymous || !profile.revision_access) {
-        return None;
-    }
-    if route.operation == Operation::Snapshot && profile.anonymous {
-        return None;
-    }
-    if matches!(
-        route.operation,
-        Operation::Create
-            | Operation::Patch
-            | Operation::Tombstone
-            | Operation::Batch
-            | Operation::Import
-    ) && profile.anonymous
-    {
-        return None;
-    }
-    if profile.anonymous && entity.classification != Classification::Public {
+    if route.operation == Operation::Revisions && !profile.revision_access {
         return None;
     }
     let row_boundaries = authorize_profile_claims(profile, claims).ok()?;
@@ -2718,13 +2658,6 @@ fn authorize_direct_route_base<'a>(
                     .stored_fields
                     .iter()
                     .any(|stored| stored.logical.id == **field)
-        })
-        .filter(|field| {
-            !profile.anonymous
-                || entity
-                    .fields
-                    .get(*field)
-                    .is_some_and(|field| field.classification == Classification::Public)
         })
         .cloned()
         .collect();
@@ -2803,25 +2736,8 @@ fn authorize_read_path_route<'a>(
     if route.operation != Operation::List || route.query_kind != Some(CompiledQueryKind::List) {
         return None;
     }
-    if profile.anonymous
-        && (entity.classification != Classification::Public
-            || response_entity.classification != Classification::Public)
-    {
-        return None;
-    }
     let row_boundaries = authorize_profile_claims(profile, claims).ok()?;
-    let readable_fields = grant
-        .readable_fields
-        .iter()
-        .filter(|field| {
-            !profile.anonymous
-                || response_entity
-                    .fields
-                    .get(*field)
-                    .is_some_and(|field| field.classification == Classification::Public)
-        })
-        .cloned()
-        .collect();
+    let readable_fields = grant.readable_fields.iter().cloned().collect();
     Some(AuthorizedSurface {
         route,
         entity,
@@ -2947,9 +2863,8 @@ pub(crate) fn authorize_profile_claims(
     profile: &AccessProfileSource,
     claims: &VerifiedRequestClaims,
 ) -> Result<Vec<VerifiedRowBoundary>, &'static str> {
-    if !profile.anonymous
-        && (profile.principal_claim.as_deref() != claims.principal_claim()
-            || claims.principal().is_none())
+    if profile.principal_claim.as_deref() != claims.principal_claim()
+        || claims.principal().is_none()
     {
         return Err("principal_missing_or_mismatched");
     }
@@ -5009,26 +4924,6 @@ fn method_name(method: crate::model::HttpMethod) -> &'static str {
         crate::model::HttpMethod::Patch => "patch",
         crate::model::HttpMethod::Post => "post",
     }
-}
-
-/// Mark a refusal of a request that carries no principal, so the telemetry
-/// boundary counts it instead of the journal recording it.
-///
-/// A caller with no principal names nobody the journal could hold
-/// accountable, and an unauthenticated caller that could append would grow
-/// the journal without bound. The refusal keeps its operational signal as a
-/// bounded counter
-/// and a debug line; refusals of an authenticated principal are unaffected
-/// and still append.
-fn anonymous_refusal(mut response: Response, reason: AnonymousRefusalReason) -> Response {
-    tracing::debug!(
-        reason = reason.label(),
-        "refused a request without a principal before admission"
-    );
-    response
-        .extensions_mut()
-        .insert(AnonymousRefusal { reason });
-    response
 }
 
 fn concealed() -> Response {

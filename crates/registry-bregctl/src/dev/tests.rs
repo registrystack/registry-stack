@@ -1145,7 +1145,7 @@ journeys:
 }
 
 #[test]
-fn anonymous_journey_steps_need_no_issuer_client() {
+fn every_journey_step_needs_an_issuer_client() {
     let clients = config::clients(
         "dev-clients.yaml",
         br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
@@ -1169,11 +1169,14 @@ journeys:
         request: {type: list}
         expect: {outcome: success, status: 200}
 "#;
-    bind_journey_profiles(journeys, &clients).unwrap();
+    assert!(bind_journey_profiles(journeys, &clients)
+        .unwrap_err()
+        .to_string()
+        .contains("needs one unambiguous local client for access profile public-reader"));
 }
 
 #[test]
-fn explicit_binding_precedes_empty_claims_and_rejects_profile_mismatch() {
+fn explicit_binding_wins_and_a_profile_mismatch_is_refused() {
     let clients = config::clients(
         "dev-clients.yaml",
         br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
@@ -1190,7 +1193,7 @@ clients:
     .unwrap();
     let exact = exact_journey_client(&clients, "public-read", "list-public", "public-reader")
         .unwrap()
-        .expect("the explicit binding wins even when authored claims are empty");
+        .expect("the explicit binding names the client for this step");
     assert_eq!(exact.id, "authenticated-public-reader");
     let journey = r#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
@@ -1199,7 +1202,7 @@ journeys:
     steps:
       - id: list-public
         accessProfile: public-reader
-        claims: {}
+        claims: {principal: reader, scopes: [registry:records:read]}
         request: {type: list}
         expect: {outcome: success, status: 200}
 "#;
@@ -1212,7 +1215,7 @@ journeys:
     assert!(bind_journey_profiles(mismatched.as_bytes(), &clients)
         .unwrap_err()
         .to_string()
-        .contains("unknown or profile-mismatched"));
+        .contains("needs one unambiguous local client for access profile other-reader"));
 }
 
 fn journey_step(
@@ -1223,7 +1226,6 @@ fn journey_step(
         journey_id: "journey".into(),
         step_id: "step".into(),
         access_profile: "reviewer".into(),
-        anonymous: false,
         scopes: Some(scopes.iter().map(|scope| (*scope).to_owned()).collect()),
         purpose: purpose.map(str::to_owned),
     }

@@ -469,15 +469,15 @@ async fn run_access_is_creator_scoped_and_possession_grants_nothing() {
     assert_eq!(runs[0]["runId"], run_id.as_str());
     assert_eq!(listed["hasMore"], false);
 
-    // An unauthenticated caller cannot create a run at all.
-    let anonymous = harness
+    // A caller whose profile only reads cannot create a run at all.
+    let reader = harness
         .post_json(
             "/v1/records/widgets/ingestion-runs",
-            &anonymous_claims(),
+            &reader_claims(),
             harness.run_body("create", &chunks),
         )
         .await;
-    assert_ne!(anonymous.status(), StatusCode::CREATED);
+    assert_ne!(reader.status(), StatusCode::CREATED);
 }
 
 /// Rotating `audit.hashKeyRef` changes the pseudonym later audit entries
@@ -4613,8 +4613,15 @@ fn operator_claims(principal: &str, jurisdiction: &str) -> VerifiedRequestClaims
     .expect("verified claims are bounded")
 }
 
-fn anonymous_claims() -> VerifiedRequestClaims {
-    VerifiedRequestClaims::anonymous()
+fn reader_claims() -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        "reader",
+        BTreeSet::new(),
+        Some("public-reading".to_owned()),
+        BTreeMap::new(),
+    )
+    .expect("verified claims are bounded")
 }
 
 const FIXTURE_HEAD: &str = r#"{
@@ -4662,7 +4669,8 @@ const FIXTURE_TAIL: &str = r#"
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     }]
   },{
-    "id":"anonymous-reader","anonymous":true,
+    "id":"reader","principalClaim":"registry_principal",
+    "requiredPurposes":["public-reading"],
     "permissions":[{
       "entity":"widget","operations":["get","list"],
       "readableFields":["label"],

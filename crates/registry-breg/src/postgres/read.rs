@@ -346,8 +346,7 @@ impl PostgresRecordReadService {
                 && plan
                     .entity
                     .access_profiles
-                    .get(claims.access_profile())
-                    .is_some_and(|profile| !profile.anonymous)
+                    .contains_key(claims.access_profile())
                 && proposal_version > 0
                 && request.request_history_after_proposal_version.is_none()
                 && request.adapter == CursorAdapter::Native
@@ -3628,7 +3627,7 @@ mod tests {
                     "geojson":{"geometryField":"location"}
                   }],
                   "accessProfiles":[{
-                    "id":"public","default":true,"anonymous":true,
+                    "id":"public","default":true,"principalClaim":"registry_principal",
                     "permissions":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": []}]
                   }]
                 }"#,
@@ -3678,7 +3677,7 @@ mod tests {
                     "geojson":{"geometryField":"location"}
                   }],
                   "accessProfiles":[{
-                    "id":"public","default":true,"anonymous":true,
+                    "id":"public","default":true,"principalClaim":"registry_principal",
                     "permissions":[{
                       "entity":"site",
                       "operations":["list"],
@@ -3761,7 +3760,7 @@ mod tests {
                     ]
                   }],
                   "accessProfiles":[{
-                    "id":"public","default":true,"anonymous":true,
+                    "id":"public","default":true,"principalClaim":"registry_principal",
                     "permissions":[{
                       "entity":"case","operations":["list"],
                       "readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"],
@@ -4027,7 +4026,7 @@ mod tests {
                     "geojson":{"geometryField":"location"}
                   }],
                   "accessProfiles":[{
-                    "id":"public","default":true,"anonymous":true,
+                    "id":"public","default":true,"principalClaim":"registry_principal",
                     "permissions":[{
                       "entity":"site",
                       "operations":["list"],

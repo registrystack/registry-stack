@@ -33,6 +33,10 @@ journeys:
       - id: public-register-gets-business
         entity: legal-entity
         accessProfile: public-register
+        claims:
+          principal: synthetic-public-reader
+          purpose: public-register
+          scopes: [business:public.read]
         request:
           type: get
           recordCapture: first-business
@@ -48,6 +52,10 @@ journeys:
       - id: public-register-lists-businesses
         entity: legal-entity
         accessProfile: public-register
+        claims:
+          principal: synthetic-public-reader
+          purpose: public-register
+          scopes: [business:public.read]
         request:
           type: list
         expect:
@@ -78,6 +86,10 @@ journeys:
       - id: public-register-sees-new-status
         entity: legal-entity
         accessProfile: public-register
+        claims:
+          principal: synthetic-public-reader
+          purpose: public-register
+          scopes: [business:public.read]
         request:
           type: get
           recordCapture: suspended-business

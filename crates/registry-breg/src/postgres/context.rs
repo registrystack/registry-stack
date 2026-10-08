@@ -319,7 +319,7 @@ impl ClaimContext {
             .as_deref()
             .map(validate_required_context_value)
             .transpose()?;
-        if !profile.anonymous && principal.is_none() {
+        if principal.is_none() {
             return Err(invalid_context());
         }
         if !profile.required_purposes.is_empty()
@@ -3609,7 +3609,6 @@ mod tests {
                 ProjectAccessProfileSource {
                     id: "operator".to_owned(),
                     default: true,
-                    anonymous: false,
                     actor_kind: None,
                     requester_clients: Default::default(),
                     task_grant: None,
@@ -3661,7 +3660,6 @@ mod tests {
                 ProjectAccessProfileSource {
                     id: "viewer".to_owned(),
                     default: false,
-                    anonymous: false,
                     actor_kind: None,
                     requester_clients: Default::default(),
                     task_grant: None,

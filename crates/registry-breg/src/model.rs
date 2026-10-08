@@ -792,7 +792,6 @@ pub struct CompiledActionAccessEntry {
 pub struct CompiledActionPermission {
     pub profile_id: String,
     pub default: bool,
-    pub anonymous: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<crate::contract::ActorKindSource>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]

@@ -661,10 +661,7 @@ fn access_direction(
             return if reverse { Widening } else { Narrowing };
         }
     }
-    if matches!(
-        field,
-        "anonymous" | "allowCount" | "revisionAccess" | "allowDataExport"
-    ) {
+    if matches!(field, "allowCount" | "revisionAccess" | "allowDataExport") {
         return if after == &serde_json::Value::Bool(true) {
             Widening
         } else {

@@ -17,6 +17,7 @@ use jsonwebtoken::Algorithm;
 use registry_breg::api::{
     authenticated_router, router, HeldReadResponse, HttpService, ReadRuntimeIdentity,
     ReadServiceError, ReadinessProbe, RecordReadRequest, RecordReadService, ServiceFuture,
+    VerifiedRequestClaims,
 };
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
@@ -32,7 +33,9 @@ use registry_breg::startup::{
     OperationalLogLevel, StartupError, WebhookStateTransitionCode,
 };
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
+use registry_platform_crypto::PrivateJwk;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
+use registry_platform_testing::{fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt};
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
@@ -72,7 +75,8 @@ entities:
 accessProfiles:
   - id: public
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: []
     permissions:
       - entity: public-record
         rowBoundaries: []
@@ -317,6 +321,7 @@ async fn trace_transport_health_aliases_and_request_ids_are_correlated() {
         request
             .headers_mut()
             .insert("traceparent", HeaderValue::from_static(INBOUND));
+        request.extensions_mut().insert(reader_claims());
         let response = app
             .clone()
             .oneshot(request)
@@ -965,23 +970,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
                 .expect("test cursor key is valid"),
         ),
     ));
-    let authenticator = Arc::new(
-        RegistryAuthenticator::new(
-            &registry,
-            TokenVerifierConfig::access_token_profile(
-                "https://issuer.example",
-                vec!["urn:breg:test".to_owned()],
-                vec![Algorithm::EdDSA],
-                vec!["at+jwt".to_owned()],
-            ),
-            Arc::new(JwksFetcher::new_static(
-                JwkSet { keys: Vec::new() },
-                JwksFetcherConfig::defaults(),
-            )),
-            AuthorityClaimConfig::new("registry_principal", None),
-        )
-        .expect("anonymous Registry has a valid production authenticator"),
-    );
+    let authenticator = pinned_authenticator(&registry);
     let app = with_request_timeout_for_test(
         authenticated_router(service, authenticator),
         Duration::from_secs(10),
@@ -992,6 +981,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
         .oneshot(
             Request::builder()
                 .uri("/v1/registry")
+                .header("authorization", reader_bearer())
                 .body(Body::empty())
                 .expect("provenance request builds"),
         )
@@ -1074,6 +1064,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
             .oneshot(
                 Request::builder()
                     .uri(uri)
+                    .header("authorization", reader_bearer())
                     .body(Body::empty())
                     .expect("metrics request builds"),
             )
@@ -1256,23 +1247,7 @@ async fn configured_metrics_record_served_requests_with_closed_value_free_labels
                 .expect("test cursor key is valid"),
         ),
     ));
-    let authenticator = Arc::new(
-        RegistryAuthenticator::new(
-            &registry,
-            TokenVerifierConfig::access_token_profile(
-                "https://issuer.example",
-                vec!["urn:breg:test".to_owned()],
-                vec![Algorithm::EdDSA],
-                vec!["at+jwt".to_owned()],
-            ),
-            Arc::new(JwksFetcher::new_static(
-                JwkSet { keys: Vec::new() },
-                JwksFetcherConfig::defaults(),
-            )),
-            AuthorityClaimConfig::new("registry_principal", None),
-        )
-        .expect("anonymous Registry has a valid production authenticator"),
-    );
+    let authenticator = pinned_authenticator(&registry);
     let metrics = Arc::new(Metrics::without_pool_for_test());
     let app = with_request_timeout_and_metrics_for_test(
         authenticated_router(service, authenticator),
@@ -1335,43 +1310,29 @@ async fn configured_metrics_record_served_requests_with_closed_value_free_labels
     assert_forbidden_values_absent(body);
 }
 
-/// A request that presents no credential and is refused before admission is
-/// counted on the metrics listener under a closed reason, so the operational
-/// signal survives the refusal no longer reaching the audit journal.
+/// A request that presents no credential is refused before admission, before
+/// any access profile or query is read, with one value-free problem. The
+/// refusal is counted as a client error under the registered route template,
+/// and no metric family is reserved for unauthenticated callers.
 #[tokio::test]
-async fn anonymous_pre_admission_refusals_are_counted_under_closed_reasons() {
+async fn unauthenticated_requests_are_refused_before_any_profile_or_query_is_read() {
     let _request_logs = captured_request_logs();
     let registry = compiled_registry();
+    let records = Arc::new(NoopRecords::default());
     let service = Arc::new(HttpService::new(
         Arc::clone(&registry),
         ReadRuntimeIdentity {
             package_revision: "package-startup-http".to_owned(),
             schema_fingerprint: "schema-startup-http".to_owned(),
         },
-        Arc::new(NoopRecords::default()),
+        records.clone(),
         Arc::new(SlowReadiness),
         Arc::new(
             CursorCodec::new(Zeroizing::new(vec![0x46; 32]), Duration::from_secs(300))
                 .expect("test cursor key is valid"),
         ),
     ));
-    let authenticator = Arc::new(
-        RegistryAuthenticator::new(
-            &registry,
-            TokenVerifierConfig::access_token_profile(
-                "https://issuer.example",
-                vec!["urn:breg:test".to_owned()],
-                vec![Algorithm::EdDSA],
-                vec!["at+jwt".to_owned()],
-            ),
-            Arc::new(JwksFetcher::new_static(
-                JwkSet { keys: Vec::new() },
-                JwksFetcherConfig::defaults(),
-            )),
-            AuthorityClaimConfig::new("registry_principal", None),
-        )
-        .expect("anonymous Registry has a valid production authenticator"),
-    );
+    let authenticator = pinned_authenticator(&registry);
     let metrics = Arc::new(Metrics::without_pool_for_test());
     let app = with_request_timeout_and_metrics_for_test(
         authenticated_router(service, authenticator),
@@ -1379,18 +1340,15 @@ async fn anonymous_pre_admission_refusals_are_counted_under_closed_reasons() {
         Some(Arc::clone(&metrics)),
     );
 
-    // A profile no anonymous caller can hold, then an unparsable query on a
-    // route the anonymous caller can otherwise reach. Both carry no
-    // credential, so neither names a principal.
-    for (uri, expected) in [
-        (
-            format!("/v1/records/public-records?accessProfile={QUERY_VALUE_CANARY}"),
-            StatusCode::NOT_FOUND,
-        ),
-        (
-            format!("/v1/records/public-records?pageSize={QUERY_VALUE_CANARY}"),
-            StatusCode::BAD_REQUEST,
-        ),
+    // The record route, a profile no caller holds, an unparsable query, and
+    // both discovery documents: without a credential each is refused alike.
+    let mut refusals = Vec::new();
+    for uri in [
+        "/v1/records/public-records".to_owned(),
+        format!("/v1/records/public-records?accessProfile={QUERY_VALUE_CANARY}"),
+        format!("/v1/records/public-records?pageSize={QUERY_VALUE_CANARY}"),
+        "/v1/registry".to_owned(),
+        "/openapi.json".to_owned(),
     ] {
         let response = app
             .clone()
@@ -1398,12 +1356,32 @@ async fn anonymous_pre_admission_refusals_are_counted_under_closed_reasons() {
                 Request::builder()
                     .uri(&uri)
                     .body(Body::empty())
-                    .expect("anonymous refusal request builds"),
+                    .expect("unauthenticated request builds"),
             )
             .await
-            .expect("anonymous refusal request responds");
-        assert_eq!(response.status(), expected, "{uri} is refused");
+            .expect("unauthenticated request responds");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("refusal body reads");
+        let mut problem: Value = serde_json::from_slice(&body).expect("refusal is JSON");
+        assert_eq!(problem["code"], "authentication.refused", "{uri}");
+        assert_forbidden_values_absent(std::str::from_utf8(&body).expect("refusal is UTF-8"));
+        problem
+            .as_object_mut()
+            .expect("problem object")
+            .remove("traceId");
+        refusals.push(problem);
     }
+    assert!(
+        refusals.windows(2).all(|pair| pair[0] == pair[1]),
+        "every unauthenticated refusal has one shape"
+    );
+    assert!(records
+        .correlations
+        .lock()
+        .expect("correlation capture")
+        .is_empty());
 
     let scrape = metrics::metrics_app(Arc::clone(&metrics))
         .oneshot(
@@ -1421,17 +1399,74 @@ async fn anonymous_pre_admission_refusals_are_counted_under_closed_reasons() {
     let body = std::str::from_utf8(&body).expect("scrape body is UTF-8");
     assert!(
         body.contains(
-            "breg_anonymous_refusals_total{route=\"/v1/records/public-records\",method=\"GET\",reason=\"read_concealed\"} 1\n"
+            "breg_http_requests_total{route=\"/v1/records/public-records\",method=\"GET\",status=\"client_error\"} 3\n"
         ),
-        "the concealed anonymous read is counted under its registered route template: {body}"
+        "the refusals are counted under their registered route template: {body}"
     );
     assert!(
-        body.contains(
-            "breg_anonymous_refusals_total{route=\"/v1/records/public-records\",method=\"GET\",reason=\"read_request_invalid\"} 1\n"
-        ),
-        "the unparsable anonymous query is counted under its own reason: {body}"
+        !body.contains("anonymous"),
+        "no metric family is reserved for unauthenticated callers: {body}"
     );
     assert_forbidden_values_absent(body);
+}
+
+/// The static key set the authenticated tests verify against: the shared
+/// testing key, pinned without a network fetch.
+fn pinned_authenticator(registry: &CompiledRegistry) -> Arc<RegistryAuthenticator> {
+    let document = jwks_from_private_jwk(
+        &PrivateJwk::parse(fixtures::ED25519_PRIVATE_JWK).expect("fixture JWK parses"),
+    );
+    let keys = serde_json::from_value::<JwkSet>(document).expect("static JWKS document parses");
+    Arc::new(
+        RegistryAuthenticator::new(
+            registry,
+            TokenVerifierConfig::access_token_profile(
+                "https://issuer.example",
+                vec!["urn:breg:test".to_owned()],
+                vec![Algorithm::EdDSA],
+                vec!["at+jwt".to_owned()],
+            ),
+            Arc::new(JwksFetcher::new_static(keys, JwksFetcherConfig::defaults())),
+            AuthorityClaimConfig::new("registry_principal", None),
+        )
+        .expect("Registry has a valid production authenticator"),
+    )
+}
+
+/// A bearer the pinned authenticator accepts for the `public` profile.
+fn reader_bearer() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_secs();
+    let token = sign_ed25519_compact_jwt(
+        fixtures::ED25519_PRIVATE_JWK,
+        "at+jwt",
+        "registry-platform-testing-ed25519-1",
+        json!({
+            "iss": "https://issuer.example",
+            "aud": "urn:breg:test",
+            "iat": now,
+            "nbf": now,
+            "exp": now + 300,
+            "registry_actor_kind": "service",
+            "registry_principal": "startup-reader",
+        }),
+    );
+    format!("Bearer {token}")
+}
+
+/// The verified claims of a `public` profile caller, for the router without
+/// the authentication layer.
+fn reader_claims() -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        "startup-reader",
+        BTreeSet::new(),
+        None,
+        std::collections::BTreeMap::new(),
+    )
+    .expect("reader claims are valid")
 }
 
 struct TestDirectory {

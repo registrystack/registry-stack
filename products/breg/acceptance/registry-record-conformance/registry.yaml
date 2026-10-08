@@ -65,7 +65,9 @@ modules:
 accessProfiles:
   - id: public-reader
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: [records:public:read]
+    requiredPurposes: [public-read]
     permissions:
       - entity: public-unit
         rowBoundaries: []

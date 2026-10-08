@@ -150,24 +150,12 @@ fn action_requirements_reject_unknown_fields_values_and_unbound_inputs() {
 }
 
 #[test]
-fn action_requirements_keep_mandatory_scope_and_public_processing_boundaries() {
+fn action_requirements_keep_mandatory_scope_and_processing_boundaries() {
     let mut source = support::project();
     source["accessProfiles"][0]["requiredScopes"] = json!(["registry:register"]);
     assert!(
         compile(source).is_err(),
         "link grants do not waive target processing requirements"
-    );
-    let mut source = support::project();
-    source["accessProfiles"][0]["anonymous"] = json!(true);
-    source["accessProfiles"][0]["requiredScopes"] = json!([]);
-    source["accessProfiles"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("principalClaim");
-    let report = format!("{:?}", compile(source).unwrap_err());
-    assert!(
-        report.contains("breg.action.permission-anonymous-forbidden"),
-        "{report}"
     );
     let mut source = support::project();
     source["accessProfiles"][0]["permissions"][0]["targets"] =

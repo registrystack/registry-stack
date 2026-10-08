@@ -296,7 +296,7 @@ fn content_types_are_bounded_concrete_and_unique() {
 }
 
 #[test]
-fn attachments_cannot_be_anonymous_or_scalar_query_inputs() {
+fn attachments_cannot_be_scalar_query_inputs() {
     for member in ["filterableFields", "sortableFields"] {
         let mut candidate = source();
         candidate["accessProfiles"][0]["permissions"][0][member] = json!(["supporting-file"]);
@@ -315,13 +315,6 @@ fn attachments_cannot_be_anonymous_or_scalar_query_inputs() {
         &candidate,
         "breg.attachment.access-processing-unsupported",
         "entities[id=request].accessProfiles[id=operator].rowBoundaries[0].field",
-    );
-    let mut candidate = source();
-    candidate["accessProfiles"][0]["anonymous"] = json!(true);
-    assert_diagnostic(
-        &candidate,
-        "breg.attachment.access-authentication-required",
-        "entities[id=request].accessProfiles[id=operator].readableFields[value=supporting-file]",
     );
 }
 

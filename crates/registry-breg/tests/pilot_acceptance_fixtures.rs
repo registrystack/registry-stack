@@ -312,12 +312,6 @@ fn inspection_pilot_fixture_compiles_protected_observations_and_create_only_perm
         .entities()
         .values()
         .all(|entity| entity.classification == Classification::Restricted));
-    assert!(compiled.entities().values().all(|entity| {
-        entity
-            .access_profiles
-            .values()
-            .all(|profile| !profile.anonymous)
-    }));
 
     let observation = entity(&compiled, "inspection-observation");
     assert!(observation.constraints.values().any(|constraint| {
@@ -430,7 +424,10 @@ fn business_pilot_fixture_compiles_composite_identifiers_temporal_appointments_a
         .access_profiles
         .get("public-register")
         .expect("public profile compiled");
-    assert!(public_entity.anonymous);
+    assert!(public_entity
+        .required_scopes
+        .iter()
+        .eq(["business:public.read"]));
     assert!(public_entity.readable_fields.contains("legal-name"));
     assert!(!public_entity.readable_fields.contains("protected-contact"));
     assert!(!public_entity.readable_fields.contains("internal-case-note"));
@@ -479,7 +476,10 @@ fn business_pilot_fixture_compiles_composite_identifiers_temporal_appointments_a
         .access_profiles
         .get("public-register")
         .expect("appointment public profile compiled");
-    assert!(public_appointment.anonymous);
+    assert!(public_appointment
+        .required_purposes
+        .iter()
+        .eq(["public-register"]));
     assert!(public_appointment
         .filterable_fields
         .contains("effective-from"));

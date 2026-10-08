@@ -655,8 +655,8 @@ const client = new breg.BaseRegistryClient({
 `with_trusted_root_certificates`, and `with_max_mutation_retries`. Health and readiness never
 acquire or send a bearer. Other operations attach one token when a provider is configured.
 
-`authorization` is optional; a client without it reaches only the probes and whatever the deployment
-serves anonymously. Any unsupported shape is refused at construction with kind `configuration`.
+`authorization` is optional; a client without it reaches only the probes, because every other
+route refuses a request without a verified bearer token. Any unsupported shape is refused at construction with kind `configuration`.
 
 Write and lifecycle authority stays opaque. `BRegCreateBinding`, `BRegPatchBinding`, and
 `BRegLifecycleAuthority` are selected from `BRegMetadata`, passed back to the client, and expose

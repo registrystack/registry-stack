@@ -640,7 +640,8 @@ mod tests {
         let mut instance = fixture("business");
         instance["entities"][0]["accessProfiles"] = serde_json::json!([{
             "id": "entity-local-reader",
-            "anonymous": true,
+            "principalClaim": "sub",
+            "requiredScopes": ["registry.read"],
             "operations": ["get"],
             "readableFields": ["legal-name"]
         }]);

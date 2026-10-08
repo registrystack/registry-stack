@@ -1,11 +1,10 @@
 {
-  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
   "entities": {
     "record": {
       "accessProfiles": {
         "district-reader": {
           "allowDataExport": false,
-          "anonymous": false,
           "default": false,
           "filterableFields": [
             "code",

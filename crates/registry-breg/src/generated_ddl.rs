@@ -3654,10 +3654,8 @@ fn policy_authority_expression_for_alias(
         "NULLIF(current_setting('registry.access_profile', true), '') = {}",
         quote_literal(&profile.id)
     )];
-    if !profile.anonymous {
-        predicates
-            .push("NULLIF(current_setting('registry.principal', true), '') IS NOT NULL".to_owned());
-    }
+    predicates
+        .push("NULLIF(current_setting('registry.principal', true), '') IS NOT NULL".to_owned());
     if !profile.required_purposes.is_empty() {
         let purposes = profile
             .required_purposes
@@ -3740,10 +3738,8 @@ fn session_authority_expression(profile: &crate::contract::AccessProfileSource) 
         "NULLIF(current_setting('registry.access_profile', true), '') = {}",
         quote_literal(&profile.id)
     )];
-    if !profile.anonymous {
-        predicates
-            .push("NULLIF(current_setting('registry.principal', true), '') IS NOT NULL".to_owned());
-    }
+    predicates
+        .push("NULLIF(current_setting('registry.principal', true), '') IS NOT NULL".to_owned());
     if !profile.required_purposes.is_empty() {
         let purposes = profile
             .required_purposes

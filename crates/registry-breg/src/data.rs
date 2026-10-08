@@ -584,12 +584,9 @@ pub(crate) fn ingestion_item_operation_admitted(
             )
     });
     if profile.operations.contains(&Operation::Import) {
-        return !profile.anonymous
-            && compiled == Operation::Create
-            && access_matches(Operation::Import);
+        return compiled == Operation::Create && access_matches(Operation::Import);
     }
-    !profile.anonymous
-        && profile.operations.contains(&Operation::Batch)
+    profile.operations.contains(&Operation::Batch)
         && profile.operations.contains(&compiled)
         && access_matches(Operation::Batch)
         && access_matches(compiled)
@@ -1386,8 +1383,7 @@ impl DataExportPlan {
                         .all(|field| query.projection_fields.contains(field))
             })
         });
-        if profile.anonymous
-            || !profile.allow_data_export
+        if !profile.allow_data_export
             || !profile.operations.contains(&Operation::List)
             || profile.readable_fields.is_empty()
             || !requested.is_subset(&profile.readable_fields)

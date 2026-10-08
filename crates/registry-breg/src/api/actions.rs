@@ -130,8 +130,7 @@ fn authorize_action<'a>(
         .permissions
         .iter()
         .find(|grant| grant.profile_id == selected)?;
-    if grant.anonymous
-        || !grant.operations.contains(&Operation::Invoke)
+    if !grant.operations.contains(&Operation::Invoke)
         || grant.principal_claim.as_deref() != claims.principal_claim()
         || !grant
             .required_scopes
@@ -210,7 +209,7 @@ pub(super) async fn dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledActionRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
     body: Body,
@@ -218,9 +217,6 @@ pub(super) async fn dispatch(
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let (options, valid_options) = match QueryOptions::parse(raw_query.as_deref(), false) {
         Ok(options) => (options, true),
         Err(_) => (QueryOptions::default(), false),
@@ -309,9 +305,6 @@ async fn action_refusal(
     correlation: &RequestCorrelation,
     response: Response,
 ) -> Response {
-    if claims.principal().is_none() {
-        return anonymous_refusal(response, AnonymousRefusalReason::ActionRefused);
-    }
     // Only a profile the compiled action route grants may reach the journal, so
     // an unknown caller-supplied value is recorded as absent.
     let selected_access_profile = match options.access_profile() {

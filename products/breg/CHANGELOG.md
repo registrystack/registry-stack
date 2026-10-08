@@ -201,6 +201,20 @@
   reads no secret, takes `--format json` and `--deny-warnings`, and exits 0,
   1, 2, or 3. Migration steps and the code table are in
   `release/notes/config-conventions/breg.md`, section "BReg citizen services".
+- BREAKING: a registry serves authenticated callers only. `anonymous` on an
+  access profile in `registry.yaml` or `module.yaml` is refused when the file
+  is read as `config.removed-key`, naming the fix, and every route except the
+  probes and the review completion receiver refuses a request without a
+  verified bearer token with `401 authentication.refused` before any profile,
+  query, or record is read; such a request used to reach the route and could
+  be served by an anonymous profile or answered `404`. The OpenAPI document
+  lists `bearerAuth` only, the `breg_anonymous_refusals_total` metric is
+  removed, the schema-test credentials file refuses `type: anonymous`,
+  `bregctl explain` reports `breg-explain/v1alpha4` without the anonymous
+  members, fifteen anonymous-only diagnostic codes are no longer reported,
+  and a baseline package that granted unauthenticated access is refused.
+  Migration steps are in `release/notes/config-conventions/breg.md`, section
+  "BReg access".
 
 - `registry-breg-client` resends an idempotency-keyed mutation whose outcome
   is unknown, a timeout or broken exchange after sending or a 5xx answer, up

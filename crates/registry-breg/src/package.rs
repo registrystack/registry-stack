@@ -3750,7 +3750,16 @@ enum EnvelopeRead {
 /// named; any other apiVersion, or a `kind` other than `BRegPackage`, is an
 /// integrity failure, since a package is generated and never edited.
 fn parse_package_envelope(bytes: &[u8], read: EnvelopeRead) -> Result<(PackageManifest, bool)> {
-    let value: Value = parse_canonical(bytes)?;
+    let mut value: Value = parse_canonical(bytes)?;
+    if read == EnvelopeRead::Predecessor {
+        if let Some(baseline) = value.pointer_mut("/manifest/migrationPlan/priorBaseline") {
+            retire_predecessor_anonymous(
+                baseline,
+                &["entities", "statisticalDatasets"],
+                "/actions/actions",
+            )?;
+        }
+    }
     let (manifest, retired) = match value.get("apiVersion").and_then(Value::as_str) {
         Some(PACKAGE_API_VERSION) => {
             let envelope: PackageEnvelope =
@@ -4106,7 +4115,12 @@ fn package_predecessor_governed_model(
 ) -> Result<PredecessorGovernedModel> {
     let entry = unique_manifest_file(manifest, PackageFileRole::GovernedModel)?;
     let bytes = loaded.get(&entry.path).ok_or(PackageError::Closure)?;
-    let value = parse_canonical::<Value>(bytes).map_err(|_| PackageError::Derivation)?;
+    let mut value = parse_canonical::<Value>(bytes).map_err(|_| PackageError::Derivation)?;
+    retire_predecessor_anonymous(
+        &mut value,
+        &["entities", "statisticalDatasets"],
+        "/actionInventory/actions",
+    )?;
 
     let registry_id = required_str(&value, "registryId")?.to_owned();
     let version = required_str(&value, "version")?.to_owned();
@@ -4171,7 +4185,10 @@ fn package_predecessor_governed_model(
                 return Err(PackageError::Derivation);
             }
             let bytes = loaded.get(&entry.path).ok_or(PackageError::Closure)?;
-            parse_canonical(bytes).map_err(|_| PackageError::Derivation)?
+            let mut value =
+                parse_canonical::<Value>(bytes).map_err(|_| PackageError::Derivation)?;
+            retire_predecessor_anonymous(&mut value, &[], "/actions")?;
+            serde_json::from_value(value).map_err(|_| PackageError::Derivation)?
         }
         None => CompiledActionInventory::default(),
     };
@@ -4197,6 +4214,60 @@ fn package_predecessor_governed_model(
         actions,
         recipients,
     })
+}
+
+/// Packages an earlier release built carry an `anonymous` member on every
+/// compiled access profile and action permission. This release serves
+/// authenticated callers only, so a predecessor read removes the member where
+/// it is `false`, letting the current types read the model it describes. A
+/// predecessor that granted unauthenticated access is refused: a successor
+/// planned over that baseline would keep row policies that admit a caller
+/// without a principal.
+///
+/// `profile_owners` name the members of `value` that map an owner to its
+/// `accessProfiles`; `actions` points at the compiled action list.
+fn retire_predecessor_anonymous(
+    value: &mut Value,
+    profile_owners: &[&str],
+    actions: &str,
+) -> Result<()> {
+    fn retire(member: &mut Value) -> Result<()> {
+        match member
+            .as_object_mut()
+            .and_then(|member| member.remove("anonymous"))
+        {
+            None | Some(Value::Bool(false)) => Ok(()),
+            Some(_) => Err(PackageError::Derivation),
+        }
+    }
+    for owners in profile_owners {
+        let Some(owners) = value.get_mut(*owners).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for owner in owners.values_mut() {
+            let Some(profiles) = owner
+                .get_mut("accessProfiles")
+                .and_then(Value::as_object_mut)
+            else {
+                continue;
+            };
+            for profile in profiles.values_mut() {
+                retire(profile)?;
+            }
+        }
+    }
+    if let Some(actions) = value.pointer_mut(actions).and_then(Value::as_array_mut) {
+        for action in actions {
+            let Some(permissions) = action.get_mut("permissions").and_then(Value::as_array_mut)
+            else {
+                continue;
+            };
+            for permission in permissions {
+                retire(permission)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn packaged_manifest_json<T: for<'de> Deserialize<'de>>(

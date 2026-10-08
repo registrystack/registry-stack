@@ -453,7 +453,6 @@ fn authentication_profile(
     AccessProfileSource {
         id: profile.id.clone(),
         default: profile.default,
-        anonymous: profile.anonymous,
         actor_kind: profile.actor_kind,
         requester_clients: profile.requester_clients.clone(),
         task_grant,
@@ -720,24 +719,17 @@ fn validate_named_profile(
     root: &str,
     errors: &mut Vec<Diagnostic>,
 ) {
-    match project
+    if !project
         .access_profiles
         .iter()
-        .find(|profile| profile.id == profile_id)
+        .any(|profile| profile.id == profile_id)
     {
-        None => errors.push(error(
+        errors.push(error(
             "breg.statistical-dataset.profile-unknown",
             root,
             dataset,
             &format!("declare access profile `{profile_id}`"),
-        )),
-        Some(profile) if profile.anonymous => errors.push(error(
-            "breg.statistical-dataset.profile-anonymous",
-            root,
-            dataset,
-            &format!("replace anonymous profile `{profile_id}` with an authenticated profile"),
-        )),
-        Some(_) => {}
+        ));
     }
 }
 

@@ -907,6 +907,40 @@ class BregLedgerTest(unittest.TestCase):
 
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
 @unittest.mock.patch.object(MODULE, "load_yaml", load_json)
+# JSON is YAML, so the journeys document reads without PyYAML.
+@unittest.mock.patch.object(MODULE, "load_yaml", load_json)
+class BregCredentialsTest(unittest.TestCase):
+    def breg(self, root: Path, steps: list[dict[str, Any]]) -> object:
+        breg = MODULE.Breg.__new__(MODULE.Breg)
+        breg.secrets = root / "secrets"
+        breg.project = root / "project"
+        breg.keys = unittest.mock.Mock()
+        breg.keys.mint.return_value = "minted"
+        (breg.project / "tests").mkdir(parents=True)
+        dump_json(breg.project / "tests" / "journeys.yaml",
+                  {"journeys": [{"id": "journey", "steps": steps}]})
+        return breg
+
+    def test_every_journey_step_is_bound_to_a_bearer_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            breg = self.breg(root, [{"id": "read", "claims": {"principal": "operator"}}])
+            breg.credentials(root / "credentials.json")
+            bindings = load_json(root / "credentials.json")["bindings"]
+            self.assertEqual(bindings, [{
+                "journeyId": "journey", "stepId": "read",
+                "credential": {"type": "bearer",
+                               "tokenRef": "secret:file/journey-token-journey-read"}}])
+
+    def test_a_step_without_claims_is_refused_rather_than_sent_unauthenticated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            breg = self.breg(root, [{"id": "read"}])
+            with self.assertRaisesRegex(MODULE.RehearsalError, "names no claims"):
+                breg.credentials(root / "credentials.json")
+            self.assertFalse((root / "credentials.json").exists())
+
+
 class EvidencePackageTest(unittest.TestCase):
     def test_a_sealed_installed_package_is_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

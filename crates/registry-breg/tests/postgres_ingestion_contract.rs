@@ -529,7 +529,7 @@ fn claims_with(
 
 /// The compact batch-driven fixture the contract tests build their surface
 /// from: one entity whose batch route the operator profile drives, with the
-/// anonymous reader the concealment proofs stay outside. The batch byte bound
+/// label-only reader the concealment proofs stay outside. The batch byte bound
 /// is a parameter so one variant can sit at the protocol's highest.
 fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegistry> {
     let fixture = json!({
@@ -569,7 +569,7 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
                 }]
             },
             {
-                "id": "anonymous-reader", "anonymous": true,
+                "id": "label-reader", "principalClaim": "registry_principal",
                 "permissions": [{
                     "entity": "widget", "operations": ["get", "list"],
                     "readableFields": ["label"],

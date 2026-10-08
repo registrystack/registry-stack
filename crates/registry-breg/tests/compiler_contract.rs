@@ -10,11 +10,9 @@ use registry_breg::compiler::{
     CompileProfile,
 };
 use registry_breg::contract::{
-    parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml,
-    AccessPermissionSource, BoundaryOperator, Classification, ComparisonOperator, ConstraintSource,
-    FieldTypeSource, ModuleAssetSource, Operation, PackageIdentitySource,
-    ProjectAccessProfileSource, ReferenceDelete, RegistryModule, RowBoundarySource,
-    UniqueWhenPredicate,
+    parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, Classification,
+    ComparisonOperator, ConstraintSource, FieldTypeSource, ModuleAssetSource, Operation,
+    PackageIdentitySource, ReferenceDelete, RegistryModule, UniqueWhenPredicate,
 };
 use registry_breg::diagnostics::CompileFailure;
 use registry_breg::generated_ddl::DdlStatementKind;
@@ -261,7 +259,7 @@ fn manifest_projection_excludes_every_protected_resource_from_public_bytes() {
             ]}
           ],
           "accessProfiles":[
-            {"id":"public-reader","anonymous":true,"permissions":[{"entity":"public-record","operations":["get"],"readableFields":["label","protected-link"], "rowBoundaries": []}]},
+            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":[{"entity":"public-record","operations":["get"],"readableFields":["label","protected-link"], "rowBoundaries": []}]},
             {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":[{"entity":"protected-record","operations":["get"],"readableFields":["protected-title"], "rowBoundaries": []}]}
           ]
         }"#,
@@ -622,89 +620,6 @@ fn change_request_correction_project(
         }}"#
     )
     .into_bytes()
-}
-
-#[test]
-fn anonymous_request_presence_processes_only_public_existence_and_linkage() {
-    let bytes = change_request_correction_project(
-        "public-request-presence",
-        "",
-        "",
-        "internal",
-        "internal",
-        "[]",
-        "[]",
-        "[]",
-    );
-    let mut project: Value = serde_json::from_slice(&bytes).unwrap();
-    for entity in project["entities"].as_array_mut().unwrap() {
-        entity["classification"] = json!("public");
-        for field in entity["fields"].as_array_mut().unwrap() {
-            field["classification"] = json!("public");
-        }
-    }
-    // Presence does not process the proposed value or the request's reason.
-    project["entities"][2]["fields"][1]["classification"] = json!("internal");
-    project["entities"][2]["fields"][2]["classification"] = json!("restricted");
-    let reader = project["accessProfiles"][0].as_object_mut().unwrap();
-    reader.remove("principalClaim");
-    reader.insert("anonymous".to_owned(), json!(true));
-    project["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id":"request-public", "anonymous":true,
-        "permissions":[{"entity":"placement-correction-request","operations":["get","list"],"readableFields":["placement"], "rowBoundaries": []}]
-    }));
-    let registry = compile_json(&serde_json::to_vec(&project).unwrap())
-        .expect("public existence and linkage may be disclosed without private intake detail");
-    let public_queue = registry
-        .queries()
-        .operations
-        .iter()
-        .find(|operation| {
-            operation.profile_id == "request-public" && operation.kind == CompiledQueryKind::List
-        })
-        .expect("anonymous polling remains available");
-    assert!(public_queue
-        .filter_fields
-        .iter()
-        .any(|field| field.field == REQUEST_BREG_STATE_QUERY_FIELD));
-    assert!(public_queue
-        .filter_fields
-        .iter()
-        .any(|field| field.field == REQUEST_PROPOSAL_VERSION_QUERY_FIELD));
-    assert!(!public_queue
-        .filter_fields
-        .iter()
-        .any(|field| field.field == REQUEST_EFFECT_DIGEST_QUERY_FIELD));
-    assert!(!public_queue
-        .sort_fields
-        .iter()
-        .any(|field| field.field == REQUEST_EFFECT_DIGEST_QUERY_FIELD));
-
-    let mut private_type = project.clone();
-    private_type["entities"][2]["classification"] = json!("internal");
-    let mut private_link = project.clone();
-    private_link["entities"][2]["fields"][0]["classification"] = json!("restricted");
-    for mut invalid in [private_type, private_link] {
-        // Exercise the separate presence grant without an ordinary request
-        // GET grant failing its own public-field validation first.
-        invalid["accessProfiles"]
-            .as_array_mut()
-            .unwrap()
-            .retain(|profile| profile["id"] != "request-public");
-        let failure = compile_json(&serde_json::to_vec(&invalid).unwrap())
-            .expect_err("an existence-only response still processes classified request linkage");
-        assert!(failure.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code == "breg.change-request.presence-anonymous-non-public"
-        }));
-    }
-
-    project["accessProfiles"][0]["permissions"][0]["requestPresence"][0]["rowBoundaries"] =
-        json!([{"field":"placement","claim":"placement","operator":"equals"}]);
-    let failure = compile_json(&serde_json::to_vec(&project).unwrap())
-        .expect_err("an anonymous presence grant cannot acquire verified claim authority");
-    assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.change-request.presence-anonymous-claim-boundary"
-    }));
 }
 
 #[test]
@@ -2254,53 +2169,6 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
 }
 
 #[test]
-fn anonymous_access_cannot_process_selector_path_or_derived_private_fields() {
-    let source = |extra: &str| {
-        format!(
-            r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"public-demo","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
-                "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"public",
-                "fields":[{{"id":"public-code","type":"string","maxLength":32,"classification":"public"}},
-                  {{"id":"private-code","type":"string","maxLength":32,"classification":"restricted"}}],
-                "derived":[{{"id":"flags","sql":"sql/flags.sql","key":"id","fields":[{{"id":"risk-flag","type":"boolean","classification":"public"}}]}}],
-                "selectorProfiles":[{{"id":"by-private-code","fields":["private-code"]}}]
-              }}],
-              "accessProfiles":[{{"id":"anon","anonymous":true,"permissions":[{{"rowBoundaries": [], "entity":"household","operations":["lookup"],{extra}}}]}}]
-            }}"#
-        )
-    };
-
-    let selector = compile_json_with_assets(
-        source(r#""readableFields":["public-code"],"lookups":[{"selector":"by-private-code","valueOrigin":"request"}]"#).as_bytes(),
-        vec![derived_sql_asset(
-            "sql/flags.sql",
-            "SELECT h.id AS id, false AS risk_flag FROM registry_source.household h",
-        )],
-    )
-    .expect_err("anonymous lookup cannot process restricted selector fields");
-    assert!(selector
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.access-profile.public-processing-non-public"));
-
-    let derived = compile_json_with_assets(
-        source(r#""readableFields":["risk-flag"],"filterableFields":["risk-flag"]"#).as_bytes(),
-        vec![derived_sql_asset(
-            "sql/flags.sql",
-            "SELECT h.id AS id, false AS risk_flag FROM registry_source.household h",
-        )],
-    )
-    .expect_err("anonymous access cannot process derived fields until lineage exists");
-    assert!(derived
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.access-profile.public-processing-non-public"));
-}
-
-#[test]
 fn module_digest_can_bind_explicit_sql_assets() {
     let module = parse_module_json(
         br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}]}]}"#,
@@ -2968,103 +2836,6 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
 }
 
 #[test]
-fn anonymous_project_access_profiles_expand_without_authenticated_claims() {
-    let project = parse_project_json(
-        br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"anonymous-profile","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"public-record","primaryDataset":"test-dataset","route":"public-records","mutationMode":"mutable","classification":"public",
-            "fields":[
-              {"id":"code","type":"string","maxLength":32,"classification":"public"},
-              {"id":"name","type":"string","maxLength":80,"classification":"public"}
-            ]
-          }],
-          "accessProfiles":[{
-            "id":"public-reader",
-            "default":true,
-            "anonymous":true,
-            "permissions":[{
-              "entity":"public-record",
-              "operations":["get","list"],
-              "readableFields":["code","name"],
-              "filterableFields":["code"],
-              "rowBoundaries": []
-            }]
-          }]
-        }"#,
-    )
-    .expect("anonymous project profile source parses");
-
-    let compiled = compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("anonymous project profile compiles");
-    let profile = compiled
-        .entities()
-        .get("public-record")
-        .and_then(|entity| entity.access_profiles.get("public-reader"))
-        .expect("anonymous top-level profile is expanded onto its granted entity");
-
-    assert!(profile.anonymous);
-    assert_eq!(profile.principal_claim, None);
-    assert!(profile.required_scopes.is_empty());
-    assert!(profile.required_purposes.is_empty());
-    assert_eq!(
-        profile.operations,
-        [Operation::Get, Operation::List].into_iter().collect()
-    );
-}
-
-#[test]
-fn anonymous_project_access_profiles_cannot_require_authenticated_claims() {
-    let source = |extra: &str| {
-        format!(
-            r#"{{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{{"id":"anonymous-profile","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
-              "entities":[{{
-                "id":"public-record","primaryDataset":"test-dataset","route":"public-records","mutationMode":"mutable","classification":"public",
-                "fields":[{{"id":"code","type":"string","maxLength":32,"classification":"public"}}]
-              }}],
-              "accessProfiles":[{{
-                "id":"public-reader",
-                "anonymous":true,
-                {extra}
-                "permissions":[{{"rowBoundaries": [], "entity":"public-record","operations":["get"],"readableFields":["code"]}}]
-              }}]
-            }}"#
-        )
-    };
-
-    for (source, code, path) in [
-        (
-            source(r#""principalClaim":"sub","#),
-            "breg.access-profile.principal-claim-forbidden",
-            "project.accessProfiles[].principalClaim",
-        ),
-        (
-            source(r#""requiredScopes":["records.read"],"#),
-            "breg.access-profile.anonymous-claim-requirements-forbidden",
-            "project.accessProfiles[]",
-        ),
-        (
-            source(r#""requiredPurposes":["case-management"],"#),
-            "breg.access-profile.anonymous-claim-requirements-forbidden",
-            "project.accessProfiles[]",
-        ),
-    ] {
-        let project = parse_project_json(source.as_bytes()).expect("project source parses");
-        let failure = compile_project(&project, &[], CompileProfile::Authoring)
-            .expect_err("anonymous profiles cannot require authenticated claims");
-        assert!(failure
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.code == code && diagnostic.path == path));
-    }
-}
-
-#[test]
 fn project_access_profiles_reject_the_legacy_purpose_vocabulary() {
     let failure = parse_project_json(
         br#"{
@@ -3690,7 +3461,7 @@ fn manifest_projection_codelists_carry_only_codes_the_publication_admits() {
          "fields":[{"id":"status","type":"vocabulary-code","vocabulary":"case-status","classification":"restricted"}]}
       ],
       "accessProfiles":[
-        {"id":"public-reader","anonymous":true,"permissions":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":[]}]},
+        {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":[]}]},
         {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":[{"entity":"protected-case","operations":["get"],"readableFields":["status"],"rowBoundaries":[]}]}
       ]
     });
@@ -4980,44 +4751,6 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
 }
 
 #[test]
-fn anonymous_bbox_queries_cannot_process_hidden_geometry() {
-    let project = parse_project_json(
-        br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"spatial-public-negative","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable","classification":"public",
-            "fields":[
-              {"id":"code","type":"string","maxLength":32,"classification":"public"},
-              {"id":"location","type":"crs84-point","precision":6,"classification":"internal"}
-            ],
-            "geojson":{"geometryField":"location"}
-          }],
-          "accessProfiles":[{
-            "id":"public-map","default":true,"anonymous":true,"permissions":[{
-              "entity":"site","operations":["list"],"readableFields":["code","location"],
-              "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}},
-              "rowBoundaries": []
-            }]
-          }]
-        }"#,
-    )
-    .expect("source shape parses");
-    let failure = compile_project(&project, &[], CompileProfile::Authoring)
-        .expect_err("anonymous bbox processing over internal geometry is refused");
-    let diagnostic = failure
-        .diagnostics()
-        .iter()
-        .find(|diagnostic| {
-            diagnostic.code == "breg.access-profile.public-processing-non-public"
-                && diagnostic.path == "entities[].accessProfiles[].spatialQueries.bbox"
-        })
-        .expect("spatial public-processing diagnostic is reported");
-    assert!(diagnostic.message.contains("public GeoJSON geometry field"));
-}
-
-#[test]
 fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
     let project = parse_project_json(
         br#"{
@@ -5638,40 +5371,7 @@ fn equivalent_partial_unique_extension_constraints_merge_deterministically() {
 }
 
 #[test]
-fn anonymous_profiles_cannot_inherit_partial_unique_processing_over_non_public_fields() {
-    let source = br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"partial-unique","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-      "entities":[{
-        "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"public",
-        "fields":[
-          {"id":"code","type":"string","maxLength":32,"required":true,"classification":"public"},
-          {"id":"protected-marker","type":"string","maxLength":32,"classification":"restricted"}
-        ],
-        "constraints":[{
-          "kind":"unique","fields":["code"],
-          "when":[{"kind":"field_is_not_null","field":"protected-marker"}]
-        }]
-      }],
-      "accessProfiles":[{
-        "id":"public-reader","anonymous":true,"default":true,"permissions":[{
-          "entity":"entry","operations":["get"],"readableFields":["code"],
-          "rowBoundaries": []
-        }]
-      }]
-    }"#;
-
-    let failure = compile_json(source)
-        .expect_err("anonymous profile cannot inherit hidden non-public predicate processing");
-    assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.access-profile.public-processing-non-public"
-            && diagnostic.path == "entities[].constraints[]"
-    }));
-}
-
-#[test]
-fn anonymous_public_surface_rejects_every_non_public_constraint_field() {
+fn authenticated_profiles_may_process_governed_non_public_constraint_fields() {
     let source = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
       "kind":"RegistryProject",
@@ -5702,72 +5402,35 @@ fn anonymous_public_surface_rejects_every_non_public_constraint_field() {
         ]
       }],
       "accessProfiles":[{
-        "id":"public-reader","anonymous":true,"default":true,"permissions":[{
+        "id":"reader","principalClaim":"principal","requiredScopes":["records.read"],"default":true,"permissions":[{
           "entity":"record","operations":["get"],"readableFields":["label"],
           "rowBoundaries": []
         }]
       }],
       "vocabularies":[{"id":"status","values":["active","inactive"]}]
     }"#;
-    let base = parse_project_json(source).expect("closed constraint processing fixture parses");
-    compile_project(&base, &[], CompileProfile::Authoring)
-        .expect("an anonymous profile may process public constraint fields");
-
-    let cases = [
-        ("full unique tuple", "unique-field"),
-        ("partial unique tuple", "partial-field"),
-        ("partial unique predicate", "predicate-field"),
-        ("compare left operand", "compare-left"),
-        ("compare right operand", "compare-right"),
-        ("integer range", "range-field"),
-        ("vocabulary", "vocabulary-field"),
-        ("temporal start", "temporal-start"),
-        ("temporal end", "temporal-end"),
-        ("temporal scope", "temporal-scope"),
-    ];
-    for (case, field_id) in cases {
-        let mut project = base.clone();
+    let mut project =
+        parse_project_json(source).expect("closed constraint processing fixture parses");
+    for field_id in [
+        "unique-field",
+        "partial-field",
+        "predicate-field",
+        "compare-left",
+        "compare-right",
+        "range-field",
+        "vocabulary-field",
+        "temporal-start",
+        "temporal-end",
+        "temporal-scope",
+    ] {
         project.entities[0]
             .fields
             .iter_mut()
             .find(|field| field.id == field_id)
             .expect("constraint field exists")
             .classification = Classification::Restricted;
-
-        let failure = compile_project(&project, &[], CompileProfile::Authoring).expect_err(
-            "the anonymous public surface cannot process a non-public constraint field",
-        );
-        let diagnostics = failure
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| {
-                diagnostic.code == "breg.access-profile.public-processing-non-public"
-                    && diagnostic.path == "entities[].constraints[]"
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(diagnostics.len(), 1, "missing exact negative for {case}");
-        assert_eq!(
-            diagnostics[0].message,
-            format!(
-                "an anonymous profile is a public surface and may process only public constraint fields: field `{field_id}` is classified `restricted`"
-            ),
-            "the refusal names the constraint field for {case}"
-        );
     }
-
-    let mut authenticated = base;
-    let profile = &mut authenticated.access_profiles[0];
-    profile.anonymous = false;
-    profile.principal_claim = Some("principal".to_owned());
-    for (_, field_id) in cases {
-        authenticated.entities[0]
-            .fields
-            .iter_mut()
-            .find(|field| field.id == field_id)
-            .expect("constraint field exists")
-            .classification = Classification::Restricted;
-    }
-    compile_project(&authenticated, &[], CompileProfile::Authoring)
+    compile_project(&project, &[], CompileProfile::Authoring)
         .expect("authenticated entities may process governed non-public constraint fields");
 }
 
@@ -5789,7 +5452,7 @@ fn compiled_partial_unique_constraint_keeps_closed_predicates_in_the_model() {
         }]
       }],
       "accessProfiles":[{
-        "id":"public-reader","anonymous":true,"default":true,"permissions":[{
+        "id":"reader","principalClaim":"principal","requiredScopes":["entries.read"],"default":true,"permissions":[{
           "entity":"entry","operations":["get"],"readableFields":["code","status"],"filterableFields":["status"],
           "rowBoundaries": []
         }]
@@ -6067,7 +5730,8 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
           "accessProfiles":[{
             "id":"public",
             "default":true,
-            "anonymous":true,
+            "principalClaim":"registry_principal",
+            "requiredScopes":["records.read"],
             "permissions":[{
               "entity":"business-record",
               "operations":["get","list"],
@@ -6097,7 +5761,7 @@ fn generated_openapi_separates_security_and_mutation_input_from_read_schema() {
 
     assert_eq!(
         openapi["paths"]["/v1/records/business-records/{record_id}"]["get"]["security"],
-        json!([{}, {"bearerAuth": []}])
+        json!([{"bearerAuth": []}])
     );
     assert_eq!(
         openapi["paths"]["/v1/records/business-records"]["post"]["security"],
@@ -6258,14 +5922,6 @@ fn compiled_metadata_inventory_is_bijective_canonical_schema_bound_and_determini
                 .get(&entry.access_profile)
                 .expect("metadata access profile refers to a compiled profile");
             assert!(entry.readable_fields.is_subset(&profile.readable_fields));
-            if profile.anonymous {
-                assert!(entry.readable_fields.iter().all(|field| {
-                    entity
-                        .fields
-                        .get(field)
-                        .is_some_and(|field| field.classification == Classification::Public)
-                }));
-            }
         }
     }
 
@@ -6387,21 +6043,7 @@ fn compiler_produces_both_revision_routes_when_explicitly_configured() {
 
 #[test]
 fn compiler_omits_revision_routes_when_not_configured_or_revision_access_is_false() {
-    for (operations, revision_access, anonymous, principal_claim) in [
-        (
-            r#"["get"]"#,
-            "true",
-            "false",
-            r#""principalClaim":"principal","#,
-        ),
-        (
-            r#"["revisions"]"#,
-            "false",
-            "false",
-            r#""principalClaim":"principal","#,
-        ),
-        (r#"["revisions"]"#, "true", "true", ""),
-    ] {
+    for (operations, revision_access) in [(r#"["get"]"#, "true"), (r#"["revisions"]"#, "false")] {
         let source = format!(
             r#"{{
               "apiVersion":"registry.registrystack.org/v1alpha1",
@@ -6412,7 +6054,7 @@ fn compiler_omits_revision_routes_when_not_configured_or_revision_access_is_fals
                 "fields":[{{"id":"code","type":"string","maxLength":32,"classification":"public"}}]
               }}],
               "accessProfiles":[{{
-                "id":"reader","default":true,"anonymous":{anonymous},{principal_claim}"permissions":[{{
+                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":["entries.read"],"permissions":[{{
                   "rowBoundaries": [], "entity":"entry","operations":{operations},"revisionAccess":{revision_access},"readableFields":["code"]
                 }}]
               }}]
@@ -6435,99 +6077,6 @@ fn compiler_omits_revision_routes_when_not_configured_or_revision_access_is_fals
             .keys()
             .all(|path| !path.contains("revisions")));
     }
-}
-
-#[test]
-fn public_profile_cannot_process_an_internal_field() {
-    let mut project = asset_project();
-    project.access_profiles[0].default = true;
-    let entity = project
-        .entities
-        .iter()
-        .find(|entity| entity.id == "asset-item")
-        .expect("asset entity exists");
-    assert!(entity.fields.iter().any(|field| field.id == "asset-code"));
-    project.access_profiles.push(ProjectAccessProfileSource {
-        id: "public-reader".to_owned(),
-        default: false,
-        anonymous: true,
-        actor_kind: None,
-        requester_clients: Default::default(),
-        task_grant: None,
-        principal_claim: None,
-        required_scopes: Default::default(),
-        required_purposes: Default::default(),
-        permissions: vec![AccessPermissionSource {
-            membership_boundaries: Vec::new(),
-            require_consent: Vec::new(),
-            entity: "asset-item".to_owned(),
-            action: None,
-            operations: [Operation::Get].into_iter().collect(),
-            readable_fields: ["asset-code".to_owned()].into_iter().collect(),
-            readable_request_fields: [registry_breg::contract::RequestMetadataFieldSource::Reason]
-                .into_iter()
-                .collect(),
-            writable_fields: Default::default(),
-            filterable_fields: Default::default(),
-            sortable_fields: Default::default(),
-            spatial_queries: None,
-            row_boundaries: vec![RowBoundarySource {
-                field: "asset-code".to_owned(),
-                claim: "asset_code".to_owned(),
-                operator: BoundaryOperator::Equals,
-            }],
-            request_visibility: None,
-            lookups: Vec::new(),
-            read_paths: Vec::new(),
-            apply_targets: Vec::new(),
-            submitter_targets: Default::default(),
-            request_presence: Vec::new(),
-            targets: Vec::new(),
-            results: Default::default(),
-            allow_count: false,
-            allow_data_export: false,
-            revision_access: false,
-            provenance_fields: Vec::new(),
-        }],
-    });
-
-    let failure = compile_project(&project, &[], CompileProfile::Authoring)
-        .expect_err("anonymous processing of internal data is refused");
-    assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.access-profile.public-processing-non-public"
-    }));
-}
-
-#[test]
-fn anonymous_public_profile_cannot_filter_a_non_public_field() {
-    let failure = compile_json(
-        br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"public-filter","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"create_only","classification":"public",
-            "fields":[
-              {"id":"label","type":"string","maxLength":32,"classification":"public"},
-              {"id":"hidden-filter-canary","type":"string","maxLength":32,"classification":"restricted"}
-            ]
-          }],
-          "accessProfiles":[{
-            "id":"public-reader","anonymous":true,"default":true,"permissions":[{
-              "entity":"entry","operations":["list"],"readableFields":["label"],
-              "filterableFields":["hidden-filter-canary"],
-              "rowBoundaries": []
-            }]
-          }]
-        }"#,
-    )
-    .expect_err("an anonymous filter cannot process a non-public field");
-    assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.access-profile.public-processing-non-public"
-            && diagnostic.path == "entities[].accessProfiles[]"
-            && diagnostic.message
-                == "anonymous profile `public-reader` may process only public fields: field `hidden-filter-canary` is classified `restricted`"
-    }));
 }
 
 #[test]
@@ -7092,37 +6641,6 @@ fn deprecated_temporal_scope_fields_must_match_explicit_non_overlap() {
 }
 
 #[test]
-fn anonymous_temporal_processing_floor_survives_without_exclusion() {
-    let failure = compile_json(
-        br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"temporal-public-floor","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"public",
-            "fields":[
-              {"id":"label","type":"string","maxLength":32,"classification":"public"},
-              {"id":"valid-from","type":"date","required":true,"classification":"internal"},
-              {"id":"valid-to","type":"date","classification":"public"}
-            ],
-            "temporal":{"startField":"valid-from","endField":"valid-to"}
-          }],
-          "accessProfiles":[{
-            "id":"public-reader","anonymous":true,"default":true,"permissions":[{
-              "entity":"membership","operations":["list"],"readableFields":["label"],
-              "rowBoundaries": []
-            }]
-          }]
-        }"#,
-    )
-    .expect_err("anonymous temporal surfaces cannot process private boundaries");
-    assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.access-profile.public-processing-non-public"
-            && diagnostic.path == "entities[].temporal"
-    }));
-}
-
-#[test]
 fn snapshot_operation_is_authenticated_stored_field_history_contract() {
     let project = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
@@ -7348,29 +6866,7 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
 }
 
 #[test]
-fn snapshot_operation_rejects_anonymous_and_unauthorized_provenance() {
-    let anonymous = compile_json(
-        br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"snapshot-anonymous","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable","classification":"public",
-            "fields":[{"id":"code","type":"string","maxLength":32,"classification":"public"}]
-          }],
-          "accessProfiles":[{
-            "id":"public-reader","anonymous":true,"default":true,"permissions":[{
-              "entity":"record","operations":["snapshot"],"readableFields":["code"],
-              "rowBoundaries": []
-            }]
-          }]
-        }"#,
-    )
-    .expect_err("snapshot cannot be anonymous");
-    assert!(anonymous.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.access-profile.snapshot-anonymous-forbidden"
-    }));
-
+fn snapshot_operation_rejects_unauthorized_provenance() {
     let provenance = compile_json(
         br#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
@@ -7738,39 +7234,6 @@ fn duplicate_routes_fail_before_artifact_generation() {
     for authored_value in ["hidden-route-value", "first-record", "second-record"] {
         assert!(!rendered.contains(authored_value));
     }
-}
-
-#[test]
-fn anonymous_profiles_cannot_grant_mutation_operations() {
-    let project = parse_project_json(
-        br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "entities":[{
-            "id":"public-entry","primaryDataset":"test-dataset","route":"public-entries","mutationMode":"mutable","classification":"public",
-            "fields":[{"id":"label","type":"string","maxLength":32,"classification":"public"}]
-          }],
-          "accessProfiles":[{
-            "id":"anonymous-writer","anonymous":true,"default":true,"permissions":[{
-              "entity":"public-entry","operations":["create","patch"],"readableFields":["label"],"writableFields":["label"],
-              "rowBoundaries": []
-            }]
-          }]
-        }"#,
-    )
-    .expect("anonymous mutation fixture parses");
-
-    let failure = compile_project(&project, &[], CompileProfile::Authoring)
-        .expect_err("anonymous mutation authority is refused at compilation");
-    let diagnostic = failure
-        .diagnostics()
-        .iter()
-        .find(|diagnostic| diagnostic.code == "breg.access-profile.anonymous-mutation-forbidden")
-        .expect("anonymous mutation has a stable diagnostic");
-    assert_eq!(diagnostic.path, "entities[].accessProfiles[].operations");
-    assert!(!serde_json::to_string(diagnostic)
-        .expect("diagnostic serializes")
-        .contains("anonymous-writer"));
 }
 
 #[test]

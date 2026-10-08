@@ -240,7 +240,11 @@ entities:
 accessProfiles:
   - id: public-register
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes:
+      - business:public.read
+    requiredPurposes:
+      - public-register
     permissions:
       - entity: legal-entity
         rowBoundaries: []

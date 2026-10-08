@@ -1642,13 +1642,6 @@ fn compile_permissions(
                     "an access profile cannot grant the same action more than once",
                 ));
             }
-            if profile.anonymous {
-                errors.push(Diagnostic::error(
-                    "breg.action.permission-anonymous-forbidden",
-                    "project.accessProfiles[].permissions[].action",
-                    "anonymous access profiles cannot invoke immediate actions",
-                ));
-            }
             crate::consent::validate_action_permission(profile, grant, entities, errors);
             if !grant.entity.is_empty() {
                 errors.push(Diagnostic::error(
@@ -1686,7 +1679,6 @@ fn compile_permissions(
             grants.push(CompiledActionPermission {
                 profile_id: profile.id.clone(),
                 default: profile.default,
-                anonymous: profile.anonymous,
                 actor_kind: profile.actor_kind,
                 requester_clients: profile.requester_clients.as_set().clone(),
                 principal_claim: profile.principal_claim.clone(),
@@ -1892,7 +1884,6 @@ fn validate_permission_access_requirements(
         let grant_profile = AccessProfileSource {
             id: profile.id.clone(),
             default: profile.default,
-            anonymous: profile.anonymous,
             actor_kind: profile.actor_kind,
             requester_clients: profile.requester_clients.clone(),
             task_grant: None,
@@ -2143,6 +2134,17 @@ fn contract_fingerprint(
                 .map(|entity| ((*entity_id).to_owned(), entity_contract_payload(entity)))
         })
         .collect::<BTreeMap<_, _>>();
+    // A permission once carried an `anonymous` member, always false on an
+    // action grant. It stays in the fingerprint input, so an engine upgrade
+    // keeps the identity of every action whose project did not change.
+    let permissions = permissions
+        .iter()
+        .map(|permission| {
+            let mut permission = json!(permission);
+            permission["anonymous"] = json!(false);
+            permission
+        })
+        .collect::<Vec<_>>();
     let mut payload = json!({
         "version": 1,
         "id": action_id,

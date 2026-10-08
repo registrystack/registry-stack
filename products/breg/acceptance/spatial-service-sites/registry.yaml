@@ -96,7 +96,9 @@ accessProfiles:
         sortableFields: [site-code, label]
         allowCount: true
   - id: map-reader
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: [service-sites:public.read]
+    requiredPurposes: [service-site-public-map]
     permissions:
       - entity: service-site
         rowBoundaries: []
@@ -127,7 +129,9 @@ accessProfiles:
             maximumLongitudeSpanDegrees: 0.25
             maximumLatitudeSpanDegrees: 0.20
   - id: directory-reader
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: [service-sites:public.read]
+    requiredPurposes: [service-site-public-directory]
     permissions:
       - entity: service-site
         rowBoundaries: []

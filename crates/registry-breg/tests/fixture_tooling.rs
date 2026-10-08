@@ -773,7 +773,7 @@ journeys:
       - id: declared-bbox
         entity: site
         accessProfile: map-reader
-        claims: {}
+        claims: {principal: synthetic-reader, scopes: [sites.read]}
         request:
           type: query
           bbox: {west: "100.0", south: "13.0", east: "100.1", north: "13.1"}
@@ -782,7 +782,7 @@ journeys:
       - id: undeclared-bbox-runtime-refusal
         entity: site
         accessProfile: directory-reader
-        claims: {}
+        claims: {principal: synthetic-reader, scopes: [sites.read]}
         request:
           type: query
           bbox: {west: "100.0", south: "13.0", east: "100.1", north: "13.1"}
@@ -825,7 +825,7 @@ journeys:
       - id: list-bbox
         entity: site
         accessProfile: map-reader
-        claims: {}
+        claims: {principal: synthetic-reader, scopes: [sites.read]}
         request:
           type: list
           bbox: {west: "100.0", south: "13.0", east: "100.1", north: "13.1"}
@@ -847,7 +847,7 @@ journeys:
       - id: path-bbox
         entity: site
         accessProfile: map-reader
-        claims: {}
+        claims: {principal: synthetic-reader, scopes: [sites.read]}
         request:
           type: read-path
           path: children
@@ -1360,12 +1360,12 @@ fn compiled_spatial_fixture() -> registry_breg::CompiledRegistry {
             "geojson":{"geometryField":"location"}
           }],
           "accessProfiles":[
-            {"id":"map-reader","default":true,"anonymous":true,"permissions":[{
+            {"id":"map-reader","default":true,"principalClaim":"sub","requiredScopes":["sites.read"],"permissions":[{
               "entity":"site","operations":["get","list"],"readableFields":["code","location"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}},
               "rowBoundaries": []
             }]},
-            {"id":"directory-reader","anonymous":true,"permissions":[{
+            {"id":"directory-reader","principalClaim":"sub","requiredScopes":["sites.read"],"permissions":[{
               "entity":"site","operations":["list"],"readableFields":["code"],
               "rowBoundaries": []
             }]}

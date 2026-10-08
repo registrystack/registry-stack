@@ -136,7 +136,7 @@ const MAX_BEARER_TOKEN_BYTES: usize = 32 * 1024;
 const MIN_SUPPORTED_POSTGRES_MAJOR: u16 = 15;
 const MAX_SUPPORTED_POSTGRES_MAJOR: u16 = 18;
 
-type CredentialMap = BTreeMap<(String, String), Option<Zeroizing<String>>>;
+type CredentialMap = BTreeMap<(String, String), Zeroizing<String>>;
 
 /// Value-free failures while preparing the runtime used by schema tests.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1074,8 +1074,6 @@ pub struct JourneyStepProfile {
     pub journey_id: String,
     pub step_id: String,
     pub access_profile: String,
-    /// The step writes `claims: {}`: it runs with no caller identity.
-    pub anonymous: bool,
     /// The step's `claims.scopes`, or `None` when it writes no `scopes`.
     pub scopes: Option<Vec<String>>,
     /// The step's `claims.purpose`.
@@ -1112,10 +1110,6 @@ pub fn journey_step_profiles(bytes: &[u8]) -> Result<Vec<JourneyStepProfile>, Fi
                 journey_id: journey.id.clone(),
                 step_id: step.id,
                 access_profile: step.access_profile,
-                anonymous: claims
-                    .as_ref()
-                    .and_then(Value::as_object)
-                    .is_some_and(Map::is_empty),
                 scopes: declares_scopes.then(|| step.claims.scopes.into_vec()),
                 purpose: step.claims.purpose,
             });
@@ -1668,19 +1662,6 @@ fn validate_claims(
     profile: &AccessProfileSource,
     outcome: ExpectedOutcome,
 ) -> Result<(), FixtureError> {
-    if profile.anonymous {
-        if claims.principal.is_some()
-            || !claims.scopes.is_empty()
-            || claims.purpose.is_some()
-            || !claims.direct_claims.is_empty()
-            || claims.actor_kind.is_some()
-            || claims.requester_client.is_some()
-            || claims.actor_subject.is_some()
-        {
-            return Err(FixtureError::AuthorityWideningRefused);
-        }
-        return Ok(());
-    }
     if profile.principal_claim.is_none()
         || claims
             .principal
@@ -1751,7 +1732,6 @@ fn action_profile_from_grant(grant: &CompiledActionPermission) -> AccessProfileS
     AccessProfileSource {
         id: grant.profile_id.clone(),
         default: grant.default,
-        anonymous: grant.anonymous,
         actor_kind: grant.actor_kind,
         requester_clients: grant.requester_clients.clone().into(),
         task_grant: None,
@@ -3205,7 +3185,7 @@ impl PostgresFixtureTestRunner {
             .bearer_tokens
             .get(self.bearer_index)
             .ok_or(FixtureError::ExecutionRefused)?;
-        fixture_request(&journey.id, step, &self.observations, Some(bearer)).map(Some)
+        fixture_request(&journey.id, step, &self.observations, bearer).map(Some)
     }
 
     /// Execute every validated journey through the captured Registry router.
@@ -3318,7 +3298,7 @@ impl CompletedPostgresFixtureTest {
 pub struct SchemaTestCredentialBinding {
     journey_id: String,
     step_id: String,
-    bearer_token: Option<Zeroizing<String>>,
+    bearer_token: Zeroizing<String>,
 }
 
 impl SchemaTestCredentialBinding {
@@ -3330,15 +3310,7 @@ impl SchemaTestCredentialBinding {
         Self {
             journey_id: journey_id.into(),
             step_id: step_id.into(),
-            bearer_token: Some(bearer_token),
-        }
-    }
-
-    pub fn anonymous(journey_id: impl Into<String>, step_id: impl Into<String>) -> Self {
-        Self {
-            journey_id: journey_id.into(),
-            step_id: step_id.into(),
-            bearer_token: None,
+            bearer_token,
         }
     }
 }
@@ -3349,8 +3321,7 @@ impl fmt::Debug for SchemaTestCredentialBinding {
             .debug_struct("SchemaTestCredentialBinding")
             .field("journey_id", &self.journey_id)
             .field("step_id", &self.step_id)
-            .field("has_bearer_token", &self.bearer_token.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -3361,8 +3332,8 @@ pub struct SchemaTestCredentialBindings {
 
 impl SchemaTestCredentialBindings {
     /// Close the credential inventory against one exact validated suite before
-    /// any database preparation is necessary. Protected steps require one
-    /// bearer value and anonymous steps require an explicit anonymous binding.
+    /// any database preparation is necessary. Every step requires one bearer
+    /// value: the registry serves authenticated callers only.
     pub fn new(
         suite: &ValidatedFixtureJourneys,
         bindings: Vec<SchemaTestCredentialBinding>,
@@ -3374,12 +3345,10 @@ impl SchemaTestCredentialBindings {
 
     fn validate(&self, suite: &ValidatedFixtureJourneys) -> Result<(), FixtureError> {
         let expected = suite.journeys.iter().flat_map(|journey| {
-            journey.steps.iter().map(move |step| {
-                (
-                    (journey.id.as_str(), step.id.as_str()),
-                    step.profile.anonymous,
-                )
-            })
+            journey
+                .steps
+                .iter()
+                .map(move |step| (journey.id.as_str(), step.id.as_str()))
         });
         if self.bindings.len() > MAX_TOTAL_STEPS {
             return Err(FixtureError::JourneyBoundsRefused);
@@ -3387,22 +3356,16 @@ impl SchemaTestCredentialBindings {
         if self.bindings.len() != expected.clone().count() {
             return Err(FixtureError::RequestConstructionRefused);
         }
-        let expected = expected.collect::<BTreeMap<_, _>>();
+        let expected = expected.collect::<BTreeSet<_>>();
         let mut actual = BTreeSet::new();
         for binding in &self.bindings {
             if !valid_stable_id(&binding.journey_id) || !valid_stable_id(&binding.step_id) {
                 return Err(FixtureError::RequestConstructionRefused);
             }
             let key = (binding.journey_id.as_str(), binding.step_id.as_str());
-            let Some(anonymous) = expected.get(&key) else {
-                return Err(FixtureError::RequestConstructionRefused);
-            };
-            if !actual.insert(key)
-                || match (*anonymous, binding.bearer_token.as_ref()) {
-                    (true, None) => false,
-                    (false, Some(token)) => !valid_bearer_token(token),
-                    (true, Some(_)) | (false, None) => true,
-                }
+            if !expected.contains(&key)
+                || !actual.insert(key)
+                || !valid_bearer_token(&binding.bearer_token)
             {
                 return Err(FixtureError::RequestConstructionRefused);
             }
@@ -3522,19 +3485,11 @@ async fn execute_schema_test_with_key_source(
             let bearer = credential_map
                 .get(&(journey.id.clone(), step.id.clone()))
                 .ok_or_else(|| step_failure(FixtureError::RequestConstructionRefused))?;
-            match (step.profile.anonymous, bearer.as_ref()) {
-                (true, None) => {}
-                (true, Some(_)) | (false, None) => {
-                    return Err(step_failure(FixtureError::RequestConstructionRefused));
-                }
-                (false, Some(token)) => {
-                    runtime
-                        .authenticate_exact(step, token.as_str())
-                        .await
-                        .map_err(&step_failure)?;
-                }
-            }
-            let bearer_token = bearer.as_ref().map(|token| token.as_str());
+            runtime
+                .authenticate_exact(step, bearer.as_str())
+                .await
+                .map_err(&step_failure)?;
+            let bearer_token = bearer.as_str();
             let response = if matches!(step.action, ActionSource::Import { .. }) {
                 runtime
                     .execute_import(step, &observations, bearer_token)
@@ -3760,12 +3715,11 @@ impl SchemaTestRuntime {
         &mut self,
         step: &ValidatedStep,
         observations: &BTreeMap<String, Observation>,
-        bearer_token: Option<&str>,
+        token: &str,
     ) -> Result<Response<Body>, FixtureError> {
         let ActionSource::Import { items } = &step.action else {
             return Err(FixtureError::RequestConstructionRefused);
         };
-        let token = bearer_token.ok_or(FixtureError::RequestConstructionRefused)?;
         let mut input = Vec::new();
         for item in items {
             let data = resolve_fixture_value_refs(&Value::Object(item.clone()), observations)?;
@@ -4045,7 +3999,7 @@ fn fixture_request(
     journey_id: &str,
     step: &ValidatedStep,
     observations: &BTreeMap<String, Observation>,
-    bearer_token: Option<&str>,
+    bearer_token: &str,
 ) -> Result<Request<Body>, FixtureError> {
     let mut path = step.route.path().to_owned();
     let mut method = Method::GET;
@@ -4253,16 +4207,12 @@ fn fixture_request(
                 .map_err(|_| FixtureError::RequestConstructionRefused)?,
         );
     }
-    if let Some(token) = bearer_token {
-        request.headers_mut().insert(
-            AUTHORIZATION,
-            format!("Bearer {token}")
-                .parse()
-                .map_err(|_| FixtureError::RequestConstructionRefused)?,
-        );
-    } else {
-        request.extensions_mut().insert(verified_claims(step)?);
-    }
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        format!("Bearer {bearer_token}")
+            .parse()
+            .map_err(|_| FixtureError::RequestConstructionRefused)?,
+    );
     Ok(request)
 }
 
@@ -4487,60 +4437,6 @@ fn captured_effect_digest(
         .ok_or(FixtureError::RequestConstructionRefused)?;
     validate_digest(digest)?;
     Ok(digest.to_owned())
-}
-
-fn verified_claims(step: &ValidatedStep) -> Result<VerifiedRequestClaims, FixtureError> {
-    if step.profile.anonymous {
-        return Ok(VerifiedRequestClaims::anonymous());
-    }
-    let principal_claim = step
-        .profile
-        .principal_claim
-        .as_deref()
-        .ok_or(FixtureError::RequestConstructionRefused)?;
-    let principal = step
-        .claims
-        .principal
-        .as_deref()
-        .ok_or(FixtureError::RequestConstructionRefused)?;
-    let direct_claims = step
-        .claims
-        .direct_claims
-        .iter()
-        .map(|(name, value)| {
-            value
-                .verified_value()
-                .map(|value| (name.clone(), value))
-                .map_err(|_| FixtureError::RequestConstructionRefused)
-        })
-        .collect::<Result<BTreeMap<_, _>, _>>()?;
-    let actor_kind = match (step.profile.actor_kind, step.claims.actor_kind) {
-        (None, None) => registry_platform_oidc::ActorKind::Service,
-        (Some(expected), Some(actual)) if expected == actual => match actual {
-            crate::contract::ActorKindSource::Human => registry_platform_oidc::ActorKind::Human,
-            crate::contract::ActorKindSource::Agent => registry_platform_oidc::ActorKind::Agent,
-            crate::contract::ActorKindSource::Service => registry_platform_oidc::ActorKind::Service,
-        },
-        _ => return Err(FixtureError::RequestConstructionRefused),
-    };
-    VerifiedRequestClaims::authenticated_with_actor_kind(
-        principal_claim,
-        principal,
-        step.claims.scope_set(),
-        step.claims.purpose.clone(),
-        direct_claims,
-        actor_kind,
-    )
-    .and_then(|claims_context| {
-        claims_context.with_contextual_authority(
-            Some(actor_kind),
-            step.claims.requester_client.clone(),
-            step.claims.actor_subject.clone(),
-            None,
-            BTreeMap::new(),
-        )
-    })
-    .map_err(|_| FixtureError::RequestConstructionRefused)
 }
 
 async fn accept_response(
@@ -7339,27 +7235,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fixture_claims_use_a_service_actor_only_for_actor_neutral_profiles() {
-        let fixture = package_fixture(DIGEST_A);
-        let suite = validate_fixture_journeys(JOURNEY_SOURCE, fixture.package.registry())
-            .expect("strict suite validates");
-        let step = &suite.journeys[0].steps[0];
-        assert_eq!(
-            verified_claims(step)
-                .expect("actor-neutral fixture claims construct")
-                .actor_kind(),
-            Some(registry_platform_oidc::ActorKind::Service)
-        );
-
-        let mut actor_bound = step.clone();
-        actor_bound.profile.actor_kind = Some(crate::contract::ActorKindSource::Agent);
-        assert_eq!(
-            verified_claims(&actor_bound).unwrap_err(),
-            FixtureError::RequestConstructionRefused
-        );
-    }
-
     const PROJECT_TEMPLATE: &[u8] =
         include_bytes!("../tests/fixtures/fixture-tooling/project.yaml");
     const MODULE_SOURCE: &[u8] = include_bytes!("../tests/fixtures/fixture-tooling/module.yaml");
@@ -7462,25 +7337,11 @@ journeys:
         );
 
         let mut missing_bearer = exact();
-        missing_bearer[0] =
-            SchemaTestCredentialBinding::anonymous("widget-lifecycle", "create-widget");
+        missing_bearer.remove(0);
         assert_eq!(
             SchemaTestCredentialBindings::new(&suite, missing_bearer).unwrap_err(),
             FixtureError::RequestConstructionRefused
         );
-
-        let mut anonymous_suite = suite.clone();
-        anonymous_suite.journeys[0].steps[0].profile.anonymous = true;
-        let mut bearer_for_anonymous = exact();
-        assert_eq!(
-            SchemaTestCredentialBindings::new(&anonymous_suite, bearer_for_anonymous).unwrap_err(),
-            FixtureError::RequestConstructionRefused
-        );
-        bearer_for_anonymous = exact();
-        bearer_for_anonymous[0] =
-            SchemaTestCredentialBinding::anonymous("widget-lifecycle", "create-widget");
-        SchemaTestCredentialBindings::new(&anonymous_suite, bearer_for_anonymous)
-            .expect("explicit anonymous mode matches the anonymous step");
 
         for token in [
             "",
@@ -8564,7 +8425,7 @@ journeys:
         for journey in &suite.journeys {
             let mut observations = BTreeMap::<String, Observation>::new();
             for (index, step) in journey.steps.iter().enumerate() {
-                let _request = fixture_request("test-journey", step, &observations, None)?;
+                let _request = fixture_request("test-journey", step, &observations, "a.b.c")?;
                 let response = scripted_response(index, mode)?;
                 let status = response.status();
                 let headers = response.headers().clone();
@@ -8672,7 +8533,7 @@ journeys:
             },
         );
 
-        let request = fixture_request("test-journey", &step, &observations, Some("a.b.c"))
+        let request = fixture_request("test-journey", &step, &observations, "a.b.c")
             .expect("request action uses discovered action precondition");
         assert_eq!(
             request
@@ -8690,7 +8551,7 @@ journeys:
             .expect("request metadata is object")
             .remove("actions");
         assert_eq!(
-            fixture_request("test-journey", &step, &observations, Some("a.b.c")).unwrap_err(),
+            fixture_request("test-journey", &step, &observations, "a.b.c").unwrap_err(),
             FixtureError::RequestConstructionRefused
         );
     }

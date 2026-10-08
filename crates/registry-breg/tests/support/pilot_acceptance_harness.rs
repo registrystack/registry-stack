@@ -522,45 +522,41 @@ fn fixture_journey_bytes(registry: &CompiledRegistry) -> Vec<u8> {
         })
         .find(|(_, _, profile)| profile.operations.contains(&Operation::List))
         .expect("every pilot fixture exposes one configured list journey");
-    let claims = if profile.anonymous {
-        json!({})
-    } else {
-        let direct_claims = profile
-            .row_boundaries
-            .iter()
-            .map(|boundary| {
-                (
-                    boundary.claim.clone(),
-                    Value::String("fixture-boundary".to_owned()),
-                )
-            })
-            .collect::<serde_json::Map<_, _>>();
-        let mut claims = serde_json::Map::new();
+    let direct_claims = profile
+        .row_boundaries
+        .iter()
+        .map(|boundary| {
+            (
+                boundary.claim.clone(),
+                Value::String("fixture-boundary".to_owned()),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let mut claims = serde_json::Map::new();
+    claims.insert(
+        "principal".to_owned(),
+        Value::String("fixture-operator".to_owned()),
+    );
+    if !profile.required_scopes.is_empty() {
         claims.insert(
-            "principal".to_owned(),
-            Value::String("fixture-operator".to_owned()),
+            "scopes".to_owned(),
+            Value::Array(
+                profile
+                    .required_scopes
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
         );
-        if !profile.required_scopes.is_empty() {
-            claims.insert(
-                "scopes".to_owned(),
-                Value::Array(
-                    profile
-                        .required_scopes
-                        .iter()
-                        .cloned()
-                        .map(Value::String)
-                        .collect(),
-                ),
-            );
-        }
-        if let Some(purpose) = profile.required_purposes.iter().next() {
-            claims.insert("purpose".to_owned(), Value::String(purpose.clone()));
-        }
-        if !direct_claims.is_empty() {
-            claims.insert("directClaims".to_owned(), Value::Object(direct_claims));
-        }
-        Value::Object(claims)
-    };
+    }
+    if let Some(purpose) = profile.required_purposes.iter().next() {
+        claims.insert("purpose".to_owned(), Value::String(purpose.clone()));
+    }
+    if !direct_claims.is_empty() {
+        claims.insert("directClaims".to_owned(), Value::Object(direct_claims));
+    }
+    let claims = Value::Object(claims);
     serde_norway::to_string(&json!({
         "apiVersion": "id.registrystack.org/formats/breg/journeys/v1",
         "kind": "BRegJourneys",

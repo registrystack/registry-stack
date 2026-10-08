@@ -1137,7 +1137,7 @@ struct DataValidateArgs {
     #[arg(long, value_name = "ID")]
     entity: String,
 
-    /// Compiled non-anonymous access profile identifier.
+    /// Compiled access profile identifier.
     #[arg(long, value_name = "ID")]
     profile: String,
 
@@ -1168,7 +1168,7 @@ struct DataImportArgs {
     #[arg(long, value_name = "ID")]
     entity: String,
 
-    /// Compiled non-anonymous access profile identifier.
+    /// Compiled access profile identifier.
     #[arg(long, value_name = "ID")]
     profile: String,
 
@@ -1207,7 +1207,7 @@ struct DataExportArgs {
     #[arg(long, value_name = "ID")]
     entity: String,
 
-    /// Compiled non-anonymous export-enabled access profile identifier.
+    /// Compiled export-enabled access profile identifier.
     #[arg(long, value_name = "ID")]
     profile: String,
 
@@ -7597,7 +7597,7 @@ fn planner_test_failure(code: &str, path: &str, message: &str) -> FailureReport 
 
 /// `apiVersion` for every `bregctl explain` payload, versioned as a whole: any change
 /// to a pinned object's shape in one of the nine kinds bumps this version.
-const EXPLAIN_API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha3";
+const EXPLAIN_API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha4";
 
 /// Which `explanation` kind a subject (and, for `access`, whether a scenario ran)
 /// produces. Kept beside `explain_envelope` because the two always travel together.
@@ -9878,7 +9878,6 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                 "permissions": action.permissions.iter().map(|grant| json!({
                     "profile": grant.profile_id,
                     "default": grant.default,
-                    "anonymous": grant.anonymous,
                     "requiredScopes": grant.required_scopes,
                     "requiredPurposes": grant.required_purposes,
                     "operations": grant.operations.iter().map(|operation| operation_wire_name(*operation)).collect::<Vec<_>>(),
@@ -11603,7 +11602,7 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
         "principal claim",
         profile["principalClaim"]
             .as_str()
-            .unwrap_or("none (anonymous)")
+            .unwrap_or("none")
             .to_owned(),
     )];
     let membership_restricted = profile["membershipBoundaries"]
@@ -11648,12 +11647,7 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
             profile["requireConsent"].to_string(),
         ));
     }
-    for field in [
-        "anonymous",
-        "allowCount",
-        "revisionAccess",
-        "allowDataExport",
-    ] {
+    for field in ["allowCount", "revisionAccess", "allowDataExport"] {
         fields.push((field, profile[field].as_bool().unwrap_or(false).to_string()));
     }
     lines.pairs_at(depth + 1, &fields);

@@ -79,7 +79,8 @@ accessProfiles:
           - path: people
             readableFields: [person-code, legal-name]
   - id: public-directory
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:sites:directory]
     permissions:
       - entity: asset-site
         rowBoundaries: []
@@ -91,10 +92,9 @@ Profile members:
 
 | Member | Effect |
 |---|---|
-| `principalClaim` | The explicitly selected token claim that identifies the caller in audit and workflow decisions. Required unless the profile is `anonymous`; it must match the runtime principal mapping. |
+| `principalClaim` | The explicitly selected token claim that identifies the caller in audit and workflow decisions. Required on every profile; it must match the runtime principal mapping. |
 | `requiredScopes`, `requiredPurposes` | Every listed scope, and one of the listed purposes, must be present in the token. Empty lists impose no restriction for that dimension. |
 | `default: true` | The profile selected when a request names none. At most one default may expose a route. If several profiles expose a route and none is default, the request must name its profile. A sole profile is selected automatically. |
-| `anonymous: true` | No token needed. Anonymous profiles cannot carry row boundaries, lookups from claims, or write operations. |
 
 A profile with no required scope raises `breg.access.profile-no-required-scope`, because any authenticated principal satisfying its purpose and row claims could then select it.
 
@@ -301,7 +301,6 @@ For the `record-reader` profile of the project `init` wrote, the block reads:
       row restrictions (all)  [{"claim":"registry_record_status","field":"status","operator":"equals"}]
       lookups                 none
       related records         none
-      anonymous               false
       allowCount              false
       revisionAccess          false
       allowDataExport         false

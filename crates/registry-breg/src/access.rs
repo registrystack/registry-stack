@@ -110,13 +110,6 @@ pub(crate) fn check_profile(
     path: &str,
     errors: &mut Vec<Diagnostic>,
 ) {
-    if profile.anonymous {
-        errors.push(Diagnostic::error(
-            "breg.access.requirements-authentication",
-            path,
-            "this entity requires authenticated access; remove the anonymous grant",
-        ));
-    }
     for scope in requirements
         .required_scopes
         .difference(&profile.required_scopes)
@@ -146,7 +139,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
     for entity in entities.values() {
         for profile in &entity.access_profiles {
             let path = profile_path(&entity.id, &profile.id);
-            if !profile.anonymous && profile.required_scopes.is_empty() {
+            if profile.required_scopes.is_empty() {
                 findings.push(Diagnostic::finding("breg.access.profile-no-required-scope", format!("{path}.requiredScopes"),
                     "no scope restricts who may select this profile; any authenticated principal satisfying its purpose and row claims qualifies. Add a required scope unless this is intended"));
             }
@@ -173,14 +166,6 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
             {
                 findings.push(Diagnostic::finding("breg.access.profile-unrestricted-rows", format!("{path}.rowBoundaries"),
                     "this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access"));
-            }
-            if profile.anonymous
-                && profile.operations.contains(&Operation::List)
-                && profile.row_boundaries.is_empty()
-                && profile.membership_boundaries.is_empty()
-            {
-                findings.push(Diagnostic::finding("breg.access.profile-anonymous-collection", format!("{path}.operations"),
-                    "`list` is granted to unauthenticated callers, so every row this profile can read is world-readable and no claim can narrow it. Confirm the whole collection is meant to be public"));
             }
             let write_operations = [Operation::Create, Operation::Patch, Operation::Import]
                 .into_iter()
@@ -309,7 +294,7 @@ pub(crate) fn compiled_access_findings(
     }
     for action in &actions.actions {
         for grant in &action.permissions {
-            if !grant.anonymous && grant.required_scopes.is_empty() {
+            if grant.required_scopes.is_empty() {
                 findings.push(Diagnostic::finding("breg.access.action-no-required-scope",
                     format!("actions[id={}].permissions[profile={}].requiredScopes", action.id, grant.profile_id),
                     "no scope restricts who may select this action profile; any authenticated principal satisfying its purpose and target claims qualifies. Add a required scope unless this is intended"));
@@ -350,7 +335,7 @@ fn ungated_client_findings(entity: &CompiledEntity, findings: &mut Vec<Diagnosti
             continue;
         }
         let path = format!("{}.requesterClients", profile_path(&entity.id, &profile.id));
-        if profile.anonymous || profile.requester_clients.is_empty() {
+        if profile.requester_clients.is_empty() {
             findings.push(Diagnostic::finding("breg.access.consent-ungated-client", path, &format!(
                 "this profile admits any client and reads `{}` without consent, so a client of the consent-gated {gated_ids} can read the same rows through it. List requesterClients that no gated profile admits",
                 entity.id)));

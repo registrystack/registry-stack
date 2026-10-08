@@ -805,9 +805,6 @@ fn bind_journey_profiles(journeys: &[u8], clients: &Clients) -> Result<()> {
             let _ = client;
             continue;
         }
-        if step.anonymous {
-            continue;
-        }
         let client = journey_client(clients, journey_id, step_id, profile)?;
         if !client.test_bindings.is_empty() {
             used.insert((journey_id.to_owned(), step_id.to_owned()));
@@ -2657,8 +2654,6 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
             let token_ref = token.output_id.clone();
             rehearsal_tokens.insert(token);
             json!({"type":"bearer","tokenRef":format!("secret:file/{token_ref}-token")})
-        } else if step.anonymous {
-            json!({"type":"anonymous"})
         } else {
             let client = journey_client(clients, journey_id, step_id, profile)?;
             let token = rehearsal_token(client, step)?;

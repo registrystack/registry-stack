@@ -1493,21 +1493,25 @@ fn spatial_credential_bindings(
                 "create-edge-service-site",
                 Zeroizing::new(spatial_admin_token(idp)),
             ),
-            SchemaTestCredentialBinding::anonymous(
+            SchemaTestCredentialBinding::bearer(
                 "service-site-source-profile-smoke",
                 "public-map-reader-lists-public-point-fields",
+                Zeroizing::new(spatial_public_map_token(idp)),
             ),
-            SchemaTestCredentialBinding::anonymous(
+            SchemaTestCredentialBinding::bearer(
                 "service-site-source-profile-smoke",
                 "public-map-reader-bbox-finds-central-site",
+                Zeroizing::new(spatial_public_map_token(idp)),
             ),
-            SchemaTestCredentialBinding::anonymous(
+            SchemaTestCredentialBinding::bearer(
                 "service-site-source-profile-smoke",
                 "directory-reader-lists-without-geometry",
+                Zeroizing::new(spatial_public_directory_token(idp)),
             ),
-            SchemaTestCredentialBinding::anonymous(
+            SchemaTestCredentialBinding::bearer(
                 "service-site-source-profile-smoke",
                 "directory-reader-bbox-is-refused",
+                Zeroizing::new(spatial_public_directory_token(idp)),
             ),
             SchemaTestCredentialBinding::bearer(
                 "service-site-source-profile-smoke",
@@ -1652,6 +1656,26 @@ fn spatial_map_token(idp: &MockIdp) -> String {
         "registry_purpose": "service-site-map",
         "scope": "service-sites:map.read",
         "service_zones": "central",
+    }))
+}
+
+fn spatial_public_map_token(idp: &MockIdp) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_actor_kind": "service",
+        "registry_principal": "synthetic-public-map",
+        "registry_purpose": "service-site-public-map",
+        "scope": "service-sites:public.read",
+    }))
+}
+
+fn spatial_public_directory_token(idp: &MockIdp) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_actor_kind": "service",
+        "registry_principal": "synthetic-public-directory",
+        "registry_purpose": "service-site-public-directory",
+        "scope": "service-sites:public.read",
     }))
 }
 

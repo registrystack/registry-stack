@@ -230,25 +230,6 @@ fn membership_row_reach_is_explicit_and_uses_the_selected_principal() {
     }
 }
 
-#[test]
-fn membership_only_profiles_require_authentication() {
-    let mut source = membership_source();
-    let profile = &mut source["accessProfiles"][0];
-    profile.as_object_mut().unwrap().remove("principalClaim");
-    profile["requiredScopes"] = json!([]);
-    profile["anonymous"] = json!(true);
-    let failure = compile_project(
-        &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
-        &[],
-        CompileProfile::Authoring,
-    )
-    .expect_err("stored membership never grants anonymous record access");
-    assert!(failure
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.access.membership-authentication"));
-}
-
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 #[test]
 fn membership_changes_report_authority_narrowing_and_widening() {

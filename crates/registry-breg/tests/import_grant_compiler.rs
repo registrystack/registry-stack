@@ -173,13 +173,12 @@ fn import_requires_entity_batch_bounds() {
 }
 
 #[test]
-fn import_refuses_an_anonymous_profile() {
+fn import_refuses_a_profile_without_a_principal_claim() {
     let mut project = ungoverned_project();
     let loader = project["accessProfiles"][0]
         .as_object_mut()
         .expect("profile object");
     loader.remove("principalClaim");
-    loader.insert("anonymous".to_owned(), json!(true));
     let failure = compile(&project).expect_err("runs are creator-scoped");
     assert_eq!(
         diagnostic(&failure, "breg.import.principal-required").path,

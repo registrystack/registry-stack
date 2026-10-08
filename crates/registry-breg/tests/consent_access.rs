@@ -507,19 +507,6 @@ fn consent_key_references_the_consent_subject_entity() {
 }
 
 #[test]
-fn anonymous_profiles_cannot_require_consent() {
-    let mut value = source();
-    value["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id": "public-person", "anonymous": true,
-        "permissions": [{
-            "entity": "household", "rowBoundaries": [], "operations": ["get"], "readableFields": ["label"],
-            "requireConsent": [{"record": "consent-decision", "on": "id"}]
-        }]
-    }));
-    assert_refused(&value, "breg.consent.require-anonymous");
-}
-
-#[test]
 fn gated_permissions_refuse_spatial_queries() {
     let mut value = source();
     value["entities"][PERSON]["fields"].as_array_mut().unwrap().push(

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha3.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha4.schema.json",
   "title": "AccessExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. The evaluation-rule strings are hand-authored constants and are pinned; `routes`, `entities`, `actions`, `rowReach`, `claimContract`, and `claimContractError` are passthroughs of compiled-model values and are declared opaque, except `routes.entries[].entityId`, which is pinned because consumers read it today. `consent` is pinned in full: its structure exists only to be this payload.",
   "type": "object",
@@ -25,7 +25,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha3"
+      "const": "registry.registrystack.org/breg-explain/v1alpha4"
     },
     "kind": {
       "const": "AccessExplanation"
@@ -78,7 +78,6 @@
       "type": ["string", "null"],
       "description": "The compiled authority inventory's failure, or null when the inventory was built. AuthorityInventoryError is a value-free enum serialized as one of these snake_case strings; the vocabulary is pinned and grows only with an apiVersion bump.",
       "enum": [
-        "anonymous_profile_carries_authority",
         "principal_claim_missing",
         "target_entity_not_compiled",
         "boundary_field_not_compiled",

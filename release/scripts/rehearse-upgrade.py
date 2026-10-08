@@ -1095,12 +1095,13 @@ class Breg:
             for step in journey["steps"]:
                 claims = step.get("claims")
                 if claims is None:
-                    credential: dict[str, Any] = {"type": "anonymous"}
-                else:
-                    name = f"journey-token-{journey['id']}-{step['id']}"
-                    write_secret(self.secrets / name, self.keys.mint(
-                        "EdDSA", BREG_KID, self.claims(claims), lifetime=280))
-                    credential = {"type": "bearer", "tokenRef": f"secret:file/{name}"}
+                    # A registry serves authenticated callers only, so every
+                    # journey step is bound to a bearer token.
+                    raise RehearsalError("a BReg starter journey step names no claims")
+                name = f"journey-token-{journey['id']}-{step['id']}"
+                write_secret(self.secrets / name, self.keys.mint(
+                    "EdDSA", BREG_KID, self.claims(claims), lifetime=280))
+                credential = {"type": "bearer", "tokenRef": f"secret:file/{name}"}
                 bindings.append({"journeyId": journey["id"], "stepId": step["id"],
                                  "credential": credential})
         path.write_text(json.dumps({**BREG_CREDENTIALS_ENVELOPE[side.label],

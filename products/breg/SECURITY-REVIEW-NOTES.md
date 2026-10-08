@@ -1591,8 +1591,7 @@ set and includes it in the definition digest. The digest also binds the types
 and mappings of processing fields and the source columns read by their derived
 SQL, so an unchanged expression cannot keep old releases visible after its
 input definitions change. Unrelated field definitions do not enter the digest.
-Anonymous profiles, encrypted
-processing fields, and consent-gated count grants are refused.
+Encrypted processing fields and consent-gated count grants are refused.
 
 Publication computes one ended period under the current package binding and
 one statement snapshot, retaining its shared history head for the freshness
@@ -1642,8 +1641,9 @@ reads its operator-supplied token file before calling the Rust client. Release l
 clients accept the complete envelope the server's
 cursor codec can issue, while retaining a fixed size bound.
 
-Anonymous refusals return before authenticated refusal auditing, preventing
-unauthenticated requests from filling that journal or observing sink health.
+A request without a verified bearer token is refused with 401 before
+authenticated refusal auditing, preventing unauthenticated requests from
+filling that journal or observing sink health.
 Authenticated unknown datasets and ungranted profiles enter refusal auditing;
 unknown IDs use a fixed route identity so caller input cannot enter the journal.
 Unmatched routes record the actual standard HTTP method and a fixed unknown
@@ -1661,7 +1661,7 @@ checked arithmetic, suppression, independent rounding, canonical bytes, and
 CSV escaping. The PostgreSQL statistics tests verify exact runtime privileges,
 atomic withdrawal, unexpected grants and altered withdrawal functions, and the
 authenticated HTTP release lifecycle. They also pin alias remapping in definition
-digests, owner count parity, anonymous refusals under audit failure, stored-byte
+digests, owner count parity, unauthenticated refusals under audit failure, stored-byte
 digest equality, real definition successor activation, and publication after
 maintained history erasure and rebaseline, including erasure between computation
 and persistence. The outer HTTP timeout test blocks the source table and verifies

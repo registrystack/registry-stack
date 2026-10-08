@@ -213,13 +213,17 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
         assert_eq!(body_json(response).await["code"], "resource.not_found");
     }
 
-    let anonymous = send(
+    let unauthenticated = send(
         &app,
         &format!("/v1/records/widgets/{RECORD_ID}/revisions"),
         None,
     )
     .await;
-    assert_eq!(anonymous.status(), StatusCode::NOT_FOUND);
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        body_json(unauthenticated).await["code"],
+        "authentication.refused"
+    );
     let wrong_purpose = send(
         &app,
         &format!("/v1/records/widgets/{RECORD_ID}/revisions?accessProfile=operator"),

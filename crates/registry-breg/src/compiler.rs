@@ -698,19 +698,6 @@ fn validate_manifest_projection(
                 path,
                 "the effective dataset access profile is not exposed by any member entity",
             ));
-        } else if selected_profiles
-            .iter()
-            .any(|profile| profile.anonymous != selected_profiles[0].anonymous)
-        {
-            let path = dataset.access_profile.as_ref().map_or_else(
-                || "project.manifestProjection.accessProfile".to_owned(),
-                |_| format!("project.manifestProjection.datasets[{index}].accessProfile"),
-            );
-            errors.push(Diagnostic::error(
-                "breg.manifest-projection.dataset-access-profile-ambiguous",
-                path,
-                "the effective dataset access profile must have one disclosure mode",
-            ));
         }
     }
 
@@ -1853,22 +1840,7 @@ pub(crate) fn expand_project_access(
                 "an access profile identifier is duplicated",
             ));
         }
-        if profile.anonymous {
-            if profile.principal_claim.is_some() {
-                errors.push(Diagnostic::error(
-                    "breg.access-profile.principal-claim-forbidden",
-                    "project.accessProfiles[].principalClaim",
-                    "an anonymous profile cannot declare a principal claim",
-                ));
-            }
-            if !profile.required_scopes.is_empty() || !profile.required_purposes.is_empty() {
-                errors.push(Diagnostic::error(
-                    "breg.access-profile.anonymous-claim-requirements-forbidden",
-                    "project.accessProfiles[]",
-                    "an anonymous profile cannot require scopes or purposes",
-                ));
-            }
-        } else if profile.principal_claim.as_deref().is_none_or(str::is_empty) {
+        if profile.principal_claim.as_deref().is_none_or(str::is_empty) {
             errors.push(Diagnostic::error(
                 "breg.access-profile.principal-claim-required",
                 "project.accessProfiles[].principalClaim",
@@ -1895,8 +1867,7 @@ pub(crate) fn expand_project_access(
             ));
         }
         if profile.task_grant.is_some()
-            && (profile.anonymous
-                || profile.actor_kind != Some(crate::contract::ActorKindSource::Agent)
+            && (profile.actor_kind != Some(crate::contract::ActorKindSource::Agent)
                 || profile.requester_clients.is_empty()
                 || profile.required_purposes.is_empty())
         {
@@ -2037,7 +2008,6 @@ pub(crate) fn expand_project_access(
             entity.access_profiles.push(AccessProfileSource {
                 id: profile.id.clone(),
                 default: profile.default,
-                anonymous: profile.anonymous,
                 actor_kind: profile.actor_kind,
                 requester_clients: profile.requester_clients.clone(),
                 task_grant: compiled_task_grant.clone(),
@@ -2360,32 +2330,6 @@ fn validate_access_log(
                 format!("{path}.exemptions[{profile_id}].delayDays"),
                 "delayDays must be at least 1 and less than retentionDays",
             ));
-        }
-    }
-    for profile in &entity.access_profiles {
-        if profile.anonymous && profile_has_direct_logged_read(profile) {
-            errors.push(Diagnostic::error(
-                "breg.access-log.anonymous-read-forbidden",
-                format!(
-                    "entities[id={}].accessProfiles[id={}].operations",
-                    entity.id, profile.id
-                ),
-                "an access-logged entity cannot grant anonymous record reads because every logged reader must be named",
-            ));
-        }
-    }
-    for source_entity in entities.values() {
-        for profile in &source_entity.access_profiles {
-            if profile.anonymous && profile_has_read_path_to(source_entity, profile, &entity.id) {
-                errors.push(Diagnostic::error(
-                    "breg.access-log.anonymous-read-forbidden",
-                    format!(
-                        "entities[id={}].accessProfiles[id={}].readPaths",
-                        source_entity.id, profile.id
-                    ),
-                    "an access-logged entity cannot be reached through an anonymous read path because every logged reader must be named",
-                ));
-            }
         }
     }
 }
@@ -3095,10 +3039,8 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             ));
         }
     }
-    validate_anonymous_constraint_processing(entity, &fields, errors);
     if let Some(temporal) = &entity.temporal {
         validate_temporal_deprecated_scope_bridge(entity, temporal, errors);
-        validate_anonymous_temporal_processing(entity, &fields, temporal, errors);
     }
 }
 
@@ -3133,100 +3075,6 @@ fn validate_temporal_deprecated_scope_bridge(
             "entities[].temporal.scopeFields",
             "deprecated temporal scopeFields must match an explicit temporal-non-overlap constraint during the predecessor transition",
         ));
-    }
-}
-
-fn validate_anonymous_temporal_processing(
-    entity: &EntitySource,
-    fields: &BTreeMap<&str, &FieldSource>,
-    temporal: &crate::contract::TemporalSource,
-    errors: &mut Vec<Diagnostic>,
-) {
-    if !entity
-        .access_profiles
-        .iter()
-        .any(|profile| profile.anonymous)
-    {
-        return;
-    }
-    let non_public = non_public_field_causes(
-        [&temporal.start_field, &temporal.end_field]
-            .into_iter()
-            .map(String::as_str),
-        fields,
-    );
-    if !non_public.is_empty() {
-        errors.push(Diagnostic::error(
-            "breg.access-profile.public-processing-non-public",
-            "entities[].temporal",
-            &format!(
-                "an anonymous temporal surface may process only public boundary fields: {non_public}"
-            ),
-        ));
-    }
-}
-
-fn validate_anonymous_constraint_processing(
-    entity: &EntitySource,
-    fields: &BTreeMap<&str, &FieldSource>,
-    errors: &mut Vec<Diagnostic>,
-) {
-    // In the current contract, `anonymous` marks the public profile surface.
-    // Every field processed by a constraint on that entity must therefore meet
-    // the public classification floor even when it is not otherwise readable.
-    if !entity
-        .access_profiles
-        .iter()
-        .any(|profile| profile.anonymous)
-    {
-        return;
-    }
-    let non_public = non_public_field_causes(
-        entity
-            .constraints
-            .iter()
-            .flat_map(constraint_processed_fields),
-        fields,
-    );
-    if !non_public.is_empty() {
-        errors.push(Diagnostic::error(
-            "breg.access-profile.public-processing-non-public",
-            "entities[].constraints[]",
-            &format!(
-                "an anonymous profile is a public surface and may process only public constraint fields: {non_public}"
-            ),
-        ));
-    }
-}
-
-fn constraint_processed_fields(constraint: &ConstraintSource) -> Vec<&str> {
-    match constraint {
-        ConstraintSource::Unique { fields, when, .. } => fields
-            .iter()
-            .map(String::as_str)
-            .chain(
-                when.iter()
-                    .flatten()
-                    .filter_map(unique_when_predicate_field),
-            )
-            .collect(),
-        ConstraintSource::Compare { left, right, .. } => {
-            vec![left.as_str(), right.as_str()]
-        }
-        ConstraintSource::IntRange { field, .. } | ConstraintSource::Vocabulary { field, .. } => {
-            vec![field.as_str()]
-        }
-        ConstraintSource::TemporalNonOverlap {
-            scope_fields,
-            start_field,
-            end_field,
-            ..
-        } => scope_fields
-            .iter()
-            .map(String::as_str)
-            .chain(start_field.iter().map(String::as_str))
-            .chain(end_field.iter().map(String::as_str))
-            .collect(),
     }
 }
 
@@ -3621,7 +3469,7 @@ fn validate_import_grant(
             "an import grant loads records in chunks, so the entity must declare batch maximumItems and maximumBytes",
         ));
     }
-    if access.anonymous || access.principal_claim.as_deref().is_none_or(str::is_empty) {
+    if access.principal_claim.as_deref().is_none_or(str::is_empty) {
         errors.push(Diagnostic::error(
             "breg.import.principal-required",
             path.clone(),
@@ -3665,7 +3513,7 @@ fn validate_profiles(
                 "an access profile must grant at least one operation",
             ));
         }
-        if !access.anonymous && access.principal_claim.as_deref().is_none_or(str::is_empty) {
+        if access.principal_claim.as_deref().is_none_or(str::is_empty) {
             errors.push(Diagnostic::error(
                 "breg.access-profile.principal-claim-required",
                 "entities[].accessProfiles[].principalClaim",
@@ -3714,27 +3562,6 @@ fn validate_profiles(
                 "a batch access profile must grant create or patch for its items",
             ));
         }
-        if access.anonymous
-            && access.operations.iter().any(|operation| {
-                matches!(
-                    operation,
-                    Operation::Create
-                        | Operation::Patch
-                        | Operation::Tombstone
-                        | Operation::Batch
-                        | Operation::SubmitRequest
-                        | Operation::ReviseRequest
-                        | Operation::CancelRequest
-                        | Operation::ApplyRequest
-                )
-            })
-        {
-            errors.push(Diagnostic::error(
-                "breg.access-profile.anonymous-mutation-forbidden",
-                "entities[].accessProfiles[].operations",
-                "an anonymous access profile cannot grant a mutation operation",
-            ));
-        }
         // A task grant carries the approval of the human who assigned the
         // task. A standing agent carries none, so a human must submit what it
         // drafts. Checked here so module-contributed profiles meet it too.
@@ -3762,17 +3589,8 @@ fn validate_profiles(
                 ));
             }
         }
-        if access.anonymous && access.operations.contains(&Operation::Snapshot) {
-            errors.push(Diagnostic::error(
-                "breg.access-profile.snapshot-anonymous-forbidden",
-                "entities[].accessProfiles[].operations",
-                "a snapshot access profile must be authenticated",
-            ));
-        }
         if !access.provenance_fields.is_empty()
-            && (access.anonymous
-                || !access.revision_access
-                || has_duplicates(&access.provenance_fields))
+            && (!access.revision_access || has_duplicates(&access.provenance_fields))
         {
             errors.push(Diagnostic::error(
                 "breg.access-profile.provenance-fields-invalid",
@@ -3781,9 +3599,7 @@ fn validate_profiles(
             ));
         }
         if access.allow_data_export
-            && (access.anonymous
-                || !access.operations.contains(&Operation::List)
-                || access.readable_fields.is_empty())
+            && (!access.operations.contains(&Operation::List) || access.readable_fields.is_empty())
         {
             errors.push(Diagnostic::error(
                 "breg.access-profile.data-export-invalid",
@@ -3802,7 +3618,6 @@ fn validate_profiles(
         }
         if access.request_visibility.is_some()
             && (entity.change_request.is_none()
-                || access.anonymous
                 || !access
                     .operations
                     .iter()
@@ -3815,7 +3630,7 @@ fn validate_profiles(
             ));
         }
         attachments::validate_profile(entity, access, errors);
-        validate_spatial_queries(access, entity, &fields, errors);
+        validate_spatial_queries(access, entity, errors);
         let mut read_processed = access.readable_fields.clone();
         read_processed.extend(access.filterable_fields.iter().cloned());
         read_processed.extend(access.sortable_fields.iter().cloned());
@@ -3897,44 +3712,6 @@ fn validate_profiles(
                 "an encrypted field cannot be a filterable or sortable field",
             ));
         }
-        if access.anonymous {
-            let mut causes = Vec::new();
-            if entity.classification != Classification::Public {
-                causes.push(format!(
-                    "entity `{}` is classified `{}`",
-                    entity.id,
-                    classification_id(entity.classification)
-                ));
-            }
-            for field in read_processed.iter().chain(
-                stored_processed
-                    .iter()
-                    .filter(|field| field.as_str() != "id"),
-            ) {
-                if derived.contains_key(field.as_str()) {
-                    causes.push(format!("field `{field}` is derived"));
-                } else if let Some(stored) = fields.get(field.as_str()) {
-                    if stored.classification != Classification::Public {
-                        causes.push(format!(
-                            "field `{field}` is classified `{}`",
-                            classification_id(stored.classification)
-                        ));
-                    }
-                }
-            }
-            causes.dedup();
-            if !causes.is_empty() {
-                errors.push(Diagnostic::error(
-                    "breg.access-profile.public-processing-non-public",
-                    "entities[].accessProfiles[]",
-                    &format!(
-                        "anonymous profile `{}` may process only public fields: {}",
-                        access.id,
-                        causes.join(", ")
-                    ),
-                ));
-            }
-        }
         let mut boundaries = BTreeSet::new();
         for boundary in &access.row_boundaries {
             if boundary.field != "id"
@@ -3982,7 +3759,7 @@ fn validate_profiles(
                 ));
             }
         }
-        validate_lookup_permissions(access, entity, &fields, errors);
+        validate_lookup_permissions(access, entity, errors);
         validate_read_path_permissions(access, entity, entities, errors);
         if access.allow_count
             && !access.operations.contains(&Operation::List)
@@ -4097,7 +3874,6 @@ fn validate_single_default(
 fn validate_spatial_queries(
     access: &AccessProfileSource,
     entity: &EntitySource,
-    fields: &BTreeMap<&str, &FieldSource>,
     errors: &mut Vec<Diagnostic>,
 ) {
     let Some(spatial) = &access.spatial_queries else {
@@ -4152,19 +3928,6 @@ fn validate_spatial_queries(
             "bbox spatial queries require readable access to the GeoJSON geometry field",
         ));
     }
-    if access.anonymous {
-        let non_public =
-            non_public_field_causes([geojson.geometry_field.as_str()].into_iter(), fields);
-        if !non_public.is_empty() {
-            errors.push(Diagnostic::error(
-                "breg.access-profile.public-processing-non-public",
-                "entities[].accessProfiles[].spatialQueries.bbox",
-                &format!(
-                    "an anonymous bbox query may process only a public GeoJSON geometry field: {non_public}"
-                ),
-            ));
-        }
-    }
 }
 
 fn validate_bbox_span(
@@ -4186,7 +3949,6 @@ fn validate_bbox_span(
 fn validate_lookup_permissions(
     access: &AccessProfileSource,
     entity: &EntitySource,
-    fields: &BTreeMap<&str, &FieldSource>,
     errors: &mut Vec<Diagnostic>,
 ) {
     if access.lookups.is_empty() {
@@ -4221,19 +3983,6 @@ fn validate_lookup_permissions(
             ));
             continue;
         };
-        if access.anonymous {
-            let non_public =
-                non_public_field_causes(selector.fields.iter().map(String::as_str), fields);
-            if !non_public.is_empty() {
-                errors.push(Diagnostic::error(
-                    "breg.access-profile.public-processing-non-public",
-                    "entities[].accessProfiles[].lookups",
-                    &format!(
-                        "an anonymous lookup may process only public selector fields: {non_public}"
-                    ),
-                ));
-            }
-        }
         match lookup.value_origin {
             LookupValueOrigin::Request if !lookup.claim_mapping.is_empty() => {
                 errors.push(Diagnostic::error(
@@ -4306,9 +4055,9 @@ fn validate_read_path_permission_fields(
     let Some(target) = entities.get(&path.to) else {
         return;
     };
-    let Some(through) = entities.get(&path.through) else {
+    if !entities.contains_key(&path.through) {
         return;
-    };
+    }
     let target_stored = stored_field_map(target);
     let target_derived = derived_field_map(target);
     if grant.readable_fields.is_empty() {
@@ -4326,35 +4075,6 @@ fn validate_read_path_permission_fields(
             "entities[].accessProfiles[].readPaths[]",
             "read-path filterable and sortable fields must be readable",
         ));
-    }
-    if access.anonymous && source.classification != Classification::Public {
-        errors.push(Diagnostic::error(
-            "breg.access-profile.public-processing-non-public",
-            "entities[].accessProfiles[].readPaths",
-            &format!(
-                "an anonymous read path may process only public source and join fields: entity `{}` is classified `{}`",
-                source.id,
-                classification_id(source.classification)
-            ),
-        ));
-    }
-    if access.anonymous {
-        if let Some((source_ref, target_ref)) = infer_read_path_refs(source, through, &path.to) {
-            let through_fields = stored_field_map(through);
-            let non_public = non_public_field_causes(
-                [source_ref, target_ref].iter().map(String::as_str),
-                &through_fields,
-            );
-            if !non_public.is_empty() {
-                errors.push(Diagnostic::error(
-                    "breg.access-profile.public-processing-non-public",
-                    "entities[].accessProfiles[].readPaths",
-                    &format!(
-                        "an anonymous read path may process only public join fields: {non_public}"
-                    ),
-                ));
-            }
-        }
     }
     let grant_path = format!(
         "entities[id={}].accessProfiles[id={}].readPaths[path={}]",
@@ -4384,33 +4104,6 @@ fn validate_read_path_permission_fields(
         .chain(&grant.filterable_fields)
         .chain(&grant.sortable_fields)
         .collect::<BTreeSet<_>>();
-    if access.anonymous {
-        let mut causes: Vec<String> = Vec::new();
-        for field in &processed {
-            if target_derived.contains_key(field.as_str()) {
-                causes.push(format!("field `{field}` is derived"));
-            } else if field.as_str() != "id" {
-                if let Some(stored) = target_stored.get(field.as_str()) {
-                    if stored.classification != Classification::Public {
-                        causes.push(format!(
-                            "field `{field}` is classified `{}`",
-                            classification_id(stored.classification)
-                        ));
-                    }
-                }
-            }
-        }
-        if !causes.is_empty() {
-            errors.push(Diagnostic::error(
-                "breg.access-profile.public-processing-non-public",
-                "entities[].accessProfiles[].readPaths",
-                &format!(
-                    "an anonymous read path may process only public target fields and no derived fields: {}",
-                    causes.join(", ")
-                ),
-            ));
-        }
-    }
     if processed.is_empty() && grant.allow_count {
         errors.push(Diagnostic::error(
             "breg.access-profile.read-path-count-without-fields",
@@ -4920,39 +4613,6 @@ fn valid_request_lifecycle_transition(value: &str) -> bool {
 
 fn valid_request_lifecycle_state(value: &str) -> bool {
     REQUEST_LIFECYCLE_STATES.contains(&value)
-}
-
-/// Name every field in `candidates` that an anonymous surface may not process,
-/// with the classification that keeps it out. The result is empty when every
-/// candidate is public.
-fn non_public_field_causes<'a>(
-    candidates: impl Iterator<Item = &'a str>,
-    fields: &BTreeMap<&str, &FieldSource>,
-) -> String {
-    let mut causes: Vec<String> = Vec::new();
-    for candidate in candidates {
-        if let Some(field) = fields.get(candidate) {
-            if field.classification != Classification::Public {
-                let cause = format!(
-                    "field `{candidate}` is classified `{}`",
-                    classification_id(field.classification)
-                );
-                if !causes.contains(&cause) {
-                    causes.push(cause);
-                }
-            }
-        }
-    }
-    causes.join(", ")
-}
-
-/// The authored spelling of one classification level.
-fn classification_id(classification: Classification) -> &'static str {
-    match classification {
-        Classification::Public => "public",
-        Classification::Internal => "internal",
-        Classification::Restricted => "restricted",
-    }
 }
 
 /// Every member that appears more than once, in first-seen order.
@@ -5979,9 +5639,7 @@ fn compile_routes_and_access(
                 .values()
                 .filter(|profile| {
                     profile.operations.contains(&operation)
-                        && (operation != Operation::Revisions
-                            || profile.revision_access && !profile.anonymous)
-                        && (operation != Operation::Snapshot || !profile.anonymous)
+                        && (operation != Operation::Revisions || profile.revision_access)
                 })
                 .collect();
             if profiles.is_empty() {
@@ -6338,13 +5996,6 @@ fn metadata_response_surface<'a>(
             route.operation != Operation::Snapshot
                 || response_entity.fields.contains_key(field.as_str())
         })
-        .filter(|field| {
-            !profile.anonymous
-                || response_entity
-                    .fields
-                    .get(*field)
-                    .is_some_and(|field| field.classification == Classification::Public)
-        })
         .cloned()
         .collect();
     Some((response_entity, readable_fields))
@@ -6437,7 +6088,7 @@ fn compile_query_inventory(
                     }
                 }
             }
-            if profile.operations.contains(&Operation::Snapshot) && !profile.anonymous {
+            if profile.operations.contains(&Operation::Snapshot) {
                 let binding = entity
                     .temporal
                     .as_ref()
@@ -6702,21 +6353,6 @@ fn query_operation(
             ));
             return None;
         }
-        if profile.anonymous
-            && temporal_fields.iter().any(|field| {
-                entity
-                    .fields
-                    .get(*field)
-                    .is_some_and(|compiled| compiled.classification != Classification::Public)
-            })
-        {
-            errors.push(Diagnostic::error(
-                "breg.query.temporal-public-processing-non-public",
-                "entities[].accessProfiles[]",
-                "an anonymous temporal query may process only public boundary fields",
-            ));
-            return None;
-        }
     }
 
     let mut projection_fields = profile
@@ -6748,31 +6384,14 @@ fn query_operation(
         .collect::<Vec<_>>();
     let mut sort_fields = sort_fields;
     if entity.change_request.is_some() && kind == CompiledQueryKind::List {
-        // A proposal digest commits to the full frozen packet, including
-        // private values. Anonymous polling must not become a hash oracle.
-        filter_fields.extend(
-            request_state_query_filter_fields()
-                .into_iter()
-                .filter(|field| {
-                    !profile.anonymous
-                        || field.field != crate::model::REQUEST_EFFECT_DIGEST_QUERY_FIELD
-                }),
-        );
-        if !profile.anonymous
-            && profile
-                .readable_request_fields
-                .contains(&crate::contract::RequestMetadataFieldSource::ReviewState)
+        filter_fields.extend(request_state_query_filter_fields());
+        if profile
+            .readable_request_fields
+            .contains(&crate::contract::RequestMetadataFieldSource::ReviewState)
         {
             filter_fields.push(crate::model::request_review_query_filter_field());
         }
-        sort_fields.extend(
-            request_state_query_sort_fields()
-                .into_iter()
-                .filter(|field| {
-                    !profile.anonymous
-                        || field.field != crate::model::REQUEST_EFFECT_DIGEST_QUERY_FIELD
-                }),
-        );
+        sort_fields.extend(request_state_query_sort_fields());
     }
     let mut processing_fields = projection_fields.iter().cloned().collect::<BTreeSet<_>>();
     processing_fields.extend(
@@ -7409,15 +7028,6 @@ fn valid_uuid(value: &str) -> bool {
             .enumerate()
             .all(|(index, byte)| matches!(index, 8 | 13 | 18 | 23) || byte.is_ascii_hexdigit())
         && Uuid::parse_str(value).is_ok_and(|identifier| identifier.to_string() == value)
-}
-
-fn unique_when_predicate_field(predicate: &UniqueWhenPredicate) -> Option<&str> {
-    match predicate {
-        UniqueWhenPredicate::FieldEquals { field, .. }
-        | UniqueWhenPredicate::FieldIsNull { field }
-        | UniqueWhenPredicate::FieldIsNotNull { field } => Some(field),
-        UniqueWhenPredicate::ActiveLifecycle {} => None,
-    }
 }
 
 fn normalized_constraint(constraint: &ConstraintSource) -> ConstraintSource {

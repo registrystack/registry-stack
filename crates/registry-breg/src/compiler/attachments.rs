@@ -155,20 +155,6 @@ pub(super) fn validate_profile(
                 ));
             }
         }
-        if profile.anonymous {
-            for (member, fields) in [
-                ("readableFields", &profile.readable_fields),
-                ("writableFields", &profile.writable_fields),
-            ] {
-                if fields.contains(&slot.id) {
-                    errors.push(Diagnostic::error(
-                        "breg.attachment.access-authentication-required",
-                        format!("{base}.{member}[value={}]", slot.id),
-                        "attachment metadata and content require authenticated request access",
-                    ));
-                }
-            }
-        }
     }
 }
 

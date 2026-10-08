@@ -1,11 +1,10 @@
 {
   "admitted": true,
-  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
   "authorityIssued": false,
   "credentialsVerified": false,
   "effectiveProfile": {
     "allowDataExport": false,
-    "anonymous": false,
     "default": false,
     "filterableFields": [
       "code",

@@ -11,7 +11,7 @@ whose `explanation` field carries an envelope plus a subject-specific payload:
   "revision": "...",
   "findings": [],
   "explanation": {
-    "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+    "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
     "kind": "RoutesExplanation",
     "routes": [ "..." ]
   }
@@ -39,6 +39,11 @@ with each group expanded. `recipients` is the recipient set of the scenario's
 states, without the unreachable `superseded`, and a twenty-first enforcement
 layer, `review_outcome`, for the `revise` and `rebase` events.
 
+`v1alpha4` removes what an anonymous access profile once carried, because a
+registry serves authenticated callers only: an immediate-action permission in
+`ActionsExplanation` has no `anonymous` member, and `claimContractError` in
+`AccessExplanation` no longer takes `anonymous_profile_carries_authority`.
+
 | Subject | `--scenario` | `kind` | Schema |
 |---|---|---|---|
 | `model` | n/a | `ModelExplanation` | `ModelExplanation.schema.json` |
@@ -64,7 +69,7 @@ cross-file `$ref`), and is validated against every fixture the gate covers by
 `crates/registry-bregctl/tests/explain_contract.rs`. Its `$id` is its
 identifier in the Registry Stack identifier catalog, named for the kind and
 the version, for example
-`https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha3.schema.json`.
+`https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha4.schema.json`.
 
 ## Examples
 

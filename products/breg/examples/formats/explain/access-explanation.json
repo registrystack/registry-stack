@@ -4,7 +4,7 @@
     "actions": [],
     "routes": []
   },
-  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
   "claimContract": {
     "directClaims": {
       "assigned_districts": {
@@ -38,7 +38,6 @@
       "profiles": [
         {
           "allowDataExport": false,
-          "anonymous": false,
           "default": false,
           "filterableFields": [
             "code",

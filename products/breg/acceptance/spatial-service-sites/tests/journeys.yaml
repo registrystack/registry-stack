@@ -83,7 +83,10 @@ journeys:
       - id: public-map-reader-lists-public-point-fields
         entity: service-site
         accessProfile: map-reader
-        claims: {}
+        claims:
+          principal: synthetic-public-map
+          purpose: service-site-public-map
+          scopes: [service-sites:public.read]
         request:
           type: query
           count: true
@@ -96,7 +99,10 @@ journeys:
       - id: public-map-reader-bbox-finds-central-site
         entity: service-site
         accessProfile: map-reader
-        claims: {}
+        claims:
+          principal: synthetic-public-map
+          purpose: service-site-public-map
+          scopes: [service-sites:public.read]
         request:
           type: query
           count: true
@@ -110,7 +116,10 @@ journeys:
       - id: directory-reader-lists-without-geometry
         entity: service-site
         accessProfile: directory-reader
-        claims: {}
+        claims:
+          principal: synthetic-public-directory
+          purpose: service-site-public-directory
+          scopes: [service-sites:public.read]
         request:
           type: query
           count: true
@@ -123,7 +132,10 @@ journeys:
       - id: directory-reader-bbox-is-refused
         entity: service-site
         accessProfile: directory-reader
-        claims: {}
+        claims:
+          principal: synthetic-public-directory
+          purpose: service-site-public-directory
+          scopes: [service-sites:public.read]
         request:
           type: query
           bbox: {west: "100.540000000", south: "13.740000000", east: "100.560000000", north: "13.760000000"}
