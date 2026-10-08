@@ -3138,13 +3138,6 @@ exceptions:
   wp: WP6
   reason: an object schema with no members accepts any member
   resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-CHECK-1
-  format: casework/breg-source-description
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-ENV-2
   format: casework/breg-source-description
   location: products/platform/config-formats.yaml#/current/apiVersion
