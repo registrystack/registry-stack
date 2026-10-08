@@ -160,6 +160,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Runtime configuration conformance gate tests",
         "run: python3 -m unittest products/platform/scripts/test_check_config_conformance.py",
     ),
+    (
+        "Configuration conformance corpus",
+        "run: products/platform/scripts/run-config-conformance.sh --strict --bin-dir target/debug",
+    ),
+    (
+        "Configuration conformance corpus runner tests",
+        "run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_config_conformance.py",
+    ),
     ("Secret scan job", "secrets:"),
     ("Gitleaks version pin", 'GITLEAKS_VERSION: "8.30.1"'),
     ("Gitleaks archive checksum", "GITLEAKS_LINUX_X64_SHA256:"),

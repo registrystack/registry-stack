@@ -132,9 +132,27 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
         "registry-messaging",
     }
 )
+# The configuration conformance corpus runs the registered `check` command of
+# each format it reaches from the built binaries of these packages, which the
+# job builds; a change to one, or to anything it links, runs the corpus.
+CONFIG_CHECK_PACKAGES = frozenset(
+    {
+        "registry-bregctl",
+        "registry-caseworkctl",
+        "registry-discoveryctl",
+        "registry-evidence",
+        "registry-evidencectl",
+        "registry-manifest-cli",
+        "registry-messagingctl",
+        "registry-render",
+        "registry-schedulingctl",
+    }
+)
 CONFIG_CONFORMANCE_INPUTS = (
     "products/platform/generated/*",
     "products/platform/scripts/*config-conformance*",
+    "products/platform/scripts/*config_conformance*",
+    "products/platform/conformance/*",
     "products/breg/generated/runtime/*",
     "products/casework/generated/runtime/*",
     "products/scheduling/generated/runtime/*",
@@ -1127,7 +1145,10 @@ def classify(
             or matches(path, *CONFIG_CONFORMANCE_INPUTS, *CONFIG_CONVENTIONS_INPUTS)
             for path in paths
         )
-        or bool(affected & (CONFIG_CONFORMANCE_PACKAGES | format_crates))
+        or bool(
+            affected
+            & (CONFIG_CONFORMANCE_PACKAGES | CONFIG_CHECK_PACKAGES | format_crates)
+        )
     )
     release_tool = (
         complete

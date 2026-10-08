@@ -1361,7 +1361,7 @@ jobs:
       - rust-policy
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.config_conformance == 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1417,6 +1417,21 @@ jobs:
             echo "The event comparison policy is unavailable." >&2
             exit 1
           fi
+
+      - name: Test configuration conformance corpus runner
+        run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_config_conformance.py
+
+      # The binaries the registered `check` commands name; a cell whose
+      # program is missing from the directory fails.
+      - name: Build configuration check commands
+        run: >-
+          cargo build --locked --bins
+          -p registry-bregctl -p registry-caseworkctl -p registry-schedulingctl
+          -p registry-messagingctl -p registry-discoveryctl -p registry-render
+          -p registry-evidence -p registry-evidencectl -p registry-manifest-cli
+
+      - name: Run configuration conformance corpus
+        run: products/platform/scripts/run-config-conformance.sh --strict --bin-dir target/debug
 
   rust-result:
     name: Rust workspace

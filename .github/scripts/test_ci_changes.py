@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,8 @@ from ci_changes import (
     MESSAGING_PACKAGES,
     MESSAGING_TUTORIAL_INPUTS,
     STACK_CLIENT_PACKAGES,
+    CONFIG_CHECK_PACKAGES,
+    CONFIG_CONFORMANCE_INPUTS,
     CONFIG_CONFORMANCE_PACKAGES,
     SECURITY_WORKFLOW_GATES,
     SHARDS,
@@ -41,6 +44,7 @@ from ci_changes import (
     classify,
     config_format_inputs,
     lock_change,
+    matches,
     repo_docs_sources,
 )
 from run_cargo_packages import command_args, package_args
@@ -66,6 +70,18 @@ EVIDENCE_CONFIGURATION_GENERATOR = Path(
     "docs/site/scripts/generate-evidence-configuration.mjs"
 )
 AUTHORING_SCHEMA_DIRECTORY = Path("crates/registry-evidencectl/schemas/authoring")
+
+
+def config_conformance_runner() -> Any:
+    """The configuration conformance corpus runner, loaded as a module."""
+
+    script = Path("products/platform/scripts/run-config-conformance.py")
+    spec = importlib.util.spec_from_file_location("run_config_conformance", script)
+    assert spec is not None and spec.loader is not None
+    runner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = runner
+    spec.loader.exec_module(runner)
+    return runner
 
 
 def published_evidence_configuration_schemas() -> set[str]:
@@ -722,6 +738,95 @@ class CiChangesTest(unittest.TestCase):
             if isinstance(row.digest_mismatch, gate.TestRef)
         }
         for path in sorted(digest_tests):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
+
+    def test_config_conformance_corpus_inputs_select_the_conformance_gate_by_name(
+        self,
+    ) -> None:
+        """The corpus, its harness, and its runner select the gate by name,
+        not only through the platform packages a products/platform path seeds."""
+        paths = [
+            path.as_posix()
+            for path in sorted(Path("products/platform/conformance").rglob("*"))
+            if path.is_file()
+        ] + [
+            "products/platform/scripts/run-config-conformance.py",
+            "products/platform/scripts/run-config-conformance.sh",
+            "products/platform/scripts/test_run_config_conformance.py",
+            "products/platform/scripts/test_check_config_conformance.py",
+        ]
+        self.assertIn("products/platform/conformance/yaml/formats.yaml", paths)
+        self.assertIn("products/platform/conformance/yaml/expected-failures.yaml", paths)
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertTrue(matches(path, *CONFIG_CONFORMANCE_INPUTS))
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
+
+    def test_config_check_packages_build_the_programs_the_corpus_runs(self) -> None:
+        """The corpus runner executes the registered check command of every
+        format it reaches and the commands its harness prepares with. The
+        packages whose binaries those are: the job builds them, and a change to
+        any of them, or to anything they link, runs the job."""
+        runner = config_conformance_runner()
+        reached, _ = runner.partition_formats(
+            runner.load_registry(Path(runner.REGISTRY))
+        )
+        harness = runner.load_harness(Path(runner.CORPUS) / "formats.yaml")
+        commands = [str(fmt.check) for fmt in reached] + [
+            command for entry in harness.values() for command in entry.get("prepare", ())
+        ]
+        programs = {shlex.split(command)[0] for command in commands}
+        binaries = {
+            target["name"]: package["name"]
+            for package in self.metadata["packages"]
+            for target in package["targets"]
+            if "bin" in target["kind"]
+        }
+        self.assertIn("messagingctl", programs)
+        self.assertLessEqual(programs, set(binaries))
+        self.assertEqual({binaries[program] for program in programs}, CONFIG_CHECK_PACKAGES)
+        steps = {
+            step.get("name"): step
+            for step in self.workflow_jobs["config-conformance"]["steps"]
+        }
+        build = steps["Build configuration check commands"]["run"].split()
+        self.assertEqual(
+            {build[index + 1] for index, word in enumerate(build) if word == "-p"},
+            CONFIG_CHECK_PACKAGES,
+        )
+        for package in sorted(CONFIG_CHECK_PACKAGES):
+            path = f"{self.workspace.roots[package]}/src/main.rs"
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
+
+    def test_every_config_conformance_staged_project_is_routed(self) -> None:
+        """The corpus runner stages a copy of each reached example's directory,
+        or of the project and copies its harness names, so a change anywhere in
+        one can change a result."""
+        runner = config_conformance_runner()
+        reached, _ = runner.partition_formats(
+            runner.load_registry(Path(runner.REGISTRY))
+        )
+        harness = runner.load_harness(Path(runner.CORPUS) / "formats.yaml")
+        sources = {
+            entry.get("project", Path(str(fmt.example)).parent.as_posix())
+            for fmt in reached
+            for entry in (harness.get(fmt.id, {}),)
+        } | {
+            copy["from"]
+            for entry in harness.values()
+            for copy in (entry.get("copies") or {}).values()
+        }
+        self.assertIn("crates/registry-evidencectl/templates/sqlite-extract", sources)
+        for source in sorted(sources):
+            path = source if Path(source).is_file() else f"{source}/conformance-probe.yaml"
             with self.subTest(path=path):
                 self.assertTrue(
                     classify(self.workspace, (path,))["config_conformance"]

@@ -1512,6 +1512,26 @@ class GateInventoryTest(unittest.TestCase):
             self.module.missing_gates(text),
         )
 
+    def test_missing_config_conformance_corpus_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: products/platform/scripts/run-config-conformance.sh --strict --bin-dir target/debug",
+            "run: products/platform/scripts/run-config-conformance.sh --bin-dir target/debug",
+        )
+        self.assertIn(
+            "Configuration conformance corpus",
+            self.module.missing_gates(text),
+        )
+
+    def test_missing_config_conformance_corpus_runner_tests_are_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_config_conformance.py",
+            "run: true # Configuration conformance corpus runner tests disabled",
+        )
+        self.assertIn(
+            "Configuration conformance corpus runner tests",
+            self.module.missing_gates(text),
+        )
+
     def test_missing_platform_fuzz_runner_is_reported(self) -> None:
         text = self.workflow.replace(
             "run: products/platform/scripts/run-fuzz-smoke.sh",
