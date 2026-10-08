@@ -294,9 +294,9 @@ For an unknown key, `next:` proposes the closest accepted key when one differs o
 case, or by at most two edits (one edit for an accepted key of four characters or fewer, counting
 a swap of two neighbouring characters as one edit). Otherwise it lists the accepted keys.
 
-A few blocks are exceptions, such as `audit` in the Casework and Scheduling runtime files. In
-those blocks the reader reports only the first unknown key, and `next:` asks you to remove it
-without proposing or listing accepted keys.
+A few blocks are exceptions, such as `audit` in the Casework and Scheduling runtime files. These
+blocks are decoded outside the reader's key checks, so a check stops at the first unknown key in
+them, and `next:` asks you to remove it without proposing or listing accepted keys.
 
 The code names the problem. The message wording is human-readable output, which
 [API stability](../api-stability/#exempt-surfaces) exempts from its promise.
