@@ -82,10 +82,11 @@ Also out of scope:
 **CFG-ENV-1 (MUST). Every document carries `apiVersion` and `kind`.** Both
 are plain strings at the top level, in any position, and the reader checks
 them before it decodes any other member. Neither may come from `${...}`
-substitution. A document missing either is refused (`config.missing-envelope`);
-a document of another format, or at a version the reader does not read, is
-refused with a message that names the expected `apiVersion` and `kind`.
-When both are wrong, `kind` is reported first.
+substitution. A document missing either is refused at its root node, with
+the empty path (`config.missing-envelope`); a document of another format, or
+at a version the reader does not read, is refused with a message that names
+the expected `apiVersion` and `kind`. When both are wrong, only `kind` is
+reported (`config.wrong-kind`).
 *Why:* a reader can refuse the wrong file with a precise message ("this is a
 `CaseworkFixture`, `casework check` reads a `CaseworkProject`"), editors can
 pick a schema, and a format can be versioned on its own.
@@ -214,9 +215,10 @@ resolve to a number, boolean, or null (`1:`, `true:`, `~:`) is refused
 (`yaml.non-string-key`); quote it.
 
 **CFG-YAML-6 (MUST). Input is bounded.** A document larger than 1 MiB is
-refused before parsing (`yaml.too-large`), naming the bound; the bound is the
-same for every format, YAML or JSON; a product may lower it for a format,
-never raise it. A document
+refused before parsing (`yaml.too-large`), naming the bound, and a document
+of exactly 1 MiB is accepted; the bound is the same for every format, YAML or
+JSON; a product may lower it for a format, never raise it, and declares the
+lower bound in the format's registry entry. A document
 nested deeper than 128 levels of mappings and lists is refused
 (`yaml.too-deep`), naming the bound. Input is UTF-8; a leading byte-order mark
 is accepted and ignored; LF and CRLF line endings are both accepted.
@@ -306,6 +308,9 @@ lexically; one that leaves the project directory is refused, and so is one
 whose target, after following links, lies outside it.
 *Why:* a file's meaning must not depend on the directory a command was run
 from.
+*Enforced by:* product CLI tests; the conformance corpus, in authored formats
+(the file at the registry's `relativePath` role moved outside the project and
+reached through `../` segments, then through a link left in its place).
 
 **CFG-VAL-9 (MUST). A value whose type another declaration states is checked
 against that declaration.** A predicate operand compared with a declared
@@ -314,6 +319,10 @@ format's check command; a mismatch is an error naming the declared type, never
 a runtime non-match.
 *Why:* an operand of the wrong type never matches, and the item silently takes
 the default path.
+*Enforced by:* product CLI tests (for a partial-unique predicate,
+`crates/registry-breg/tests/compiler_contract.rs`,
+`partial_unique_rejects_invalid_literals_and_json_predicate_fields`); the
+conformance corpus (text planted at the registry's `operand` role).
 
 **CFG-VAL-10 (SHOULD). Each path member's schema states whether it accepts a
 relative path.** Operator files accept relative paths unless the product gives
@@ -423,10 +432,15 @@ every reference the same way.
 **CFG-ID-4 (MUST). Every reference is resolved by the format's check
 command,** including references to other files of the same product. A
 dangling reference is an error at check time, not at activation.
+*Enforced by:* product CLI tests; the conformance corpus (an identifier
+nothing defines, written at the registry's `reference` role).
 
 **CFG-ID-5 (MUST). Named items are a list of mappings, each with an `id`
 member, when their order carries meaning, and an id-keyed mapping when it
 does not.** Either way identifiers are unique and a duplicate is refused.
+*Enforced by:* product CLI tests; the conformance corpus (the first item of
+the list at the registry's `idList` role copied after its last item, refused
+with `config.duplicate-id` at the copy's `id`).
 
 **CFG-ID-6 (MUST). A list that is a set refuses duplicates**
 (`config.duplicate-item`) instead of collapsing them, and its schema declares
@@ -435,7 +449,9 @@ does not.** Either way identifiers are unique and a duplicate is refused.
 `IndexSet` keep one copy silently and are not reader types. The same family
 provides the id-unique list that CFG-ID-5 requires.
 *Enforced by:* the source lint (no set type in the reader-type closure); the
-conformance corpus (a duplicated item in a set position).
+convention lint (a list of values or identifiers declares `uniqueItems`); the
+conformance corpus (the first item of the set at the registry's `set` role
+copied after its last item, refused with `config.duplicate-item`).
 
 **CFG-ID-7 (MUST). A union names its variant in one of two shapes.**
 Internally tagged: a `type` member, whose values follow CFG-NAME-2, beside the
@@ -477,8 +493,9 @@ value outside them with `config.out-of-range`, naming the bounds. An implicit
 `minimum: 0` for an unsigned type does not state a bound.
 *Enforced by:* the convention lint (every `integer` property declares
 `minimum` and `maximum`); the conformance corpus boundary sweep (each integer
-member of each format's example set to its maximum plus one and its minimum
-minus one).
+in each format's example whose registered schema states both bounds, set one
+past its maximum and then one below its minimum; a format with no registered
+schema is not swept).
 
 ## 7. Empty, null, and omitted values
 
@@ -566,8 +583,10 @@ inside string values, never in keys, `apiVersion`, `kind`, a member ending in
 (refused without repeating the message), with `NAME` matching
 `[A-Za-z_][A-Za-z0-9_]*`; there is no escape. A substitution in an integer or
 boolean position is refused (CFG-VAL-3): write the value or template the
-whole file. An authored file containing a substitution expression is refused,
-and the remedy names the operator-file member that binds such a value or,
+whole file. An authored file containing a substitution expression is refused
+at that value (`config.substitution-not-allowed`), as a structural problem
+(CFG-DIAG-5), and the remedy names the operator-file member that binds such a
+value or,
 where the product has none, says to write the value in the authored file.
 Text that is not an expression, such as a lone `${`, is accepted.
 *Why:* an authored file must mean the same thing on every machine, and a
@@ -661,7 +680,10 @@ the command depends on was unavailable. Every checking command takes
 **CFG-DIAG-5 (MUST). A check reports every problem it can find in one run.**
 Structural problems are those the reader finds before decoding: every `yaml.`
 code and the envelope check. All are reported together, and a document with
-one is not decoded. While decoding, the reader records every unknown and
+one is not decoded. A problem that stops the parser ends the pass, so nothing
+after it is found: `yaml.too-large` and `yaml.not-utf8` are reported alone,
+before parsing; a syntax error, `yaml.too-deep`, and `yaml.multiple-documents`
+follow the problems found before them. While decoding, the reader records every unknown and
 removed key and continues; decoding stops at its first other error in a
 document. Semantic checks run only on documents decoded without error and
 report all their findings.
@@ -732,6 +754,9 @@ across products, the modeline (CFG-SCHEMA-7) selects the schema.
 `# yaml-language-server: $schema=<$id>` modeline on its first line.** The
 modeline may name the local schema copy the tool wrote instead of the `$id`,
 for a network that cannot reach `id.registrystack.org`.
+*Enforced by:* the conformance corpus runner's `init` mode, which runs each
+product's init command named in the corpus harness and reads the first line
+of each format's file it writes.
 
 **CFG-SCHEMA-8 (MUST). Every position keeps its source position.** A reader
 type decodes so that every error, including one inside a union variant or a
@@ -852,11 +877,11 @@ Each MUST rule appears once; SHOULD rules are in the last row.
 |---|---|
 | CFG-ENV-1, 4; CFG-YAML-2 to 8; CFG-VAL-1 to 3; CFG-EMPTY-1; CFG-SEC-2, 3; CFG-DIAG-1, 2, 5; CFG-CHANGE-2 | reader unit tests named with the rule ID; the conformance corpus; for CFG-ENV-1 also the convention lint (`const` envelope) |
 | CFG-YAML-1 | `disallowed-methods` in every `clippy.toml` in the repository, with the proof script; the conformance corpus; the convention lint's source scan (a reader that bypasses `registry-platform-yaml`) |
-| CFG-ENV-2, 3, 6; CFG-NAME-1 to 5; CFG-ID-1, 6, 7; CFG-QTY-1 to 4; CFG-VAL-6, 7; CFG-EMPTY-2, 4; CFG-SEC-1; CFG-EMBED-2; CFG-SCHEMA-1, 3 to 6 | `check-config-conventions.py` over the registry and every schema, with the exceptions register as ratchet; for CFG-EMPTY-2 the lint checks the sentinel shape and review classifies each member as granting or restricting; for CFG-SEC-1 also the `SecretReference` parser tests; for CFG-ID-6 also the source lint (set types) and a corpus case; for CFG-QTY-4 also the corpus boundary sweep |
+| CFG-ENV-2, 3, 6; CFG-NAME-1 to 5; CFG-ID-1, 6, 7; CFG-QTY-1 to 4; CFG-VAL-6, 7; CFG-EMPTY-2, 4; CFG-SEC-1; CFG-EMBED-2; CFG-SCHEMA-1, 3 to 6 | `check-config-conventions.py` over the registry and every schema, with the exceptions register as ratchet; for CFG-EMPTY-2 the lint checks the sentinel shape and review classifies each member as granting or restricting; for CFG-SEC-1 also the `SecretReference` parser tests; for CFG-ID-6 also the source lint (set types) and the corpus's duplicated set item; for CFG-QTY-4 also the corpus boundary sweep over the bounds each format's registered schema states |
 | CFG-SCHEMA-8; CFG-CHANGE-1 | source lint over the reader-type closure (`flatten`, `untagged`, `tag`, `alias`, set types); the corpus unknown-key sweep |
 | CFG-SCHEMA-2 | each product's schema drift check, in a job that runs on every pull request touching the product; the convention lint (a format with no generated schema) |
-| CFG-CHECK-1 to 3; CFG-DIAG-3, 4, 6; CFG-ID-4, 5; CFG-VAL-8, 9; CFG-SCHEMA-7 | product CLI tests and the corpus runner; for CFG-CHECK-1 also the convention lint (the registry's `check` field) (dangling reference, duplicate id, escaping path, mistyped operand, the modeline `init` writes) |
-| CFG-CHANGE-5 | the convention lint compares the exceptions register with the base branch; an added entry outside the growth classes fails |
+| CFG-CHECK-1 to 3; CFG-DIAG-3, 4, 6; CFG-ID-4, 5; CFG-VAL-8, 9; CFG-SCHEMA-7 | product CLI tests and the corpus runner; for CFG-ID-4, CFG-ID-5, CFG-VAL-8 and CFG-VAL-9 the cases at the registry's `conformance` roles (dangling reference, duplicate id, escaping path, mistyped operand); for CFG-SCHEMA-7 the runner's `init` mode (the modeline each product's init command writes); for CFG-CHECK-1 also the convention lint (the registry's `check` field) |
+| CFG-CHANGE-5 | the convention lint compares the exceptions register with the base entry by entry (rule, format, location): an added entry outside the growth classes fails, and so does a class change, so deletion is the only other change and a moved entry counts as added; an explicit `--base` without the register fails |
 | CFG-ID-2, 3; CFG-VAL-4, 5; CFG-NAME-7; CFG-EMPTY-3, 6; CFG-EMBED-1; CFG-CHANGE-3, 4 | review citing the rule; CFG-EMPTY-3 also needs a security review note (AGENTS.md) |
 | CFG-ENV-5; CFG-VAL-10; CFG-NAME-6, 8; CFG-ID-8; CFG-EMPTY-5; CFG-SCHEMA-9; CFG-CHECK-4 (SHOULD) | review |
 
