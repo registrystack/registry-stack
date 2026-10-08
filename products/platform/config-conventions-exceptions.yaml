@@ -803,34 +803,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-2
-  format: breg/data-export-checkpoint
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is registry.registrystack.org/v1alpha1
-  resolution: Read and write id.registrystack.org/formats/breg/data-export-checkpoint/v1alpha1; refuse the old value with config.retired-api-version
-- rule: CFG-ENV-3
-  format: breg/data-export-checkpoint
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: kind is RegistryDataExportCheckpoint
-  resolution: Rename the kind to BRegDataExportCheckpoint
-- rule: CFG-SCHEMA-1
-  format: breg/data-export-checkpoint
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-YAML-1
-  format: breg/data-export-checkpoint
-  location: crates/registry-breg/src/data.rs#from_json()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: breg/data-import-checkpoint
   location: products/platform/config-formats.yaml#/check
@@ -838,34 +810,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-2
-  format: breg/data-import-checkpoint
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is registry.registrystack.org/v1alpha1
-  resolution: Read and write id.registrystack.org/formats/breg/data-import-checkpoint/v1alpha1; refuse the old value with config.retired-api-version
-- rule: CFG-ENV-3
-  format: breg/data-import-checkpoint
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: kind is RegistryDataImportCheckpoint
-  resolution: Rename the kind to BRegDataImportCheckpoint
-- rule: CFG-SCHEMA-1
-  format: breg/data-import-checkpoint
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-YAML-1
-  format: breg/data-import-checkpoint
-  location: crates/registry-breg/src/data.rs#from_json()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: breg/data-import-state
   location: products/platform/config-formats.yaml#/check
@@ -873,34 +817,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-2
-  format: breg/data-import-state
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is registry.registrystack.org/bregctl-data/v2
-  resolution: Read and write id.registrystack.org/formats/breg/data-import-state/v2; refuse the old value with config.retired-api-version
-- rule: CFG-ENV-3
-  format: breg/data-import-state
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: kind is BRegctlDataImportState
-  resolution: Rename the kind to BRegDataImportState
-- rule: CFG-SCHEMA-1
-  format: breg/data-import-state
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-YAML-1
-  format: breg/data-import-state
-  location: crates/registry-bregctl/src/data_lifecycle.rs#read_import_state()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: breg/dev-clients
   location: products/platform/config-formats.yaml#/check

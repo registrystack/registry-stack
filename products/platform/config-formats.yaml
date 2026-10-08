@@ -421,8 +421,8 @@ formats:
     audience: generated
     stability: unpromised
     current:
-      apiVersion: registry.registrystack.org/v1alpha1
-      kind: RegistryDataImportCheckpoint
+      apiVersion: id.registrystack.org/formats/breg/data-import-checkpoint/v1alpha1
+      kind: BRegDataImportCheckpoint
       checkedBy:
         file: crates/registry-breg/src/data.rs
         symbol: IMPORT_CHECKPOINT_KIND
@@ -433,15 +433,15 @@ formats:
     reader:
       crate: registry-breg
       file: crates/registry-breg/src/data.rs
-      function: from_json
+      function: read
       type: DataImportCheckpoint
     check: none
-    example: none
+    example: products/breg/examples/formats/import.checkpoint.json
     conformance:
-      requiredText: none
+      requiredText: /entityId
       optionalText: none
-      integer: none
-      boolean: none
+      integer: /inputLength
+      boolean: /complete
     securityMembers: []
     restrictingMembers: []
   - id: breg/data-export-checkpoint
@@ -452,8 +452,8 @@ formats:
     audience: generated
     stability: unpromised
     current:
-      apiVersion: registry.registrystack.org/v1alpha1
-      kind: RegistryDataExportCheckpoint
+      apiVersion: id.registrystack.org/formats/breg/data-export-checkpoint/v1alpha1
+      kind: BRegDataExportCheckpoint
       checkedBy:
         file: crates/registry-breg/src/data.rs
         symbol: EXPORT_CHECKPOINT_KIND
@@ -464,27 +464,27 @@ formats:
     reader:
       crate: registry-breg
       file: crates/registry-breg/src/data.rs
-      function: from_json
+      function: read
       type: DataExportCheckpoint
     check: none
-    example: none
+    example: products/breg/examples/formats/export.checkpoint.json
     conformance:
-      requiredText: none
-      optionalText: none
-      integer: none
-      boolean: none
+      requiredText: /entityId
+      optionalText: /nextCursor
+      integer: /outputLength
+      boolean: /complete
     securityMembers: []
     restrictingMembers: []
   - id: breg/data-import-state
     product: breg
     title: Data import state
-    files: [state.json]
+    files: ['*.state']
     syntax: json
     audience: generated
     stability: unpromised
     current:
-      apiVersion: registry.registrystack.org/bregctl-data/v2
-      kind: BRegctlDataImportState
+      apiVersion: id.registrystack.org/formats/breg/data-import-state/v2
+      kind: BRegDataImportState
       checkedBy:
         file: crates/registry-bregctl/src/data_lifecycle.rs
         symbol: IMPORT_STATE_KIND
@@ -498,9 +498,9 @@ formats:
       function: read_import_state
       type: ImportState
     check: none
-    example: none
+    example: products/breg/examples/formats/import.checkpoint.json.state
     conformance:
-      requiredText: none
+      requiredText: /runId
       optionalText: none
       integer: none
       boolean: none

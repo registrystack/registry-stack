@@ -32,6 +32,9 @@ use registry_platform_httputil::client::{
     build_client, OutboundOptions, ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
 };
 use registry_platform_httputil::{read_bounded, validate_response_headers};
+use registry_platform_yaml::{
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, Report, RetiredApiVersion,
+};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize};
@@ -42,8 +45,24 @@ use crate::safe_path::{SafeDir, SafeEntry, SafePathError};
 const MAX_TOKEN_BYTES: u64 = 64 * 1024;
 const MAX_CHECKPOINT_BYTES: u64 = 1024 * 1024;
 const DATA_HTTP_USER_AGENT: &str = "bregctl-data";
-const DATA_STATE_API_VERSION: &str = "registry.registrystack.org/bregctl-data/v2";
-const IMPORT_STATE_KIND: &str = "BRegctlDataImportState";
+/// The data import state apiVersion `bregctl data import` writes beside its
+/// checkpoint.
+pub(crate) const IMPORT_STATE_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/data-import-state/v2";
+/// The data import state kind.
+pub(crate) const IMPORT_STATE_KIND: &str = "BRegDataImportState";
+/// The data import state format and the header it retired.
+pub(crate) const IMPORT_STATE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: IMPORT_STATE_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(IMPORT_STATE_API_VERSION)],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: "registry.registrystack.org/bregctl-data/v2",
+            replacement: "Finish this import with the bregctl that wrote the state file; this bregctl reads only the state files it writes.",
+        }],
+    },
+    removed_keys: &[],
+};
 const MAX_ATOMIC_WRITE_TEMP_ATTEMPTS: usize = 16;
 /// The longest output tail a resuming export discards. The export appends one
 /// bounded page and then publishes the checkpoint that records it, so a run
@@ -81,6 +100,9 @@ pub(crate) enum DataLifecycleError {
     Data(DataError),
     /// The export output file and its checkpoint file were not both present.
     ExportPair(ExportPairState),
+    /// The shared reader refused the import state file; the report carries
+    /// its diagnostics unchanged.
+    ImportStateDocument(Report),
 }
 
 /// Which half of an export's output and checkpoint pair is missing.
@@ -173,10 +195,15 @@ pub(crate) struct DataExportOutcome {
     pub complete: bool,
 }
 
+/// The state file that names the ingestion run an import drives. The shared
+/// reader checks and removes the header before the members are decoded, so
+/// the header members are written from the format and never read.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ImportState {
+    #[serde(skip_deserializing, default = "import_state_api_version")]
     api_version: String,
+    #[serde(skip_deserializing, default = "import_state_kind")]
     kind: String,
     package_revision: String,
     schema_fingerprint: String,
@@ -552,7 +579,12 @@ fn load_or_start_ingestion(
         }
         return start_new_ingestion(drive, destinations);
     }
-    let state = read_import_state(&destinations.state, drive.plan, drive.inspected)?;
+    let state = read_import_state(
+        &destinations.state,
+        &destinations.state_file,
+        drive.plan,
+        drive.inspected,
+    )?;
     let run_id = parse_ingestion_run_id(&state)?;
     let run = drive.read_run(run_id)?;
     validate_ingestion_run(&run, drive.plan, drive.inspected, drive.input)?;
@@ -560,6 +592,7 @@ fn load_or_start_ingestion(
         let bytes = read_bounded_entry(&destinations.checkpoint, MAX_CHECKPOINT_BYTES)
             .map_err(|_| DataLifecycleError::Checkpoint)?;
         let _ = DataImportCheckpoint::from_json(
+            &destinations.checkpoint_file,
             &bytes,
             drive.plan,
             &drive.inspected.package_revision,
@@ -1086,6 +1119,10 @@ fn inspect_data_package(package: &Path) -> Result<InspectedDataPackage, DataLife
 struct ImportDestinations {
     checkpoint: SafeEntry,
     state: SafeEntry,
+    /// The checkpoint path as the operator gave it, for diagnostics.
+    checkpoint_file: String,
+    /// The state file path beside it, for diagnostics.
+    state_file: String,
 }
 
 impl ImportDestinations {
@@ -1095,6 +1132,8 @@ impl ImportDestinations {
             checkpoint: resolve_write_destination(checkpoint)
                 .map_err(|_| DataLifecycleError::Checkpoint)?,
             state: resolve_write_destination(&state).map_err(|_| DataLifecycleError::Checkpoint)?,
+            checkpoint_file: checkpoint.display().to_string(),
+            state_file: state.display().to_string(),
         })
     }
 }
@@ -1122,6 +1161,8 @@ fn publish_import_checkpoint(
 struct ExportDestinations {
     output: SafeEntry,
     checkpoint: SafeEntry,
+    /// The checkpoint path as the operator gave it, for diagnostics.
+    checkpoint_file: String,
 }
 
 impl ExportDestinations {
@@ -1129,6 +1170,7 @@ impl ExportDestinations {
         Ok(ExportDestinations {
             output: resolve_write_destination(output)?,
             checkpoint: resolve_write_destination(checkpoint)?,
+            checkpoint_file: checkpoint.display().to_string(),
         })
     }
 }
@@ -1194,7 +1236,7 @@ fn import_state_for_checkpoint(
     run_id: &str,
 ) -> ImportState {
     ImportState {
-        api_version: DATA_STATE_API_VERSION.to_owned(),
+        api_version: IMPORT_STATE_API_VERSION.to_owned(),
         kind: IMPORT_STATE_KIND.to_owned(),
         package_revision: inspected.package_revision.clone(),
         schema_fingerprint: inspected.schema_fingerprint.clone(),
@@ -1217,18 +1259,7 @@ fn start_checkpoint_from_state(
     inspected: &InspectedDataPackage,
     state: &ImportState,
 ) -> Result<DataImportCheckpoint, DataLifecycleError> {
-    let checkpoint = DataImportCheckpoint::start(
-        plan,
-        &inspected.package_revision,
-        &inspected.schema_fingerprint,
-    )
-    .map_err(DataLifecycleError::Data)?;
-    let mut value =
-        serde_json::to_value(&checkpoint).map_err(|_| DataLifecycleError::Checkpoint)?;
-    value["importId"] = serde_json::Value::String(state.import_id.clone());
-    let bytes = canonicalize_json(&value).map_err(|_| DataLifecycleError::Checkpoint)?;
-    DataImportCheckpoint::from_json(
-        &bytes,
+    DataImportCheckpoint::start_with_import_id(
         plan,
         &inspected.package_revision,
         &inspected.schema_fingerprint,
@@ -1237,19 +1268,21 @@ fn start_checkpoint_from_state(
     .map_err(DataLifecycleError::Data)
 }
 
+/// Read the import state file through the shared reader, naming it `file` in
+/// diagnostics, and refuse a state bound to another import.
 fn read_import_state(
     entry: &SafeEntry,
+    file: &str,
     plan: &DataImportPlan,
     inspected: &InspectedDataPackage,
 ) -> Result<ImportState, DataLifecycleError> {
     let bytes = read_bounded_entry(entry, MAX_CHECKPOINT_BYTES)
         .map_err(|_| DataLifecycleError::Checkpoint)?;
-    let value = parse_json_strict(&bytes).map_err(|_| DataLifecycleError::Checkpoint)?;
-    let state: ImportState =
-        serde_json::from_value(value).map_err(|_| DataLifecycleError::Checkpoint)?;
-    if state.api_version != DATA_STATE_API_VERSION
-        || state.kind != IMPORT_STATE_KIND
-        || state.package_revision != inspected.package_revision
+    let state = Reader::new(file)
+        .decode::<ImportState>(&bytes, &Expect::one(&IMPORT_STATE_FORMAT))
+        .map_err(DataLifecycleError::ImportStateDocument)?
+        .value;
+    if state.package_revision != inspected.package_revision
         || state.schema_fingerprint != inspected.schema_fingerprint
         || state.entity_id != plan.entity_id()
         || state.operation != plan.operation()
@@ -1259,6 +1292,14 @@ fn read_import_state(
         return Err(DataLifecycleError::Checkpoint);
     }
     Ok(state)
+}
+
+fn import_state_api_version() -> String {
+    IMPORT_STATE_API_VERSION.to_owned()
+}
+
+fn import_state_kind() -> String {
+    IMPORT_STATE_KIND.to_owned()
 }
 
 fn import_state_path(checkpoint_path: &Path) -> PathBuf {
@@ -1355,7 +1396,11 @@ fn resume_existing_export(
 ) -> Result<StartedExport, DataLifecycleError> {
     let checkpoint_bytes = read_bounded_entry(&destinations.checkpoint, MAX_CHECKPOINT_BYTES)
         .map_err(|_| DataLifecycleError::Checkpoint)?;
-    let committed_length = checkpointed_output_length(&checkpoint_bytes)?;
+    // The recorded output length only bounds the prefix that is streamed; the
+    // checkpoint is still matched against the bytes that prefix hashes to.
+    let checkpoint = DataExportCheckpoint::read(&destinations.checkpoint_file, &checkpoint_bytes)
+        .map_err(DataLifecycleError::Data)?;
+    let committed_length = checkpoint.output_length();
     // One descriptor serves the prefix read and the tail discard, so the file
     // whose prefix matched the checkpoint is the file that gets shortened.
     let file = destinations
@@ -1374,14 +1419,14 @@ fn resume_existing_export(
         return Err(DataLifecycleError::Data(DataError::CheckpointMismatch));
     }
     let output_state = read_export_output_prefix(&file, committed_length)?;
-    let (checkpoint, resume_state) = DataExportCheckpoint::resume_from_json(
-        &checkpoint_bytes,
-        plan,
-        &inspected.package_revision,
-        &inspected.schema_fingerprint,
-        &output_state,
-    )
-    .map_err(DataLifecycleError::Data)?;
+    let (checkpoint, resume_state) = checkpoint
+        .resume(
+            plan,
+            &inspected.package_revision,
+            &inspected.schema_fingerprint,
+            &output_state,
+        )
+        .map_err(DataLifecycleError::Data)?;
     if tail_length > 0 {
         // A checkpoint reporting the export complete is published after the
         // last page, so no interrupted append can follow it.
@@ -1398,18 +1443,6 @@ fn resume_existing_export(
         output_state,
         resume_state,
     })
-}
-
-/// The output length the checkpoint records, read before the checkpoint is
-/// validated so recovery knows how much of the output file it covers. The value
-/// only bounds the prefix that is streamed; the checkpoint is still matched
-/// against the bytes that prefix hashes to.
-fn checkpointed_output_length(checkpoint_bytes: &[u8]) -> Result<u64, DataLifecycleError> {
-    parse_json_strict(checkpoint_bytes)
-        .map_err(|_| DataLifecycleError::Checkpoint)?
-        .get("outputLength")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or(DataLifecycleError::Checkpoint)
 }
 
 /// Stream exactly the checkpointed prefix of an open output file into the
@@ -2486,9 +2519,10 @@ mod tests {
         let directory = test_directory("ingestion-v1-sidecar");
         let checkpoint_path = directory.join("import.checkpoint.json");
         let state_path = import_state_path(&checkpoint_path);
+        // The header a sidecar written before ingestion runs carries.
         let legacy = json!({
             "apiVersion": "registry.registrystack.org/bregctl-data/v1",
-            "kind": IMPORT_STATE_KIND,
+            "kind": "BRegctlDataImportState",
             "packageRevision": PACKAGE,
             "schemaFingerprint": SCHEMA,
             "entityId": ENTITY,
@@ -2508,11 +2542,13 @@ mod tests {
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
         let error = match load_or_start_ingestion(&drive, destinations) {
             Err(error) => error,
-            Ok(_) => panic!("an unknown sidecar version is refused rather than resumed"),
+            Ok(_) => {
+                panic!("a sidecar written before ingestion runs is refused rather than resumed")
+            }
         };
         let requests = handle.join().unwrap();
 
-        assert!(matches!(error, DataLifecycleError::Checkpoint));
+        assert_state_refused_with(&error, "config.wrong-kind");
         let rendered = format!("{error:?}");
         assert!(!rendered.contains("SECRET-CANARY"));
         assert!(!rendered.contains(PACKAGE));
@@ -2558,12 +2594,92 @@ mod tests {
         };
         let requests = handle.join().unwrap();
 
-        assert!(matches!(error, DataLifecycleError::Checkpoint));
+        assert_state_refused_with(&error, "config.unsupported-api-version");
         assert!(requests.is_empty());
         assert_eq!(fs::read(&state_path).unwrap(), other_bytes);
         assert!(!checkpoint_path.exists());
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn the_registered_import_state_example_reads() {
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/examples/formats/import.checkpoint.json.state");
+        let bytes = fs::read(example).expect("the import state example reads");
+        let state = Reader::new("import.checkpoint.json.state")
+            .decode::<ImportState>(&bytes, &Expect::one(&IMPORT_STATE_FORMAT))
+            .expect("the import state example is accepted")
+            .value;
+        assert_eq!(canonical_import_state(&state).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_state_file_an_earlier_bregctl_wrote_is_refused_by_its_retired_header() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-retired-sidecar");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        let state_path = import_state_path(&checkpoint_path);
+        let state_file = state_path.display().to_string();
+        let state_entry = resolve_write_destination(&state_path).unwrap();
+        for (kind, code) in [
+            ("BRegctlDataImportState", "config.wrong-kind"),
+            (IMPORT_STATE_KIND, "config.retired-api-version"),
+        ] {
+            let earlier = json!({
+                "apiVersion": "registry.registrystack.org/bregctl-data/v2",
+                "kind": kind,
+                "packageRevision": PACKAGE,
+                "schemaFingerprint": SCHEMA,
+                "entityId": ENTITY,
+                "operation": "create",
+                "profileId": PROFILE,
+                "inputDigest": plan.input_digest(),
+                "importId": "018f06d6-0248-4c7f-8a7e-df9dfbd83d2c",
+                "runId": RUN_ID,
+            });
+            fs::write(&state_path, canonicalize_json(&earlier).unwrap()).unwrap();
+            let error = read_import_state(&state_entry, &state_file, &plan, &inspected)
+                .expect_err("an earlier header is refused");
+            assert_state_refused_with(&error, code);
+        }
+        let DataLifecycleError::ImportStateDocument(report) =
+            read_import_state(&state_entry, &state_file, &plan, &inspected).unwrap_err()
+        else {
+            unreachable!("the loop asserted a document refusal");
+        };
+        assert!(report.diagnostics()[0]
+            .suggested_action
+            .contains("Finish this import with the bregctl that wrote the state file"));
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The state file was refused by the shared reader with `code`, naming
+    /// the file in every diagnostic.
+    fn assert_state_refused_with(error: &DataLifecycleError, code: &str) {
+        let DataLifecycleError::ImportStateDocument(report) = error else {
+            panic!("expected a document refusal, got {error:?}");
+        };
+        assert!(
+            report
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == code),
+            "expected {code} in {:?}",
+            report.diagnostics()
+        );
+        for diagnostic in report.diagnostics() {
+            let file = diagnostic
+                .source
+                .as_ref()
+                .map(|source| source.file.as_str());
+            assert!(
+                file.is_some_and(|file| file.ends_with(".state")),
+                "every diagnostic names the state file"
+            );
+        }
     }
 
     #[test]
@@ -3596,6 +3712,7 @@ mod tests {
         // resumes it instead of orphaning it behind a fresh one.
         let state = read_import_state(
             &resolve_write_destination(&state_path).unwrap(),
+            &state_path.display().to_string(),
             &plan,
             &inspected,
         )
@@ -4001,7 +4118,7 @@ mod tests {
         fs::create_dir(&directory).unwrap();
         let state_path = directory.join("import.state");
         let state = ImportState {
-            api_version: DATA_STATE_API_VERSION.to_owned(),
+            api_version: IMPORT_STATE_API_VERSION.to_owned(),
             kind: IMPORT_STATE_KIND.to_owned(),
             package_revision: PACKAGE.to_owned(),
             schema_fingerprint: SCHEMA.to_owned(),
@@ -4017,7 +4134,21 @@ mod tests {
         fs::write(&state_path, canonicalize_json(&value).unwrap()).unwrap();
 
         let state_entry = resolve_write_destination(&state_path).unwrap();
-        let error = read_import_state(&state_entry, &plan, &inspected).unwrap_err();
+        let state_file = state_path.display().to_string();
+        let error = read_import_state(&state_entry, &state_file, &plan, &inspected).unwrap_err();
+        let DataLifecycleError::ImportStateDocument(report) = &error else {
+            panic!("an unknown state member is a document refusal");
+        };
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.code, "config.unknown-key");
+        assert_eq!(diagnostic.path, "/unknownCredential");
+        assert_eq!(
+            diagnostic
+                .source
+                .as_ref()
+                .map(|source| source.file.as_str()),
+            Some(state_file.as_str())
+        );
         let rendered = format!("{error:?}");
         assert!(!rendered.contains("SECRET-CANARY"));
         assert!(!rendered.contains(PACKAGE));
@@ -4026,7 +4157,10 @@ mod tests {
         let mut changed: Value = serde_json::to_value(&state).unwrap();
         changed["profileId"] = json!("other-profile-canary");
         fs::write(&state_path, canonicalize_json(&changed).unwrap()).unwrap();
-        assert!(read_import_state(&state_entry, &plan, &inspected).is_err());
+        assert!(matches!(
+            read_import_state(&state_entry, &state_file, &plan, &inspected),
+            Err(DataLifecycleError::Checkpoint)
+        ));
         fs::remove_dir_all(directory).unwrap();
     }
 }

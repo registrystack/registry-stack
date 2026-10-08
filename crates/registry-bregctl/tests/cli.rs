@@ -6345,6 +6345,70 @@ fn data_validate_uses_a_closed_package_plan_and_value_free_usage() {
     );
 }
 
+#[test]
+fn data_export_prints_the_reader_diagnostics_for_a_checkpoint_an_earlier_bregctl_wrote() {
+    let (directory, package) = data_package_fixture();
+    let token = directory.path().join("access-token");
+    fs::write(&token, "data-token-canary\n").expect("token writes");
+    let output_file = directory.path().join("records.jsonl");
+    fs::write(&output_file, b"").expect("export output writes");
+    let checkpoint = directory.path().join("records.checkpoint.json");
+    fs::write(
+        &checkpoint,
+        br#"{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryDataExportCheckpoint"}"#,
+    )
+    .expect("earlier checkpoint writes");
+    let export = |format: &[&str]| {
+        let mut arguments = format.to_vec();
+        arguments.extend([
+            "data",
+            "export",
+            "--package",
+            path(&package),
+            "--breg-url",
+            "http://127.0.0.1:1",
+            "--access-token-file",
+            path(&token),
+            "--entity",
+            "record",
+            "--profile",
+            "operator",
+            "--field",
+            "code",
+            "--output",
+            path(&output_file),
+            "--checkpoint",
+            path(&checkpoint),
+        ]);
+        bregctl(&arguments)
+    };
+
+    let output = export(&["--format", "json"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let report = json_stdout(&output);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "data export");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    let wrong_kind = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "config.wrong-kind")
+        .expect("the earlier kind is refused");
+    assert_eq!(wrong_kind["source"]["file"], path(&checkpoint));
+    assert_eq!(wrong_kind["source"]["line"], 1);
+
+    let output = export(&[]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let rendered = String::from_utf8(output.stderr).expect("refusal is UTF-8");
+    assert!(
+        rendered.starts_with("bregctl data export refused the data export checkpoint.\n"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("config.wrong-kind"), "{rendered}");
+    assert!(!rendered.contains("data-token-canary"));
+}
+
 #[cfg(unix)]
 #[test]
 fn generation_refuses_a_broken_symlink_destination_without_publishing_output() {

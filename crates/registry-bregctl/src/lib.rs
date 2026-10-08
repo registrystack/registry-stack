@@ -2490,13 +2490,13 @@ where
             DataCommand::Import(args) => {
                 return match data_import(&args) {
                     Ok(report) => write_data_import_success(&report, format, stdout, stderr),
-                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                    Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
                 };
             }
             DataCommand::Export(args) => {
                 return match data_export(&args) {
                     Ok(report) => write_data_export_success(&report, format, stdout, stderr),
-                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                    Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
                 };
             }
         },
@@ -4289,7 +4289,7 @@ fn data_validate(args: &DataValidateArgs) -> Result<DataValidateSuccessReport, F
     })
 }
 
-fn data_import(args: &DataImportArgs) -> Result<DataImportSuccessReport, FailureReport> {
+fn data_import(args: &DataImportArgs) -> Result<DataImportSuccessReport, Refusal> {
     let outcome = data_lifecycle::run_import(DataImportRequest {
         package: &args.package,
         breg_url: &args.breg_url,
@@ -4301,7 +4301,7 @@ fn data_import(args: &DataImportArgs) -> Result<DataImportSuccessReport, Failure
         checkpoint: &args.checkpoint,
         max_chunks: args.max_chunks,
     })
-    .map_err(|error| data_lifecycle_failure("data import", "data.import", error))?;
+    .map_err(|error| data_lifecycle_refusal("data import", "data.import", error))?;
     Ok(DataImportSuccessReport {
         ok: true,
         command: "data import",
@@ -4319,7 +4319,7 @@ fn data_import(args: &DataImportArgs) -> Result<DataImportSuccessReport, Failure
     })
 }
 
-fn data_export(args: &DataExportArgs) -> Result<DataExportSuccessReport, FailureReport> {
+fn data_export(args: &DataExportArgs) -> Result<DataExportSuccessReport, Refusal> {
     let outcome = data_lifecycle::run_export(DataExportRequest {
         package: &args.package,
         breg_url: &args.breg_url,
@@ -4331,7 +4331,7 @@ fn data_export(args: &DataExportArgs) -> Result<DataExportSuccessReport, Failure
         checkpoint: &args.checkpoint,
         max_pages: args.max_pages,
     })
-    .map_err(|error| data_lifecycle_failure("data export", "data.export", error))?;
+    .map_err(|error| data_lifecycle_refusal("data export", "data.export", error))?;
     Ok(DataExportSuccessReport {
         ok: true,
         command: "data export",
@@ -4515,6 +4515,33 @@ fn operation_arg(operation: registry_breg::data::DataImportOperation) -> DataOpe
     }
 }
 
+/// A data command refusal: a checkpoint or state file the shared reader
+/// refused keeps the reader's diagnostics, and every other failure is the
+/// command's own report.
+fn data_lifecycle_refusal(
+    command: &'static str,
+    prefix: &'static str,
+    error: DataLifecycleError,
+) -> Refusal {
+    let (subject, report) = match error {
+        DataLifecycleError::Data(DataError::CheckpointDocument(report)) => (
+            if command == "data export" {
+                "the data export checkpoint"
+            } else {
+                "the data import checkpoint"
+            },
+            report,
+        ),
+        DataLifecycleError::ImportStateDocument(report) => ("the data import state", report),
+        error => return Refusal::Tool(data_lifecycle_failure(command, prefix, error)),
+    };
+    Refusal::Document(DocumentRefusal {
+        command,
+        subject,
+        report,
+    })
+}
+
 fn data_lifecycle_failure(
     command: &'static str,
     prefix: &'static str,
@@ -4574,7 +4601,9 @@ fn data_lifecycle_failure(
             SuggestedAction::CorrectDataBinding,
         ),
         DataLifecycleError::Checkpoint
-        | DataLifecycleError::Data(DataError::CheckpointMismatch) => (
+        | DataLifecycleError::Data(DataError::CheckpointMismatch)
+        | DataLifecycleError::Data(DataError::CheckpointDocument(_))
+        | DataLifecycleError::ImportStateDocument(_) => (
             format!("{prefix}.checkpoint.refused"),
             "checkpoint",
             "the data checkpoint was refused",

@@ -1146,3 +1146,39 @@ a file that cannot be read; the content refusals carry these codes instead:
 
 The diagnostics name the credentials file and the journey and step ids;
 they never repeat a token, a secret reference, or a secret name.
+
+### BREAKING: data checkpoint and import state headers
+
+`bregctl data import` and `bregctl data export` read their checkpoints, and
+`bregctl data import` its `.state` sidecar, through the shared reader. Each
+file now carries a header of its own:
+
+| File | Old header | New header |
+|---|---|---|
+| import checkpoint | `registry.registrystack.org/v1alpha1`, `RegistryDataImportCheckpoint` | `id.registrystack.org/formats/breg/data-import-checkpoint/v1alpha1`, `BRegDataImportCheckpoint` |
+| export checkpoint | `registry.registrystack.org/v1alpha1`, `RegistryDataExportCheckpoint` | `id.registrystack.org/formats/breg/data-export-checkpoint/v1alpha1`, `BRegDataExportCheckpoint` |
+| import `.state` sidecar | `registry.registrystack.org/bregctl-data/v2`, `BRegctlDataImportState` | `id.registrystack.org/formats/breg/data-import-state/v2`, `BRegDataImportState` |
+
+The members, the bindings each file holds, and the resume rules are
+unchanged. A file an earlier `bregctl` wrote is refused before any network
+use: its old kind with `config.wrong-kind`, and the old header beside the
+current kind with `config.retired-api-version`. Finish an import or export
+that is in flight with the `bregctl` that started it before upgrading. If
+that is no longer possible, an export restarts: remove the output and its
+checkpoint and export again. An import restarts under a fresh checkpoint
+path with only the lines its run did not commit (the run's `committedItems`
+says how many did); never edit the files to carry them across.
+
+A refused file is printed as one sentence (`bregctl data import refused the
+data import checkpoint.`, `bregctl data import refused the data import
+state.`, or `bregctl data export refused the data export checkpoint.`)
+followed by the reader's diagnostics, each naming the file as given in
+`source.file` with its line, column, and member. Every unknown member is
+reported, with `config.unknown-key`. `data.import.checkpoint.refused` and
+`data.export.checkpoint.refused` remain for a file that cannot be read and
+for a checkpoint whose bindings no longer match the run, the package, or
+the output.
+
+The export checkpoint leaves `nextCursor` out when there is no cursor; it
+wrote `"nextCursor": null`, which the shared reader refuses
+(`config.null-value`).
