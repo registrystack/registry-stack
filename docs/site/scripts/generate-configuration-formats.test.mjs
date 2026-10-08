@@ -71,7 +71,10 @@ test('states each header, schema, check, and stability as the registry records i
   assert.equal(discovery.kind, 'DiscoveryRuntimeConfig');
   assert.equal(formats.get('casework/project').schemaId, null);
   assert.equal(formats.get('casework/project').schemaPath, null);
-  assert.equal(formats.get('messaging/runtime').check, 'messagingctl check --runtime-config <file>');
+  assert.equal(
+    formats.get('messaging/runtime').check,
+    'messagingctl check --project <project> --runtime-config <file>',
+  );
   for (const format of formats.values()) {
     assert.ok(['promised', 'experimental', 'unpromised'].includes(format.stability), format.id);
     assert.doesNotMatch(format.check ?? '', /[{}]/, format.id);
