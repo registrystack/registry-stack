@@ -525,10 +525,12 @@ an unfinished edit or an empty template variable than a choice.
 **CFG-EMPTY-2 (MUST). An empty list or mapping is never how a file says "no
 restriction".** Where entries grant (an allow-list, bindings), empty means
 none, and a granting member that also accepts the sentinel refuses `[]`,
-naming it. Where entries restrict (required scopes or purposes, per-issuer
-rules, a deny-list), empty is refused: omit the member when nothing is added
-and omission is closed (CFG-EMPTY-3), and otherwise write the sentinel
-`unrestricted` in place of the list. An enumerable set (Scheduling
+naming it. Where entries restrict, empty is refused. A member that every file
+must decide (`requiredScopes`, `rowBoundaries`, `allowedClients`) is required
+and takes the sentinel `unrestricted` in place of the list. A member that only
+narrows further (`requiredPurposes`, `requesterClients`) takes no sentinel:
+omit it when nothing is added, and the format registry records its omission as
+open. An enumerable set (Scheduling
 `channels`) takes no sentinel: its open choice is every member listed, and
 `[]` is refused.
 
@@ -659,7 +661,8 @@ path given for the project joined with the file's path inside it. `line` and
 byte-order mark is not counted, and a tab counts as one. A key problem
 (unknown, duplicate, removed) points at the key; a value problem at the
 value's first character; a missing member at the key of the mapping that
-lacks it. A problem that involves another location lists it in `related`,
+lacks it, and a `config.missing-key` problem's `path` is that parent mapping,
+not the absent member. A problem that involves another location lists it in `related`,
 each entry with `file`, `line`, `column`, `path`, and `message`. The type
 lives in `registry-platform-yaml` and the ctl report envelope (`ok`,
 `command`, `status`, ..., `diagnostics`) carries it unchanged.
@@ -883,7 +886,7 @@ unrecorded deviation and on a recorded one that no longer deviates.
 | `protocol-constant` | A value another specification defines, written as it defines it. | Permanent. |
 | `external-format` | A file whose grammar another project owns. | Permanent; listed so the scope is explicit. |
 | `exchange-model` | A published data model whose member names its specification fixes. | Permanent for that specification version. |
-| `stable-move` | A respelling of something a correct file in a promised format already writes (header, key, enum value, identifier grammar, unit, discriminator), applied in the release that moves promised formats to stable. | That release. |
+| `stable-move` | A respelling of something a correct file in a promised format already writes (header, key, enum value, identifier grammar, unit, discriminator), applied in the release that moves promised formats to stable. A new value in such an enum takes the target spelling from its first release and needs no entry. | That release. |
 | `decision` | A deviation waiting on a named, dated decision. | The decision; the entry names it. |
 | `pending` | A deviation in work the configuration conventions program has not reached yet; the entry's `wp` names the work package that removes it. | That work package. `--strict` refuses every `pending` entry; the program is done when `--strict` passes. |
 
