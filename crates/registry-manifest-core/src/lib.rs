@@ -657,15 +657,27 @@ pub struct EcosystemBindingManifest {
 
 /// Text written either as one string or as a mapping from language tag to
 /// text. The node kind chooses the variant, so a decoding error inside either
-/// form keeps its position.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// form keeps its position. Each variant serializes as the form it was
+/// written in.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema), schemars(untagged))]
-#[serde(untagged)]
 pub enum LocalizedText {
     Plain(String),
     Localized(BTreeMap<String, String>),
 }
 registry_platform_yaml::shape_union!(LocalizedText { scalar => Plain, mapping => Localized });
+
+impl Serialize for LocalizedText {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Plain(text) => text.serialize(serializer),
+            Self::Localized(texts) => texts.serialize(serializer),
+        }
+    }
+}
 
 impl LocalizedText {
     pub fn text(&self) -> String {

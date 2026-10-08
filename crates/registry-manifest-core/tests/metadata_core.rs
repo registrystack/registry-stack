@@ -4798,3 +4798,16 @@ fn localized_text_is_chosen_by_node_kind() {
     let refused = serde_json::from_value::<LocalizedText>(json!(["Register"]));
     assert!(refused.is_err(), "a list is neither form");
 }
+
+#[test]
+fn localized_text_serializes_in_the_form_it_was_written() {
+    let plain = LocalizedText::Plain("Register".to_string());
+    assert_eq!(serde_json::to_value(&plain).unwrap(), json!("Register"));
+
+    let localized: LocalizedText =
+        serde_json::from_value(json!({"en": "Register", "fr": "Registre"})).expect("localized");
+    assert_eq!(
+        serde_json::to_value(&localized).unwrap(),
+        json!({"en": "Register", "fr": "Registre"})
+    );
+}
