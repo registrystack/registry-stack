@@ -209,7 +209,7 @@ fn serve(args: ServeArgs) -> Result<ExitCode> {
                 || args.as_of.is_some()
                 || args.explain =>
         {
-            return Err(argument_refusal(
+            Err(argument_refusal(
                 "evidence.mock.serve-config-flags",
                 "serve --config rejects generation and operation-selection flags",
                 "Remove --operation, --seed, --as-of, and --explain, or serve with --openapi to use them.",
