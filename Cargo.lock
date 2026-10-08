@@ -5279,6 +5279,7 @@ dependencies = [
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
  "rustix 1.1.5",
+ "schemars",
  "serde",
  "serde_json",
  "serde_norway",

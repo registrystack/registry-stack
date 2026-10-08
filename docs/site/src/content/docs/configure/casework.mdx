@@ -249,7 +249,8 @@ Each entry binds one client to one access profile the policy declares, carries t
 The `directory` block names one team per queue, with its Staff and its Supervisors, so a queue has someone serving it from the first start.
 
 ```yaml
-version: 1
+apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
+kind: CaseworkDevClients
 clients:
   - id: administrator
     accessProfile: administrator
@@ -276,12 +277,17 @@ directory:
     supervisors: [supervisor]
 ```
 
+`caseworkctl check` reads this file beside `casework.yaml` and reports, at the entry that causes it, a client bound to a profile the policy does not declare, a missing required scope or claim, and a directory team on an unknown queue or with a member whose profile does not fit the role.
+The file takes literal text only: a `${...}` substitution is refused.
+
 Nothing in this file is a credential.
 `caseworkctl dev` generates a fresh private key per client under the project's own owner-only `.casework/dev/credentials/` directory, and the file names claims and scopes only.
 It has no role in a deployment: a deployed runtime takes its callers from your identity provider and its teams from an Administrator, and `caseworkctl package` leaves this file out of the package entirely.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, STANDALONE_DEV_CLIENTS and package();
-    crates/registry-caseworkctl/src/dev/mod.rs, capture(). */}
+    crates/registry-caseworkctl/src/dev/mod.rs, capture();
+    crates/registry-caseworkctl/src/dev/config.rs, DEV_CLIENTS_FORMAT, read_against(), and bind();
+    crates/registry-caseworkctl/src/offline.rs, check_dev_clients(). */}
 
 ## Extend the policy
 

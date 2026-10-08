@@ -60,6 +60,7 @@ SCHEMAS = {
             "products/casework/generated/holiday-set/holiday-set.schema.json",
             "simulations/holiday-sets/*.yml",
         ),
+        ("products/casework/generated/dev-clients/dev-clients.schema.json", "dev-clients.yaml"),
     ),
     "scheduling": (
         ("products/scheduling/generated/project/project.schema.json", "scheduling.yaml"),

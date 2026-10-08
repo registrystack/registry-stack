@@ -55,7 +55,7 @@
         "filesChecked": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 3138
+          "maximum": 3139
         },
         "diagnostics": {
           "$ref": "#/$defs/warnings"

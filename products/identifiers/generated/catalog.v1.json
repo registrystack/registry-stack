@@ -3206,6 +3206,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/casework/dev-clients/dev-clients.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Registry Casework development clients",
+      "description": "Registry Casework development clients JSON Schema.",
+      "source": {
+        "path": "crates/registry-caseworkctl/src/schema.rs",
+        "sha256": "73fc492acb16ee17f108d82b2e28384a845e387faf0592c8a848c39a1a7a5207"
+      },
+      "artifact": {
+        "path": "products/casework/generated/dev-clients/dev-clients.schema.json",
+        "sha256": "d56bd456c1da60348e8983f4e5806c650ca1b6439e79bc026a373611d0e0a3a5",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/casework/fixture/fixture.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3215,7 +3233,7 @@
       "description": "Registry Casework fixture JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "c9392e07e7a56ae4b7237874ca207107479fd93fff6dfc0204b9082f99ffd8c3"
+        "sha256": "edf4378a5a307924582999707bc6dec96cc04cda3f92e835a9662b8f7fac4392"
       },
       "artifact": {
         "path": "products/casework/generated/fixture/fixture.schema.json",
@@ -3233,7 +3251,7 @@
       "description": "Registry Casework holiday set JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "c9392e07e7a56ae4b7237874ca207107479fd93fff6dfc0204b9082f99ffd8c3"
+        "sha256": "edf4378a5a307924582999707bc6dec96cc04cda3f92e835a9662b8f7fac4392"
       },
       "artifact": {
         "path": "products/casework/generated/holiday-set/holiday-set.schema.json",
@@ -3251,7 +3269,7 @@
       "description": "Registry Casework project JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "c9392e07e7a56ae4b7237874ca207107479fd93fff6dfc0204b9082f99ffd8c3"
+        "sha256": "edf4378a5a307924582999707bc6dec96cc04cda3f92e835a9662b8f7fac4392"
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
@@ -3287,7 +3305,7 @@
       "description": "Registry Casework simulation JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "c9392e07e7a56ae4b7237874ca207107479fd93fff6dfc0204b9082f99ffd8c3"
+        "sha256": "edf4378a5a307924582999707bc6dec96cc04cda3f92e835a9662b8f7fac4392"
       },
       "artifact": {
         "path": "products/casework/generated/simulation/simulation.schema.json",

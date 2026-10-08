@@ -226,6 +226,14 @@
       "description": "Registry Casework holiday set JSON Schema."
     },
     {
+      "glob": "products/casework/generated/dev-clients/*.schema.json",
+      "sourcePath": "crates/registry-caseworkctl/src/schema.rs",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Casework development clients JSON Schema."
+    },
+    {
       "glob": "products/scheduling/generated/runtime/*.schema.json",
       "sourcePath": "crates/registry-scheduling/src/schema.rs",
       "owner": "scheduling",

@@ -5,9 +5,11 @@
 //! rule through `schemars(with = ...)` on the member. The project and the
 //! runtime configuration both read through these.
 
-use std::hash::Hash;
+use std::{collections::BTreeMap, hash::Hash};
 
-use registry_platform_yaml::{BoundedU32, BoundedU64, Digest, UniqueList, Url};
+use registry_platform_yaml::{
+    BoundedU32, BoundedU64, Digest, ExternalId, LocalId, UniqueList, Url,
+};
 use serde::{Deserialize, Deserializer};
 
 /// A whole number from `MIN` to `MAX` (CFG-QTY-4).
@@ -103,4 +105,39 @@ where
     Digest::deserialize(deserializer)
         .map(Digest::into_string)
         .map(Some)
+}
+
+/// A local identifier (CFG-ID-1), kept as written.
+pub fn local_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    LocalId::deserialize(deserializer).map(LocalId::into_string)
+}
+
+/// A mapping keyed by local identifiers (CFG-ID-1), keys kept as written.
+pub fn local_id_keys<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    BTreeMap::<LocalId, V>::deserialize(deserializer).map(|map| {
+        map.into_iter()
+            .map(|(key, value)| (key.into_string(), value))
+            .collect()
+    })
+}
+
+/// A mapping keyed by external identifiers (CFG-ID-2), such as claim names,
+/// keys kept as written.
+pub fn external_id_keys<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    BTreeMap::<ExternalId, V>::deserialize(deserializer).map(|map| {
+        map.into_iter()
+            .map(|(key, value)| (key.into_string(), value))
+            .collect()
+    })
 }

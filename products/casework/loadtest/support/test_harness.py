@@ -288,6 +288,7 @@ class RegistryCaseworkHarnessTests(unittest.TestCase):
             self.assertIn("    subject: agent-0123abcd\n", policy)
             self.assertNotIn(loadenv.EXAMPLE_ISSUER_LINE, policy)
             clients = (project / "dev-clients.yaml").read_text(encoding="utf-8")
+            self.assertIn("kind: CaseworkDevClients\n", clients)
             self.assertIn("id: loadtest-producer", clients)
             self.assertIn("id: loadtest-staff", clients)
             self.assertIn("queue: decisions", clients)

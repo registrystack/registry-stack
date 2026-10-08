@@ -319,6 +319,47 @@ pub(crate) fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// The local development clients file a project may hold.
+pub(crate) const DEV_CLIENTS: &str = "dev-clients.yaml";
+
+/// Read the project's `dev-clients.yaml` when it holds one, and check it
+/// against `casework.yaml` when that file was accepted (CFG-CHECK-2).
+/// Returns how many files were read and every diagnostic found.
+pub(crate) fn check_dev_clients(
+    project: &Path,
+    policy: Option<&CaseworkProject>,
+) -> (usize, Report) {
+    let path = project.join(DEV_CLIENTS);
+    let shown = path.display().to_string();
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return (0, Report::default()),
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            return (
+                0,
+                Report::new(vec![file_diagnostic(
+                    Severity::Error,
+                    "casework.project.not-a-regular-file",
+                    &shown,
+                    "this path is not a regular file; caseworkctl reads dev-clients.yaml only as a regular file",
+                    "Replace the link or special file with a regular file holding the document.",
+                )]),
+            );
+        }
+        _ => {}
+    }
+    let Ok(bytes) = read_bounded(&path) else {
+        return (0, Report::new(vec![unreadable(&shown)]));
+    };
+    let read = match policy {
+        Some(policy) => crate::dev::config::read_against(&shown, &bytes, policy),
+        None => crate::dev::config::read(&shown, &bytes),
+    };
+    match read {
+        Ok(decoded) => (1, decoded.document.warnings()),
+        Err(refused) => (1, refused),
+    }
+}
+
 fn unreadable(file: &str) -> Diagnostic {
     file_diagnostic(
         Severity::Error,

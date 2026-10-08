@@ -11,3 +11,4 @@ cd "$repo_root"
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 cargo test --locked --quiet -p registry-casework-core --features schema --lib schema::tests
 cargo test --locked --quiet -p registry-casework --features schema --lib schema::tests
+cargo test --locked --quiet -p registry-caseworkctl --features schema --lib schema::tests

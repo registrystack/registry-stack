@@ -3204,55 +3204,6 @@ exceptions:
   wp: WP6
   reason: packageDigest is not typed as $defs/Digest
   resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-CHECK-1
-  format: casework/dev-clients
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: casework/dev-clients
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1'
-- rule: CFG-ENV-1
-  format: casework/dev-clients
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: CaseworkDevClients'
-- rule: CFG-SCHEMA-1
-  format: casework/dev-clients
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-2
-  format: casework/dev-clients
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: casework/dev-clients
-  location: editors/configure.py#/SCHEMAS/casework
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: casework/dev-clients
-  location: crates/registry-caseworkctl/src/dev/config.rs#clients()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: casework/dev-events-report
   location: products/casework/contracts/cli/DevEventsReport.schema.json#/properties

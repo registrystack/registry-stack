@@ -189,7 +189,7 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("casework", casework, self.workspace, None)
         configure.configure("breg", breg, self.workspace, None)
         settings = json.loads(settings_path.read_text())
-        self.assertEqual(len(settings["yaml.schemas"]), 9)
+        self.assertEqual(len(settings["yaml.schemas"]), 10)
         self.assertEqual(settings["yaml.schemas"][unrelated_uri], [str(self.workspace / "unrelated/registry.yaml")])
         tasks = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"]
         self.assertEqual(len(tasks), 2)

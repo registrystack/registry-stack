@@ -1789,7 +1789,7 @@ fn plan_breg_dev_clients(
 ) -> Result<DevClientsPlan> {
     let casework_dev_clients_path = project.join("dev-clients.yaml");
     let dev_clients_path = registry.join("dev-clients.yaml");
-    let bytes = match fs::read(&casework_dev_clients_path) {
+    let bytes = match crate::offline::read_bounded(&casework_dev_clients_path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(absent_dev_clients_plan())
         }
@@ -1803,8 +1803,10 @@ fn plan_breg_dev_clients(
         Err(error) => return Err(error).context("reading BReg dev-clients.yaml"),
         Ok(_) => {}
     }
-    let casework_dev_clients: Value = serde_norway::from_slice(&bytes)
-        .context("parsing the Casework project's dev-clients.yaml")?;
+    let casework_dev_clients =
+        crate::dev::config::read(&casework_dev_clients_path.display().to_string(), &bytes)?
+            .document
+            .to_json_value();
     let casework_policy = load_casework_policy(project)?;
     let profiles = casework_policy["accessProfiles"]
         .as_array()

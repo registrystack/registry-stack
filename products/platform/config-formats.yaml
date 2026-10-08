@@ -1372,23 +1372,29 @@ formats:
     audience: operator
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'version: 1'
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
+      kind: CaseworkDevClients
+      checkedBy:
+        file: crates/registry-caseworkctl/src/dev/config.rs
+        symbol: DEV_CLIENTS_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
       kind: CaseworkDevClients
-    schema: none
+    schema:
+      path: products/casework/generated/dev-clients/dev-clients.schema.json
+      id: https://id.registrystack.org/schemas/casework/dev-clients/dev-clients.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-caseworkctl --features schema --example dev-clients-schema -- --output products/casework/generated
+      driftCheck: crates/registry-caseworkctl/src/schema.rs
     reader:
       crate: registry-caseworkctl
       file: crates/registry-caseworkctl/src/dev/config.rs
-      function: clients
+      function: read
       type: Clients
-    check: none
-    example: none
+    check: caseworkctl check {project}
+    example: products/casework/examples/standalone-decision/dev-clients.yaml
     conformance:
-      requiredText: none
+      requiredText: /clients/0/id
       optionalText: none
       integer: none
       boolean: none

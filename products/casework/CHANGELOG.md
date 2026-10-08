@@ -79,6 +79,23 @@
   names no value. `source add` reads `casework.yaml` through the project
   reader, so an invalid project is refused with positioned diagnostics.
   Migration steps are in `release/notes/config-conventions/casework.md`.
+- BREAKING: `dev-clients.yaml` declares
+  `apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1`
+  and `kind: CaseworkDevClients` in place of `version: 1`, is read through
+  the shared configuration reader, and has a published JSON Schema that
+  `caseworkctl init` copies into the project and names in a modeline.
+  `caseworkctl check` reads it beside `casework.yaml`, counts it in
+  `filesChecked` (now at most 3139), and reports each problem at its line
+  and column with a `casework.dev-clients.*` code, where `caseworkctl dev`
+  reported the first problem alone as one sentence. A `${...}` expression
+  is refused, and `integrations.taskAuthority.jwksPort` must be 1 to 65535.
+  Client and service client IDs and the keys of `integrations.sources`,
+  `secretFiles`, and `taskAuthority.statusClients` are local identifiers (a
+  leading digit is refused, `_` is accepted), claim names are external
+  identifiers, a service client's claim values are text,
+  `taskAuthority.issuer` is an absolute URL, and a source binding no longer
+  takes its timeouts or reconciliation interval.
+  Migration steps are in `release/notes/config-conventions/casework.md`.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

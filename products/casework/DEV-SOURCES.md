@@ -27,8 +27,8 @@ Set `agent.issuer` to the exact local issuer URL, such as
 issuer URL qualifies it. Local human teaching clients remain explicit fixtures
 in `dev-clients.yaml` and seed the directory through the normal API.
 
-Add an explicit `integrations` block beside `version`, `clients`, and
-`directory` in that file. This example shows the operator-owned connection
+Add an explicit `integrations` block beside `clients` and `directory` in that
+file. This example shows the operator-owned connection
 shape; replace its resource, ports, source profile, event source and paths with
 the source's actual configuration:
 
@@ -76,7 +76,10 @@ configured source issuer, client, purpose, operations and identity
 bounds. The template's BREG bounds must match the selected task profile's full
 effective permissions. A bootstrap token has no grant fields.
 
-Each `sources` entry must match a declared source. Its token endpoint, client
+Each `sources` entry must match a declared source. It takes the members of the
+runtime configuration's `sources.<id>` binding except the timeouts and the
+reconciliation interval, which the session leaves at the runtime's defaults.
+Its token endpoint, client
 assertion audience and resource must match this session. These mismatches fail
 before containers start. Both reader credential references must name the same
 generated service client, whose effective resource and scopes exactly match the

@@ -377,8 +377,9 @@ Offline file codes: `casework.fixture.display-mismatch`, `casework.fixture.displ
   of its files is read. Migration: remove files until no more than 1024
   remain.
 - `filesChecked` in `CheckReport.schema.json` and `TestReport.schema.json`
-  states its maximum, 3138: the project file, the runtime configuration, 64
-  source descriptions, and 1024 files from each of the three directories.
+  states its maximum, 3139: the project file, the runtime configuration,
+  `dev-clients.yaml`, 64 source descriptions, and 1024 files from each of
+  the three directories.
   A `warning` in a report's `diagnostics` is a closed object. A consumer that
   validates reports takes the regenerated schemas.
 
@@ -405,6 +406,72 @@ Neither warning blocks the pairing, and their codes are unchanged:
 - A consumer that reads `findings` reads `diagnostics` instead and takes the
   regenerated `SourceAddReport.schema.json`. The `findings` definition is
   removed from every report schema.
+
+## BREAKING: `dev-clients.yaml` is read by the shared reader
+
+`dev-clients.yaml`, the local callers `caseworkctl dev` registers, carries
+the format envelope, is read through the shared configuration reader, and is
+checked by `caseworkctl check`.
+
+- Replace `version: 1` with:
+
+  ```yaml
+  apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
+  kind: CaseworkDevClients
+  ```
+
+  A file that still carries `version` is refused with `config.removed-key`
+  at `/version`.
+- The schema is published at
+  `products/casework/generated/dev-clients/dev-clients.schema.json` with
+  `$id`
+  `https://id.registrystack.org/schemas/casework/dev-clients/dev-clients.v1alpha1.schema.json`.
+  `caseworkctl init` copies it to `.casework/schemas/dev-clients.schema.json`,
+  names it in a modeline, and maps it in the project's VS Code settings, and
+  `editors/configure.py casework` maps it for `dev-clients.yaml`. Migration
+  for an existing project: copy the schema and add
+  `# yaml-language-server: $schema=./.casework/schemas/dev-clients.schema.json`
+  as the file's first line, or run `editors/configure.py`.
+- `caseworkctl check` reads `dev-clients.yaml` when the project has one and
+  reports a client bound to an undeclared profile, a missing required scope
+  or claim, and a directory team on an unknown queue or with a member whose
+  profile does not fit the role, each at the entry that causes it.
+  `filesChecked` counts the file. A consumer that validates reports takes
+  the regenerated `CheckReport.schema.json` and `TestReport.schema.json`.
+  Checks that need a connected source's
+  arguments still run at `caseworkctl dev`.
+- `caseworkctl dev` reports every problem in the file as a positioned
+  diagnostic with its own code, where it reported the first problem alone as
+  one sentence. No diagnostic repeats a client, claim, or scope value; the
+  path locates it.
+- A `${...}` expression is refused with `config.substitution-not-allowed`;
+  the file takes literal text only. `null` is refused with
+  `config.null-value`; omit the key instead.
+- `integrations.taskAuthority.jwksPort` is refused outside 1 to 65535 with
+  `config.out-of-range`.
+- A client ID, a service client ID, and each key of `integrations.sources`,
+  `integrations.secretFiles`, and `integrations.taskAuthority.statusClients`
+  is a local identifier: a lowercase letter, then at most 63 lowercase
+  letters, digits, `_`, or `-`. A leading digit is now refused and `_` is
+  now accepted. The reader refuses any other spelling with
+  `config.invalid-value`, where `caseworkctl dev` reported
+  `casework.dev-clients.invalid-id` for a client ID; that code now covers
+  `browserClients` alone. Migration: rename an ID that starts with a digit,
+  and the references to it under `directory` and `statusClients`.
+- A claim name is an external identifier of 1 to 512 characters without
+  control characters, and a service client's claim value is text: a list or
+  mapping value is refused with `config.invalid-value`. Migration: write the
+  claim value as one string.
+- `integrations.taskAuthority.issuer` is an absolute URL, refused otherwise
+  with `config.invalid-value`; an `http` URL is still reported with
+  `casework.dev-clients.invalid-task-authority-issuer`.
+- A source binding under `integrations.sources` no longer takes
+  `requestTimeoutMilliseconds`, `connectTimeoutMilliseconds`, or
+  `reconciliationIntervalMilliseconds`; the session leaves them at the
+  runtime's defaults, and the reader refuses them with `config.unknown-key`.
+  Migration: remove them; set them in a deployed runtime configuration.
+
+Development clients codes: `casework.dev-clients.clients-out-of-range`, `casework.dev-clients.duplicate-access-profile`, `casework.dev-clients.duplicate-id`, `casework.dev-clients.duplicate-member`, `casework.dev-clients.duplicate-queue`, `casework.dev-clients.duplicate-scope`, `casework.dev-clients.duplicate-team`, `casework.dev-clients.invalid-access-profile`, `casework.dev-clients.invalid-claim-name`, `casework.dev-clients.invalid-claim-value`, `casework.dev-clients.invalid-id`, `casework.dev-clients.invalid-queue`, `casework.dev-clients.invalid-resource`, `casework.dev-clients.invalid-scope`, `casework.dev-clients.invalid-secret-file`, `casework.dev-clients.invalid-status-client`, `casework.dev-clients.invalid-task-authority-issuer`, `casework.dev-clients.invalid-task-exchange`, `casework.dev-clients.invalid-team`, `casework.dev-clients.member-role-mismatch`, `casework.dev-clients.missing-administrator`, `casework.dev-clients.missing-human-claim`, `casework.dev-clients.missing-integrations`, `casework.dev-clients.missing-principal-claim`, `casework.dev-clients.missing-required-scope`, `casework.dev-clients.missing-task-authority`, `casework.dev-clients.missing-task-exchange-client`, `casework.dev-clients.repeated-principal`, `casework.dev-clients.requester-human-claim`, `casework.dev-clients.requester-member`, `casework.dev-clients.reserved-claim`, `casework.dev-clients.reserved-id`, `casework.dev-clients.scopes-out-of-range`, `casework.dev-clients.service-client-human-claim`, `casework.dev-clients.source-bindings-mismatch`, `casework.dev-clients.staff-out-of-range`, `casework.dev-clients.too-many-claims`, `casework.dev-clients.too-many-integrations`, `casework.dev-clients.too-many-supervisors`, `casework.dev-clients.too-many-teams`, `casework.dev-clients.unknown-access-profile`, `casework.dev-clients.unknown-client`, `casework.dev-clients.unknown-queue`, `casework.dev-clients.unserved-queue`.
 
 ## Diagnostic codes
 

@@ -76,7 +76,10 @@ pub fn offline_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
     .into())
 }
 
-fn render(
+/// One committed schema document: the derived schema with `null` refused,
+/// each stated zero minimum kept, identifier-keyed maps typed, the envelope
+/// pinned to `api_version` and `kind`, and the `$id` and title set.
+pub fn render(
     schema: schemars::Schema,
     api_version: &str,
     kind: &str,
@@ -92,17 +95,31 @@ fn render(
         *slot = literal;
     }
     state_zero_minimum(&mut derived);
-    let identifiers = ["LocalId", "ExternalId"]
-        .into_iter()
-        .filter_map(|name| {
-            let pattern = derived
-                .pointer(&format!("/$defs/{name}/pattern"))?
-                .as_str()?
-                .to_owned();
-            Some((pattern, name))
+    // A type used only as a map key is inlined as a pattern, so the
+    // definitions come from the types rather than from `$defs`.
+    let definitions = [
+        ("LocalId", definition::<registry_platform_yaml::LocalId>()?),
+        (
+            "ExternalId",
+            definition::<registry_platform_yaml::ExternalId>()?,
+        ),
+    ];
+    let identifiers = definitions
+        .iter()
+        .filter_map(|(name, definition)| {
+            let pattern = definition.get("pattern")?.as_str()?.to_owned();
+            Some((pattern, *name))
         })
         .collect::<BTreeMap<_, _>>();
     type_map_keys(&mut derived, &identifiers);
+    for (name, definition) in definitions {
+        let pointer = format!("#/$defs/{name}");
+        if references(&derived, &pointer) {
+            if let Some(Value::Object(defs)) = derived.get_mut("$defs") {
+                defs.entry(name).or_insert(definition);
+            }
+        }
+    }
     set_const(&mut derived, "apiVersion", api_version);
     set_const(&mut derived, "kind", kind);
     let mut object = match derived {
@@ -211,6 +228,23 @@ fn type_map_keys(schema: &mut Value, identifiers: &BTreeMap<String, &str>) {
             .iter_mut()
             .for_each(|item| type_map_keys(item, identifiers)),
         _ => {}
+    }
+}
+
+/// The definition of a shared type, as `$defs` holds it.
+fn definition<T: schemars::JsonSchema>() -> Result<Value, serde_json::Error> {
+    serde_json::to_value(T::json_schema(&mut schemars::SchemaGenerator::default()))
+}
+
+/// Whether any `$ref` in `schema` is `pointer`.
+fn references(schema: &Value, pointer: &str) -> bool {
+    match schema {
+        Value::Object(object) => {
+            object.get("$ref").and_then(Value::as_str) == Some(pointer)
+                || object.values().any(|member| references(member, pointer))
+        }
+        Value::Array(items) => items.iter().any(|item| references(item, pointer)),
+        _ => false,
     }
 }
 

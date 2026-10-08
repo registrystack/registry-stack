@@ -8,6 +8,8 @@ mod offline;
 mod policy;
 mod project;
 mod report;
+#[cfg(feature = "schema")]
+pub mod schema;
 mod source_add;
 
 use anyhow::{Context, Result};
@@ -1695,7 +1697,7 @@ mod tests {
         assert_eq!(exit, ExitCode::SUCCESS, "{stderr}");
         let report: Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(report["status"], "incomplete");
-        assert_eq!(report["filesChecked"], 2);
+        assert_eq!(report["filesChecked"], 3);
         let warning = &report["diagnostics"][0];
         assert_eq!(warning["severity"], "warning");
         assert_eq!(warning["code"], "casework.source-description.missing");
@@ -1717,7 +1719,7 @@ mod tests {
             "{stdout}"
         );
         assert!(
-            stdout.ends_with("0 errors, 1 warning in 2 files\n"),
+            stdout.ends_with("0 errors, 1 warning in 3 files\n"),
             "{stdout}"
         );
 
@@ -1742,7 +1744,7 @@ mod tests {
             "warning[casework.source-description.missing] {file}:"
         )));
         assert!(
-            stderr.ends_with("0 errors, 1 warning in 2 files\n"),
+            stderr.ends_with("0 errors, 1 warning in 3 files\n"),
             "{stderr}"
         );
 
@@ -1845,7 +1847,7 @@ mod tests {
             "{stderr}"
         );
         assert!(
-            stderr.ends_with("1 error, 0 warnings in 2 files\n"),
+            stderr.ends_with("1 error, 0 warnings in 3 files\n"),
             "{stderr}"
         );
         assert!(!stderr.contains("QUEUE_LABEL"), "{stderr}");
@@ -1987,7 +1989,7 @@ mod tests {
             "{stderr}"
         );
         assert!(
-            stderr.ends_with("2 errors, 0 warnings in 3 files\n"),
+            stderr.ends_with("2 errors, 0 warnings in 4 files\n"),
             "{stderr}"
         );
     }
@@ -2094,7 +2096,7 @@ mod tests {
   recoveryDays is longer than the result retention of a review kind this producer submits
   next: Make recoveryDays no longer than that review kind's retention.terminalDays.
   note: {file}:{related_line}:21 /reviewKinds/0/retention/terminalDays terminalDays is written here
-1 error, 0 warnings in 2 files
+1 error, 0 warnings in 3 files
 "
             )
         );

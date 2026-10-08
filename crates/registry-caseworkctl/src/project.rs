@@ -36,6 +36,9 @@ const FIXTURE_SCHEMA: &str =
 const PROJECT_SCHEMA: &str =
     include_str!("../../../products/casework/generated/project/project.schema.json");
 
+const DEV_CLIENTS_SCHEMA: &str =
+    include_str!("../../../products/casework/generated/dev-clients/dev-clients.schema.json");
+
 /// The first line of a YAML file `init` writes, naming the local schema copy
 /// beside it so an editor validates the file without reaching the network.
 fn modeline(schema: &str) -> String {
@@ -211,7 +214,8 @@ pub(super) const STANDALONE_DEV_CLIENTS: &str = r#"# Local callers for `casework
 # `dev` generates a fresh private key per client under
 # `.casework/dev/credentials/`; nothing here is a credential, and none of it
 # belongs in a deployment.
-version: 1
+apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
+kind: CaseworkDevClients
 clients:
   - id: administrator
     accessProfile: administrator
@@ -257,7 +261,8 @@ pub(super) const PROFESSIONAL_REVIEW_DEV_CLIENTS: &str = r#"# Local callers for 
 # principal, which `caseworkctl source add --apply` writes into the registry's
 # own dev-clients.yaml. For a deployment, point these clients at the runtime's
 # own token issuer instead.
-version: 1
+apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
+kind: CaseworkDevClients
 clients:
   - id: administrator
     accessProfile: administrator
@@ -340,11 +345,18 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         staging.path().join(".casework/schemas/fixture.schema.json"),
         FIXTURE_SCHEMA,
     )?;
+    fs::write(
+        staging
+            .path()
+            .join(".casework/schemas/dev-clients.schema.json"),
+        DEV_CLIENTS_SCHEMA,
+    )?;
     let mut editor_settings = serde_json::to_vec_pretty(&json!({
         "yaml.schemas": {
             "./.casework/schemas/project.schema.json": ["casework.yaml"],
             "./.casework/schemas/runtime.schema.json": ["runtime.example.yaml", "runtime.yaml"],
-            "./.casework/schemas/fixture.schema.json": ["fixtures/*.yaml"]
+            "./.casework/schemas/fixture.schema.json": ["fixtures/*.yaml"],
+            "./.casework/schemas/dev-clients.schema.json": ["dev-clients.yaml"]
         }
     }))?;
     editor_settings.push(b'\n');
@@ -357,7 +369,10 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         staging.path().join("fixtures").join(fixture_name),
         modeline("fixture.schema.json").replace("$schema=./", "$schema=../") + fixture,
     )?;
-    fs::write(staging.path().join("dev-clients.yaml"), dev_clients)?;
+    fs::write(
+        staging.path().join("dev-clients.yaml"),
+        modeline("dev-clients.schema.json") + dev_clients,
+    )?;
     let staging_path = staging.keep();
     fs::rename(&staging_path, project)
         .context("publishing Casework project without replacement")?;
@@ -366,7 +381,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "command": "init",
         "template": template,
         "project": project,
-        "created": ["casework.yaml", "runtime.example.yaml", "dev-clients.yaml", format!("fixtures/{fixture_name}"), "sources/", ".casework/schemas/project.schema.json", ".casework/schemas/runtime.schema.json", ".casework/schemas/fixture.schema.json", ".vscode/settings.json"],
+        "created": ["casework.yaml", "runtime.example.yaml", "dev-clients.yaml", format!("fixtures/{fixture_name}"), "sources/", ".casework/schemas/project.schema.json", ".casework/schemas/runtime.schema.json", ".casework/schemas/fixture.schema.json", ".casework/schemas/dev-clients.schema.json", ".vscode/settings.json"],
         "next": [next]
     }))
 }
@@ -567,8 +582,8 @@ pub(super) fn check(project: &Path, production: bool, deny_warnings: bool) -> Re
 }
 
 /// `check`, keeping what it read: `casework.yaml`, every imported source
-/// description, and every fixture, simulation, and holiday set the project
-/// holds (CFG-CHECK-2), each reference resolved (CFG-ID-4) and each fixture
+/// description, every fixture, simulation, and holiday set the project
+/// holds, and its `dev-clients.yaml` (CFG-CHECK-2), each reference resolved (CFG-ID-4) and each fixture
 /// display checked against its review kind (CFG-VAL-9).
 pub(super) fn checked_project(
     project: &Path,
@@ -582,20 +597,24 @@ pub(super) fn checked_project(
             let Some(refused) = crate::configuration_report(&error) else {
                 return Err(error);
             };
+            let (clients_read, clients) = crate::offline::check_dev_clients(project, None);
             let mut report = refused.clone();
             report.extend(scanned);
-            report.set_files_checked(1 + offline.files_read);
+            report.extend(clients);
+            report.set_files_checked(1 + offline.files_read + clients_read);
             return Err(report.into());
         }
     };
+    let (clients_read, clients) = crate::offline::check_dev_clients(project, Some(&decoded.value));
     let mut diagnostics = authoring_diagnostics(project, &decoded, production);
     diagnostics.extend(scanned);
     diagnostics.extend(crate::offline::resolve(&decoded, &offline));
+    diagnostics.extend(clients);
     let refused = |diagnostics: &Report| {
         diagnostics.has_errors() || (deny_warnings && diagnostics.warning_count() > 0)
     };
     if refused(&diagnostics) {
-        diagnostics.set_files_checked(1 + offline.files_read);
+        diagnostics.set_files_checked(1 + offline.files_read + clients_read);
         return Err(diagnostics.into());
     }
     let policy = &decoded.value;
@@ -605,6 +624,7 @@ pub(super) fn checked_project(
         .any(|diagnostic| diagnostic.code == MISSING_SOURCE_DESCRIPTION);
     let files_checked = 1
         + offline.files_read
+        + clients_read
         + policy
             .sources
             .iter()
@@ -759,7 +779,7 @@ pub(super) fn test(project: &Path) -> Result<Value> {
         });
         let mut report = diagnostics;
         report.push(diagnostic);
-        report.set_files_checked(1 + offline.files_read);
+        report.set_files_checked(files_checked.as_u64().unwrap_or_default() as usize);
         return Err(report.into());
     }
     let holidays = offline.holiday_documents();
@@ -2716,8 +2736,11 @@ mod tests {
                 .contains(&json!("dev-clients.yaml")));
             let clients = project.join("dev-clients.yaml");
             let text = fs::read_to_string(&clients).unwrap();
-            let value: Value = serde_norway::from_str(&text).unwrap();
-            assert_eq!(value["version"], 1);
+            let value = crate::dev::config::read("dev-clients.yaml", text.as_bytes())
+                .unwrap()
+                .document
+                .to_json_value();
+            assert_eq!(value["kind"], "CaseworkDevClients");
             let runtime: Value = serde_norway::from_str(
                 &fs::read_to_string(project.join("runtime.example.yaml")).unwrap(),
             )
@@ -3137,7 +3160,7 @@ mod tests {
         let tested = test(&project).unwrap();
         assert_eq!(tested["authoringStatus"], "complete");
         assert_eq!(tested["diagnostics"], json!([]));
-        assert_eq!(tested["filesChecked"], 2);
+        assert_eq!(tested["filesChecked"], 3);
         assert_eq!(tested["proofBoundary"], "offline_synthetic");
         assert_eq!(tested["productionClosure"], false);
         let fixture = project.join("fixtures/standalone-decision.yaml");
@@ -3177,9 +3200,14 @@ mod tests {
             fs::read_to_string(project.join(".casework/schemas/project.schema.json")).unwrap(),
             PROJECT_SCHEMA
         );
+        assert_eq!(
+            fs::read_to_string(project.join(".casework/schemas/dev-clients.schema.json")).unwrap(),
+            DEV_CLIENTS_SCHEMA
+        );
         for (file, schema) in [
             ("casework.yaml", "project.schema.json"),
             ("runtime.example.yaml", "runtime.schema.json"),
+            ("dev-clients.yaml", "dev-clients.schema.json"),
         ] {
             let text = fs::read_to_string(project.join(file)).unwrap();
             assert_eq!(
@@ -3202,6 +3230,17 @@ mod tests {
             settings["yaml.schemas"]["./.casework/schemas/runtime.schema.json"],
             json!(["runtime.example.yaml", "runtime.yaml"])
         );
+        assert_eq!(
+            settings["yaml.schemas"]["./.casework/schemas/dev-clients.schema.json"],
+            json!(["dev-clients.yaml"])
+        );
+    }
+
+    #[test]
+    fn the_standalone_example_holds_the_clients_init_writes() {
+        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/casework/examples/standalone-decision/dev-clients.yaml");
+        assert_eq!(fs::read_to_string(example).unwrap(), STANDALONE_DEV_CLIENTS);
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! start or stop is the container whose random ownership label and immutable
 //! Docker ID match its private journal. There is intentionally no reset.
 
-mod config;
+pub(crate) mod config;
 mod integrations;
 mod private;
 mod public_jwks;
@@ -15,7 +15,7 @@ mod tests;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use config::Clients;
-use registry_casework_core::CaseworkRole;
+use registry_casework_core::{findings_report, CaseworkRole};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -679,17 +679,26 @@ impl Drop for StartInterruption {
 
 #[cfg(test)]
 fn capture(project: &Path, client_bytes: &[u8]) -> Result<Captured> {
-    capture_with_sources(project, client_bytes, &[], &BTreeMap::new())
+    capture_with_sources(
+        project,
+        "dev-clients.yaml",
+        client_bytes,
+        &[],
+        &BTreeMap::new(),
+    )
 }
 
+/// Read the clients file, named `file` in diagnostics, against the project.
 fn capture_with_sources(
     project: &Path,
+    file: &str,
     client_bytes: &[u8],
     source_args: &[String],
     retained: &BTreeMap<String, SourceSession>,
 ) -> Result<Captured> {
     let policy = crate::project::load_and_check_policy(project)?;
-    let clients = config::clients(client_bytes)?;
+    let decoded = config::read(file, client_bytes)?;
+    let clients = &decoded.value;
     validate_source_mode(
         !policy.task_templates.is_empty(),
         clients.integrations.is_some(),
@@ -701,21 +710,19 @@ fn capture_with_sources(
         .map(|source| source.id.clone())
         .collect::<Vec<_>>();
     let sources;
-    if let Some(integrations) = &clients.integrations {
+    if clients.integrations.is_some() {
         if !source_args.is_empty() {
             bail!("explicit integrations cannot be combined with --source-project");
         }
         sources = BTreeMap::new();
-        integrations.validate(&clients, &policy)?;
-    } else if !policy.task_templates.is_empty() {
-        bail!("source-backed development requires explicit integrations with source bindings and any task authority in the local clients file");
     } else {
         sources = source_projects(&declared, source_args, retained)?;
         if !sources.is_empty() {
             config::require_stable_borrowed_principals(&policy)?;
         }
     }
-    let bound = config::bind(&clients, &policy)?;
+    let bound = config::against(clients, &policy)
+        .map_err(|found| findings_report(&decoded.document, &found))?;
     let reported = bound
         .iter()
         .map(|entry| ReportedClient {
@@ -747,7 +754,7 @@ fn capture_with_sources(
         }
     }
     Ok(Captured {
-        clients,
+        clients: decoded.value,
         digest: config::hex_lower(&hasher.finalize()),
         reported,
         sources,
@@ -1059,7 +1066,7 @@ fn require_active_source_bindings(bregctl: &Path, state: &State) -> Result<()> {
         .context("creating private active-source check directory")?;
     fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o700))?;
     private::check(scratch.path(), true)?;
-    let clients: Clients = serde_json::from_slice(&private::read(
+    let clients = config::retained(&private::read(
         &state.root().join("clients.json"),
         MAX_BYTES,
     )?)?;
@@ -1250,6 +1257,7 @@ fn start(args: StartArgs) -> Result<Value> {
         sources,
     } = capture_with_sources(
         &project,
+        &clients_file.display().to_string(),
         &client_bytes,
         &args.source_project,
         retained_sources,
@@ -1996,8 +2004,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
     if !matches!(state.status, Status::Starting) {
         bail!("supervisor requires a pending owned start");
     }
-    let clients: Clients =
-        serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
+    let clients = config::retained(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
     let mut children = Children::default();
     let mut public_jwks = None;
     let result = (|| {
@@ -4164,8 +4171,7 @@ fn token(state: &State, id: &str, terminate: &AtomicBool) -> Result<()> {
     use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
     ensure_active(terminate)?;
     let root = state.root();
-    let clients: Clients =
-        serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
+    let clients = config::retained(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
     let (resource, scopes) = clients
         .clients
         .iter()

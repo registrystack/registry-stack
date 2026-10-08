@@ -1,0 +1,304 @@
+{
+  "$defs": {
+    "Client": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfile": {
+          "description": "The access profile this client binds; each profile binds one client.",
+          "type": "string"
+        },
+        "claims": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "At most 32 token claims; registered access-token claims are reserved.",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "`issuer` is reserved for the local token issuer."
+        },
+        "scopes": {
+          "description": "1 to 32 distinct RFC 6749 scope-tokens of at most 256 bytes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "accessProfile",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "DirectoryTeam": {
+      "additionalProperties": false,
+      "properties": {
+        "queue": {
+          "description": "The queue this team serves; one team serves each queue.",
+          "type": "string"
+        },
+        "staff": {
+          "description": "1 to 32 clients bound to a Staff profile.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "supervisors": {
+          "description": "At most 32 clients bound to a Supervisor profile.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "team": {
+          "description": "A lowercase letter, then at most 63 lowercase letters, digits, `_`,\nor `-`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team",
+        "queue",
+        "staff"
+      ],
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "Integrations": {
+      "additionalProperties": false,
+      "properties": {
+        "browserClients": {
+          "description": "Interactive OAuth clients explicitly admitted from a borrowed issuer.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resource": {
+          "description": "Explicit shared audience accepted independently by Casework and each source.",
+          "type": "string"
+        },
+        "secretFiles": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Files copied once to source-prefixed references in the retained private root.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "serviceClients": {
+          "items": {
+            "$ref": "#/$defs/ServiceClient"
+          },
+          "type": "array"
+        },
+        "sources": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SourceBinding"
+          },
+          "description": "One binding for each source `casework.yaml` declares.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "taskAuthority": {
+          "$ref": "#/$defs/TaskAuthority"
+        }
+      },
+      "required": [
+        "resource"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "ServiceClient": {
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Token claims of at most 256 bytes each, written as text.",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "resource": {
+          "description": "Omission means this Casework session's generated audience.",
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "taskExchange": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "SourceBinding": {
+      "additionalProperties": false,
+      "description": "One source binding as the clients file writes it. The session copies it\ninto the runtime configuration it writes, where it is that source's\n`sources.<id>` binding with the runtime's default timeouts and\nreconciliation interval.",
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "clientAssertionAudience": {
+          "type": "string"
+        },
+        "clientAssertionKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "clientIdRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "eventSource": {
+          "type": "string"
+        },
+        "readerProfile": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tokenEndpoint": {
+          "type": "string"
+        },
+        "trustedRootCertificatesRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "webhookSecretRef": {
+          "$ref": "#/$defs/SecretReference"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "readerProfile",
+        "tokenEndpoint",
+        "clientIdRef",
+        "clientAssertionKeyRef",
+        "webhookSecretRef",
+        "eventSource"
+      ],
+      "type": "object"
+    },
+    "TaskAuthority": {
+      "additionalProperties": false,
+      "properties": {
+        "issuer": {
+          "$ref": "#/$defs/Url",
+          "description": "Logical issuer, independent of the local API transport URL; an\n`https` URL."
+        },
+        "jwksPort": {
+          "description": "Public-key-only listener, reachable from the stock issuer container.",
+          "format": "uint32",
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "statusClients": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "issuer",
+        "jwksPort",
+        "statusClients"
+      ],
+      "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/casework/dev-clients/dev-clients.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/casework/dev-clients/v1alpha1",
+      "type": "string"
+    },
+    "clients": {
+      "description": "One teaching client for each access profile `casework.yaml` declares.",
+      "items": {
+        "$ref": "#/$defs/Client"
+      },
+      "type": "array"
+    },
+    "directory": {
+      "description": "The teams the first start seeds, one for each queue.",
+      "items": {
+        "$ref": "#/$defs/DirectoryTeam"
+      },
+      "type": "array"
+    },
+    "integrations": {
+      "$ref": "#/$defs/Integrations",
+      "description": "Source-backed development: source bindings, service clients, and the\nlocal task authority."
+    },
+    "kind": {
+      "const": "CaseworkDevClients",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "clients"
+  ],
+  "title": "Registry Casework development clients",
+  "type": "object"
+}
