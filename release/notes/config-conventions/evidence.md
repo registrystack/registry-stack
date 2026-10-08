@@ -134,7 +134,7 @@ is either the word `unrestricted` or a nonempty list.
   nonempty list as it is. (`requiredScopes: []` was already refused.)
 - A missing member is `config.missing-key`. An item `"*"` or
   `"unrestricted"` inside either list is a warning,
-  `evidence.oid4vci.sentinel-item`: it matches only a client or scope with
+  `evidence.oid4vci.wildcard-spelled-item`: it matches only a client or scope with
   that literal name. Write `unrestricted` in place of the list instead.
 
 ### BREAKING: values the reader now refuses
@@ -253,7 +253,7 @@ problem now.
 | `a supervised local development credential issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port` | `evidence.oid4vci.supervised-issuer` |
 | `the client key file is unavailable`, `... is not a regular, single-link, owner-only file`, `... is too large`, `... could not be read`, `... is not valid UTF-8` (at `check`, `serve`, or `inspect`) | No longer reported by `check`. At `serve` and `inspect` startup: `the secret reference <reference> could not be resolved: <reason>` |
 
-New codes with no old message: `evidence.oid4vci.sentinel-item` (warning),
+New codes with no old message: `evidence.oid4vci.wildcard-spelled-item` (warning),
 `evidence.oid4vci.secret-providers`,
 `evidence.oid4vci.secret-provider-disabled`,
 `evidence.oid4vci.secret-file-root`, `evidence.oid4vci.config-path`,

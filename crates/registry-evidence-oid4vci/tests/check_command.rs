@@ -166,7 +166,7 @@ fn a_warning_passes_unless_warnings_are_denied() {
     assert_eq!(output.status.code(), Some(0));
     let document = json(&output);
     assert_eq!(document["ok"], true);
-    assert_eq!(codes(&document), ["evidence.oid4vci.sentinel-item"]);
+    assert_eq!(codes(&document), ["evidence.oid4vci.wildcard-spelled-item"]);
     assert_eq!(document["diagnostics"][0]["severity"], "warning");
 
     let output = check(&path, &["--format", "json", "--deny-warnings"]);

@@ -1198,7 +1198,7 @@ impl OffersDocument {
             for (index, item) in items.iter().enumerate() {
                 if matches!(item.as_str(), "*" | "unrestricted") {
                     findings.push(Finding::warning(
-                        "evidence.oid4vci.sentinel-item",
+                        "evidence.oid4vci.wildcard-spelled-item",
                         format!("{list}/{index}"),
                         "this item is compared as a literal value and admits nothing else",
                         "Write unrestricted in place of the list to admit any value, or remove the item.",
@@ -1916,7 +1916,7 @@ store:
     }
 
     #[test]
-    fn a_sentinel_list_item_is_a_warning_that_does_not_block_startup() {
+    fn a_wildcard_spelled_item_is_a_warning_that_does_not_block_startup() {
         let text = VALID.replace(
             "  authorizedClients: [adopter-front-end]",
             "  authorizedClients: [\"*\"]",
@@ -1924,7 +1924,7 @@ store:
         let (_root, path) = write(&text);
         let (_, warnings) = DeliveryConfig::load_reporting(&path).expect("a warning loads");
         assert_eq!(warnings.len(), 1);
-        assert_eq!(warnings[0].code, "evidence.oid4vci.sentinel-item");
+        assert_eq!(warnings[0].code, "evidence.oid4vci.wildcard-spelled-item");
         assert_eq!(warnings[0].severity, Severity::Warning);
         assert_eq!(warnings[0].path, "/offers/authorizedClients/0");
     }
