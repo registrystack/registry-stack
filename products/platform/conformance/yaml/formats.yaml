@@ -40,9 +40,35 @@ formats:
   casework/holiday-set:
     project: products/casework/examples/multi-stage-routing-clocks
 
+  # The retired apiVersions and renamed keys each Scheduling reader refuses by
+  # name.
+  scheduling/project:
+    retiredApiVersions:
+      - registry.registrystack.org/scheduling-policy-package/v1alpha1
+    removedKeys:
+      - /scheduling
+      - /offerings/0/exactTime/maxRecipients
+      - /offerings/0/reminders/0/minutesBefore
+      - /holdPolicy/maxPerCaller
+    init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: scheduling.yaml}
   scheduling/fixture:
     project: products/scheduling/examples/standalone-arrival-window
+    retiredApiVersions:
+      - registry.registrystack.org/scheduling-fixture/v1alpha1
+    removedKeys:
+      - /cases/0/expect/outcome
+      - /facts/windows/0/unitsPolicy/kind
+      - /facts/windows/0/unitsPolicy/aboveHighestBand/policy
     init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: fixtures/counter-stations.yaml}
+  scheduling/runtime:
+    retiredApiVersions:
+      - registry.registrystack.org/scheduling-runtime/v1alpha1
+    removedKeys:
+      - /audit/retainDays
+      - /retention/attemptReceiptDays
+      - /retention/hookPayloadDays
+      - /authentication/oidc/jwksUri
+    init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: runtime.example.yaml}
 
   messaging/template:
     project: products/messaging/examples/starter
@@ -197,12 +223,8 @@ formats:
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: runtime.example.yaml}
   casework/dev-clients:
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: dev-clients.yaml}
-  scheduling/project:
-    init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: scheduling.yaml}
   scheduling/records:
     init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: records.yaml}
-  scheduling/runtime:
-    init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: runtime.example.yaml}
   messaging/project:
     init: {command: "messagingctl init {directory}", file: messaging.yaml}
   evidence/authoring-project:
