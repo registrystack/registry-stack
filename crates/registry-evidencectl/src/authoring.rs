@@ -7208,7 +7208,11 @@ factSchema: schemas/source-facts.schema.yaml
             .collect::<Vec<_>>();
         assert_eq!(
             codes,
-            ["config.missing-envelope"],
+            [
+                "config.missing-envelope",
+                "config.removed-key",
+                "config.removed-key"
+            ],
             "unexpected error: {error}"
         );
     }

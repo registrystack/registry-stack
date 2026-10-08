@@ -491,7 +491,10 @@ mod tests {
         );
         assert_eq!(
             codes("version: 1\nopenapi: ../source.openapi.yaml\noperations: []\n"),
-            [("config.missing-envelope".to_owned(), String::new())]
+            [
+                ("config.missing-envelope".to_owned(), String::new()),
+                ("config.removed-key".to_owned(), "/version".to_owned())
+            ]
         );
         let duplicate = rendered.replace(
             "openapi: ../source.openapi.yaml\n",

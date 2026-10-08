@@ -2423,11 +2423,23 @@ factSchema: schemas/record-status-facts.schema.yaml
         let report = refused(check(temporary.path(), None, false, false).unwrap_err());
         assert_eq!(
             sites(&report, temporary.path()),
-            [(
-                "config.missing-envelope".to_owned(),
-                PROJECT_MARKER_FILE.to_owned(),
-                String::new()
-            )]
+            [
+                (
+                    "config.missing-envelope".to_owned(),
+                    PROJECT_MARKER_FILE.to_owned(),
+                    String::new()
+                ),
+                (
+                    "config.removed-key".to_owned(),
+                    PROJECT_MARKER_FILE.to_owned(),
+                    "/version".to_owned()
+                ),
+                (
+                    "config.removed-key".to_owned(),
+                    PROJECT_MARKER_FILE.to_owned(),
+                    "/project".to_owned()
+                )
+            ]
         );
     }
 
