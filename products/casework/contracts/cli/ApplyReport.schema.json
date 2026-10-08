@@ -262,7 +262,8 @@
               }
             }
           }
-        ]
+        ],
+        "unevaluatedProperties": false
       }
     },
     "findings": {

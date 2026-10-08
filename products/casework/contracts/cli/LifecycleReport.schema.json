@@ -185,7 +185,8 @@
               }
             }
           }
-        ]
+        ],
+        "unevaluatedProperties": false
       }
     },
     "findings": {

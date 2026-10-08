@@ -23,6 +23,9 @@ pub const CASEWORK_API_VERSION: &str = "registry.registrystack.org/casework/v1al
 pub const CASEWORK_KIND: &str = "CaseworkProject";
 // Matches the maximum RFC 6749 scope-token size Casework accepts.
 const MAXIMUM_REQUIRED_SCOPE_BYTES: usize = 256;
+/// The most sources one project declares, which bounds the source
+/// descriptions a project check reads.
+pub const MAXIMUM_SOURCES: usize = 64;
 
 fn default_page_size() -> usize {
     25
@@ -645,6 +648,14 @@ impl CaseworkProject {
             .iter()
             .map(ClockPolicy::id)
             .collect::<BTreeSet<_>>();
+        if self.sources.len() > MAXIMUM_SOURCES {
+            findings.push(
+                "casework.source.too-many",
+                "/sources",
+                format!("at most {MAXIMUM_SOURCES} sources may be declared"),
+                "Remove sources until no more than the bound remain.",
+            );
+        }
         findings.repeated(
             self.sources
                 .iter()
@@ -1817,6 +1828,20 @@ sources:
         duplicate.description = "other-description.json".to_owned();
         candidate.sources.push(duplicate);
         refused(&candidate, "casework.source.duplicate-id", "/sources/1/id");
+    }
+
+    #[test]
+    fn a_project_declares_a_bounded_number_of_sources() {
+        let mut candidate = project_with_source_queue("decisions");
+        let source = candidate.sources[0].clone();
+        candidate.sources = (0..=MAXIMUM_SOURCES)
+            .map(|index| {
+                let mut source = source.clone();
+                source.id = format!("source-{index}");
+                source
+            })
+            .collect();
+        refused(&candidate, "casework.source.too-many", "/sources");
     }
 
     #[test]

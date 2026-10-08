@@ -180,7 +180,8 @@
               }
             }
           }
-        ]
+        ],
+        "unevaluatedProperties": false
       }
     },
     "findings": {

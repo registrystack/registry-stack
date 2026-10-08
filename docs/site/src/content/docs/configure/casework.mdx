@@ -493,6 +493,7 @@ That is how you prove a five-working-day deadline entered on a Friday lands wher
 An expectation that does not hold is reported at the `expect` member that states it.
 
 `caseworkctl test` runs every fixture under `fixtures/` and every simulation under `simulations/`.
+`caseworkctl check` and `test` read at most 1024 YAML files from each of `fixtures/`, `simulations/`, and `simulations/holiday-sets/`.
 A fixture asserts the queue, the available outcomes, the target, and the application mode for one review or source request:
 
 ```yaml

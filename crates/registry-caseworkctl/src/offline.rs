@@ -65,6 +65,9 @@ const DIRECTORIES: [(&str, OfflineFileKind); 3] = [
 /// The directory under `simulations/` that holds holiday sets.
 const HOLIDAY_SETS: &str = "holiday-sets";
 
+/// The most YAML files a project check reads from one offline directory.
+pub(crate) const MAXIMUM_DIRECTORY_FILES: usize = 1024;
+
 const FIXTURE_UNKNOWN: &str = "casework.fixture.unknown-reference";
 const SIMULATION_UNKNOWN: &str = "casework.simulation.unknown-reference";
 const FIXTURE_NOT_MET: &str = "casework.fixture.expectation-not-met";
@@ -97,6 +100,8 @@ fn scan_directory(
     let shown = path.display().to_string();
     match fs::symlink_metadata(&path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        // `simulations/` is not a directory, which its own scan reports.
+        Err(error) if error.kind() == io::ErrorKind::NotADirectory => return,
         Err(_) => {
             report.push(unreadable(&shown));
             return;
@@ -122,6 +127,20 @@ fn scan_directory(
             }
         };
     entries.sort_by_key(fs::DirEntry::file_name);
+    let yaml_files = entries
+        .iter()
+        .filter(|entry| is_yaml(&entry.path()))
+        .count();
+    if yaml_files > MAXIMUM_DIRECTORY_FILES {
+        report.push(file_diagnostic(
+            Severity::Error,
+            "casework.project.too-many-files",
+            &shown,
+            format!("{directory}/ holds more than the {MAXIMUM_DIRECTORY_FILES} YAML files caseworkctl reads from one directory, so none of them was read"),
+            format!("Remove YAML files from {directory}/ until no more than {MAXIMUM_DIRECTORY_FILES} remain."),
+        ));
+        return;
+    }
     for entry in entries {
         let entry_path = entry.path();
         let entry_shown = entry_path.display().to_string();
@@ -146,10 +165,7 @@ fn scan_directory(
             ));
             continue;
         }
-        let yaml = entry_path
-            .extension()
-            .is_some_and(|extension| extension == "yaml" || extension == "yml");
-        if !yaml {
+        if !is_yaml(&entry_path) {
             continue;
         }
         if !file_type.is_file() {
@@ -201,6 +217,11 @@ fn scan_directory(
             Err(refused) => report.extend(refused),
         }
     }
+}
+
+fn is_yaml(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension == "yaml" || extension == "yml")
 }
 
 /// Keep a holiday-set revision whose file name is
@@ -1152,4 +1173,87 @@ pub(crate) fn evaluate_fixture(
         }
     }
     Ok(found)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn codes(report: &Report) -> Vec<(&str, Severity)> {
+        report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.severity))
+            .collect()
+    }
+
+    fn example_fixture() -> String {
+        fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "../../products/casework/examples/payment-review/fixtures/payment-review.yaml",
+            ),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_scan_reads_yml_files_and_ignores_files_that_are_not_yaml() {
+        let root = crate::canonical_tempdir();
+        let fixtures = root.path().join("fixtures");
+        fs::create_dir(&fixtures).unwrap();
+        fs::write(fixtures.join("payment-review.yml"), example_fixture()).unwrap();
+        fs::write(fixtures.join("notes.txt"), "not a fixture").unwrap();
+
+        let (files, report) = scan(root.path());
+
+        assert!(codes(&report).is_empty(), "{report}");
+        assert_eq!(files.files_read, 1);
+        assert_eq!(files.fixtures.len(), 1);
+        assert_eq!(files.fixtures[0].relative, "fixtures/payment-review.yml");
+    }
+
+    #[test]
+    fn a_scan_reports_what_it_cannot_read_instead_of_skipping_it() {
+        let root = crate::canonical_tempdir();
+        let fixtures = root.path().join("fixtures");
+        fs::create_dir_all(fixtures.join("nested")).unwrap();
+        let elsewhere = root.path().join("elsewhere.yaml");
+        fs::write(&elsewhere, example_fixture()).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, fixtures.join("linked.yaml")).unwrap();
+        fs::write(root.path().join("simulations"), "not a directory").unwrap();
+
+        let (files, report) = scan(root.path());
+
+        assert_eq!(files.files_read, 0);
+        assert_eq!(
+            codes(&report),
+            [
+                ("casework.project.not-a-regular-file", Severity::Error),
+                ("casework.project.unread-directory", Severity::Warning),
+                ("casework.project.not-a-directory", Severity::Error),
+            ],
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn a_scan_refuses_a_directory_holding_more_yaml_files_than_it_reads() {
+        let root = crate::canonical_tempdir();
+        let fixtures = root.path().join("fixtures");
+        fs::create_dir(&fixtures).unwrap();
+        for index in 0..=MAXIMUM_DIRECTORY_FILES {
+            fs::write(fixtures.join(format!("fixture-{index}.yaml")), "").unwrap();
+        }
+
+        let (files, report) = scan(root.path());
+
+        assert_eq!(files.files_read, 0);
+        assert_eq!(
+            codes(&report),
+            [("casework.project.too-many-files", Severity::Error)],
+            "{report}"
+        );
+        let diagnostic = &report.diagnostics()[0];
+        assert!(diagnostic.suggested_action.contains("1024"), "{report}");
+    }
 }

@@ -66,6 +66,12 @@
   runs simulations, and each failure is its own positioned diagnostic.
   Migration steps and the code table are in
   `release/notes/config-conventions/casework.md`.
+- BREAKING: a project declares at most 64 sources (`casework.source.too-many`
+  at `/sources`), and `caseworkctl check` and `test` refuse a `fixtures/`,
+  `simulations/`, or `simulations/holiday-sets/` directory holding more than
+  1024 YAML files (`casework.project.too-many-files`), so `filesChecked`
+  states its maximum. Migration steps are in
+  `release/notes/config-conventions/casework.md`.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

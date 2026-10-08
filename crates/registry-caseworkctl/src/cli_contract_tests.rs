@@ -111,6 +111,22 @@ fn generated_schemas_are_current() {
 }
 
 #[test]
+fn the_files_checked_bound_is_the_most_files_a_check_reads() {
+    let most =
+        2 + registry_casework_core::MAXIMUM_SOURCES + 3 * crate::offline::MAXIMUM_DIRECTORY_FILES;
+    for kind in ["CheckReport", "TestReport"] {
+        let path = repo_root()
+            .join("products/casework/contracts/cli")
+            .join(format!("{kind}.schema.json"));
+        let schema: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            schema["oneOf"][0]["properties"]["filesChecked"]["maximum"], most,
+            "{kind}"
+        );
+    }
+}
+
+#[test]
 fn every_public_json_report_matches_its_schema() {
     let root = crate::canonical_tempdir();
     let project = root.path().join("standalone");
