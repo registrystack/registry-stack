@@ -69,8 +69,14 @@ test('states each header, schema, check, and stability as the registry records i
   const discovery = formats.get('discovery/runtime');
   assert.equal(discovery.check, 'discoveryctl check --runtime-config <file>');
   assert.equal(discovery.kind, 'DiscoveryRuntimeConfig');
-  assert.equal(formats.get('casework/project').schemaId, null);
-  assert.equal(formats.get('casework/project').schemaPath, null);
+  assert.equal(
+    formats.get('casework/project').schemaId,
+    'https://id.registrystack.org/schemas/casework/project/project.v1alpha1.schema.json',
+  );
+  assert.equal(
+    formats.get('casework/project').schemaPath,
+    'products/casework/generated/project/project.schema.json',
+  );
   assert.equal(
     formats.get('messaging/runtime').check,
     'messagingctl check --project <project> --runtime-config <file>',
