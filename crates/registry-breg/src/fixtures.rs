@@ -20,8 +20,8 @@ use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httpsec::{response_trace_id, TraceId};
 use registry_platform_oidc::{JwksFetcher, TokenVerifier};
 use registry_platform_yaml::{
-    shape_union, tagged_union, ApiVersion, EnvelopeRule, Expect, FormatSpec, Node, RemovedKey,
-    Report, RetiredApiVersion, UniqueList,
+    shape_union, tagged_union, ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Node,
+    RemovedKey, Report, RetiredApiVersion, Severity, Source, UniqueList,
 };
 #[cfg(feature = "schema")]
 use registry_platform_yaml::{BoundedU32, Digest as FormatDigest, LocalId};
@@ -105,8 +105,22 @@ pub const JOURNEYS_FORMAT: FormatSpec<'static> = FormatSpec {
         },
     ],
 };
-const RECEIPT_API_VERSION: &str = "registry.registrystack.org/breg-schema-test-receipt/v2";
-const RECEIPT_KIND: &str = "SchemaTestReceipt";
+/// The schema-test receipt apiVersion `bregctl test` writes.
+pub const RECEIPT_API_VERSION: &str = "id.registrystack.org/formats/breg/schema-test-receipt/v2";
+/// The schema-test receipt kind.
+pub const RECEIPT_KIND: &str = "BRegSchemaTestReceipt";
+/// The schema-test receipt format and the header it retired (CFG-CHANGE-2).
+pub const SCHEMA_TEST_RECEIPT_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: RECEIPT_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(RECEIPT_API_VERSION)],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: "registry.registrystack.org/breg-schema-test-receipt/v2",
+            replacement: "Run `bregctl test` again with this bregctl; it writes the receipt with the current header.",
+        }],
+    },
+    removed_keys: &[],
+};
 const MAX_JOURNEY_FILE_BYTES: usize = 1024 * 1024;
 const MAX_JOURNEYS: usize = 128;
 const MAX_STEPS_PER_JOURNEY: usize = 128;
@@ -219,6 +233,9 @@ pub enum FixtureError {
     /// with a code, a path, a position, and the fix, and never an authored
     /// value (CFG-DIAG-1).
     JourneyDocument(Report),
+    /// A schema-test receipt the shared reader refused, or one that is not
+    /// the canonical bytes `bregctl test` writes (CFG-DIAG-1).
+    ReceiptDocument(Report),
     /// A refusal that belongs to one journey rather than to one of its steps.
     JourneyRefused {
         journey_index: usize,
@@ -264,6 +281,13 @@ impl fmt::Display for FixtureError {
                 report.render_human().trim_end()
             );
         }
+        if let Self::ReceiptDocument(report) = self {
+            return write!(
+                formatter,
+                "the schema test receipt was refused\n{}",
+                report.render_human().trim_end()
+            );
+        }
         if let Self::JourneyRefused {
             journey_index,
             journey_id,
@@ -298,6 +322,7 @@ impl fmt::Display for FixtureError {
             | Self::ResponseStatusMismatch { .. }
             | Self::StepFailed { .. }
             | Self::JourneyDocument(_)
+            | Self::ReceiptDocument(_)
             | Self::JourneyRefused { .. } => {
                 unreachable!("handled above")
             }
@@ -5888,10 +5913,15 @@ impl fmt::Debug for ValidatedSchemaTestCandidate {
     }
 }
 
+/// The receipt `bregctl test` writes after every journey passed. The shared
+/// reader checks and removes the header before the members are decoded, so
+/// the header members are written from the format and never read.
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SchemaTestReceipt {
+    #[serde(skip_deserializing, default = "receipt_api_version")]
     api_version: String,
+    #[serde(skip_deserializing, default = "receipt_kind")]
     kind: String,
     registry_revision: String,
     project_source_revision: String,
@@ -5927,6 +5957,42 @@ impl SchemaTestReceipt {
     pub fn successful_journey_ids(&self) -> &[String] {
         &self.successful_journey_ids
     }
+
+    pub fn registry_revision(&self) -> &str {
+        &self.registry_revision
+    }
+
+    pub fn project_source_revision(&self) -> &str {
+        &self.project_source_revision
+    }
+
+    pub fn prior_package_digest(&self) -> Option<&str> {
+        self.prior_package_digest.as_deref()
+    }
+
+    pub fn source_closure_sha256(&self) -> &str {
+        &self.source_closure_sha256
+    }
+
+    pub fn migration_plan_sha256(&self) -> &str {
+        &self.migration_plan_sha256
+    }
+
+    pub fn target_managed_schema_fingerprint(&self) -> &str {
+        &self.target_managed_schema_fingerprint
+    }
+
+    pub fn journey_file_sha256(&self) -> &str {
+        &self.journey_file_sha256
+    }
+}
+
+fn receipt_api_version() -> String {
+    RECEIPT_API_VERSION.to_owned()
+}
+
+fn receipt_kind() -> String {
+    RECEIPT_KIND.to_owned()
 }
 
 /// Build a receipt only from the unforgeable all-success token and exact
@@ -5991,22 +6057,66 @@ pub fn validate_schema_test_receipt_for_package(
 }
 
 fn parse_canonical_schema_test_receipt(bytes: &[u8]) -> Result<SchemaTestReceipt, FixtureError> {
-    if bytes.is_empty() || bytes.len() > MAX_RECEIPT_BYTES {
-        return Err(FixtureError::ReceiptShapeRefused);
-    }
-    let value = parse_json_strict(bytes).map_err(|_| FixtureError::ReceiptShapeRefused)?;
-    let canonical = canonicalize_json(&value).map_err(|_| FixtureError::ReceiptShapeRefused)?;
-    if canonical != bytes {
-        return Err(FixtureError::ReceiptShapeRefused);
-    }
-    let receipt: SchemaTestReceipt =
-        serde_json::from_value(value).map_err(|_| FixtureError::ReceiptShapeRefused)?;
+    let receipt = read_schema_test_receipt(RECEIPT_FILE, bytes)?;
     if !(MIN_SUPPORTED_POSTGRES_MAJOR..=MAX_SUPPORTED_POSTGRES_MAJOR)
         .contains(&receipt.postgres_major)
     {
         return Err(FixtureError::ReceiptBindingRefused);
     }
     Ok(receipt)
+}
+
+/// The name `bregctl test` gives the receipt it writes.
+pub const RECEIPT_FILE: &str = "schema-test-receipt.json";
+const RECEIPT_REWRITE_ACTION: &str =
+    "Run `bregctl test` again to write the receipt; do not edit it by hand.";
+
+/// Read a schema-test receipt through the shared reader, naming it `file` in
+/// diagnostics. A receipt is the canonical JSON `bregctl test` wrote, so the
+/// reader's diagnostics come first and bytes in any other layout are then
+/// refused at the document's start; no member is compared with a candidate
+/// here.
+pub fn read_schema_test_receipt(
+    file: &str,
+    bytes: &[u8],
+) -> Result<SchemaTestReceipt, FixtureError> {
+    if bytes.len() > MAX_RECEIPT_BYTES {
+        let mut diagnostic = Diagnostic::error(
+            "breg.receipt.too-large",
+            "",
+            format!(
+                "the schema-test receipt is larger than {} KiB",
+                MAX_RECEIPT_BYTES / 1024
+            ),
+            RECEIPT_REWRITE_ACTION,
+        );
+        diagnostic.artifact = Some(RECEIPT_KIND.to_owned());
+        diagnostic.source = Some(Source {
+            file: file.to_owned(),
+            line: None,
+            column: None,
+        });
+        return Err(FixtureError::ReceiptDocument(Report::new(vec![diagnostic])));
+    }
+    let decoded = registry_platform_yaml::Reader::new(file)
+        .decode::<SchemaTestReceipt>(bytes, &Expect::one(&SCHEMA_TEST_RECEIPT_FORMAT))
+        .map_err(FixtureError::ReceiptDocument)?;
+    let canonical = decoded
+        .value
+        .canonical_bytes()
+        .map_err(|_| FixtureError::ReceiptShapeRefused)?;
+    if canonical != bytes {
+        return Err(FixtureError::ReceiptDocument(Report::new(vec![decoded
+            .document
+            .diagnostic_at_value(
+                Severity::Error,
+                "breg.receipt.not-canonical",
+                "",
+                "the schema-test receipt is not laid out as the canonical JSON `bregctl test` writes",
+                RECEIPT_REWRITE_ACTION,
+            )])));
+    }
+    Ok(decoded.value)
 }
 
 fn receipt_for_candidate(
@@ -7730,25 +7840,56 @@ journeys:
     ) {
         let noncanonical = [bytes, b"\n"].concat();
         assert_eq!(
-            validate_schema_test_receipt_for_package(&noncanonical, &fixture.prepared, suite),
-            Err(FixtureError::ReceiptShapeRefused)
+            receipt_document_codes(validate_schema_test_receipt_for_package(
+                &noncanonical,
+                &fixture.prepared,
+                suite
+            )),
+            [("breg.receipt.not-canonical".to_owned(), String::new())]
         );
 
         let mut unknown: Value = serde_json::from_slice(bytes).expect("receipt parses");
         unknown["unknownAuthority"] = json!(true);
         let unknown = canonicalize_json(&unknown).expect("unknown receipt canonicalizes");
         assert_eq!(
-            validate_schema_test_receipt_for_package(&unknown, &fixture.prepared, suite),
-            Err(FixtureError::ReceiptShapeRefused)
+            receipt_document_codes(validate_schema_test_receipt_for_package(
+                &unknown,
+                &fixture.prepared,
+                suite
+            )),
+            [(
+                "config.unknown-key".to_owned(),
+                "/unknownAuthority".to_owned()
+            )]
         );
         assert_eq!(
-            validate_schema_test_receipt_for_package(
+            receipt_document_codes(validate_schema_test_receipt_for_package(
                 &vec![b'x'; MAX_RECEIPT_BYTES + 1],
                 &fixture.prepared,
                 suite,
-            ),
-            Err(FixtureError::ReceiptShapeRefused)
+            )),
+            [("breg.receipt.too-large".to_owned(), String::new())]
         );
+        for (field, replacement, code) in [
+            (
+                "apiVersion",
+                json!("registry.invalid/v2"),
+                "config.unsupported-api-version",
+            ),
+            ("kind", json!("ActivationApproval"), "config.wrong-kind"),
+        ] {
+            let mut changed: Value = serde_json::from_slice(bytes).expect("receipt parses");
+            changed[field] = replacement;
+            let changed = canonicalize_json(&changed).expect("changed receipt canonicalizes");
+            assert_eq!(
+                receipt_document_codes(validate_schema_test_receipt_for_package(
+                    &changed,
+                    &fixture.prepared,
+                    suite
+                )),
+                [(code.to_owned(), format!("/{field}"))]
+            );
+        }
 
         let changed_journey_bytes = [JOURNEY_SOURCE, b"\n# reviewed change\n"].concat();
         let changed_suite =
@@ -7772,8 +7913,6 @@ journeys:
         );
 
         for (field, replacement) in [
-            ("apiVersion", json!("registry.invalid/v2")),
-            ("kind", json!("ActivationApproval")),
             ("registryRevision", json!(DIGEST_B)),
             ("projectSourceRevision", json!("another-source")),
             ("compilerSourceRevision", json!("another-compiler")),
@@ -7980,11 +8119,97 @@ journeys:
             receipt[field] = value;
             let changed = canonicalize_json(&receipt).expect("changed receipt canonicalizes");
             assert_eq!(
-                revalidate_schema_test_receipt(&changed, candidate, suite),
-                Err(FixtureError::ReceiptShapeRefused),
+                receipt_document_codes(revalidate_schema_test_receipt(&changed, candidate, suite)),
+                [("config.unknown-key".to_owned(), format!("/{field}"))],
                 "{field}"
             );
         }
+    }
+
+    fn receipt_document_codes(
+        result: Result<SchemaTestReceipt, FixtureError>,
+    ) -> Vec<(String, String)> {
+        match result {
+            Err(FixtureError::ReceiptDocument(report)) => report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+                .collect(),
+            other => panic!("expected a receipt document refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_registered_receipt_example_reads() {
+        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/examples/formats/schema-test-receipt.json");
+        let bytes = std::fs::read(example).expect("the receipt example reads");
+        let receipt =
+            parse_canonical_schema_test_receipt(&bytes).expect("the receipt example is accepted");
+        assert_eq!(receipt.canonical_bytes().expect("canonical"), bytes);
+    }
+
+    #[test]
+    fn a_receipt_with_a_retired_header_names_the_command_that_rewrites_it() {
+        let receipt = |api_version: &str, kind: &str| {
+            canonicalize_json(&json!({
+                "apiVersion": api_version,
+                "kind": kind,
+                "compilerSourceRevision": "compiler",
+                "journeyFileSha256": DIGEST_A,
+                "migrationPlanSha256": DIGEST_A,
+                "postgresMajor": 16,
+                "projectSourceRevision": "source",
+                "registryRevision": DIGEST_A,
+                "sourceClosureSha256": DIGEST_A,
+                "successfulJourneyIds": ["journey"],
+                "targetManagedSchemaFingerprint": DIGEST_A,
+            }))
+            .expect("receipt canonicalizes")
+        };
+        let retired = "registry.registrystack.org/breg-schema-test-receipt/v2";
+
+        let Err(FixtureError::ReceiptDocument(report)) = read_schema_test_receipt(
+            "build/schema-test-receipt.json",
+            &receipt(retired, RECEIPT_KIND),
+        ) else {
+            panic!("a retired receipt header is refused");
+        };
+        let [diagnostic] = report.diagnostics() else {
+            panic!("one diagnostic: {report:?}");
+        };
+        assert_eq!(diagnostic.code, "config.retired-api-version");
+        assert_eq!(diagnostic.path, "/apiVersion");
+        assert!(diagnostic.suggested_action.contains("bregctl test"));
+        assert_eq!(
+            diagnostic
+                .source
+                .as_ref()
+                .map(|source| source.file.as_str()),
+            Some("build/schema-test-receipt.json")
+        );
+
+        // The kind was renamed with the header, so an old receipt is refused
+        // for its kind first; the message names the kind this reads.
+        let Err(FixtureError::ReceiptDocument(report)) =
+            read_schema_test_receipt(RECEIPT_FILE, &receipt(retired, "SchemaTestReceipt"))
+        else {
+            panic!("an old receipt is refused");
+        };
+        let [diagnostic] = report.diagnostics() else {
+            panic!("one diagnostic: {report:?}");
+        };
+        assert_eq!(diagnostic.code, "config.wrong-kind");
+        assert!(diagnostic.message.contains(RECEIPT_KIND));
+
+        let current =
+            read_schema_test_receipt(RECEIPT_FILE, &receipt(RECEIPT_API_VERSION, RECEIPT_KIND))
+                .expect("a current receipt reads");
+        assert_eq!(current.postgres_major, 16);
+        assert_eq!(
+            current.canonical_bytes().expect("receipt canonicalizes"),
+            receipt(RECEIPT_API_VERSION, RECEIPT_KIND)
+        );
     }
 
     async fn assert_closed_response_negatives(

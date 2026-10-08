@@ -1094,3 +1094,23 @@ record an earlier step captured writes `{"recordCapture": "<capture>"}`
 where it wrote `{"recordRef": "<capture>"}`. The old marker is refused with
 a message naming the new one. Migrate each input file by renaming the key;
 the capture name is unchanged.
+
+### BREAKING: schema-test receipt version 2 header
+
+`bregctl test` writes `schema-test-receipt.json` with `"apiVersion":
+"id.registrystack.org/formats/breg/schema-test-receipt/v2"` and `"kind":
+"BRegSchemaTestReceipt"`; the members and their canonical layout are
+unchanged. `bregctl package` reads the receipt through the shared reader, so
+a receipt written by an earlier `bregctl` is refused: its old kind,
+`SchemaTestReceipt`, is refused with `config.wrong-kind`, and the old header
+beside the current kind with `config.retired-api-version`. Run `bregctl test`
+again with this `bregctl` to write a current receipt; never edit the file by
+hand.
+
+The refusal is printed as one sentence (`bregctl package refused the
+schema-test receipt.`) followed by the reader's diagnostics, each naming the
+receipt file in `source.file`. Two product codes replace the single
+`package.test_receipt.invalid` diagnostic for a malformed receipt:
+`breg.receipt.not-canonical` (the bytes are not the canonical JSON `bregctl
+test` writes) and `breg.receipt.too-large` (the receipt is over 64 KiB). An
+unknown member is refused with `config.unknown-key` at its position.

@@ -4784,24 +4784,15 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, Refusal> {
     let schema_fingerprint = match &args.schema_fingerprint {
         Some(supplied) => supplied.clone(),
         None => package_lifecycle::receipt_schema_fingerprint(&args.test_receipt)
-            .map_err(package_lifecycle_failure)?,
+            .map_err(|error| package_lifecycle_refusal(error, &args.candidate.project))?,
     };
     let prepared = prepare_candidate(&args.candidate, schema_fingerprint, "package")?;
-    let receipt = match package_lifecycle::validate_test_receipt(
+    let receipt = package_lifecycle::validate_test_receipt(
         &args.test_receipt,
         &prepared,
         args.schema_fingerprint.as_deref(),
-    ) {
-        Ok(receipt) => receipt,
-        Err(PackageLifecycleError::Journeys(report)) => {
-            return Err(Refusal::Document(DocumentRefusal {
-                command: "package",
-                subject: "the packaged fixture journeys",
-                report: report_in_project(report, &args.candidate.project),
-            }));
-        }
-        Err(error) => return Err(package_lifecycle_failure(error).into()),
-    };
+    )
+    .map_err(|error| package_lifecycle_refusal(error, &args.candidate.project))?;
     let outcome = package_lifecycle::run(prepared, receipt, &args.output, args.revision.as_deref())
         .map_err(package_lifecycle_failure)?;
     Ok(PackageSuccessReport {
@@ -4813,6 +4804,24 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, Refusal> {
         package_files: outcome.package_files,
         revision: outcome.revision,
     })
+}
+
+/// A document `package` read is reported with the reader's diagnostics;
+/// every other refusal is the command's own report.
+fn package_lifecycle_refusal(error: PackageLifecycleError, project: &Path) -> Refusal {
+    match error {
+        PackageLifecycleError::Journeys(report) => Refusal::Document(DocumentRefusal {
+            command: "package",
+            subject: "the packaged fixture journeys",
+            report: report_in_project(report, project),
+        }),
+        PackageLifecycleError::ReceiptDocument(report) => Refusal::Document(DocumentRefusal {
+            command: "package",
+            subject: "the schema-test receipt",
+            report,
+        }),
+        error => package_lifecycle_failure(error).into(),
+    }
 }
 
 fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, Refusal> {
@@ -5343,10 +5352,10 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
             DiagnosticArtifact::SchemaTestReceipt,
             SuggestedAction::SupplySchemaTestReceipt,
         ),
-        PackageLifecycleError::TestReceiptInvalid { message } => package_failure(
+        PackageLifecycleError::ReceiptDocument(_) => package_failure(
             "package.test_receipt.invalid",
             "testReceipt",
-            &message,
+            "the schema-test receipt was refused",
             DiagnosticArtifact::SchemaTestReceipt,
             SuggestedAction::SupplySchemaTestReceipt,
         ),

@@ -40,7 +40,7 @@ fn public_bregctl_test_executes_fixed_output_wasm_and_emits_receipt() {
     assert_eq!(stdout["command"], "test");
     assert_eq!(stdout["successfulJourneyIds"], json!([JOURNEY_ID]));
     let receipt = receipt.expect("the successful schema test publishes its receipt");
-    assert_eq!(receipt["kind"], "SchemaTestReceipt");
+    assert_eq!(receipt["kind"], "BRegSchemaTestReceipt");
     assert_eq!(receipt["successfulJourneyIds"], json!([JOURNEY_ID]));
 }
 

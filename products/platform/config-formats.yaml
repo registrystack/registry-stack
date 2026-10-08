@@ -359,8 +359,8 @@ formats:
     audience: generated
     stability: unpromised
     current:
-      apiVersion: registry.registrystack.org/breg-schema-test-receipt/v2
-      kind: SchemaTestReceipt
+      apiVersion: id.registrystack.org/formats/breg/schema-test-receipt/v2
+      kind: BRegSchemaTestReceipt
       checkedBy:
         file: crates/registry-breg/src/fixtures.rs
         symbol: RECEIPT_API_VERSION
@@ -371,14 +371,14 @@ formats:
     reader:
       crate: registry-breg
       file: crates/registry-breg/src/fixtures.rs
-      function: parse_canonical_schema_test_receipt
+      function: read_schema_test_receipt
       type: SchemaTestReceipt
     check: none
-    example: none
+    example: products/breg/examples/formats/schema-test-receipt.json
     conformance:
-      requiredText: none
-      optionalText: none
-      integer: none
+      requiredText: /registryRevision
+      optionalText: /priorPackageDigest
+      integer: /postgresMajor
       boolean: none
     securityMembers: []
     restrictingMembers: []

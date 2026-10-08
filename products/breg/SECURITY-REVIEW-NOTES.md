@@ -230,7 +230,7 @@ attempted.
 
 ### Accepted deviations from the design
 
-- The `bregctl test` receipt (`breg-schema-test-receipt/v2`) binds the
+- The `bregctl test` receipt (`schema-test-receipt/v2`) binds the
   project source closure, including every reviewed migration file by path and
   SHA-256, in place of the retired `signingInputSha256`. A changed review
   invalidates the receipt. Tests:

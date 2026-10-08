@@ -8,13 +8,12 @@ use std::io::Read;
 use std::path::Path;
 
 use registry_breg::fixtures::{
-    validate_fixture_journeys, validate_schema_test_receipt_for_package, FixtureError,
+    read_schema_test_receipt, validate_fixture_journeys, validate_schema_test_receipt_for_package,
+    FixtureError, SchemaTestReceipt,
 };
 use registry_breg::package::{
     PackageError, PackageFileRole, PreparedPackage, FIXTURE_JOURNEYS_PATH,
 };
-use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-use serde::Deserialize;
 
 use crate::safe_path::{EntryStat, SafeDir, SafeEntry};
 
@@ -47,10 +46,9 @@ pub(crate) enum PackageLifecycleError {
     },
     /// The shared reader refused the candidate's fixture journeys.
     Journeys(registry_platform_yaml::Report),
-    /// The receipt bytes are not a strict canonical receipt document.
-    TestReceiptInvalid {
-        message: String,
-    },
+    /// The shared reader refused the receipt, or its bytes are not the
+    /// canonical receipt `test` writes.
+    ReceiptDocument(registry_platform_yaml::Report),
     /// The receipt was produced for a different target schema fingerprint than
     /// the one supplied on the command line.
     TestReceiptFingerprint {
@@ -67,21 +65,6 @@ pub(crate) enum PackageLifecycleError {
     TestReceiptEvidence {
         message: String,
     },
-}
-
-/// The receipt fields this tool reads to explain a refusal and to derive the
-/// target schema fingerprint. The runtime remains the authority on the receipt.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TestReceiptFields {
-    registry_revision: String,
-    project_source_revision: String,
-    #[serde(default)]
-    prior_package_digest: Option<String>,
-    target_managed_schema_fingerprint: String,
-    journey_file_sha256: String,
-    migration_plan_sha256: String,
-    source_closure_sha256: String,
 }
 
 pub(crate) fn run(
@@ -107,7 +90,9 @@ pub(crate) fn run(
 /// `package` can use it when the operator does not restate it.
 pub(crate) fn receipt_schema_fingerprint(path: &Path) -> Result<String, PackageLifecycleError> {
     let bytes = read_test_receipt(path)?;
-    Ok(receipt_fields(&bytes)?.target_managed_schema_fingerprint)
+    Ok(receipt_fields(path, &bytes)?
+        .target_managed_schema_fingerprint()
+        .to_owned())
 }
 
 pub(crate) fn validate_test_receipt(
@@ -116,11 +101,11 @@ pub(crate) fn validate_test_receipt(
     supplied_schema_fingerprint: Option<&str>,
 ) -> Result<ValidatedTestReceipt, PackageLifecycleError> {
     let bytes = read_test_receipt(path)?;
-    let fields = receipt_fields(&bytes)?;
+    let fields = receipt_fields(path, &bytes)?;
     if let Some(supplied) = supplied_schema_fingerprint {
-        if supplied != fields.target_managed_schema_fingerprint {
+        if supplied != fields.target_managed_schema_fingerprint() {
             return Err(PackageLifecycleError::TestReceiptFingerprint {
-                receipt: fields.target_managed_schema_fingerprint,
+                receipt: fields.target_managed_schema_fingerprint().to_owned(),
                 supplied: supplied.to_owned(),
             });
         }
@@ -147,7 +132,7 @@ pub(crate) fn validate_test_receipt(
 /// Name the exact disagreement between a well-formed receipt and this
 /// candidate. The runtime already refused the pair; this only reports why.
 fn explain_receipt_binding(
-    fields: TestReceiptFields,
+    fields: SchemaTestReceipt,
     prepared: &PreparedPackage,
     suite: &registry_breg::fixtures::ValidatedFixtureJourneys,
     error: registry_breg::fixtures::FixtureError,
@@ -156,12 +141,12 @@ fn explain_receipt_binding(
     for (field, receipt, package) in [
         (
             "registryRevision",
-            fields.registry_revision,
+            fields.registry_revision().to_owned(),
             prepared.registry().revision().to_owned(),
         ),
         (
             "projectSourceRevision",
-            fields.project_source_revision,
+            fields.project_source_revision().to_owned(),
             prepared
                 .registry()
                 .package()
@@ -170,7 +155,7 @@ fn explain_receipt_binding(
         ),
         (
             "priorPackageDigest",
-            fields.prior_package_digest.unwrap_or_default(),
+            fields.prior_package_digest().unwrap_or_default().to_owned(),
             manifest
                 .migration_plan
                 .from_package_digest
@@ -179,12 +164,12 @@ fn explain_receipt_binding(
         ),
         (
             "journeyFileSha256",
-            fields.journey_file_sha256,
+            fields.journey_file_sha256().to_owned(),
             suite.file_sha256().to_owned(),
         ),
         (
             "migrationPlanSha256",
-            fields.migration_plan_sha256,
+            fields.migration_plan_sha256().to_owned(),
             manifest
                 .files
                 .iter()
@@ -194,12 +179,12 @@ fn explain_receipt_binding(
         ),
         (
             "targetManagedSchemaFingerprint",
-            fields.target_managed_schema_fingerprint,
+            fields.target_managed_schema_fingerprint().to_owned(),
             manifest.schema_fingerprint.clone(),
         ),
         (
             "sourceClosureSha256",
-            fields.source_closure_sha256,
+            fields.source_closure_sha256().to_owned(),
             registry_breg::fixtures::schema_test_source_closure_sha256(prepared)
                 .unwrap_or_default(),
         ),
@@ -217,23 +202,15 @@ fn explain_receipt_binding(
     }
 }
 
-fn receipt_fields(bytes: &[u8]) -> Result<TestReceiptFields, PackageLifecycleError> {
-    let value =
-        parse_json_strict(bytes).map_err(|_| PackageLifecycleError::TestReceiptInvalid {
-            message: "the schema-test receipt must be strict JSON without duplicate keys"
-                .to_owned(),
-        })?;
-    let canonical =
-        canonicalize_json(&value).map_err(|_| PackageLifecycleError::TestReceiptInvalid {
-            message: "the schema-test receipt is not canonicalizable JSON".to_owned(),
-        })?;
-    if canonical != bytes {
-        return Err(PackageLifecycleError::TestReceiptInvalid {
-            message: "the schema-test receipt bytes must be exactly the canonical document written by test".to_owned(),
-        });
-    }
-    serde_json::from_value(value).map_err(|error| PackageLifecycleError::TestReceiptInvalid {
-        message: format!("the schema-test receipt document is incomplete: {error}"),
+/// Read the receipt through the shared reader. Its members explain a refusal
+/// and supply the target schema fingerprint; the runtime remains the
+/// authority on the receipt.
+fn receipt_fields(path: &Path, bytes: &[u8]) -> Result<SchemaTestReceipt, PackageLifecycleError> {
+    read_schema_test_receipt(&path.display().to_string(), bytes).map_err(|error| match error {
+        FixtureError::ReceiptDocument(report) => PackageLifecycleError::ReceiptDocument(report),
+        error => PackageLifecycleError::TestReceiptRefused {
+            message: format!("the schema-test receipt was refused: {error}"),
+        },
     })
 }
 

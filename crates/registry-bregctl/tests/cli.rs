@@ -757,8 +757,8 @@ fn schema_test_receipt_bytes(prepared: &PreparedPackage, journey_ids: &[&str]) -
         }
     }
     let mut receipt = json!({
-        "apiVersion": "registry.registrystack.org/breg-schema-test-receipt/v2",
-        "kind": "SchemaTestReceipt",
+        "apiVersion": "id.registrystack.org/formats/breg/schema-test-receipt/v2",
+        "kind": "BRegSchemaTestReceipt",
         "registryRevision": prepared.registry().revision(),
         "projectSourceRevision": project_identity.source_revision,
         "compilerSourceRevision": manifest.compiler.source_revision,
@@ -3806,23 +3806,31 @@ fn package_refuses_missing_noncanonical_and_stale_receipts_before_output() {
     let refused = package_candidate_command(&project, fingerprint, &receipt, &refused_build);
     assert_eq!(refused.status.code(), Some(1), "{refused:?}");
     let refused_report = json_stdout(&refused);
+    assert_eq!(refused_report["ok"], false);
+    assert_eq!(refused_report["command"], "package");
+    let refused_diagnostics = refused_report["diagnostics"]
+        .as_array()
+        .expect("diagnostics are a list");
+    assert_eq!(refused_diagnostics.len(), 1, "{refused_report}");
+    assert_eq!(refused_diagnostics[0]["code"], "breg.receipt.not-canonical");
+    assert_eq!(refused_diagnostics[0]["artifact"], "BRegSchemaTestReceipt");
+    assert_eq!(refused_diagnostics[0]["path"], "");
     assert_eq!(
-        refused_report["diagnostics"][0]["code"],
-        "package.test_receipt.invalid"
+        refused_diagnostics[0]["source"]["file"],
+        path(&receipt),
+        "the receipt is named as the command was given it"
     );
-    assert_tool_diagnostic(
-        &refused_report["diagnostics"][0],
-        "schema_test_receipt",
-        "supply_schema_test_receipt",
-    );
+    assert_eq!(refused_diagnostics[0]["source"]["line"], 1);
+    assert!(refused_diagnostics[0]["suggestedAction"]
+        .as_str()
+        .is_some_and(|action| action.contains("bregctl test")));
     assert!(!refused_build.exists());
 
-    for rendered in [
-        String::from_utf8(missing.stdout).expect("missing diagnostic is UTF-8"),
-        String::from_utf8(refused.stdout).expect("refused diagnostic is UTF-8"),
-    ] {
-        assert!(!rendered.contains(path(project.path())));
-        assert!(!rendered.contains("candidate-receipt"));
+    let missing_rendered = String::from_utf8(missing.stdout).expect("missing diagnostic is UTF-8");
+    assert!(!missing_rendered.contains(path(project.path())));
+    assert!(!missing_rendered.contains("candidate-receipt"));
+    let refused_rendered = String::from_utf8(refused.stdout).expect("refused diagnostic is UTF-8");
+    for rendered in [missing_rendered, refused_rendered] {
         assert!(!rendered.contains(PACKAGE_DATABASE));
     }
 }

@@ -4222,34 +4222,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-2
-  format: breg/schema-test-receipt
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is registry.registrystack.org/breg-schema-test-receipt/v2
-  resolution: Read and write id.registrystack.org/formats/breg/schema-test-receipt/v2; refuse the old value with config.retired-api-version
-- rule: CFG-ENV-3
-  format: breg/schema-test-receipt
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: kind is SchemaTestReceipt
-  resolution: Rename the kind to BRegSchemaTestReceipt
-- rule: CFG-SCHEMA-1
-  format: breg/schema-test-receipt
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-YAML-1
-  format: breg/schema-test-receipt
-  location: crates/registry-breg/src/fixtures.rs#parse_canonical_schema_test_receipt()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: casework/apply-report
   location: products/casework/contracts/cli/ApplyReport.schema.json#/properties
