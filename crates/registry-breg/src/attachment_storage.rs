@@ -76,6 +76,9 @@ impl fmt::Debug for AttachmentStorage {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
+// Read once from `runtime.yaml` at startup and converted at once, so the size
+// of the S3 variant costs nothing worth an indirection.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum RawAttachmentStorageConfig {
     Database {},
     S3 {
