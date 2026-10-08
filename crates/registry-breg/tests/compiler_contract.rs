@@ -29,6 +29,9 @@ use registry_manifest_core::{compile_manifest, AccessRights, FieldType, Metadata
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde_json::{json, Value};
 
+#[path = "support/source_bytes.rs"]
+mod source_bytes;
+
 /// An edit a test applies to a fixture project before reading it.
 type ProjectEdit = Box<dyn Fn(&mut Value)>;
 
@@ -3251,6 +3254,58 @@ fn manifest_projection_compiles_to_deterministic_valid_manifest_core() {
         .relationships
         .iter()
         .any(|relationship| relationship.name == "asset" && relationship.target == "asset-item"));
+}
+
+/// Every project and module the product ships serializes, with its null
+/// members left out, to source the reader reads back to the same value, so a
+/// test may write a read project or module back as source.
+#[test]
+fn a_read_project_or_module_serializes_to_source_the_reader_reads_again() {
+    let mut files = Vec::new();
+    collect_project_and_module_files(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../products/breg"),
+        &mut files,
+    );
+    assert!(
+        files.len() > 40,
+        "the product ships its projects and modules"
+    );
+    for path in files {
+        let bytes = fs::read(&path).expect("the shipped source file reads");
+        let display = path.display();
+        if path.ends_with("module.yaml") {
+            // A file the reader refuses (a negative fixture) has nothing to
+            // round-trip.
+            let Ok(module) = parse_module_yaml(&bytes) else {
+                continue;
+            };
+            let reread = parse_module_yaml(&source_bytes::source_bytes(&module))
+                .unwrap_or_else(|failure| panic!("{display}: {:?}", failure.diagnostics()));
+            assert_eq!(reread, module, "{display}");
+        } else {
+            let Ok(project) = parse_project_yaml(&bytes) else {
+                continue;
+            };
+            let reread = parse_project_yaml(&source_bytes::source_bytes(&project))
+                .unwrap_or_else(|failure| panic!("{display}: {:?}", failure.diagnostics()));
+            assert_eq!(reread, project, "{display}");
+        }
+    }
+}
+
+fn collect_project_and_module_files(directory: &std::path::Path, files: &mut Vec<PathBuf>) {
+    let mut entries = fs::read_dir(directory)
+        .expect("the product directory reads")
+        .map(|entry| entry.expect("the product entry reads").path())
+        .collect::<Vec<_>>();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            collect_project_and_module_files(&path, files);
+        } else if path.ends_with("registry.yaml") || path.ends_with("module.yaml") {
+            files.push(path);
+        }
+    }
 }
 
 #[test]

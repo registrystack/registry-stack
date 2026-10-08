@@ -4,6 +4,8 @@
 
 #[path = "support/postgres_harness.rs"]
 mod postgres_harness;
+#[path = "support/source_bytes.rs"]
+mod source_bytes;
 
 use std::{collections::BTreeSet, fs, os::unix::fs::PermissionsExt as _, time::Duration};
 
@@ -979,7 +981,7 @@ fn prepare_and_load_person_registration(
             schema_fingerprint: fingerprint.to_owned(),
             project: PackageSourceFile {
                 path: "source/registry.yaml".to_owned(),
-                bytes: serde_json::to_vec(project).expect("the project serializes"),
+                bytes: source_bytes::source_bytes(project),
             },
             modules: Vec::new(),
             fixture_journeys: PackageSourceFile {
