@@ -822,9 +822,9 @@ Each of these is the process's whole output on standard error, and each exits no
 | `messaging: package.expectedDigest does not pin the package at package.root, whose digest is …; deploy the pinned package or update package.expectedDigest` | The package directory is not the one the runtime file pins |
 
 {/* Evidence: crates/registry-messaging/src/main.rs; crates/registry-messaging/src/runtime.rs;
-    crates/registry-messaging/src/store.rs; outputs observed with messaging 0.33.0-dev on
-    2026-09-25, and the expectedDigest row with messaging 0.40.0 on 2026-10-08, digests
-    shortened. */}
+    crates/registry-messaging/src/store.rs; crates/registry-messaging/src/package.rs, expectedDigest;
+    outputs observed with messaging 0.33.0-dev on 2026-09-25, and the expectedDigest row with
+    messaging 0.40.0 on 2026-10-08, digests shortened. */}
 
 ## Next
 
