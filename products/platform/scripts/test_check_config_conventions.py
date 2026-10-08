@@ -1202,7 +1202,7 @@ class SourceLintTests(ConventionsTestCase):
         self.assertNoFinding(report, "CFG-ID-6")
 
 
-class RegisterTests(ConventionsTestCase):
+class RegisterTestCase(ConventionsTestCase):
     def plant(self) -> None:
         self.repo.project["$defs"]["Queue"]["properties"]["maxItems"] = {
             "type": "integer",
@@ -1223,6 +1223,8 @@ class RegisterTests(ConventionsTestCase):
         entry.update(changes)
         return {key: value for key, value in entry.items() if value is not None}
 
+
+class RegisterTests(RegisterTestCase):
     def test_an_unrecorded_finding_fails_with_one_line(self) -> None:
         self.plant()
         code, stdout, _ = self.repo.main()
@@ -1283,7 +1285,7 @@ class RegisterTests(ConventionsTestCase):
         self.assertIn("fix", finding)
 
 
-class RatchetTests(ConventionsTestCase):
+class RatchetTests(RegisterTestCase):
     """CFG-CHANGE-5: the register only shrinks outside the growth classes."""
 
     def git(self, *arguments: str) -> str:
@@ -1306,37 +1308,69 @@ class RatchetTests(ConventionsTestCase):
 
     def test_cfg_change_5_refuses_a_new_pending_entry(self) -> None:
         base = self.commit()
-        RegisterTests.plant(self)
-        self.repo.exceptions.append(RegisterTests.entry(self))
+        self.plant()
+        self.repo.exceptions.append(self.entry())
         report = self.repo.run(base=base)
         self.assertTrue(report.change5, report.change5)
         self.assertIn("CFG-NAME-3", report.change5[0])
 
     def test_cfg_change_5_accepts_a_new_protocol_constant(self) -> None:
         base = self.commit()
-        RegisterTests.plant(self)
+        self.plant()
         self.repo.exceptions.append(
-            RegisterTests.entry(self, **{"class": "protocol-constant", "wp": None})
+            self.entry(**{"class": "protocol-constant", "wp": None})
         )
         self.assertEqual(self.repo.run(base=base).change5, [])
 
-    def test_cfg_change_5_accepts_a_moved_entry(self) -> None:
-        RegisterTests.plant(self)
-        self.repo.exceptions.append(RegisterTests.entry(self))
+    def test_cfg_change_5_refuses_a_moved_entry(self) -> None:
+        self.plant()
+        self.repo.exceptions.append(self.entry())
         base = self.commit()
         queue = self.repo.project["$defs"]["Queue"]["properties"]
         queue["maxEntries"] = queue.pop("maxItems")
         self.repo.exceptions[0]["location"] = at(PROJECT_SCHEMA, "/$defs/Queue/properties/maxEntries")
         report = self.repo.run(base=base)
+        self.assertEqual(report.errors, [])
+        self.assertEqual(len(report.change5), 1, report.change5)
+        self.assertIn("/$defs/Queue/properties/maxEntries", report.change5[0])
+
+    def test_cfg_change_5_accepts_a_deleted_entry(self) -> None:
+        self.plant()
+        self.repo.exceptions.append(self.entry())
+        base = self.commit()
+        del self.repo.project["$defs"]["Queue"]["properties"]["maxItems"]
+        self.repo.exceptions.clear()
+        report = self.repo.run(base=base)
         self.assertEqual(report.change5, [])
         self.assertEqual(report.errors, [])
 
-    def test_cfg_change_5_notes_a_base_without_the_register(self) -> None:
+    def test_cfg_change_5_accepts_a_reworded_entry(self) -> None:
+        self.plant()
+        self.repo.exceptions.append(self.entry())
+        base = self.commit()
+        self.repo.exceptions[0] = self.entry(reason="Spelled before the convention was approved.")
+        self.assertEqual(self.repo.run(base=base).change5, [])
+
+    def test_cfg_change_5_refuses_a_class_change(self) -> None:
+        self.plant()
+        self.repo.exceptions.append(self.entry())
+        base = self.commit()
+        for cls in ("stable-move", "protocol-constant"):
+            self.repo.exceptions[0] = self.entry(**{"class": cls, "wp": None})
+            report = self.repo.run(base=base)
+            self.assertEqual(report.errors, [])
+            self.assertEqual(len(report.change5), 1, report.change5)
+            self.assertIn(f"pending to {cls}", report.change5[0])
+
+    def test_cfg_change_5_fails_when_an_explicit_base_lacks_the_register(self) -> None:
         self.git("-c", "user.name=t", "-c", "user.email=t@example.org",
                  "commit", "-q", "--allow-empty", "-m", "empty")
         report = lint.run(self.repo.root, base="HEAD")
-        self.assertEqual(report.change5, [])
-        self.assertTrue(any("CFG-CHANGE-5" in note for note in report.notes), report.notes)
+        self.assertEqual(len(report.change5), 1, report.change5)
+        self.assertIn("has no products/platform/config-conventions-exceptions.yaml", report.change5[0])
+        code, stdout, _ = self.repo.main("--base", "HEAD")
+        self.assertEqual(code, 1)
+        self.assertIn("CFG-CHANGE-5", stdout)
 
     def test_cfg_change_5_fails_on_an_unknown_base(self) -> None:
         self.commit()

@@ -21,9 +21,12 @@ reader type's closure (CFG-SCHEMA-8, CFG-CHANGE-1, CFG-ID-6). A deviation
 recorded in the exceptions register passes; an unrecorded one fails, and so
 does a recorded one that no longer deviates. Pending entries are counted per
 product and work package, and `--strict` refuses them. CFG-CHANGE-5 compares
-the register with the merge base of `origin/main` (or `--base`): the register
-only grows in the protocol-constant, external-format, and exchange-model
-classes.
+the register, entry by entry (rule, format, location), with the merge base of
+`origin/main` (or `--base`): an entry may be added only in the
+protocol-constant, external-format, and exchange-model classes, no entry
+changes class, and deletion is the only other change. A moved entry is a
+deletion and an addition. An explicit `--base` whose tree lacks the register
+fails; without `--base` that is a note.
 
 `--rule-coverage` checks instead that every rule the convention declares has
 one Enforcement summary row and that the gates the row names exist.
@@ -2041,6 +2044,14 @@ class Lint:
         self.report.strict = strict
 
     def ratchet(self, entries: list[dict], base: str | None) -> None:
+        """CFG-CHANGE-5: compare entries by (rule, format, location) with the base.
+
+        An entry outside the growth classes may not appear, and no entry may
+        change class; deleting an entry is the only change the register takes
+        outside the growth classes. A moved entry is a deletion and an addition,
+        so it is refused like any other new one.
+        """
+        explicit = base is not None
         if base is None:
             merge = git(self.root, "merge-base", "HEAD", "origin/main")
             if merge.returncode != 0:
@@ -2049,30 +2060,49 @@ class Lint:
             base = merge.stdout.strip()
         elif git(self.root, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}").returncode != 0:
             raise UsageError(f"--base {base} does not name a commit")
+
+        def unchecked(reason: str) -> None:
+            message = f"CFG-CHANGE-5 not checked: {reason}"
+            if explicit:
+                self.report.change5.append(f"{message}; pass a --base that carries the register")
+            else:
+                self.report.notes.append(message)
+
         shown = git(self.root, "show", f"{base}:{REGISTER}")
         if shown.returncode != 0:
-            self.report.notes.append(f"CFG-CHANGE-5 not checked: {base} has no {REGISTER}")
+            unchecked(f"{base} has no {REGISTER}")
             return
         try:
-            before = (yaml.safe_load(shown.stdout) or {}).get("exceptions") or []
+            document = yaml.safe_load(shown.stdout) or {}
         except yaml.YAMLError:
-            self.report.notes.append(f"CFG-CHANGE-5 not checked: {REGISTER} at {base} does not parse")
+            unchecked(f"{REGISTER} at {base} does not parse")
+            return
+        before = document.get("exceptions") if isinstance(document, dict) else None
+        if not isinstance(before, list):
+            unchecked(f"{REGISTER} at {base} has no exceptions list")
             return
 
-        def counts(items: list) -> Counter:
-            return Counter(
-                (item.get("rule"), item.get("format")) for item in items
-                if isinstance(item, dict) and item.get("class") not in GROWTH_CLASSES
-            )
+        def keyed(items: list) -> dict[tuple, str | None]:
+            return {
+                (item.get("rule"), item.get("format"), item.get("location")): item.get("class")
+                for item in items if isinstance(item, dict)
+            }
 
-        then, now = counts(before), counts(entries)
+        then, now = keyed(before), keyed(entries)
         for key in sorted(now, key=str):
-            if now[key] > then[key]:
+            rule, format_id, location = key
+            if key not in then:
+                if now[key] not in GROWTH_CLASSES:
+                    self.report.change5.append(
+                        f"CFG-CHANGE-5 {rule} {format_id} {location}: a new {now[key]} entry; only "
+                        f"{', '.join(sorted(GROWTH_CLASSES))} entries may be added, so fix the deviation "
+                        "instead of recording it"
+                    )
+            elif now[key] != then[key]:
                 self.report.change5.append(
-                    f"CFG-CHANGE-5 {key[0]} {key[1]}: the register records {now[key]} entries outside "
-                    f"the growth classes, the base records {then[key]}; fix the new deviation instead of recording it"
+                    f"CFG-CHANGE-5 {rule} {format_id} {location}: the class changed from {then[key]} to "
+                    f"{now[key]}; an existing entry may only be deleted"
                 )
-
 
 def unconstrained(node: dict) -> bool:
     constraining = ("properties", "patternProperties", "items", "prefixItems", "$ref", "enum", "const",

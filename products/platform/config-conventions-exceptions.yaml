@@ -29,8 +29,11 @@
 # `exceptionClass` in config-formats.yaml instead of one entry per finding.
 #
 # CFG-CHANGE-5: the register only shrinks. On a pull request the lint compares
-# it with the base branch and fails when an entry outside protocol-constant,
-# external-format, and exchange-model is added.
+# it with the base, entry by entry (rule, format, location), and fails when an
+# entry outside protocol-constant, external-format, and exchange-model is added
+# or when an entry changes class. Deleting an entry is the only other change; a
+# moved entry is a deletion and an addition. An explicit --base whose tree
+# lacks this register fails.
 #
 # The entries were seeded from the lint's `--list --format json` output and
 # classified by rule, format stability, and schema origin; edit them by hand.
