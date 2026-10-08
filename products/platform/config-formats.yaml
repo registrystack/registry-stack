@@ -98,7 +98,7 @@ formats:
       boolean: /accessProfiles/0/default
       idList: /entities
       set: /accessProfiles/0/requiredPurposes
-      reference: /entities/0/fields/2/vocabulary
+      reference: /accessProfiles/0/permissions/0/entity
     securityMembers:
       - pointer: /accessProfiles/*/anonymous
         whenOmitted: closed
