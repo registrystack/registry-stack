@@ -35,7 +35,7 @@ use registry_evidence_authoring::{
     openapi::types::OperationKey,
 };
 use registry_platform_crypto::parse_json_strict;
-use registry_platform_yaml::{Report, Severity};
+use registry_platform_yaml::{Diagnostic, Report, Severity};
 use serde_json::{json, Value};
 
 use crate::{authored, report, OutputFormat};
@@ -209,7 +209,11 @@ fn serve(args: ServeArgs) -> Result<ExitCode> {
                 || args.as_of.is_some()
                 || args.explain =>
         {
-            bail!("materialized serve rejects generation and operation-selection flags")
+            return Err(argument_refusal(
+                "evidence.mock.serve-config-flags",
+                "serve --config rejects generation and operation-selection flags",
+                "Remove --operation, --seed, --as-of, and --explain, or serve with --openapi to use them.",
+            ))
         }
         (Some(openapi_path), None) => {
             let root = current_root()?;
@@ -274,7 +278,11 @@ fn serve(args: ServeArgs) -> Result<ExitCode> {
                 .http_addr
                 .is_some_and(|requested| requested != configured.address)
             {
-                bail!("--http-addr must exactly match the applicable project source origin");
+                return Err(argument_refusal(
+                    "evidence.mock.http-addr-mismatch",
+                    "--http-addr must exactly match the applicable project source origin",
+                    "Omit --http-addr to serve the project source origin, or change the source's base URL to the address you want.",
+                ));
             }
             serve_ephemeral(
                 prepared,
@@ -393,7 +401,11 @@ fn serve_materialized(checked: CheckedPlan, address: SocketAddr) -> Result<ExitC
 fn generate(args: GenerateArgs) -> Result<ExitCode> {
     if args.config.is_some() {
         if args.seed.is_some() || args.as_of.is_some() {
-            bail!("generate --config uses the stored generation settings");
+            return Err(argument_refusal(
+                "evidence.mock.generate-config-flags",
+                "generate --config uses the stored generation settings",
+                "Remove --seed and --as-of; the plan's generation settings apply.",
+            ));
         }
         if args.operation.is_some() {
             return append_generated_case(args);
@@ -934,19 +946,33 @@ fn path_is_absent(path: &Path) -> Result<bool> {
     }
 }
 
+/// A refusal of an argument combination clap cannot express, reported as a
+/// diagnostic with a code and the next step.
+fn argument_refusal(code: &str, message: &str, fix: &str) -> anyhow::Error {
+    Report::new(vec![Diagnostic::error(code, "", message, fix)]).into()
+}
+
 fn parse_path_parameters(arguments: &[String]) -> Result<BTreeMap<String, String>> {
     let mut parameters = BTreeMap::new();
     for argument in arguments {
-        let (name, value) = argument
-            .split_once('=')
-            .context("--path-parameter must use NAME=VALUE")?;
+        let (name, value) = argument.split_once('=').ok_or_else(|| {
+            argument_refusal(
+                "evidence.mock.path-parameter-form",
+                "--path-parameter must use NAME=VALUE",
+                "Write each --path-parameter as NAME=VALUE, such as person_id=person-123.",
+            )
+        })?;
         if name.is_empty()
             || value.is_empty()
             || parameters
                 .insert(name.to_owned(), value.to_owned())
                 .is_some()
         {
-            bail!("--path-parameter names must be non-empty and unique");
+            return Err(argument_refusal(
+                "evidence.mock.path-parameter-names",
+                "--path-parameter names and values must be non-empty, and each name unique",
+                "Give each path template parameter one non-empty NAME=VALUE.",
+            ));
         }
     }
     Ok(parameters)
@@ -1336,6 +1362,27 @@ fn print_explanations(explanations: &[generator::ExplainedInference]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_parameter_refusals_are_diagnostics_with_a_code_and_a_fix() {
+        for (arguments, code) in [
+            (
+                vec!["person_id".to_owned()],
+                "evidence.mock.path-parameter-form",
+            ),
+            (vec!["a=".to_owned()], "evidence.mock.path-parameter-names"),
+            (
+                vec!["a=1".to_owned(), "a=2".to_owned()],
+                "evidence.mock.path-parameter-names",
+            ),
+        ] {
+            let error = parse_path_parameters(&arguments).expect_err("refused");
+            let report = authored::report_in(&error).expect("a diagnostic report");
+            let diagnostic = &report.diagnostics()[0];
+            assert_eq!(diagnostic.code, code);
+            assert!(!diagnostic.suggested_action.is_empty());
+        }
+    }
 
     #[test]
     fn project_sources_prefer_exact_then_longest_operation_suffix() {
