@@ -2904,6 +2904,7 @@ factSchema: schemas/record-status-facts.schema.yaml
     }
 
     #[test]
+    #[ignore = "run with EVIDENCE_BIN naming the evidence binary built from this commit"]
     fn the_reference_authoring_example_checks_with_no_diagnostic() {
         let example = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/evidence/reference/authoring-projects/example");

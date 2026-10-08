@@ -1320,6 +1320,49 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn(f"fn {test.rsplit('::', 1)[1]}()", source)
 
+    def test_evidence_lifecycle_runs_the_reference_authoring_check_exactly(
+        self,
+    ) -> None:
+        script = next(
+            step["run"]
+            for step in self.workflow_jobs["evidence-tutorials"]["steps"]
+            if step.get("name") == "Test the exact local Evidence lifecycle"
+        )
+        test = (
+            "check::tests::"
+            "the_reference_authoring_example_checks_with_no_diagnostic"
+        )
+        name = test.rsplit("::", 1)[1]
+        # The check delegates fixture evaluation to the sibling `evidence`
+        # binary the job builds, so the test is ignored elsewhere and this
+        # step names it exactly: a renamed test would otherwise leave the
+        # step running zero tests.
+        self.assertRegex(
+            script,
+            rf"-p registry-evidencectl --lib \\\s*\n\s*{re.escape(test)} \\"
+            r"\s*\n\s*-- --ignored --exact \\",
+        )
+        self.assertIn(
+            "grep -q 'test result: ok\\. 1 passed' "
+            '"${RUNNER_TEMP}/evidence-reference-authoring.log" || '
+            '{ echo "::error::expected exactly one passing test for '
+            f'{name}"; exit 1; }}',
+            script,
+        )
+        source = Path("crates/registry-evidencectl/src/check.rs").read_text()
+        self.assertRegex(source, rf"#\[ignore = \"[^\"]+\"\]\s*\n\s*fn {name}\(\)")
+        # The test checks the reference example, so a change to it reaches
+        # the job that runs the test.
+        self.assertTrue(
+            classify(
+                self.workspace,
+                (
+                    "products/evidence/reference/authoring-projects/example/"
+                    "evidence-project.yaml",
+                ),
+            )["evidence_tutorial"]
+        )
+
     def test_casework_postgres_runs_task_approval_and_local_session_exactly(
         self,
     ) -> None:

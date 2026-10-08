@@ -1857,6 +1857,15 @@ jobs:
           cargo test --locked \
             -p registry-evidencectl --test dev_lifecycle -- \
             --ignored --test-threads=1
+          # The reference authoring check delegates its fixture runs to the
+          # evidence binary built above. An inexact name filter that selects
+          # nothing still exits 0, so the step names the test exactly and
+          # fails unless it reports one pass.
+          cargo test --locked -p registry-evidencectl --lib \
+            check::tests::the_reference_authoring_example_checks_with_no_diagnostic \
+            -- --ignored --exact \
+            | tee "${RUNNER_TEMP}/evidence-reference-authoring.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-reference-authoring.log" || { echo "::error::expected exactly one passing test for the_reference_authoring_example_checks_with_no_diagnostic"; exit 1; }
 
       - name: Execute the Evidence tutorials with the stock issuer
         shell: bash
