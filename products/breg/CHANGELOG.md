@@ -240,6 +240,23 @@
   the issuer, which is now written `allowedClients: unrestricted`. Token
   verification does not change. Migration steps are in
   `release/notes/config-conventions/breg.md`, section "BReg access".
+- BREAKING: access to a statistical dataset is granted in each access
+  profile's `permissions`, as `{dataset, operations}` with the operations
+  `read-live`, `publish`, and `read-releases`. `live` and `releases` on a
+  `statisticalDatasets` entry are refused when the file is read as
+  `config.removed-key`, naming the new home. Exactly one profile may hold
+  `publish` on a dataset, and the publisher and every `read-live` profile of
+  a published dataset also write `read-releases`, which the release routes
+  already served them. `breg.access-profile.permission-dataset-unknown`,
+  `breg.statistical-dataset.publisher-multiple`,
+  `breg.statistical-dataset.publisher-missing`, and
+  `breg.statistical-dataset.read-releases-required` are added;
+  `breg.statistical-dataset.profile-unknown` and
+  `breg.statistical-dataset.releases-readers-empty` are removed. Enforcement
+  does not change and a rewritten project keeps its compiled revision.
+  `bregctl explain access` gains `statisticalDatasets`, the profiles holding
+  each operation per dataset, in `breg-explain/v1alpha4`. Migration steps are
+  in `release/notes/config-conventions/breg.md`, section "BReg access".
 
 - `registry-breg-client` resends an idempotency-keyed mutation whose outcome
   is unknown, a timeout or broken exchange after sending or a 5xx answer, up

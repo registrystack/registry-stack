@@ -409,6 +409,18 @@ accessProfiles:
           - field: administrative-boundary
             claim: administrative_boundaries
             operator: in
+      - dataset: monthly-discharge-reports
+        operations:
+          - read-live
+          - read-releases
+      - dataset: monthly-valid-permits-temporal
+        operations:
+          - read-live
+          - read-releases
+      - dataset: monthly-valid-permits-fields
+        operations:
+          - read-live
+          - read-releases
   - id: statistics-publisher
     principalClaim: registry_principal
     requiredScopes: unrestricted
@@ -446,10 +458,31 @@ accessProfiles:
           - has-measured-quantity
         allowCount: true
         rowBoundaries: unrestricted
+      - dataset: monthly-discharge-reports
+        operations:
+          - publish
+          - read-releases
+      - dataset: monthly-valid-permits-temporal
+        operations:
+          - publish
+          - read-releases
+      - dataset: monthly-valid-permits-fields
+        operations:
+          - publish
+          - read-releases
   - id: statistics-reader
     principalClaim: registry_principal
     requiredScopes: unrestricted
-    permissions: []
+    permissions:
+      - dataset: monthly-discharge-reports
+        operations:
+          - read-releases
+      - dataset: monthly-valid-permits-temporal
+        operations:
+          - read-releases
+      - dataset: monthly-valid-permits-fields
+        operations:
+          - read-releases
 statisticalDatasets:
   - id: monthly-discharge-reports
     unit: discharge-report
@@ -465,12 +498,6 @@ statisticalDatasets:
     disclosure:
       minimumCount: 5
       roundingBase: 5
-    live:
-      - facility-operator
-    releases:
-      publisher: statistics-publisher
-      readers:
-        - statistics-reader
   - id: monthly-valid-permits-temporal
     unit: permit
     population: "permitType ne null"
@@ -485,12 +512,6 @@ statisticalDatasets:
     disclosure:
       minimumCount: 5
       roundingBase: 5
-    live:
-      - facility-operator
-    releases:
-      publisher: statistics-publisher
-      readers:
-        - statistics-reader
   - id: monthly-valid-permits-fields
     unit: permit
     population: "permitType ne null"
@@ -507,12 +528,6 @@ statisticalDatasets:
     disclosure:
       minimumCount: 5
       roundingBase: 5
-    live:
-      - facility-operator
-    releases:
-      publisher: statistics-publisher
-      readers:
-        - statistics-reader
 vocabularies:
   - id: administrative-boundary
     values:

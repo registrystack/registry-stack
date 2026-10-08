@@ -135,5 +135,6 @@
       "surface": "entity"
     }
   ],
-  "scopeMatching": "all required scopes must be present"
+  "scopeMatching": "all required scopes must be present",
+  "statisticalDatasets": []
 }

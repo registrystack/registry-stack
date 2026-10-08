@@ -775,6 +775,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "requestVisibility":"owner",
                 "allowCount":true
+              },{
+                "dataset":"monthly-owned-correction-requests",
+                "operations":["read-live"]
               }]
             },
             {
@@ -807,8 +810,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "population":"included eq true",
             "period":{"type":"flow","field":"requested-on","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["included"],
-            "disclosure":{"minimumCount":2,"roundingBase":2},
-            "live":["submitter"]
+            "disclosure":{"minimumCount":2,"roundingBase":2}
           }]
         }"#,
     )

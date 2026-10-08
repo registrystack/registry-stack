@@ -1705,7 +1705,7 @@ fn validate_action_permission_sources(
                 (true, None) => errors.push(Diagnostic::error(
                     "breg.access-profile.permission-target-missing",
                     "project.accessProfiles[].permissions[]",
-                    "an access permission must name either one entity or one action",
+                    "an access permission must name one entity, one action, or one statistical dataset",
                 )),
                 (false, Some(_)) => errors.push(Diagnostic::error(
                     "breg.access-profile.permission-target-exclusive",

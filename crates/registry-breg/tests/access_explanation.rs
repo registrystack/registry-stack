@@ -89,6 +89,8 @@ fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
     // A project without consent configuration states no consent block.
     assert_eq!(explanation["consent"], serde_json::Value::Null);
     assert!(explanation.as_object().unwrap().contains_key("consent"));
+    // A project without statistical datasets states an empty audience list.
+    assert_eq!(explanation["statisticalDatasets"], json!([]));
     assert_eq!(explanation["rowReach"][0]["profile"], "clerk");
     assert_eq!(explanation["rowReach"][0]["ownerOnlyRequestReads"], false);
     assert_eq!(

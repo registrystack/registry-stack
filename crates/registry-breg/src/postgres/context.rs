@@ -3656,6 +3656,7 @@ mod tests {
                         results: BTreeSet::new(),
                         allow_count: false,
                     }],
+                    dataset_permissions: Vec::new(),
                 },
                 ProjectAccessProfileSource {
                     id: "viewer".to_owned(),
@@ -3700,6 +3701,7 @@ mod tests {
                         results: BTreeSet::new(),
                         allow_count: false,
                     }],
+                    dataset_permissions: Vec::new(),
                 },
             ],
             vocabularies: Vec::new(),

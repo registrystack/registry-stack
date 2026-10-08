@@ -4275,22 +4275,24 @@ fn statistics_registry_source() -> Value {
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
                 "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,
                 "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
-            }]},
+            },{"dataset":"records-by-category","operations":["read-live","read-releases"]}]},
             {"id":"analyst-wide","principalClaim":"principal","requiredScopes":["statistics.wide"],"permissions":[{
                 "entity":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
                 "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":"unrestricted"
-            }]},
+            },{"dataset":"records-by-category","operations":["read-live","read-releases"]}]},
             {"id":"publisher","principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":[{
                 "entity":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
                 "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":"unrestricted"
-            }]},
+            },{"dataset":"records-by-category","operations":["publish","read-releases"]}]},
             {"id":"seed","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                 "entity":"record","operations":["create"],
                 "writableFields":["subject","active","category","event-date","jurisdiction"],"rowBoundaries":"unrestricted"
             }]},
-            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[]}
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
+                {"dataset":"records-by-category","operations":["read-releases"]}
+            ]}
         ],
         "vocabularies":[
             {"id":"category","values":["a","b"]},
@@ -4299,8 +4301,7 @@ fn statistics_registry_source() -> Value {
         "statisticalDatasets":[{
             "id":"records-by-category","unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
-            "dimensions":["category"],"disclosure":{"minimumCount":5,"roundingBase":5},
-            "live":["analyst","analyst-wide"],"releases":{"publisher":"publisher","readers":["reader"]}
+            "dimensions":["category"],"disclosure":{"minimumCount":5,"roundingBase":5}
         }]
     })
 }
@@ -4331,19 +4332,20 @@ fn cap_registry() -> registry_breg::CompiledRegistry {
             {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                 "entity":"record","operations":["list"],"readableFields":["active","category","event-date"],
                 "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":"unrestricted"
-            }]},
+            },{"dataset":"daily-by-category","operations":["read-live","read-releases"]}]},
             {"id":"publisher","principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":[{
                 "entity":"record","operations":["list"],"readableFields":["active","category","event-date"],
                 "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":"unrestricted"
-            }]},
-            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[]}
+            },{"dataset":"daily-by-category","operations":["publish","read-releases"]}]},
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
+                {"dataset":"daily-by-category","operations":["read-releases"]}
+            ]}
         ],
         "vocabularies":[{"id":"category","values":codes}],
         "statisticalDatasets":[{
             "id":"daily-by-category","unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"day","firstPeriod":"2025-01-01"},
-            "dimensions":["category"],"disclosure":{"minimumCount":5,"roundingBase":5},
-            "live":["analyst"],"releases":{"publisher":"publisher","readers":["reader"]}
+            "dimensions":["category"],"disclosure":{"minimumCount":5,"roundingBase":5}
         }]
     });
     let bytes = serde_json::to_vec(&source).expect("cap fixture serializes");

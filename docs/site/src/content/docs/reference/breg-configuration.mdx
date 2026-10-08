@@ -176,7 +176,7 @@ it generates record schemas for that project's API, not configuration schemas.
 
 ## Statistical dataset declarations
 
-Root `statisticalDatasets` entries name the unit entity, typed population, flow or stock period, closed dimensions, disclosure parameters, and live or release profile grants. `minimumCount` and `roundingBase` are explicit integers of at least two. A publisher needs caller-independent read visibility over the unit and every source read by referenced derived fields. Live grants need a count-capable ordinary list permission; reader grants do not add record access.
+Root `statisticalDatasets` entries name the unit entity, typed population, flow or stock period, closed dimensions, and disclosure parameters. `minimumCount` and `roundingBase` are explicit integers of at least two. Access to a dataset is granted in an access profile's `permissions`, as an entry holding `dataset` and `operations` only, with the operations `read-live`, `publish`, and `read-releases`. Exactly one profile may hold `publish` on a dataset, and the publisher and every `read-live` profile of a published dataset also write `read-releases`. A publisher needs caller-independent read visibility over the unit and every source read by referenced derived fields. A `read-live` or `publish` grant needs a count-capable ordinary list permission; a `read-releases` grant does not add record access.
 
 The generated `registry.yaml` tables include every nested dataset member. Compiler rules additionally reject reserved dimension names and codes, encrypted fields, consent-gated sources, and an unbounded or unauthorized population. See [publish a statistical series](../../configure/breg-statistics/) for the declaration journey.
 

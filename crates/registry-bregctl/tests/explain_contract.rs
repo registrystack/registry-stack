@@ -297,6 +297,29 @@ fn explain_access_consent_matches_contract() {
 }
 
 #[test]
+fn explain_access_states_who_holds_each_statistical_dataset_operation() {
+    let project = repo_root().join("products/breg/acceptance/facility");
+    let explanation = explain("access", &project);
+    assert_matches_contract("facility", "AccessExplanation", &explanation);
+    let audience = |dataset: &str| {
+        json!({
+            "dataset": dataset,
+            "readLive": ["facility-operator"],
+            "publish": ["statistics-publisher"],
+            "readReleases": ["facility-operator", "statistics-publisher", "statistics-reader"],
+        })
+    };
+    assert_eq!(
+        explanation["statisticalDatasets"],
+        json!([
+            audience("monthly-discharge-reports"),
+            audience("monthly-valid-permits-fields"),
+            audience("monthly-valid-permits-temporal"),
+        ])
+    );
+}
+
+#[test]
 fn explain_routes_matches_contract() {
     for (name, relative) in FIXTURES {
         let explanation = explain("routes", &fixture_path(relative));

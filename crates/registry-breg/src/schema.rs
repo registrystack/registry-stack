@@ -651,6 +651,59 @@ mod tests {
     }
 
     #[test]
+    fn schema_states_a_dataset_permission_as_dataset_and_operations_only() {
+        let document = schema_document();
+        let schema = compile(&document);
+        let facility = fixture("facility");
+        let reader = facility["accessProfiles"]
+            .as_array()
+            .expect("the fixture lists access profiles")
+            .iter()
+            .position(|profile| profile["id"] == "statistics-reader")
+            .expect("the fixture declares statistics-reader");
+        assert!(facility["accessProfiles"][reader]["permissions"][0]["dataset"].is_string());
+        assert!(schema.is_valid(&facility));
+
+        for (member, written) in [
+            ("operations", serde_json::json!([])),
+            ("operations", serde_json::json!(["list"])),
+            ("operations", serde_json::json!(["read-releases", "list"])),
+            ("rowBoundaries", serde_json::json!("unrestricted")),
+            ("entity", serde_json::json!("permit")),
+        ] {
+            let mut instance = facility.clone();
+            instance["accessProfiles"][reader]["permissions"][0][member] = written.clone();
+            assert!(
+                !schema.is_valid(&instance),
+                "a dataset permission with {member}: {written}"
+            );
+        }
+
+        let mut entity_permission = facility.clone();
+        entity_permission["accessProfiles"][0]["permissions"][0]["operations"] =
+            serde_json::json!(["list", "read-live"]);
+        assert!(
+            !schema.is_valid(&entity_permission),
+            "an entity permission with a dataset operation"
+        );
+
+        for (member, written) in [
+            ("live", serde_json::json!(["facility-operator"])),
+            (
+                "releases",
+                serde_json::json!({"publisher": "statistics-publisher", "readers": ["statistics-reader"]}),
+            ),
+        ] {
+            let mut instance = facility.clone();
+            instance["statisticalDatasets"][0][member] = written;
+            assert!(
+                !schema.is_valid(&instance),
+                "a dataset that still writes {member}"
+            );
+        }
+    }
+
+    #[test]
     fn schema_accepts_geojson_and_bbox_authoring_and_rejects_duplicate_bbox_geometry() {
         let document = schema_document();
         let schema = compile(&document);

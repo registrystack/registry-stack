@@ -452,6 +452,22 @@ pub struct AccessExplanation {
     /// Consent-gated permissions and the recipients they admit; null when the
     /// project declares neither.
     pub consent: Option<ConsentExplanation>,
+    /// Who may do what with each statistical dataset; empty when the project
+    /// declares none.
+    pub statistical_datasets: Vec<StatisticalDatasetAccessExplanation>,
+}
+
+/// The access profiles that hold each operation on one statistical dataset.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticalDatasetAccessExplanation {
+    pub dataset: String,
+    /// Profiles that read live counts.
+    pub read_live: Vec<String>,
+    /// The profile that publishes releases; empty when the dataset has none.
+    pub publish: Vec<String>,
+    /// Every profile that reads published releases.
+    pub read_releases: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -707,6 +723,36 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
         claim_contract,
         claim_contract_error,
         consent: explain_consent(registry),
+        statistical_datasets: registry
+            .statistical_datasets()
+            .values()
+            .map(|dataset| {
+                let releases = dataset.releases.as_ref();
+                StatisticalDatasetAccessExplanation {
+                    dataset: dataset.id.clone(),
+                    read_live: dataset.live_profiles.iter().cloned().collect(),
+                    publish: releases
+                        .map(|releases| releases.publisher.clone())
+                        .into_iter()
+                        .collect(),
+                    // A live reader and the publisher read releases too, so
+                    // the audience is all three sets together.
+                    read_releases: releases
+                        .map(|releases| {
+                            dataset
+                                .live_profiles
+                                .iter()
+                                .chain([&releases.publisher])
+                                .chain(&releases.readers)
+                                .cloned()
+                                .collect::<BTreeSet<_>>()
+                        })
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect(),
+                }
+            })
+            .collect(),
     }
 }
 

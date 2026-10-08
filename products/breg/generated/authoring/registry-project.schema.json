@@ -86,6 +86,9 @@
         },
         {
           "$ref": "#/$defs/ActionAccessPermissionSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/DatasetPermissionSource"
         }
       ]
     },
@@ -1686,6 +1689,50 @@
         "number",
         "string"
       ]
+    },
+    "DatasetOperation": {
+      "description": "One thing a profile may do with a statistical dataset.",
+      "oneOf": [
+        {
+          "const": "read-live",
+          "description": "Read the dataset's live counts.",
+          "type": "string"
+        },
+        {
+          "const": "publish",
+          "description": "Publish and withdraw the dataset's releases. One profile holds it per dataset.",
+          "type": "string"
+        },
+        {
+          "const": "read-releases",
+          "description": "Read the dataset's releases.",
+          "type": "string"
+        }
+      ]
+    },
+    "DatasetPermissionSource": {
+      "additionalProperties": false,
+      "description": "What a profile may do with one statistical dataset.",
+      "properties": {
+        "dataset": {
+          "description": "The statistical dataset the permission names.",
+          "type": "string"
+        },
+        "operations": {
+          "description": "What the profile may do with the dataset. A profile that holds `read-live` or `publish` on a dataset with a publisher also holds `read-releases`.",
+          "items": {
+            "$ref": "#/$defs/DatasetOperation"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "dataset",
+        "operations"
+      ],
+      "type": "object"
     },
     "DateFieldKindSchema": {
       "enum": [
@@ -3308,6 +3355,7 @@
     },
     "ProjectAccessProfileSource": {
       "additionalProperties": false,
+      "description": "One access profile as a project writes it.",
       "properties": {
         "actorKind": {
           "$ref": "#/$defs/ActorKindSource"
@@ -3321,6 +3369,7 @@
         },
         "permissions": {
           "default": [],
+          "description": "What the profile may do: each permission names one entity, one action, or one statistical dataset.",
           "items": {
             "$ref": "#/$defs/AccessPermissionSource"
           },
@@ -3718,20 +3767,11 @@
         "id": {
           "$ref": "#/$defs/LocalId"
         },
-        "live": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "period": {
           "$ref": "#/$defs/StatisticalPeriodSource"
         },
         "population": {
           "type": "string"
-        },
-        "releases": {
-          "$ref": "#/$defs/StatisticalReleasesSource"
         },
         "unit": {
           "type": "string"
@@ -3830,25 +3870,6 @@
           "type": "object"
         }
       ]
-    },
-    "StatisticalReleasesSource": {
-      "additionalProperties": false,
-      "properties": {
-        "publisher": {
-          "type": "string"
-        },
-        "readers": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "publisher",
-        "readers"
-      ],
-      "type": "object"
     },
     "StatisticalTemporalValiditySource": {
       "enum": [

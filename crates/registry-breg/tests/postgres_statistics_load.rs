@@ -53,13 +53,14 @@ async fn million_unit_three_dimension_statistics_measurement() {
         "accessProfiles":[{"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
             "entity":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted",
             "readableFields":["active","category","region","event-date"],
-            "filterableFields":["active","category","region","event-date"]}]},
-            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[]}],
+            "filterableFields":["active","category","region","event-date"]},
+            {"dataset":"units-by-category","operations":["read-live","publish","read-releases"]}]},
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
+                {"dataset":"units-by-category","operations":["read-releases"]}]}],
         "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"active ne null",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["active","category","region"],
-            "disclosure":{"minimumCount":5,"roundingBase":5},"live":["publisher"],
-            "releases":{"publisher":"publisher","readers":["reader"]}}]
+            "disclosure":{"minimumCount":5,"roundingBase":5}}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let compiled = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());

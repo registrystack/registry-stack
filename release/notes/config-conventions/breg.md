@@ -1011,12 +1011,10 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `statistical_dataset.population.field_unknown` | `breg.statistical-dataset.population-field-unknown` |
 | `statistical_dataset.population.invalid` | `breg.statistical-dataset.population-invalid` |
 | `statistical_dataset.profile.duplicate` | `breg.statistical-dataset.profile-duplicate` |
-| `statistical_dataset.profile.unknown` | `breg.statistical-dataset.profile-unknown` |
 | `statistical_dataset.publisher.caller_dependent` | `breg.statistical-dataset.publisher-caller-dependent` |
 | `statistical_dataset.publisher.dependency_grant_missing` | `breg.statistical-dataset.publisher-dependency-grant-missing` |
 | `statistical_dataset.publisher.dependency_read_required` | `breg.statistical-dataset.publisher-dependency-read-required` |
 | `statistical_dataset.publisher.entity_row_boundary` | `breg.statistical-dataset.publisher-entity-row-boundary` |
-| `statistical_dataset.releases.readers_empty` | `breg.statistical-dataset.releases-readers-empty` |
 | `statistical_dataset.unit.unknown` | `breg.statistical-dataset.unit-unknown` |
 | `temporal.field.unknown` | `breg.temporal.field-unknown` |
 | `temporal.role.conflict` | `breg.temporal.role-conflict` |
@@ -1729,6 +1727,115 @@ To migrate a runtime file:
 2. To keep accepting every client of the issuer, write
    `allowedClients: unrestricted`.
 3. Run `bregctl check <project> --runtime-config runtime.yaml`.
+
+### BREAKING: statistical dataset access is granted in profile permissions
+
+A statistical dataset no longer names the profiles that use it. Each access
+profile grants the dataset in its own `permissions`, beside its record
+grants, so reviewing one profile shows everything the profile reaches.
+
+| File | Member | Change |
+|---|---|---|
+| `registry.yaml` | `/statisticalDatasets/*/live` | Removed, refused as `config.removed-key` naming the new home |
+| `registry.yaml` | `/statisticalDatasets/*/releases` | Removed, refused as `config.removed-key` naming the new home |
+| `registry.yaml` | `/accessProfiles/*/permissions/*` | Accepts a third form, `{dataset, operations}` |
+
+A dataset permission holds `dataset` and `operations` only. Its operations
+are `read-live` (exact live counts), `publish` (publish and withdraw
+releases), and `read-releases` (read released documents).
+
+The three words are new, so they are kebab-case from their first release
+(CFG-NAME-2, CFG-CHANGE-5). The fifteen entity and action operations keep
+their spelling (`submit_request` and the rest) until the stable move, and
+the operation names the API returns for a dataset in `/v1/registry` and in
+the OpenAPI document (`read_live`, `list_releases`, `publish_release`, and
+the rest) are unchanged.
+
+```yaml
+accessProfiles:
+  - id: facility-operator
+    permissions:
+      - dataset: monthly-discharge-reports
+        operations: [read-live, read-releases]
+  - id: statistics-publisher
+    permissions:
+      - dataset: monthly-discharge-reports
+        operations: [publish, read-releases]
+  - id: statistics-reader
+    permissions:
+      - dataset: monthly-discharge-reports
+        operations: [read-releases]
+```
+
+The release routes serve the publisher and every live reader as well as the
+listed readers, and they still do. The file now says so: when a dataset has
+a publisher, the publisher and every `read-live` profile must also write
+`read-releases`. That audience was implied before and is written now.
+
+Refused when the file is read, as `config.invalid-value` at the permission:
+
+| Written | Fix the diagnostic names |
+|---|---|
+| a dataset permission with an entity or action operation, or with none | write at least one of `read-live`, `publish`, or `read-releases` |
+| a dataset permission with any other member (`entity`, `action`, `rowBoundaries`, `readableFields`, and the rest) | keep `dataset` and `operations` only |
+| an entity or action permission with `read-live`, `publish`, or `read-releases` | move them to a permission that names a dataset |
+
+An operation outside the eighteen words a permission accepts is refused as
+`config.unknown-variant`.
+
+Refused at compile:
+
+| Code | Path | Condition |
+|---|---|---|
+| `breg.access-profile.permission-dataset-unknown` | `project.accessProfiles[].permissions[].dataset` | The permission names a dataset the project does not declare. Added. |
+| `breg.statistical-dataset.publisher-multiple` | the dataset | More than one profile holds `publish`. Added. |
+| `breg.statistical-dataset.publisher-missing` | the dataset | A profile holds `read-releases` and no profile holds `publish`. Added. |
+| `breg.statistical-dataset.read-releases-required` | the dataset | The publisher or a `read-live` profile of a published dataset does not hold `read-releases`. One diagnostic per profile. Added. |
+| `breg.statistical-dataset.profile-duplicate` | the dataset | One profile names the dataset in two permissions. It used to report a profile listed twice on the dataset. |
+| `breg.statistical-dataset.grants-empty` | the dataset | No profile holds any operation on the dataset. The fix text now names the profile permission. |
+
+Two codes are no longer reported, because nothing can write the shape they
+refused:
+
+| Was | Renamed to, now removed |
+|---|---|
+| `statistical_dataset.profile.unknown` | `breg.statistical-dataset.profile-unknown` |
+| `statistical_dataset.releases.readers_empty` | `breg.statistical-dataset.releases-readers-empty` |
+
+A dataset that only its publisher reads is therefore accepted: the publisher
+holds `publish` and `read-releases`, and no other profile is needed.
+
+The message of `breg.access-profile.permission-target-missing` now reads "an
+access permission must name one entity, one action, or one statistical
+dataset".
+
+The authorization a registry enforces does not change. A project rewritten
+as below compiles to the same live profiles, publisher, and readers, so it
+keeps its compiled revision and its dataset definition digests. One case
+moves the revision without changing who is served: a project that listed the
+publisher or a live profile under `releases.readers` compiles to a reader
+list without that profile, which the release routes already served.
+
+`bregctl explain access` gains `statisticalDatasets`: one entry per dataset,
+in dataset id order, with the profiles holding `readLive`, `publish`, and
+`readReleases`. It is `[]` for a project without datasets. The member is
+added to `breg-explain/v1alpha4` and to the `AccessExplanation` contract,
+where it is required; no member is removed or renamed.
+
+To migrate a registry project, for each entry under `statisticalDatasets`:
+
+1. For each profile under `live`, add `{dataset: <id>, operations:
+   [read-live]}` to that profile's `permissions`. If the dataset has
+   `releases`, write `operations: [read-live, read-releases]`.
+2. For `releases.publisher`, add `{dataset: <id>, operations: [publish,
+   read-releases]}` to that profile's `permissions`. A profile that is both
+   live and the publisher writes one permission with all three operations.
+3. For each profile under `releases.readers`, add `{dataset: <id>,
+   operations: [read-releases]}` to that profile's `permissions`, or add
+   `read-releases` to the permission steps 1 and 2 already wrote for it.
+4. Delete `live` and `releases` from the dataset.
+5. Run `bregctl check`, then `bregctl explain access` and compare
+   `statisticalDatasets` with the grants you removed.
 
 ## BReg citizen services
 

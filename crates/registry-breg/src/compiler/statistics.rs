@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::contract::{
-    AccessProfileSource, FieldTypeSource, Operation, RegistryProject,
+    AccessProfileSource, DatasetOperation, FieldTypeSource, Operation, RegistryProject,
     StatisticalPeriodGranularitySource, StatisticalPeriodSource, StatisticalValiditySource,
     MAX_EXACT_JSON_INTEGER,
 };
@@ -29,6 +29,7 @@ pub(super) fn compile(
     let mut errors = Vec::new();
     let mut compiled = BTreeMap::new();
     let mut seen = BTreeSet::new();
+    validate_permission_datasets(project, &mut errors);
     for source in &project.statistical_datasets {
         let root = format!("statisticalDatasets[id={}]", source.id);
         if !seen.insert(source.id.clone()) {
@@ -71,51 +72,84 @@ pub(super) fn compile(
         referenced_fields.extend(dimensions.iter().map(|dimension| dimension.field.clone()));
         validate_referenced_fields(source, unit, &referenced_fields, &root, &mut errors);
 
-        let live_profiles = unique_profiles(
-            &source.live,
-            &format!("{root}.live[]"),
-            &source.id,
-            "list each live profile once",
-            &mut errors,
-        );
-        let releases = source.releases.as_ref().map(|release| {
-            let readers = unique_profiles(
-                &release.readers,
-                &format!("{root}.releases.readers[]"),
+        let grants = DatasetGrants::of(project, &source.id);
+        for profile in &grants.repeated {
+            errors.push(error(
+                "breg.statistical-dataset.profile-duplicate",
+                &root,
                 &source.id,
-                "list each release reader once",
-                &mut errors,
-            );
-            if readers.is_empty() {
+                &format!(
+                    "name the dataset in one permission of access profile `{profile}` and list every operation there"
+                ),
+            ));
+        }
+        let live_profiles = grants.read_live.clone();
+        let mut publishers = grants.publish.iter();
+        let releases = match (publishers.next(), publishers.next()) {
+            (None, _) => {
+                if !grants.read_releases.is_empty() {
+                    errors.push(error(
+                        "breg.statistical-dataset.publisher-missing",
+                        &root,
+                        &source.id,
+                        &format!(
+                            "no access profile publishes it, so there are no releases to read: grant publish to one access profile, or remove read-releases from {}",
+                            quoted(&grants.read_releases)
+                        ),
+                    ));
+                }
+                None
+            }
+            (Some(publisher), None) => {
+                // The runtime lets a live reader and the publisher read
+                // releases, so each says so in its own permission.
+                for profile in live_profiles.iter().chain([publisher]) {
+                    if !grants.read_releases.contains(profile) {
+                        errors.push(error(
+                            "breg.statistical-dataset.read-releases-required",
+                            &root,
+                            &source.id,
+                            &format!(
+                                "access profile `{profile}` reads its releases because it reads live counts or publishes: add read-releases to the profile's permission on the dataset"
+                            ),
+                        ));
+                    }
+                }
+                Some(CompiledStatisticalReleases {
+                    publisher: publisher.clone(),
+                    readers: grants
+                        .read_releases
+                        .iter()
+                        .filter(|profile| {
+                            *profile != publisher && !live_profiles.contains(*profile)
+                        })
+                        .cloned()
+                        .collect(),
+                })
+            }
+            (Some(_), Some(_)) => {
                 errors.push(error(
-                    "breg.statistical-dataset.releases-readers-empty",
-                    &format!("{root}.releases.readers"),
+                    "breg.statistical-dataset.publisher-multiple",
+                    &root,
                     &source.id,
-                    "name at least one release reader profile",
+                    &format!(
+                        "grant publish to one access profile; {} hold it",
+                        quoted(&grants.publish)
+                    ),
                 ));
+                None
             }
-            CompiledStatisticalReleases {
-                publisher: release.publisher.clone(),
-                readers,
-            }
-        });
-        if live_profiles.is_empty() && releases.is_none() {
+        };
+        let granted = grants.holders();
+        if granted.is_empty() {
             errors.push(error(
                 "breg.statistical-dataset.grants-empty",
                 &root,
                 &source.id,
-                "declare live profiles, releases, or both",
+                "grant read-live, publish, or read-releases on the dataset in an access profile's permissions",
             ));
         }
 
-        let mut granted = live_profiles.clone();
-        if let Some(releases) = &releases {
-            granted.insert(releases.publisher.clone());
-            granted.extend(releases.readers.iter().cloned());
-        }
-        for profile in &granted {
-            validate_named_profile(project, profile, &source.id, &root, &mut errors);
-        }
         let access_profiles = granted
             .iter()
             .filter_map(|profile_id| {
@@ -712,27 +746,6 @@ fn validate_referenced_fields(
     }
 }
 
-fn validate_named_profile(
-    project: &RegistryProject,
-    profile_id: &str,
-    dataset: &str,
-    root: &str,
-    errors: &mut Vec<Diagnostic>,
-) {
-    if !project
-        .access_profiles
-        .iter()
-        .any(|profile| profile.id == profile_id)
-    {
-        errors.push(error(
-            "breg.statistical-dataset.profile-unknown",
-            root,
-            dataset,
-            &format!("declare access profile `{profile_id}`"),
-        ));
-    }
-}
-
 fn validate_count_grant(
     source: &crate::contract::StatisticalDatasetSource,
     unit: &CompiledEntity,
@@ -1102,23 +1115,80 @@ fn source_field_definition<'a>(
         })
 }
 
-fn unique_profiles(
-    values: &[String],
-    path: &str,
-    dataset: &str,
-    fix: &str,
-    errors: &mut Vec<Diagnostic>,
-) -> BTreeSet<String> {
-    let profiles = values.iter().cloned().collect::<BTreeSet<_>>();
-    if profiles.len() != values.len() {
-        errors.push(error(
-            "breg.statistical-dataset.profile-duplicate",
-            path,
-            dataset,
-            fix,
-        ));
+/// Which access profiles hold each operation on one statistical dataset.
+#[derive(Default)]
+struct DatasetGrants {
+    read_live: BTreeSet<String>,
+    publish: BTreeSet<String>,
+    read_releases: BTreeSet<String>,
+    /// Profiles that name the dataset in more than one permission.
+    repeated: BTreeSet<String>,
+}
+
+impl DatasetGrants {
+    fn of(project: &RegistryProject, dataset: &str) -> Self {
+        let mut grants = Self::default();
+        for profile in &project.access_profiles {
+            let mut named = false;
+            for permission in &profile.dataset_permissions {
+                if permission.dataset != dataset {
+                    continue;
+                }
+                if named {
+                    grants.repeated.insert(profile.id.clone());
+                }
+                named = true;
+                for operation in &permission.operations {
+                    match operation {
+                        DatasetOperation::ReadLive => &mut grants.read_live,
+                        DatasetOperation::Publish => &mut grants.publish,
+                        DatasetOperation::ReadReleases => &mut grants.read_releases,
+                    }
+                    .insert(profile.id.clone());
+                }
+            }
+        }
+        grants
     }
+
+    fn holders(&self) -> BTreeSet<String> {
+        self.read_live
+            .iter()
+            .chain(&self.publish)
+            .chain(&self.read_releases)
+            .cloned()
+            .collect()
+    }
+}
+
+fn quoted(profiles: &BTreeSet<String>) -> String {
     profiles
+        .iter()
+        .map(|profile| format!("`{profile}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A dataset permission names a dataset the project declares.
+fn validate_permission_datasets(project: &RegistryProject, errors: &mut Vec<Diagnostic>) {
+    for profile in &project.access_profiles {
+        for permission in &profile.dataset_permissions {
+            if !project
+                .statistical_datasets
+                .iter()
+                .any(|dataset| *dataset.id == *permission.dataset)
+            {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.permission-dataset-unknown",
+                    "project.accessProfiles[].permissions[].dataset",
+                    &format!(
+                        "access profile `{}` holds a permission on statistical dataset `{}`, which the project does not declare; declare it under statisticalDatasets or remove the permission",
+                        profile.id, permission.dataset
+                    ),
+                ));
+            }
+        }
+    }
 }
 
 fn validate_population(

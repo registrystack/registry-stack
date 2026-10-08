@@ -43,6 +43,10 @@ layer, `review_outcome`, for the `revise` and `rebase` events.
 registry serves authenticated callers only: an immediate-action permission in
 `ActionsExplanation` has no `anonymous` member, and `claimContractError` in
 `AccessExplanation` no longer takes `anonymous_profile_carries_authority`.
+The same version's `AccessExplanation` carries `statisticalDatasets`: for each
+statistical dataset, the access profiles that hold `read-live`, the one that
+holds `publish`, and every profile that reads its releases. The list is empty
+when the project declares no dataset.
 
 | Subject | `--scenario` | `kind` | Schema |
 |---|---|---|---|

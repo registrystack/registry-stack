@@ -43,7 +43,7 @@ fn source() -> Value {
                     "readableFields":["active","category","event-date","valid-from","valid-to"],
                     "filterableFields":["active","category","event-date","valid-from","valid-to"],
                     "allowCount":true,"rowBoundaries":"unrestricted"
-                }]
+                }, {"dataset":"records-by-category","operations":["read-live","read-releases"]}]
             },
             {
                 "id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
@@ -51,9 +51,11 @@ fn source() -> Value {
                     "readableFields":["active","category","event-date","valid-from","valid-to"],
                     "filterableFields":["active","category","event-date","valid-from","valid-to"],
                     "allowCount":true,"rowBoundaries":"unrestricted"
-                }]
+                }, {"dataset":"records-by-category","operations":["publish","read-releases"]}]
             },
-            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[]},
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
+                {"dataset":"records-by-category","operations":["read-releases"]}
+            ]},
             {"id":"other-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[]}
         ],
         "vocabularies": [{"id":"category","values":["a","b"]}],
@@ -63,12 +65,27 @@ fn source() -> Value {
             "population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["category"],
-            "disclosure":{"minimumCount":5,"roundingBase":5},
-            "live":["analyst"],
-            "releases":{"publisher":"publisher","readers":["reader"]}
+            "disclosure":{"minimumCount":5,"roundingBase":5}
         }]
     }))
     .expect("fixture is JSON")
+}
+
+const ANALYST: usize = 0;
+const PUBLISHER: usize = 1;
+const READER: usize = 2;
+const OTHER_READER: usize = 3;
+
+/// Write the operations one profile holds on the dataset. No operation
+/// removes the profile's dataset permission.
+fn grant(value: &mut Value, profile: usize, operations: &[&str]) {
+    let permissions = value["accessProfiles"][profile]["permissions"]
+        .as_array_mut()
+        .expect("the profile lists permissions");
+    permissions.retain(|permission| permission.get("dataset").is_none());
+    if !operations.is_empty() {
+        permissions.push(json!({"dataset":"records-by-category","operations":operations}));
+    }
 }
 
 fn source_with_swappable_population_fields() -> Value {
@@ -153,6 +170,398 @@ fn assert_refused(mutator: impl FnOnce(&mut Value), code: &str) {
 
 type RefusalCase = (Box<dyn FnOnce(&mut Value)>, &'static str);
 
+/// The live profiles, the publisher, and the readers a dataset compiles to.
+type CompiledGrants = (Vec<String>, Option<(String, Vec<String>)>);
+
+fn compiled_grants(value: &Value) -> CompiledGrants {
+    let compiled = compile(value).expect("the dataset compiles");
+    let dataset = &compiled.statistical_datasets()["records-by-category"];
+    (
+        dataset.live_profiles.iter().cloned().collect(),
+        dataset.releases.as_ref().map(|releases| {
+            (
+                releases.publisher.clone(),
+                releases.readers.iter().cloned().collect(),
+            )
+        }),
+    )
+}
+
+fn grants(live: &[&str], releases: Option<(&str, &[&str])>) -> CompiledGrants {
+    let owned = |profiles: &[&str]| profiles.iter().map(|id| (*id).to_owned()).collect();
+    (
+        owned(live),
+        releases.map(|(publisher, readers)| (publisher.to_owned(), owned(readers))),
+    )
+}
+
+/// Every diagnostic that refuses a project when it is read, as its code,
+/// path, and message.
+fn read_refusals(value: &Value) -> Vec<(String, String, String)> {
+    parse_project_yaml(&serde_json::to_vec(value).expect("fixture serializes"))
+        .expect_err("the project is refused when it is read")
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.code.clone(),
+                diagnostic.path.clone(),
+                diagnostic.message.clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn dataset_permissions_compile_to_the_dataset_grants() {
+    let compiled = compile(&source()).expect("the dataset compiles");
+    let dataset = &compiled.statistical_datasets()["records-by-category"];
+    assert_eq!(
+        dataset.access_profiles.keys().collect::<Vec<_>>(),
+        ["analyst", "publisher", "reader"],
+        "every profile holding a dataset permission authenticates for the dataset"
+    );
+    assert_eq!(
+        compiled_grants(&source()),
+        grants(&["analyst"], Some(("publisher", &["reader"])))
+    );
+
+    // A profile may hold every operation. The readers are the profiles that
+    // hold read-releases alone.
+    let mut one_profile = source();
+    grant(&mut one_profile, ANALYST, &[]);
+    grant(
+        &mut one_profile,
+        PUBLISHER,
+        &["read-live", "publish", "read-releases"],
+    );
+    grant(&mut one_profile, OTHER_READER, &["read-releases"]);
+    assert_eq!(
+        compiled_grants(&one_profile),
+        grants(
+            &["publisher"],
+            Some(("publisher", &["other-reader", "reader"]))
+        )
+    );
+
+    // A dataset no profile publishes has no releases, so its live profiles
+    // hold read-live alone.
+    let mut live_only = source();
+    grant(&mut live_only, ANALYST, &["read-live"]);
+    grant(&mut live_only, PUBLISHER, &[]);
+    grant(&mut live_only, READER, &[]);
+    assert_eq!(compiled_grants(&live_only), grants(&["analyst"], None));
+
+    // The publisher reads what it publishes, so a dataset needs no other
+    // release reader.
+    let mut publisher_only = source();
+    grant(&mut publisher_only, ANALYST, &[]);
+    grant(&mut publisher_only, READER, &[]);
+    assert_eq!(
+        compiled_grants(&publisher_only),
+        grants(&[], Some(("publisher", &[])))
+    );
+}
+
+#[test]
+fn access_explanation_states_who_holds_each_dataset_operation() {
+    let audience = |value: &Value| {
+        let compiled = compile(value).expect("the project compiles");
+        serde_json::to_value(registry_breg::access::explain_access(&compiled))
+            .expect("the explanation serializes")["statisticalDatasets"]
+            .clone()
+    };
+    assert_eq!(
+        audience(&source()),
+        json!([{
+            "dataset":"records-by-category",
+            "readLive":["analyst"],
+            "publish":["publisher"],
+            "readReleases":["analyst","publisher","reader"]
+        }])
+    );
+
+    let mut live_only = source();
+    grant(&mut live_only, ANALYST, &["read-live"]);
+    grant(&mut live_only, PUBLISHER, &[]);
+    grant(&mut live_only, READER, &[]);
+    assert_eq!(
+        audience(&live_only),
+        json!([{
+            "dataset":"records-by-category",
+            "readLive":["analyst"],
+            "publish":[],
+            "readReleases":[]
+        }])
+    );
+
+    let mut without = source();
+    without["statisticalDatasets"] = json!([]);
+    for profile in [ANALYST, PUBLISHER, READER] {
+        grant(&mut without, profile, &[]);
+    }
+    assert_eq!(audience(&without), json!([]));
+}
+
+#[test]
+fn a_dataset_has_one_publisher() {
+    let mut value = source();
+    grant(
+        &mut value,
+        ANALYST,
+        &["read-live", "publish", "read-releases"],
+    );
+    let failure = compile(&value).expect_err("two publishers are refused");
+    let [diagnostic] = failure.diagnostics() else {
+        panic!("one diagnostic refuses two publishers: {failure:?}");
+    };
+    assert_eq!(
+        diagnostic.code,
+        "breg.statistical-dataset.publisher-multiple"
+    );
+    assert_eq!(
+        diagnostic.path,
+        "statisticalDatasets[id=records-by-category]"
+    );
+    for named in [
+        "statistical dataset `records-by-category`",
+        "`analyst`",
+        "`publisher`",
+        "one access profile",
+    ] {
+        assert!(
+            diagnostic.message.contains(named),
+            "the refusal names {named}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn a_profile_that_reads_live_counts_or_publishes_also_holds_read_releases() {
+    for (profile, id, operations) in [
+        (ANALYST, "analyst", ["read-live"]),
+        (PUBLISHER, "publisher", ["publish"]),
+    ] {
+        let mut value = source();
+        grant(&mut value, profile, &operations);
+        let failure = compile(&value).expect_err("a missing read-releases is refused");
+        let [diagnostic] = failure.diagnostics() else {
+            panic!("one diagnostic refuses the missing read-releases: {failure:?}");
+        };
+        assert_eq!(
+            diagnostic.code,
+            "breg.statistical-dataset.read-releases-required"
+        );
+        for named in [
+            "statistical dataset `records-by-category`".to_owned(),
+            format!("`{id}`"),
+            "add read-releases".to_owned(),
+        ] {
+            assert!(
+                diagnostic.message.contains(&named),
+                "the refusal names {named}: {}",
+                diagnostic.message
+            );
+        }
+    }
+}
+
+#[test]
+fn read_releases_is_refused_on_a_dataset_no_profile_publishes() {
+    let mut value = source();
+    grant(&mut value, PUBLISHER, &[]);
+    let failure = compile(&value).expect_err("release readers without a publisher are refused");
+    let refused = failure
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(refused, ["breg.statistical-dataset.publisher-missing"]);
+    let message = &failure.diagnostics()[0].message;
+    for named in [
+        "statistical dataset `records-by-category`",
+        "`analyst`",
+        "`reader`",
+        "grant publish",
+        "remove read-releases",
+    ] {
+        assert!(
+            message.contains(named),
+            "the refusal names {named}: {message}"
+        );
+    }
+}
+
+#[test]
+fn a_dataset_permission_names_a_declared_dataset() {
+    let mut value = source();
+    value["accessProfiles"][OTHER_READER]["permissions"] =
+        json!([{"dataset":"records-by-region","operations":["read-live"]}]);
+    let failure = compile(&value).expect_err("an undeclared dataset is refused");
+    let [diagnostic] = failure.diagnostics() else {
+        panic!("one diagnostic refuses the undeclared dataset: {failure:?}");
+    };
+    assert_eq!(
+        diagnostic.code,
+        "breg.access-profile.permission-dataset-unknown"
+    );
+    assert_eq!(
+        diagnostic.path,
+        "project.accessProfiles[].permissions[].dataset"
+    );
+    for named in [
+        "`other-reader`",
+        "`records-by-region`",
+        "statisticalDatasets",
+    ] {
+        assert!(
+            diagnostic.message.contains(named),
+            "the refusal names {named}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn a_dataset_permission_is_written_with_dataset_operations_and_nothing_else() {
+    let dataset_permission = "project.accessProfiles[0].permissions[1]";
+    let cases: [(&str, Value, &str, &str); 7] = [
+        (
+            "/accessProfiles/0/permissions/1/operations",
+            json!(["read-live", "list"]),
+            dataset_permission,
+            "read-live, publish, or read-releases",
+        ),
+        (
+            "/accessProfiles/0/permissions/1/operations",
+            json!([]),
+            dataset_permission,
+            "read-live, publish, or read-releases",
+        ),
+        (
+            "/accessProfiles/0/permissions/1/readableFields",
+            json!(["active"]),
+            dataset_permission,
+            "only dataset and operations",
+        ),
+        (
+            "/accessProfiles/0/permissions/1/rowBoundaries",
+            json!("unrestricted"),
+            dataset_permission,
+            "only dataset and operations",
+        ),
+        (
+            "/accessProfiles/0/permissions/1/allowCount",
+            json!(true),
+            dataset_permission,
+            "only dataset and operations",
+        ),
+        (
+            "/accessProfiles/0/permissions/1/entity",
+            json!("record"),
+            dataset_permission,
+            "only dataset and operations",
+        ),
+        (
+            "/accessProfiles/0/permissions/0/operations",
+            json!(["list", "read-releases"]),
+            "project.accessProfiles[0].permissions[0]",
+            "a permission that names a dataset",
+        ),
+    ];
+    for (pointer, written, path, fix) in cases {
+        let mut value = source();
+        let (parent, member) = pointer.rsplit_once('/').expect("a member pointer");
+        value
+            .pointer_mut(parent)
+            .and_then(Value::as_object_mut)
+            .unwrap_or_else(|| panic!("{parent} is a mapping"))
+            .insert(member.to_owned(), written);
+        let failure = parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
+            .expect_err("a permission mixing the two shapes is refused when it is read");
+        let [diagnostic] = failure.diagnostics() else {
+            panic!("one diagnostic refuses {pointer}: {failure:?}");
+        };
+        assert_eq!(diagnostic.code, "config.invalid-value", "{pointer}");
+        assert_eq!(diagnostic.path, path, "{pointer}");
+        assert!(
+            diagnostic.message.contains(fix),
+            "the refusal of {pointer} names its fix `{fix}`: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn an_unknown_permission_operation_is_refused_with_the_whole_vocabulary() {
+    let mut value = source();
+    value["accessProfiles"][0]["permissions"][1]["operations"] = json!(["read"]);
+    let refused = read_refusals(&value);
+    let [(code, path, message)] = refused.as_slice() else {
+        panic!("one diagnostic refuses the unknown operation: {refused:?}");
+    };
+    assert_eq!(code, "config.unknown-variant");
+    assert_eq!(
+        path,
+        "project.accessProfiles[0].permissions[1].operations[0]"
+    );
+    for operation in ["list", "invoke", "read-live", "publish", "read-releases"] {
+        assert!(
+            message.contains(operation),
+            "the refusal lists {operation}: {message}"
+        );
+    }
+}
+
+#[test]
+fn the_removed_dataset_grant_members_are_refused_with_their_new_home_named() {
+    for (member, written, named) in [
+        ("live", json!(["analyst"]), ["permissions", "read-live"]),
+        (
+            "releases",
+            json!({"publisher":"publisher","readers":["reader"]}),
+            ["publish", "read-releases"],
+        ),
+    ] {
+        let mut value = source();
+        value["statisticalDatasets"][0][member] = written;
+        let refused = read_refusals(&value);
+        let [(code, path, message)] = refused.as_slice() else {
+            panic!("one diagnostic refuses {member}: {refused:?}");
+        };
+        assert_eq!(code, "config.removed-key");
+        assert_eq!(path, &format!("project.statisticalDatasets[0].{member}"));
+        for name in named {
+            assert!(
+                message.contains(name),
+                "the refusal of {member} names {name}: {message}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_profile_writes_its_dataset_permissions_back_into_its_permissions() {
+    let bytes = serde_json::to_vec(&source()).expect("fixture serializes");
+    let project = parse_project_json(&bytes).expect("fixture parses");
+    let written = serde_json::to_value(&project).expect("the project serializes");
+    assert_eq!(
+        written["accessProfiles"][ANALYST]["permissions"][1],
+        json!({"dataset":"records-by-category","operations":["read-live","read-releases"]})
+    );
+    assert_eq!(
+        written["accessProfiles"][READER]["permissions"],
+        json!([{"dataset":"records-by-category","operations":["read-releases"]}])
+    );
+    assert!(written["accessProfiles"][ANALYST]
+        .get("datasetPermissions")
+        .is_none());
+    let reread = parse_project_json(&serde_json::to_vec(&written).expect("it serializes"))
+        .expect("the written project parses");
+    assert_eq!(reread, project);
+}
+
 #[test]
 fn statistical_dataset_compiles_with_release_reader_authentication() {
     let compiled = compile(&source()).expect("statistical dataset compiles");
@@ -227,20 +636,20 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
             "breg.statistical-dataset.disclosure-missing",
         ),
         (
-            Box::new(|v| v["statisticalDatasets"][0]["live"] = json!(["analyst", "analyst"])),
+            Box::new(|v| {
+                let again = v["accessProfiles"][ANALYST]["permissions"][1].clone();
+                v["accessProfiles"][ANALYST]["permissions"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(again);
+            }),
             "breg.statistical-dataset.profile-duplicate",
         ),
         (
-            Box::new(|v| v["statisticalDatasets"][0]["releases"]["readers"] = json!([])),
-            "breg.statistical-dataset.releases-readers-empty",
-        ),
-        (
             Box::new(|v| {
-                v["statisticalDatasets"][0]["live"] = json!([]);
-                v["statisticalDatasets"][0]
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("releases");
+                for profile in [ANALYST, PUBLISHER, READER] {
+                    grant(v, profile, &[]);
+                }
             }),
             "breg.statistical-dataset.grants-empty",
         ),
@@ -759,8 +1168,14 @@ fn definition_digest_excludes_grants_and_first_period_but_covers_values() {
     let baseline_digest = &baseline.statistical_datasets()["records-by-category"].definition_digest;
 
     let mut grant_change = source();
-    grant_change["statisticalDatasets"][0]["live"] = json!(["publisher"]);
-    grant_change["statisticalDatasets"][0]["releases"]["readers"] = json!(["other-reader"]);
+    grant(&mut grant_change, ANALYST, &[]);
+    grant(
+        &mut grant_change,
+        PUBLISHER,
+        &["read-live", "publish", "read-releases"],
+    );
+    grant(&mut grant_change, READER, &[]);
+    grant(&mut grant_change, OTHER_READER, &["read-releases"]);
     grant_change["statisticalDatasets"][0]["period"]["firstPeriod"] = json!("2024-01");
     let compiled = compile(&grant_change).expect("grant-only changes compile");
     assert_eq!(
@@ -1201,10 +1616,9 @@ fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
 #[test]
 fn generated_openapi_omits_undeclared_statistical_route_families() {
     let mut live_only = source();
-    live_only["statisticalDatasets"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("releases");
+    grant(&mut live_only, ANALYST, &["read-live"]);
+    grant(&mut live_only, PUBLISHER, &[]);
+    grant(&mut live_only, READER, &[]);
     let compiled = compile(&live_only).expect("live-only dataset compiles");
     let openapi = artifact_json(&compiled, "generated/openapi.json");
     assert!(openapi["paths"]
@@ -1215,7 +1629,7 @@ fn generated_openapi_omits_undeclared_statistical_route_families() {
         .all(|path| path.ends_with(":live")));
 
     let mut released_only = source();
-    released_only["statisticalDatasets"][0]["live"] = json!([]);
+    grant(&mut released_only, ANALYST, &[]);
     let compiled = compile(&released_only).expect("released-only dataset compiles");
     let openapi = artifact_json(&compiled, "generated/openapi.json");
     assert!(!openapi["paths"]
@@ -1230,6 +1644,9 @@ fn package_diff_classifies_statistical_dataset_add_change_and_removal() {
     let with_dataset = compile(&source()).expect("dataset compiles");
     let mut without = source();
     without["statisticalDatasets"] = json!([]);
+    for profile in [ANALYST, PUBLISHER, READER] {
+        grant(&mut without, profile, &[]);
+    }
     let without_dataset = compile(&without).expect("registry without dataset compiles");
 
     let added = compiled_registry_change_set(&without_dataset, &with_dataset, "sha256:before");
@@ -1273,8 +1690,7 @@ fn package_diff_classifies_statistical_dataset_add_change_and_removal() {
 fn tooling_classifies_statistical_grant_direction_and_definition_review() {
     let baseline = compile(&source()).expect("baseline compiles");
     let mut widened_source = source();
-    widened_source["statisticalDatasets"][0]["releases"]["readers"] =
-        json!(["reader", "other-reader"]);
+    grant(&mut widened_source, OTHER_READER, &["read-releases"]);
     let widened = compile(&widened_source).expect("widened dataset compiles");
     let diff = classify_registry_diff(&baseline, &widened, "sha256:before");
     assert!(diff.changes.iter().any(|change| {
@@ -1360,7 +1776,8 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     let baseline_digest = dataset.definition_digest.clone();
 
     let mut additional_read = value.clone();
-    additional_read["accessProfiles"][1]["permissions"][1]["operations"] = json!(["get", "list"]);
+    additional_read["accessProfiles"][PUBLISHER]["permissions"][2]["operations"] =
+        json!(["get", "list"]);
     let additional_read = compile_with_sql(&additional_read, sql)
         .expect("another ordinary dependency read operation compiles");
     assert_ne!(
@@ -1371,7 +1788,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
 
     let mut batch_select = value.clone();
     batch_select["entities"][1]["batch"] = json!({"maximumItems": 10, "maximumBytes": 4096});
-    batch_select["accessProfiles"][1]["permissions"][1] = json!({
+    batch_select["accessProfiles"][PUBLISHER]["permissions"][2] = json!({
         "entity":"lookup","operations":["patch","batch"],"writableFields":["flag"],
         "rowBoundaries":"unrestricted"
     });
@@ -1384,9 +1801,10 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     );
 
     let mut additional_mutation = value.clone();
-    additional_mutation["accessProfiles"][1]["permissions"][1]["operations"] =
+    additional_mutation["accessProfiles"][PUBLISHER]["permissions"][2]["operations"] =
         json!(["list", "patch"]);
-    additional_mutation["accessProfiles"][1]["permissions"][1]["writableFields"] = json!(["flag"]);
+    additional_mutation["accessProfiles"][PUBLISHER]["permissions"][2]["writableFields"] =
+        json!(["flag"]);
     let additional_mutation = compile_with_sql(&additional_mutation, sql)
         .expect("an unrelated dependency mutation grant compiles");
     assert_eq!(
@@ -1406,7 +1824,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
         }),
     ] {
         let mut mutation_only_dependency = value.clone();
-        mutation_only_dependency["accessProfiles"][1]["permissions"][1] = permission;
+        mutation_only_dependency["accessProfiles"][PUBLISHER]["permissions"][2] = permission;
         let failure = compile_with_sql(&mutation_only_dependency, sql)
             .expect_err("a publisher needs an ordinary read operation on every derived dependency");
         assert!(failure.diagnostics().iter().any(|diagnostic| {
@@ -1445,7 +1863,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     let long_entity = "l".repeat(64);
     value["entities"][1]["id"] = json!(long_entity.clone());
     value["entities"][1]["route"] = json!("long-lookups");
-    value["accessProfiles"][1]["permissions"][1]["entity"] = json!(long_entity.clone());
+    value["accessProfiles"][PUBLISHER]["permissions"][2]["entity"] = json!(long_entity.clone());
     let long_sql = sql.replace(
         "registry_source.lookup",
         &format!("registry_source.{long_entity}"),

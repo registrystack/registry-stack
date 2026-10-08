@@ -112,10 +112,6 @@ pub struct StatisticalDatasetSource {
     pub dimensions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disclosure: Option<StatisticalDisclosureSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub live: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub releases: Option<StatisticalReleasesSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -211,14 +207,6 @@ pub struct StatisticalDisclosureSource {
 /// The largest integer a JSON number carries exactly, the bound of a
 /// statistical disclosure parameter.
 pub const MAX_EXACT_JSON_INTEGER: u64 = 9_007_199_254_740_991;
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct StatisticalReleasesSource {
-    pub publisher: String,
-    pub readers: Vec<String>,
-}
 
 /// Declared consent recipients. Organization and group ids share one
 /// namespace and form the append-only `registry-recipients` vocabulary.
@@ -3459,15 +3447,57 @@ pub enum WebhookDeadLetterMode {
     Required,
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+/// One access profile as the compiler reads it. A project writes one
+/// `permissions` list; the permissions that name a statistical dataset are
+/// held apart from the ones that name an entity or an action.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(
+    from = "WrittenAccessProfileSource",
+    into = "WrittenAccessProfileSource"
+)]
 pub struct ProjectAccessProfileSource {
     pub id: String,
-    #[serde(default)]
     pub default: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<ActorKindSource>,
+    /// The OAuth clients whose tokens may select this profile. Empty accepts every client.
+    pub requester_clients: UniqueSet<String>,
+    pub task_grant: Option<TaskGrantSource>,
+    pub principal_claim: Option<String>,
+    /// The scopes the verified token must carry. Empty requires none.
+    pub required_scopes: UniqueSet<String>,
+    /// The verified token's purpose must match one listed value. Empty accepts every purpose.
+    pub required_purposes: UniqueSet<String>,
+    /// The permissions that name an entity or an action.
+    pub permissions: Vec<AccessPermissionSource>,
+    /// The permissions that name a statistical dataset.
+    pub dataset_permissions: Vec<DatasetPermissionSource>,
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ProjectAccessProfileSource {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ProjectAccessProfileSource")
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed(concat!(module_path!(), "::ProjectAccessProfileSource"))
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        WrittenAccessProfileSource::json_schema(generator)
+    }
+}
+
+/// One access profile as a project writes it.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WrittenAccessProfileSource {
+    id: String,
+    #[serde(default)]
+    default: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    actor_kind: Option<ActorKindSource>,
     /// The OAuth clients whose tokens may select this profile. Omit to accept every client.
     #[serde(
         default,
@@ -3478,11 +3508,11 @@ pub struct ProjectAccessProfileSource {
         feature = "schema",
         schemars(with = "sentinel::Listed<UniqueSet<String>, sentinel::ProfileClients>")
     )]
-    pub requester_clients: UniqueSet<String>,
+    requester_clients: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_grant: Option<TaskGrantSource>,
+    task_grant: Option<TaskGrantSource>,
     #[serde(default)]
-    pub principal_claim: Option<String>,
+    principal_claim: Option<String>,
     /// The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present.
     // Held as the listed scopes, so `unrestricted` is the empty set.
     #[serde(
@@ -3490,7 +3520,7 @@ pub struct ProjectAccessProfileSource {
         serialize_with = "sentinel::serialize_required_scopes"
     )]
     #[cfg_attr(feature = "schema", schemars(with = "sentinel::RequiredScopes"))]
-    pub required_scopes: UniqueSet<String>,
+    required_scopes: UniqueSet<String>,
     /// The verified token's purpose must match one listed value. Omit to accept every purpose.
     #[serde(
         default,
@@ -3501,9 +3531,130 @@ pub struct ProjectAccessProfileSource {
         feature = "schema",
         schemars(with = "sentinel::Listed<UniqueSet<String>, sentinel::ProfilePurposes>")
     )]
-    pub required_purposes: UniqueSet<String>,
+    required_purposes: UniqueSet<String>,
+    /// What the profile may do: each permission names one entity, one action, or one statistical dataset.
     #[serde(default)]
-    pub permissions: Vec<AccessPermissionSource>,
+    permissions: Vec<WrittenPermission>,
+}
+
+impl From<WrittenAccessProfileSource> for ProjectAccessProfileSource {
+    fn from(written: WrittenAccessProfileSource) -> Self {
+        let mut permissions = Vec::new();
+        let mut dataset_permissions = Vec::new();
+        for permission in written.permissions {
+            match permission {
+                WrittenPermission::Record(permission) => permissions.push(*permission),
+                WrittenPermission::Dataset(permission) => dataset_permissions.push(permission),
+            }
+        }
+        Self {
+            id: written.id,
+            default: written.default,
+            actor_kind: written.actor_kind,
+            requester_clients: written.requester_clients,
+            task_grant: written.task_grant,
+            principal_claim: written.principal_claim,
+            required_scopes: written.required_scopes,
+            required_purposes: written.required_purposes,
+            permissions,
+            dataset_permissions,
+        }
+    }
+}
+
+impl From<ProjectAccessProfileSource> for WrittenAccessProfileSource {
+    fn from(profile: ProjectAccessProfileSource) -> Self {
+        Self {
+            id: profile.id,
+            default: profile.default,
+            actor_kind: profile.actor_kind,
+            requester_clients: profile.requester_clients,
+            task_grant: profile.task_grant,
+            principal_claim: profile.principal_claim,
+            required_scopes: profile.required_scopes,
+            required_purposes: profile.required_purposes,
+            permissions: profile
+                .permissions
+                .into_iter()
+                .map(|permission| WrittenPermission::Record(Box::new(permission)))
+                .chain(
+                    profile
+                        .dataset_permissions
+                        .into_iter()
+                        .map(WrittenPermission::Dataset),
+                )
+                .collect(),
+        }
+    }
+}
+
+/// One entry of a profile's `permissions` list.
+enum WrittenPermission {
+    /// Names an entity or an action.
+    Record(Box<AccessPermissionSource>),
+    /// Names a statistical dataset.
+    Dataset(DatasetPermissionSource),
+}
+
+impl Serialize for WrittenPermission {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Record(permission) => permission.serialize(serializer),
+            Self::Dataset(permission) => permission.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WrittenPermission {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawAccessPermissionSource::deserialize(deserializer)?;
+        if raw.dataset.is_some() {
+            raw.into_dataset_permission().map(Self::Dataset)
+        } else {
+            raw.into_record_permission()
+                .map(|permission| Self::Record(Box::new(permission)))
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for WrittenPermission {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        AccessPermissionSource::schema_name()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        AccessPermissionSource::schema_id()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        AccessPermissionSource::json_schema(generator)
+    }
+}
+
+/// What a profile may do with one statistical dataset.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DatasetPermissionSource {
+    /// The statistical dataset the permission names.
+    pub dataset: String,
+    /// What the profile may do with the dataset. A profile that holds `read-live` or `publish` on a dataset with a publisher also holds `read-releases`.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
+    pub operations: BTreeSet<DatasetOperation>,
+}
+
+/// One thing a profile may do with a statistical dataset.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DatasetOperation {
+    /// Read the dataset's live counts.
+    ReadLive,
+    /// Publish and withdraw the dataset's releases. One profile holds it per dataset.
+    Publish,
+    /// Read the dataset's releases.
+    ReadReleases,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -3607,7 +3758,9 @@ struct RawAccessPermissionSource {
     entity: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     action: Option<String>,
-    operations: UniqueSet<Operation>,
+    #[serde(default)]
+    dataset: Option<String>,
+    operations: UniqueSet<PermissionOperation>,
     #[serde(default)]
     readable_fields: UniqueSet<String>,
     /// Readable change-request decision detail.
@@ -3657,47 +3810,209 @@ struct RawAccessPermissionSource {
     allow_data_export: bool,
 }
 
-// Entity grants must state their row reach. Action invocation itself has no
-// rows; its target permissions carry the independently required declarations.
-impl<'de> Deserialize<'de> for AccessPermissionSource {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawAccessPermissionSource::deserialize(deserializer)?;
-        if !raw.entity.is_empty() && raw.row_boundaries.is_none() {
+/// Every operation a permission may list, whatever the permission names, so
+/// that an unknown word is answered with the whole vocabulary.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PermissionOperation {
+    Create,
+    Get,
+    Lookup,
+    List,
+    Patch,
+    Tombstone,
+    Batch,
+    Revisions,
+    Snapshot,
+    SubmitRequest,
+    ReviseRequest,
+    CancelRequest,
+    ApplyRequest,
+    Invoke,
+    Import,
+    #[serde(rename = "read-live")]
+    ReadLive,
+    Publish,
+    #[serde(rename = "read-releases")]
+    ReadReleases,
+}
+
+/// What a written operation is an operation on.
+enum OperationSubject {
+    Record(Operation),
+    Dataset(DatasetOperation),
+}
+
+impl PermissionOperation {
+    fn subject(self) -> OperationSubject {
+        use OperationSubject::{Dataset, Record};
+        match self {
+            Self::Create => Record(Operation::Create),
+            Self::Get => Record(Operation::Get),
+            Self::Lookup => Record(Operation::Lookup),
+            Self::List => Record(Operation::List),
+            Self::Patch => Record(Operation::Patch),
+            Self::Tombstone => Record(Operation::Tombstone),
+            Self::Batch => Record(Operation::Batch),
+            Self::Revisions => Record(Operation::Revisions),
+            Self::Snapshot => Record(Operation::Snapshot),
+            Self::SubmitRequest => Record(Operation::SubmitRequest),
+            Self::ReviseRequest => Record(Operation::ReviseRequest),
+            Self::CancelRequest => Record(Operation::CancelRequest),
+            Self::ApplyRequest => Record(Operation::ApplyRequest),
+            Self::Invoke => Record(Operation::Invoke),
+            Self::Import => Record(Operation::Import),
+            Self::ReadLive => Dataset(DatasetOperation::ReadLive),
+            Self::Publish => Dataset(DatasetOperation::Publish),
+            Self::ReadReleases => Dataset(DatasetOperation::ReadReleases),
+        }
+    }
+}
+
+// Keeps the written vocabulary in step with `Operation`: a new operation does
+// not compile until the written vocabulary names it.
+impl From<Operation> for PermissionOperation {
+    fn from(operation: Operation) -> Self {
+        match operation {
+            Operation::Create => Self::Create,
+            Operation::Get => Self::Get,
+            Operation::Lookup => Self::Lookup,
+            Operation::List => Self::List,
+            Operation::Patch => Self::Patch,
+            Operation::Tombstone => Self::Tombstone,
+            Operation::Batch => Self::Batch,
+            Operation::Revisions => Self::Revisions,
+            Operation::Snapshot => Self::Snapshot,
+            Operation::SubmitRequest => Self::SubmitRequest,
+            Operation::ReviseRequest => Self::ReviseRequest,
+            Operation::CancelRequest => Self::CancelRequest,
+            Operation::ApplyRequest => Self::ApplyRequest,
+            Operation::Invoke => Self::Invoke,
+            Operation::Import => Self::Import,
+        }
+    }
+}
+
+impl RawAccessPermissionSource {
+    // Entity grants must state their row reach. Action invocation itself has no
+    // rows; its target permissions carry the independently required declarations.
+    fn into_record_permission<E: serde::de::Error>(self) -> Result<AccessPermissionSource, E> {
+        let mut operations = BTreeSet::new();
+        for operation in self.operations {
+            match operation.subject() {
+                OperationSubject::Record(operation) => operations.insert(operation),
+                OperationSubject::Dataset(_) => {
+                    return Err(Invalid::expected(
+                        "an entity or action operation",
+                        "Move read-live, publish, and read-releases to a permission that names a dataset; a permission that names an entity or an action lists only entity and action operations.",
+                    )
+                    .into_error())
+                }
+            };
+        }
+        if self.dataset.is_some() {
+            return Err(Invalid::expected(
+                "a permission that names one entity or one action",
+                "Remove dataset here; a statistical dataset permission is written in an access profile's permissions list.",
+            )
+            .into_error());
+        }
+        if !self.entity.is_empty() && self.row_boundaries.is_none() {
             return Err(Invalid::expected(
                 "an entity permission with rowBoundaries",
                 "Declare rowBoundaries on the permission: list the row boundaries that bind rows to the caller's claims, or write unrestricted to reach every row.",
             )
             .into_error());
         }
-        Ok(Self {
-            entity: raw.entity,
-            action: raw.action,
-            operations: raw.operations.into_set(),
-            readable_fields: raw.readable_fields.into_set(),
-            readable_request_fields: raw.readable_request_fields.into_set(),
-            writable_fields: raw.writable_fields.into_set(),
-            filterable_fields: raw.filterable_fields.into_set(),
-            sortable_fields: raw.sortable_fields.into_set(),
-            spatial_queries: raw.spatial_queries,
-            row_boundaries: raw.row_boundaries.unwrap_or_default(),
-            membership_boundaries: raw.membership_boundaries,
-            require_consent: raw.require_consent,
-            request_visibility: raw.request_visibility,
-            lookups: raw.lookups,
-            read_paths: raw.read_paths,
-            apply_targets: raw.apply_targets,
-            submitter_targets: raw.submitter_targets.into_set(),
-            request_presence: raw.request_presence,
-            targets: raw.targets,
-            results: raw.results.into_set(),
-            allow_count: raw.allow_count,
-            revision_access: raw.revision_access,
-            provenance_fields: raw.provenance_fields,
-            allow_data_export: raw.allow_data_export,
+        Ok(AccessPermissionSource {
+            entity: self.entity,
+            action: self.action,
+            operations,
+            readable_fields: self.readable_fields.into_set(),
+            readable_request_fields: self.readable_request_fields.into_set(),
+            writable_fields: self.writable_fields.into_set(),
+            filterable_fields: self.filterable_fields.into_set(),
+            sortable_fields: self.sortable_fields.into_set(),
+            spatial_queries: self.spatial_queries,
+            row_boundaries: self.row_boundaries.unwrap_or_default(),
+            membership_boundaries: self.membership_boundaries,
+            require_consent: self.require_consent,
+            request_visibility: self.request_visibility,
+            lookups: self.lookups,
+            read_paths: self.read_paths,
+            apply_targets: self.apply_targets,
+            submitter_targets: self.submitter_targets.into_set(),
+            request_presence: self.request_presence,
+            targets: self.targets,
+            results: self.results.into_set(),
+            allow_count: self.allow_count,
+            revision_access: self.revision_access,
+            provenance_fields: self.provenance_fields,
+            allow_data_export: self.allow_data_export,
         })
+    }
+
+    /// A dataset permission is `dataset` and `operations` and nothing else.
+    fn into_dataset_permission<E: serde::de::Error>(self) -> Result<DatasetPermissionSource, E> {
+        let names_only_a_dataset = self.entity.is_empty()
+            && self.action.is_none()
+            && self.readable_fields.is_empty()
+            && is_default_readable_request_fields(&self.readable_request_fields)
+            && self.writable_fields.is_empty()
+            && self.filterable_fields.is_empty()
+            && self.sortable_fields.is_empty()
+            && self.spatial_queries.is_none()
+            && self.row_boundaries.is_none()
+            && self.membership_boundaries.is_empty()
+            && self.require_consent.is_empty()
+            && self.request_visibility.is_none()
+            && self.lookups.is_empty()
+            && self.read_paths.is_empty()
+            && self.apply_targets.is_empty()
+            && self.submitter_targets.is_empty()
+            && self.request_presence.is_empty()
+            && self.targets.is_empty()
+            && self.results.is_empty()
+            && !self.allow_count
+            && !self.revision_access
+            && self.provenance_fields.is_empty()
+            && !self.allow_data_export;
+        if !names_only_a_dataset {
+            return Err(Invalid::expected(
+                "a dataset permission with only dataset and operations",
+                "Write only dataset and operations on a permission that names a dataset; entity and action members go on a permission of their own.",
+            )
+            .into_error());
+        }
+        let mut operations = BTreeSet::new();
+        for operation in self.operations {
+            if let OperationSubject::Dataset(operation) = operation.subject() {
+                operations.insert(operation);
+            } else {
+                operations.clear();
+                break;
+            }
+        }
+        if operations.is_empty() {
+            return Err(Invalid::expected(
+                "at least one of read-live, publish, or read-releases",
+                "List read-live, publish, or read-releases on a permission that names a dataset; entity and action operations go on a permission of their own.",
+            )
+            .into_error());
+        }
+        Ok(DatasetPermissionSource {
+            dataset: self.dataset.unwrap_or_default(),
+            operations,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for AccessPermissionSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        RawAccessPermissionSource::deserialize(deserializer)?.into_record_permission()
     }
 }
 
@@ -3723,6 +4038,7 @@ impl schemars::JsonSchema for AccessPermissionSource {
 enum AccessPermissionSourceSchema {
     Entity(Box<EntityAccessPermissionSourceSchema>),
     Action(ActionAccessPermissionSourceSchema),
+    Dataset(DatasetPermissionSource),
 }
 
 #[cfg(feature = "schema")]
@@ -3925,10 +4241,18 @@ pub const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
 
 /// Members `registry.yaml` no longer accepts, each with the member that
 /// replaced it.
-const PROJECT_REMOVED_KEYS: [RemovedKey<'static>; 3] = [
+const PROJECT_REMOVED_KEYS: [RemovedKey<'static>; 5] = [
     RemovedKey {
         pointer: "/statisticalDatasets/*/period/kind",
         replacement: "Rename `kind` to `type`, keeping its value: `type: flow` or `type: stock`.",
+    },
+    RemovedKey {
+        pointer: "/statisticalDatasets/*/live",
+        replacement: "Grant live counts in each profile instead: add `{dataset: <id>, operations: [read-live]}` to the profile's `permissions`, with `read-releases` beside it when a profile publishes the dataset.",
+    },
+    RemovedKey {
+        pointer: "/statisticalDatasets/*/releases",
+        replacement: "Grant releases in each profile instead: add `{dataset: <id>, operations: [publish, read-releases]}` to the publisher profile's `permissions` and `{dataset: <id>, operations: [read-releases]}` to each reader profile's.",
     },
     RemovedKey {
         pointer: "/accessProfiles/*/anonymous",
