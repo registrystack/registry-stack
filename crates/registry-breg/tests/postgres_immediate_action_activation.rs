@@ -5,6 +5,8 @@
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
+#[path = "support/source_bytes.rs"]
+mod source_bytes;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -1325,11 +1327,11 @@ const NEW_RECIPIENT: &str = "ngo-gamma";
 /// The consent enforcement fixture bound to this test's package identity,
 /// optionally with one more recipient organization.
 fn consent_project_bytes(with_new_recipient: bool) -> Vec<u8> {
-    let mut project = serde_json::to_value(
-        registry_breg::contract::parse_project_yaml(CONSENT_PROJECT.as_bytes())
+    let mut project: serde_json::Value = serde_json::from_slice(&source_bytes::source_bytes(
+        &registry_breg::contract::parse_project_yaml(CONSENT_PROJECT.as_bytes())
             .expect("consent fixture parses"),
-    )
-    .expect("consent fixture serializes");
+    ))
+    .expect("consent fixture source is JSON");
     project["registry"]["id"] = json!(PACKAGE_ID);
     project["package"] = json!({
         "sourceRevision": SOURCE_REVISION,

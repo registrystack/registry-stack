@@ -5,6 +5,8 @@
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
+#[path = "support/source_bytes.rs"]
+mod source_bytes;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -1859,7 +1861,7 @@ fn compiled_household_fixture(
         CompileProfile::Production,
     )
     .expect("household acceptance project compiles in Production");
-    let source = serde_json::to_vec(&project).expect("household project serializes");
+    let source = source_bytes::source_bytes(&project);
     let modules = vec![
         PackageModuleSource {
             id: "publicschema-household-core".to_owned(),
