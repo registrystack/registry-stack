@@ -523,7 +523,9 @@ held for the stable release" lists them.
    `config.removed-key` with its replacement. A `${...}` expression in the
    bundle is refused as `config.substitution-not-allowed`. Every integer in
    both files is bounded, and a value outside its range is refused as
-   `config.out-of-range` with the allowed range. The warning for a burst
+   `config.out-of-range` with the allowed range. `audit.hashKeyVersion` and
+   `subjectBinding.keyVersion` accept 1 to 2147483647, the range the bundle
+   contract states; a larger value was accepted before. The warning for a burst
    below the largest request cost names that cost and the key to raise, not
    the configured values. Migration: remove anchors, aliases, tags, merge
    keys, duplicate keys, and unknown keys; write each integer unquoted and

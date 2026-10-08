@@ -2874,16 +2874,20 @@ pub struct AuditConfig {
     pub key: AuditKeyConfig,
     /// Labels the pseudonym key generation, so a rotated key is told apart
     /// from the one it replaced.
-    pub hash_key_version: BoundedU32<1, { u32::MAX }>,
+    pub hash_key_version: BoundedU32<1, MAXIMUM_BUNDLE_KEY_VERSION>,
 }
 
 shared_block_host!(AuditConfig, block = "key");
+
+/// The bundle contract's ceiling for the audit and subject-binding key
+/// versions.
+const MAXIMUM_BUNDLE_KEY_VERSION: u32 = 2_147_483_647;
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubjectBindingConfig {
     pub secret_ref: SecretReference,
-    pub key_version: BoundedU32<1, { u32::MAX }>,
+    pub key_version: BoundedU32<1, MAXIMUM_BUNDLE_KEY_VERSION>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -11441,6 +11445,46 @@ outboundTls:
         let diagnostics = bundle_refusal(&null);
         assert_eq!(diagnostics[0].path, "/audit/hashKeyVersion");
         assert_eq!(diagnostics[0].code, "config.null-value");
+    }
+
+    #[test]
+    fn bundle_key_versions_stay_inside_the_contract_range() {
+        let valid = acceptance_bundle();
+        let validator = bundle_contract_validator();
+        for (member, path) in [
+            ("hashKeyVersion: 1", "/audit/hashKeyVersion"),
+            ("keyVersion: 1", "/subjectBinding/keyVersion"),
+        ] {
+            let name = member.trim_end_matches(" 1");
+            for (version, accepted) in [
+                (0_u64, false),
+                (1, true),
+                (2_147_483_647, true),
+                (2_147_483_648, false),
+            ] {
+                let mutated = valid.replacen(member, &format!("{name} {version}"), 1);
+                assert!(
+                    version == 1 || mutated != valid,
+                    "the mutation applies at {path}"
+                );
+                assert_eq!(
+                    validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
+                    accepted,
+                    "the contract disagrees at {path} {version}"
+                );
+                if accepted {
+                    EvidenceConfig::parse_yaml(mutated.as_bytes())
+                        .unwrap_or_else(|_| panic!("{path} {version} is inside the range"));
+                } else {
+                    let diagnostics = bundle_refusal(&mutated);
+                    assert_eq!(
+                        diagnostics[0].code, "config.out-of-range",
+                        "{path} {version}"
+                    );
+                    assert_eq!(diagnostics[0].path, path, "{version}");
+                }
+            }
+        }
     }
 
     #[test]
