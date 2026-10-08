@@ -639,11 +639,15 @@ impl Found {
 /// Where a null was found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NullPlace {
+    /// A member the reader cannot tell is optional: a type with a serde
+    /// default is decoded the same way as a required one.
     Member,
     Item,
     /// A position that takes a mapping, such as an optional block.
     Block,
 }
+
+const NULL_AFTER_KEY: &str = "null is never a value; an empty value after a key is null too";
 
 pub(crate) fn null_value(place: NullPlace) -> Text {
     match place {
@@ -652,14 +656,24 @@ pub(crate) fn null_value(place: NullPlace) -> Text {
             "Remove the item, or give a value.",
         ),
         NullPlace::Member => text(
-            "null is never a value; an empty value after a key is null too",
-            "Remove the key to use the default, or give a value.",
+            NULL_AFTER_KEY,
+            "Give a value, or remove the key if the member is optional.",
         ),
         NullPlace::Block => text(
-            "null is never a value; an empty value after a key is null too",
-            "Remove the key to use the default, or give a value (`{}` for a block with no members).",
+            NULL_AFTER_KEY,
+            "Give a value (`{}` for a block with no members), or remove the key if the block is optional.",
         ),
     }
+}
+
+/// A union's tag given as null: the tag is never optional.
+pub(crate) fn null_tag(variants: &[&str]) -> Text {
+    let action = if variants.is_empty() {
+        "Give a value.".to_string()
+    } else {
+        format!("Give one of {}.", list(variants))
+    };
+    text(NULL_AFTER_KEY, action)
 }
 
 const SUBSTITUTION_MESSAGE: &str = "substitution fills text values only";

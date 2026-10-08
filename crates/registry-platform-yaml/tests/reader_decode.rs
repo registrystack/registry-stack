@@ -579,9 +579,37 @@ fn cfg_empty_1_a_null_member_is_refused() {
         );
         assert_eq!(
             diagnostic.suggested_action,
-            "Remove the key to use the default, or give a value."
+            "Give a value, or remove the key if the member is optional."
         );
     }
+}
+
+#[test]
+fn cfg_empty_1_a_null_required_member_is_not_told_to_remove_the_key() {
+    let report = refusal::<Settings>("listener:\n  bind:\n");
+    assert_diagnostic(
+        only(&report),
+        "config.null-value",
+        "/listener/bind",
+        (4, 3),
+        "null is never a value; an empty value after a key is null too",
+        "Give a value, or remove the key if the member is optional.",
+    );
+
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Holder {
+        source: Source,
+    }
+    let report = refusal::<Holder>("source:\n  type:\n");
+    assert_diagnostic(
+        only(&report),
+        "config.null-value",
+        "/source/type",
+        (4, 3),
+        "null is never a value; an empty value after a key is null too",
+        "Give one of `http`, `file`, `none`.",
+    );
 }
 
 #[test]
@@ -614,7 +642,7 @@ fn cfg_empty_1_a_null_block_names_the_empty_mapping() {
         "/listener",
         (3, 1),
         "null is never a value; an empty value after a key is null too",
-        "Remove the key to use the default, or give a value (`{}` for a block with no members).",
+        "Give a value (`{}` for a block with no members), or remove the key if the block is optional.",
     );
 }
 

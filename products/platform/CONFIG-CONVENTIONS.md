@@ -502,8 +502,8 @@ schema is not swept).
 ## 7. Empty, null, and omitted values
 
 **CFG-EMPTY-1 (MUST). `null` is never a value.** `null`, `~`, or an empty
-value after a key is refused in every member with "remove the key to use the
-default, or give a value" (`config.null-value`). Absence has one spelling:
+value after a key is refused in every member with "give a value, or remove the
+key if the member is optional" (`config.null-value`). Absence has one spelling:
 omit the key. An optional block whose presence turns a feature on is written
 `{}` when it has no members; `null` or `true` in its place is refused, naming
 `{}`. A format that compares record values may accept null as a record value

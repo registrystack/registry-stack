@@ -1872,7 +1872,10 @@ impl<'de, 'a> de::EnumAccess<'de> for TaggedAccess<'a> {
         let tag = self.de.child(entry);
         match &entry.value.value {
             NodeValue::String(_) => {}
-            NodeValue::Null => return Err(tag.null_error(false)),
+            NodeValue::Null => {
+                let variants = probe_variants(seed);
+                return Err(tag.fail("config.null-value", messages::null_tag(variants)));
+            }
             _ => {
                 let variants = probe_variants(seed);
                 return Err(tag.fail(
