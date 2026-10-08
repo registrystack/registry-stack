@@ -6,7 +6,7 @@
   "authoringStatus": "complete",
   "databaseAccess": false,
   "diagnostics": [],
-  "filesChecked": 4,
+  "filesChecked": 3,
   "fixtures": [
     {
       "file": "fixtures/standalone-decision.yaml",
