@@ -130,12 +130,15 @@ A member keeps the type its format gives it. An integer member refuses `1_000` a
 
 ```text
 error[config.expected-integer] runtime.yaml:10:25 /limits/maximumResultRecords
-  expected a whole number of 0 or more; quoted values are text
+  expected a whole number from 0 to 18446744073709551615; quoted values are text
   next: Remove the quotes.
 ```
 
+A message about a whole number states both bounds: the ones the format declares, or else the
+range of the member's type, as here.
+
 {/* Evidence: crates/registry-platform-yaml/src/scalar.rs, resolve_plain();
-    crates/registry-platform-yaml/src/messages.rs, CODES. */}
+    crates/registry-platform-yaml/src/messages.rs, CODES, whole_number(), and expected_integer(). */}
 
 ### Absent and null
 
@@ -146,7 +149,7 @@ accepts null. With `logLevel:` on a line of its own, the reader reports:
 ```text
 error[config.null-value] runtime.yaml:14:1 /logLevel
   null is never a value; an empty value after a key is null too
-  next: Remove the key to use the default, or give a value.
+  next: Give a value, or remove the key if the member is optional.
 ```
 
 ## Values from the environment
@@ -255,7 +258,9 @@ error[yaml.duplicate-key] runtime.yaml:15:1 /listener
 ```
 
 The reader reports every unknown and removed key it finds, and stops decoding at the first other
-problem. After you fix what it reports, run the check again: a later problem can surface.
+problem. It shows at most 100 diagnostics for one file, then one `config.too-many-problems`
+diagnostic that counts the rest. After you fix what it reports, run the check again: a later
+problem can surface.
 
 {/* Evidence: crates/registry-platform-yaml/src/diagnostic.rs, Diagnostic, Severity, and
     render_human();
@@ -283,8 +288,12 @@ runtime file most often meets:
 | `config.expected-string` | A text member holds something other than text |
 | `config.substitution` | A `${...}` expression cannot be filled |
 | `config.substitution-not-allowed` | A `${...}` expression is written where substitution is refused |
+| `config.too-many-problems` | The file has more problems than the reader shows; this last diagnostic counts the rest |
 | `yaml.duplicate-key` | A mapping holds the same key twice |
 | `yaml.ambiguous-number` | An unquoted value looks like a number but is not a plain decimal |
+| `yaml.invalid-escape` | A backslash in a double-quoted value starts an escape sequence YAML does not define |
+| `yaml.text-after-quote` | Text follows the closing quote of a quoted value |
+| `yaml.control-character` | A text value holds a control character other than tab, line feed, or carriage return |
 
 `CODES` in `crates/registry-platform-yaml/src/messages.rs` lists every reader code with its meaning.
 The one warning, `config.deprecated-api-version`, reports an `apiVersion` the runtime still reads
@@ -292,7 +301,21 @@ and names the version to change to.
 
 For an unknown key, `next:` proposes the closest accepted key when one differs only in letter
 case, or by at most two edits (one edit for an accepted key of four characters or fewer, counting
-a swap of two neighbouring characters as one edit). Otherwise it lists the accepted keys.
+a swap of two neighbouring characters as one edit). Otherwise it lists the accepted keys, once per
+mapping: a later unknown key in the same mapping points at the line that lists them.
+
+The same rule applies to accepted values. With `logLevel: inf` in the Discovery runtime file, the
+reader reports:
+
+```text
+error[config.unknown-variant] runtime.yaml:14:11 /logLevel
+  expected one of `error`, `warn`, `info`
+  next: Use `info`, the closest accepted value.
+```
+
+With `logLevel: Info`, `next:` reads ``Use `info`; letter case matters.`` instead. Otherwise it
+lists the accepted values. A value filled from the environment gets the list and no proposal, since
+a proposal would reveal part of the value.
 
 A few blocks are exceptions, such as `audit` in the Casework and Scheduling runtime files. These
 blocks are decoded outside the reader's key checks, so a check stops at the first unknown key in
@@ -301,8 +324,8 @@ them, and `next:` asks you to remove it without proposing or listing accepted ke
 The code names the problem. The message wording is human-readable output, which
 [API stability](../api-stability/#exempt-surfaces) exempts from its promise.
 
-{/* Evidence: crates/registry-platform-yaml/src/messages.rs, CODES, unknown_key(), closest(), and
-    deprecated_api_version();
+{/* Evidence: crates/registry-platform-yaml/src/messages.rs, CODES, unknown_key(), closest(),
+    suggest(), unknown_variant(), too_many_problems(), and deprecated_api_version();
     crates/registry-platform-yaml/src/de.rs, serde_unknown_field();
     crates/registry-casework/src/config.rs, AuditConfig;
     crates/registry-scheduling/src/config.rs, AuditConfig;
