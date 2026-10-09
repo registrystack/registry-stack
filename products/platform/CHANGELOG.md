@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `config.unknown-variant` with a single accepted value says "expected `x`" and
+  "Write `x`." instead of listing one value.
 - `config.invalid-type` for a mapping no longer suggests writing `{}`; the reader
   cannot know whether an empty mapping is valid there.
 - `yaml.ambiguous-number` no longer offers quoting everywhere: its `next` says to

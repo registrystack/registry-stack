@@ -1226,6 +1226,31 @@ fn cfg_sec_3_an_unknown_variant_names_the_accepted_values_only() {
 }
 
 #[test]
+fn an_unknown_variant_with_one_accepted_value_names_it_alone() {
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    #[allow(dead_code)]
+    enum Only {
+        Uri,
+    }
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Holder {
+        source: Only,
+    }
+
+    let report = refusal::<Holder>("source: zzzzzz\n");
+    assert_diagnostic(
+        only(&report),
+        "config.unknown-variant",
+        "/source",
+        (3, 9),
+        "expected `uri`",
+        "Write `uri`.",
+    );
+}
+
+#[test]
 fn cfg_diag_6_an_unknown_variant_names_the_value_it_is_close_to() {
     for (body, action) in [
         ("mode: Strict\n", "Use `strict`; letter case matters."),

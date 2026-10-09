@@ -893,12 +893,17 @@ pub(crate) fn unknown_variant(accepted: &[&str], suggestion: Option<Suggestion>)
             "Report this to the product maintainers; the format declares a union with no forms.",
         );
     }
-    let action = match suggestion {
-        Some(Suggestion::LetterCase(name)) => format!("Use `{name}`; letter case matters."),
-        Some(Suggestion::Close(name)) => format!("Use `{name}`, the closest accepted value."),
-        None => format!("Use one of {}.", list(accepted)),
+    let action = match (suggestion, accepted) {
+        (Some(Suggestion::LetterCase(name)), _) => format!("Use `{name}`; letter case matters."),
+        (Some(Suggestion::Close(name)), _) => format!("Use `{name}`, the closest accepted value."),
+        (None, [only]) => format!("Write {}.", key(only)),
+        (None, _) => format!("Use one of {}.", list(accepted)),
     };
-    text(format!("expected one of {}", list(accepted)), action)
+    let expected = match accepted {
+        [only] => key(only),
+        _ => format!("one of {}", list(accepted)),
+    };
+    text(format!("expected {expected}"), action)
 }
 
 pub(crate) fn invalid_type(expected: &str, found: Found) -> Text {
