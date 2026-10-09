@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 use registry_platform_yaml::{
-    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report, Severity,
 };
 
 use crate::authoring::{
@@ -186,6 +186,22 @@ fn no_case_diagnostic() -> JsonValue {
     })
 }
 
+/// The refusal for an editable project that holds no fixture file, naming
+/// the directory where one goes.
+fn no_fixture_report() -> Report {
+    let mut report = Report::new(vec![crate::authored::file_diagnostic(
+        Severity::Error,
+        "evidencectl.fixtures.no-fixture",
+        Some("EvidenceFixture"),
+        "fixtures",
+        "",
+        "No fixture file was found in the project's fixtures directory.",
+        "Add fixtures/<question-id>.yaml with `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1`, `kind: EvidenceFixture`, `synthetic_only: true`, and at least one case, name it in the question's `governance.fixtures`, then rerun evidencectl test <project>.",
+    )]);
+    report.set_files_checked(0);
+    report
+}
+
 /// The refusal for a run whose check or fixture steps failed; each failed
 /// step and case carries its own detail.
 fn failed_run_diagnostic(command: &str) -> JsonValue {
@@ -243,10 +259,14 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
         // The shared reader decides what a fixture file is before the project
         // is compiled or any step is delegated, so a file it refuses is
         // reported with its own diagnostics and nothing runs against it.
+        let fixture_paths = project_fixture_paths(&args.project)?;
+        if fixture_paths.is_empty() {
+            return Err(no_fixture_report().into());
+        }
         reader_warnings = read_fixture_files(
             &args.project,
             &args.project,
-            &project_fixture_paths(&args.project)?,
+            &fixture_paths,
             args.deny_warnings,
         )?;
         editable_lock = Some(

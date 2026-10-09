@@ -1676,3 +1676,53 @@ fn deny_warnings_is_accepted_and_a_clean_project_still_passes() {
     assert_eq!(output.status.code(), Some(0), "{report}");
     assert_eq!(report["passed"], true, "{report}");
 }
+
+/// A project that holds no fixture file is told so, and where one goes,
+/// whether the `fixtures/` directory is absent or empty.
+#[test]
+fn a_project_with_no_fixture_file_says_so_and_where_one_goes() {
+    for remove_directory in [true, false] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = dir.path().join("sqlite-project");
+        let created = evidencectl()
+            .args(["new"])
+            .arg(&project)
+            .args(["--transport", "sqlite-extract", "--profile", "local"])
+            .output()
+            .expect("create SQLite starter");
+        assert!(created.status.success(), "{}", stderr_of(&created));
+        fs::remove_dir_all(project.join("fixtures")).expect("remove the starter fixtures");
+        if !remove_directory {
+            fs::create_dir(project.join("fixtures")).expect("recreate an empty fixtures directory");
+        }
+        let stub = write_stub_evidence(dir.path());
+        let output = evidencectl()
+            .args(["--format", "json", "test"])
+            .arg(&project)
+            .arg("--evidence-bin")
+            .arg(&stub)
+            .env("ARGV_LOG", dir.path().join("argv.log"))
+            .output()
+            .expect("run evidencectl test");
+        assert_eq!(output.status.code(), Some(1), "{}", stdout_of(&output));
+        let report: serde_json::Value =
+            serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(
+            diagnostic["code"], "evidencectl.fixtures.no-fixture",
+            "{report}"
+        );
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("No fixture file")),
+            "{report}"
+        );
+        assert!(
+            diagnostic["suggestedAction"]
+                .as_str()
+                .is_some_and(|action| action.contains("fixtures/") && action.contains("kind")),
+            "{report}"
+        );
+    }
+}
