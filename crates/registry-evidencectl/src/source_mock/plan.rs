@@ -312,7 +312,8 @@ fn validate_operation(operation: &PlanOperation, index: usize) -> Result<()> {
         bail!("operation {index} method must be GET");
     }
     validate_route_template(&operation.path)?;
-    if operation.response.status.get() != 200 || operation.response.media_type != "application/json" {
+    if operation.response.status.get() != 200 || operation.response.media_type != "application/json"
+    {
         bail!("operation {index} response must be 200 application/json");
     }
     if operation.cases.is_empty() || operation.cases.len() > MAX_CASES_PER_OPERATION {
