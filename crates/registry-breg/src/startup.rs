@@ -356,6 +356,9 @@ pub enum OperationalEvent {
     PostgresBaselineAdvisory(BaselineAdvisory),
     /// The role mode the runtime file selects, logged once at startup.
     RoleMode(RoleMode),
+    /// The runtime file leaves `authentication.oidc.allowedClients`
+    /// unrestricted, logged once at startup. It names the member only.
+    ClientsUnrestricted,
     /// A supervised background task panicked, or returned before shutdown
     /// was requested. The code names the task and how it ended.
     BackgroundTaskStopped(BackgroundTask, BackgroundTaskStop),
@@ -409,6 +412,13 @@ impl OperationalEvent {
                     "Base Registry Engine serves with a separate runtime role (roleMode split)",
                 error: None,
                 code: Some("startup.role_mode.split"),
+            },
+            Self::ClientsUnrestricted => OperationalLogRecord {
+                level: OperationalLogLevel::Info,
+                target: "registry_breg::startup",
+                message: "authentication.oidc.allowedClients is unrestricted: a token from any client is accepted",
+                error: None,
+                code: Some("startup.authentication.clients_unrestricted"),
             },
             Self::WebhookWorkerIterationFailed => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
@@ -497,8 +507,8 @@ impl OperationalEvent {
             Self::StartupBegan | Self::Listening => {
                 tracing::info!(target: "registry_breg::startup", message = record.message);
             }
-            Self::RoleMode(_) => {
-                let code = record.code.expect("role mode records have a code");
+            Self::RoleMode(_) | Self::ClientsUnrestricted => {
+                let code = record.code.expect("startup notes have a code");
                 tracing::info!(target: "registry_breg::startup", code, message = record.message);
             }
             Self::Stopped => {

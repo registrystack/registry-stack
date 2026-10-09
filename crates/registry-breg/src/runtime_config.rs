@@ -30,7 +30,7 @@ use registry_platform_oidc::{
 };
 #[cfg(feature = "schema")]
 use registry_platform_yaml::{BoundedU32, BoundedU64};
-use registry_platform_yaml::{Diagnostic, Report, Source, Url};
+use registry_platform_yaml::{Diagnostic, Report, Severity, Source, Url};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -534,6 +534,17 @@ pub fn check_runtime_config(
                 }
             }
             Ok(config) => {
+                for index in config.authentication().oidc().wildcard_spelled_clients() {
+                    let mut warning = check.error_at(
+                        RUNTIME_CONFIG_KIND,
+                        "breg.access.wildcard-spelled-item",
+                        &format!("/authentication/oidc/allowedClients/{index}"),
+                        "The item is spelled like a wildcard but names one client: `*` and `unrestricted` match nothing else in this list.",
+                        "List each client by its exact identifier, or write allowedClients: unrestricted to admit every client.",
+                    );
+                    warning.severity = Severity::Warning;
+                    diagnostics.push(warning);
+                }
                 if let Some(registry) = registry {
                     if !check.defers_within("/authentication") {
                         if let Err(error) = config.authentication().check_against(registry) {
@@ -1809,6 +1820,23 @@ impl OidcVerifierConfig {
             request_timeout: self.jwks_cache.request_timeout,
             outage_tolerance: self.jwks_cache.outage_tolerance,
         }
+    }
+
+    /// Whether the file leaves `allowedClients` unrestricted, so a token from
+    /// any client is accepted.
+    #[must_use]
+    pub fn admits_every_client(&self) -> bool {
+        self.allowed_clients.is_empty()
+    }
+
+    /// The positions of listed clients spelled like a wildcard, which name one
+    /// client each.
+    fn wildcard_spelled_clients(&self) -> impl Iterator<Item = usize> + '_ {
+        self.allowed_clients
+            .iter()
+            .enumerate()
+            .filter(|(_, client)| matches!(client.as_str(), "*" | "unrestricted"))
+            .map(|(index, _)| index)
     }
 
     pub fn token_verifier_config(&self) -> TokenVerifierConfig {

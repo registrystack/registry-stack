@@ -653,6 +653,13 @@ fn expected_operational_event(
             None,
             Some("startup.role_mode.split"),
         ),
+        OperationalEvent::ClientsUnrestricted => (
+            OperationalLogLevel::Info,
+            "registry_breg::startup",
+            "authentication.oidc.allowedClients is unrestricted: a token from any client is accepted",
+            None,
+            Some("startup.authentication.clients_unrestricted"),
+        ),
         OperationalEvent::PostgresBaselineAdvisory(advisory) => (
             match advisory.severity() {
                 AdvisorySeverity::Warning => OperationalLogLevel::Warn,
@@ -831,6 +838,7 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     );
     events.push(OperationalEvent::RoleMode(RoleMode::Single));
     events.push(OperationalEvent::RoleMode(RoleMode::Split));
+    events.push(OperationalEvent::ClientsUnrestricted);
     events.push(OperationalEvent::WebhookWorkerIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationRetryPending);

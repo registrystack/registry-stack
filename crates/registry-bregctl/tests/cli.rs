@@ -1807,6 +1807,47 @@ fn check_refuses_a_principal_claim_the_access_profiles_do_not_use() {
 }
 
 #[test]
+fn check_warns_of_a_wildcard_spelled_allowed_client_and_denies_it_on_request() {
+    let scratch = TestProject::from_registry_source(b"");
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace(
+            "allowedClients: [minimal-client]",
+            "allowedClients: [\"*\"]",
+        )
+    });
+    let example = minimal_example();
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(json.status.code(), Some(0), "{json:?}");
+    let report = json_stdout(&json);
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    let diagnostic = &diagnostics[0];
+    assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
+    assert_eq!(diagnostic["severity"], "warning");
+    assert_eq!(diagnostic["code"], "breg.access.wildcard-spelled-item");
+    assert_eq!(diagnostic["path"], "/authentication/oidc/allowedClients/0");
+    assert_eq!(diagnostic["source"]["file"], path(&runtime));
+    assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic}");
+
+    let denied = bregctl(&[
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&runtime),
+        "--deny-warnings",
+    ]);
+    assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+}
+
+#[test]
 fn check_accepts_a_runtime_that_lists_the_clients_a_profile_names() {
     let scratch = TestProject::from_registry_source(b"");
     minimal_project_limited_to_portal(&scratch);

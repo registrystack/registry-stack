@@ -41,6 +41,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    let clients_unrestricted = config.authentication().oidc().admits_every_client();
     let prepared = match prepare_loaded(config).await {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -49,6 +50,9 @@ async fn main() {
         }
     };
     OperationalEvent::RoleMode(prepared.role_mode()).emit();
+    if clients_unrestricted {
+        OperationalEvent::ClientsUnrestricted.emit();
+    }
     for advisory in prepared.postgres_advisories() {
         OperationalEvent::PostgresBaselineAdvisory(advisory.clone()).emit();
     }
