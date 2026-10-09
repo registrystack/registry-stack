@@ -327,6 +327,27 @@ def matches_tail(pattern: str, path: str) -> bool:
     return any(regex.match("/".join(parts[index:])) for index in range(len(parts)))
 
 
+def covers(mapped: str, registered: str) -> bool:
+    """Whether an editor pattern maps every file a registered pattern names.
+
+    A registered pattern names the tail of a path. An editor pattern is
+    relative to the project directory, so it may name directories above that
+    tail; `{document}` is the one file the adopter names at setup.
+    """
+
+    if mapped == "{document}":
+        return True
+    wide, narrow = mapped.split("/"), registered.split("/")
+    if len(wide) < len(narrow):
+        return False
+    return all(
+        theirs == ours
+        or theirs in ("*", "**")
+        or (not any(mark in ours for mark in "*?{") and glob_regex(theirs).fullmatch(ours) is not None)
+        for theirs, ours in zip(reversed(wide), reversed(narrow))
+    )
+
+
 def load_document(path: Path) -> object:
     text = path.read_text(encoding="utf-8")
     if path.suffix == ".json":
@@ -1448,7 +1469,7 @@ class Lint:
 
     # Registry-level rules ---------------------------------------------------
 
-    def registry_rules(self, entry: dict, configure: set[str], tooling: set[str]) -> None:
+    def registry_rules(self, entry: dict, configure: dict[str, set[str]], tooling: dict[str, set[str]]) -> None:
         fid = entry["id"]
         current = entry["current"]
         target = entry["target"] if isinstance(entry["target"], dict) else {}
@@ -1514,6 +1535,12 @@ class Lint:
                     self.find("CFG-SCHEMA-6", fid, CONFIGURE, f"/SCHEMAS/{product}",
                               "the format is not mapped for editors",
                               f"Map {schema['path'] if isinstance(schema, dict) else 'its schema'} in editors/configure.py")
+            else:
+                patterns = configure.get(str(schema["path"]), set()) | tooling.get(Path(str(schema["path"])).name, set())
+                for index, pattern in enumerate(entry["files"]):
+                    if not any(covers(theirs, str(pattern)) for theirs in patterns):
+                        rule("CFG-SCHEMA-6", f"/files/{index}", f"no editor mapping covers the file pattern {pattern}",
+                             f"Map {pattern} to {schema['path']} in editors/configure.py, or register the pattern editors map")
         if entry["check"] == "none":
             rule("CFG-CHECK-1", "/check", "a read format with no offline check command",
                  "Add an offline check command")
@@ -2335,8 +2362,13 @@ def derive_format(kind: str, prefix: str) -> str:
     return "-".join(part.lower() for part in re.findall(r"[A-Z][a-z0-9]*", stem))
 
 
-def editor_mappings(root: Path, lint: Lint) -> tuple[set[str], set[str]]:
-    configured: set[str] = set()
+def editor_mappings(root: Path, lint: Lint) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """The file patterns each schema is mapped to, by `editors/configure.py` and by `evidencectl tooling editor`.
+
+    The first is keyed by schema path, the second by schema file name.
+    """
+
+    configured: dict[str, set[str]] = {}
     path = root / CONFIGURE
     if not path.is_file():
         lint.error(f"{CONFIGURE} does not exist")
@@ -2350,13 +2382,20 @@ def editor_mappings(root: Path, lint: Lint) -> tuple[set[str], set[str]]:
                 if any(isinstance(target, ast.Name) and target.id == "SCHEMAS" for target in targets):
                     schemas = ast.literal_eval(statement.value)
                     for pairs in schemas.values():
-                        configured |= {str(pair[0]) for pair in pairs}
+                        for pair in pairs:
+                            configured.setdefault(str(pair[0]), set()).add(str(pair[1]))
         except (SyntaxError, ValueError) as problem:
             lint.error(f"{CONFIGURE}: SCHEMAS does not parse as a literal: {problem}")
-    tooling: set[str] = set()
+    tooling: dict[str, set[str]] = {}
     editor = root / TOOLING_EDITOR
     if editor.is_file():
-        tooling = {Path(name).name for name in re.findall(r"include_str!\(\s*\"([^\"]+)\"\s*\)", editor.read_text(encoding="utf-8"))}
+        text = editor.read_text(encoding="utf-8")
+        for name in re.findall(r"include_str!\(\s*\"([^\"]+)\"\s*\)", text):
+            tooling.setdefault(Path(name).name, set())
+        for glob, name in re.findall(
+            r"file_glob:\s*\"([^\"]+)\"\s*,\s*document:\s*include_str!\(\s*\"([^\"]+)\"\s*\)", text
+        ):
+            tooling[Path(name).name].add(glob)
     return configured, tooling
 
 

@@ -83,6 +83,28 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("breg", project, self.workspace, None)
         self.assertEqual({path: path.read_bytes() for path in snapshots}, snapshots)
 
+    def test_breg_maps_every_runtime_file_and_the_publicschema_starters(self):
+        project = self.project(
+            "breg",
+            "registry.yaml",
+            "products/breg/fixtures/organization-membership-access/registry.yaml",
+        )
+        configure.configure("breg", project, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            schemas[(managed / "runtime.schema.json").as_uri()],
+            [
+                str(project / "runtime.yaml"),
+                str(project / "runtime-test.yaml"),
+                str(project / "runtime.example.yaml"),
+            ],
+        )
+        self.assertEqual(
+            schemas[(managed / "model-selection.v1alpha1.schema.json").as_uri()],
+            [str(project / "model/selection.yaml"), str(project / "publicschema/starters/*.yaml")],
+        )
+
     def test_breg_maps_its_json_documents_to_json_schemas(self):
         project = self.project(
             "breg",

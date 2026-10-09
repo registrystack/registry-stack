@@ -1279,6 +1279,54 @@ class SchemaTests(ConventionsTestCase):
         self.repo.write("editors/configure.py", "SCHEMAS = {}\n")
         self.assertFinding(self.repo.run(), "CFG-SCHEMA-6", P, at("editors/configure.py", "/SCHEMAS/casework"))
 
+    def test_cfg_schema_6_reports_a_registered_file_pattern_editors_do_not_map(self) -> None:
+        self.repo.fmt()["files"] = ["casework.yaml", "casework-test.yaml", "queues/*.yaml"]
+        report = self.repo.run()
+        self.assertFinding(report, "CFG-SCHEMA-6", P, at(REGISTRY, "/files/1"))
+        self.assertFinding(report, "CFG-SCHEMA-6", P, at(REGISTRY, "/files/2"))
+        self.assertEqual(len([key for key in keys(report.findings) if key[0] == "CFG-SCHEMA-6"]), 2)
+
+    def test_cfg_schema_6_reports_a_mapping_narrower_than_the_registered_pattern(self) -> None:
+        for registered, mapped in (
+            ("*.casework.yaml", "intake*.casework.yaml"),
+            ("queues/casework.yaml", "casework.yaml"),
+            ("*/casework.yaml", "queues/casework.yaml"),
+        ):
+            with self.subTest(registered=registered, mapped=mapped):
+                self.setUp()
+                self.repo.fmt()["files"] = ["casework.yaml", registered]
+                self.repo.write("editors/configure.py", CONFIGURE_TEXT.replace(
+                    '"casework.yaml"),', f'"casework.yaml"),\n        ("{PROJECT_SCHEMA}", "{mapped}"),'))
+                self.assertFinding(self.repo.run(), "CFG-SCHEMA-6", P, at(REGISTRY, "/files/1"))
+
+    def test_cfg_schema_6_accepts_a_mapping_that_covers_the_registered_pattern(self) -> None:
+        for registered, mapped in (
+            ("casework.yaml", "**/casework.yaml"),
+            ("casework.yaml", "project/casework.yaml"),
+            ("casework.yaml", "{document}"),
+            ("casework.yaml", "case*.yaml"),
+            ("queues/*/casework.yaml", "queues/**/casework.yaml"),
+            ("queues/*.yaml", "queues/*.yaml"),
+        ):
+            with self.subTest(registered=registered, mapped=mapped):
+                self.setUp()
+                self.repo.fmt()["files"] = [registered]
+                self.repo.write("editors/configure.py", CONFIGURE_TEXT.replace('"casework.yaml"),', f'"{mapped}"),'))
+                self.assertNoFinding(self.repo.run(), "CFG-SCHEMA-6")
+
+    def test_cfg_schema_6_holds_a_schema_the_adopter_tool_maps_to_its_own_pattern(self) -> None:
+        self.repo.write("editors/configure.py", "SCHEMAS = {}\n")
+        catalog = (
+            'EditorSchema {{\n    filename: "project.schema.json",\n    file_glob: "{glob}",\n'
+            '    document: include_str!("../../../{schema}"),\n}},\n'
+        )
+        self.repo.write("crates/registry-evidencectl/src/tooling_editor.rs",
+                        catalog.format(glob="casework.yaml", schema=PROJECT_SCHEMA))
+        self.assertNoFinding(self.repo.run(), "CFG-SCHEMA-6")
+        self.repo.write("crates/registry-evidencectl/src/tooling_editor.rs",
+                        catalog.format(glob="questions/*.yml", schema=PROJECT_SCHEMA))
+        self.assertFinding(self.repo.run(), "CFG-SCHEMA-6", P, at(REGISTRY, "/files/0"))
+
     def test_cfg_schema_6_and_2_exempt_read_back_formats(self) -> None:
         state = copy.deepcopy(project_format())
         state.update(

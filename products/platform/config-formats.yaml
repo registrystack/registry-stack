@@ -3405,7 +3405,7 @@ formats:
   - id: evidence/verification-policy
     product: evidence
     title: Evidence relying-procedure verification policy
-    files: ['*.policy.yaml']
+    files: ['verification*.policy.yaml']
     syntax: yaml
     audience: operator
     stability: promised
@@ -3438,7 +3438,7 @@ formats:
   - id: evidence/holder-bound-verification-policy
     product: evidence
     title: Evidence holder-bound presentation verification policy
-    files: ['*.policy.yaml']
+    files: ['holder-bound*.policy.yaml']
     syntax: yaml
     audience: operator
     stability: promised
