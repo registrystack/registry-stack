@@ -3962,6 +3962,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/evidence/selector/selector.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Evidence selector profile",
+      "description": "Evidence authoring project marker and question JSON Schema.",
+      "source": {
+        "path": "crates/registry-evidence-authoring/src/schema.rs",
+        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+      },
+      "artifact": {
+        "path": "crates/registry-evidencectl/schemas/authoring/selector.schema.json",
+        "sha256": "916eb5204c031df2f4732cd230b885bf367e237cb201bf4cfd1c402523658a8e",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/evidence/source-resolution/source-resolution.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3976,6 +3994,60 @@
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json",
         "sha256": "8ebfd8d54b92be742595c6bc1d4a71a570ae04ab80e85d0d276522f0967ab7bf",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/evidence/source/source.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Evidence source",
+      "description": "Evidence authoring project marker and question JSON Schema.",
+      "source": {
+        "path": "crates/registry-evidence-authoring/src/schema.rs",
+        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+      },
+      "artifact": {
+        "path": "crates/registry-evidencectl/schemas/authoring/source.schema.json",
+        "sha256": "c149992d06b1a2d9a2f014391687acb41aedbf16ff7fad024e9cf620753e1666",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/evidence/target-governance/target-governance.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Evidence deployment target governance",
+      "description": "Evidence authoring project marker and question JSON Schema.",
+      "source": {
+        "path": "crates/registry-evidence-authoring/src/schema.rs",
+        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+      },
+      "artifact": {
+        "path": "crates/registry-evidencectl/schemas/authoring/target-governance.schema.json",
+        "sha256": "da3863063106f8c17bd76f8e35631656b924c55c97c60917f23fb086cc8bcb33",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/evidence/target-settings/target-settings.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Evidence deployment target settings",
+      "description": "Evidence authoring project marker and question JSON Schema.",
+      "source": {
+        "path": "crates/registry-evidence-authoring/src/schema.rs",
+        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+      },
+      "artifact": {
+        "path": "crates/registry-evidencectl/schemas/authoring/target-settings.schema.json",
+        "sha256": "d9a554d9d276d960e529be93c99ddf6265738aa73ff4ea3e2d08d69d491746fb",
         "mediaType": "application/schema+json"
       }
     },
