@@ -754,14 +754,22 @@ boundary. The shared platform activation crate supplies the ledger behind
 Messaging, the old
 binaries apply the `messagingctl init` starter package, then submit scheduled
 email and SMS messages whose delivery window starts a day later, so no provider
-is contacted, and cancel one of them. After the upgrade the new binaries must
-report the same active package, serve every captured message view unchanged,
-answer an idempotent resubmission with its original receipt, and accept a new
-submission and a cancellation. The ledger's active and package digests must be
-the ones the previous release recorded. An operator retention erase
-(`messagingctl retention erase-expired --apply`) run with the new binaries must
-add a `messaging.retention.requested` and a `messaging.retention.erased` record
-to the audit stream, which must also keep every earlier record. A default run from a release that did not ship
+is contacted, and cancel one of them. The rehearsal then upgrades the way an
+operator does: it applies the Messaging steps of the upgrade steps file to the
+project and the runtime file, performs the manual step
+`messaging-project-envelope`, builds the package again with the new
+`messagingctl package`, and points `package.root` at it. `messagingctl plan`
+must name the package the previous release activated as active and another
+package on disk, or the rehearsal does not apply. After `messagingctl apply`
+the ledger must name the package on disk as active, with the package the
+previous release activated as its predecessor. The new binaries must serve
+every captured message view unchanged, answer an idempotent resubmission with
+its stored receipt, and accept a new submission and a cancellation. An
+operator retention erase (`messagingctl retention erase-expired --apply`) run
+with the new binaries must add a `messaging.retention.requested` and a
+`messaging.retention.erased` record to the `messagingctl` audit stream, the
+companion file beside the runtime's, and both streams must keep every earlier
+record. A default run from a release that did not ship
 Messaging omits it and records the reason under `omitted` in the report;
 naming it with `--product messaging` from such a release is refused. Messaging
 publishes Linux amd64 binaries only, so a macOS rehearsal that downloads the
@@ -771,7 +779,7 @@ The upgraded Casework, Evidence, and Messaging runtimes continue the audit files
 previous release wrote, as the upgrade runbook has an operator do. The
 rehearsal counts the records in each stream before and after the upgrade. It
 fails when the stream was empty before the upgrade, or holds fewer records
-after it than before plus the number the upgraded runtime must write. That is a
+after it than before plus the number the upgraded binaries must write. That is a
 count, not a comparison of the earlier records. Every record in the Evidence
 stream must also be a valid current envelope. The Evidence target is packaged again with the new `evidencectl` and
 its configuration is carried forward unchanged.
@@ -1312,10 +1320,13 @@ uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/tes
 
 The upgrade rehearsal (`release/scripts/rehearse-upgrade.py`) applies the
 `edit` steps listed in `BREG_UPGRADE_STEPS`, `BREG_RUNTIME_UPGRADE_STEPS`,
-`CASEWORK_UPGRADE_STEPS` and `EVIDENCE_UPGRADE_STEPS` to the project on disk
+`CASEWORK_UPGRADE_STEPS`, `EVIDENCE_UPGRADE_STEPS`, `MESSAGING_UPGRADE_STEPS`
+and `MESSAGING_RUNTIME_UPGRADE_STEPS` to the project on disk
 after the previous release wrote state and before the new binaries run.
-Messaging is not wired: its applied package ledger names a digest an applied
-step would change.
+The Messaging project steps change the package digest, so that leg also
+performs the manual step `messaging-project-envelope`, builds the package
+again, and applies it as the successor of the one the previous release
+activated.
 
 Every other `edit` step is listed in `UNIT_TESTED_ONLY_STEPS` in the same file,
 each with a one-line reason (no leg for the product, or the starter does not
