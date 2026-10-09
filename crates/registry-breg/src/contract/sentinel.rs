@@ -19,8 +19,11 @@ use registry_platform_yaml::{shape_union, Invalid};
 use serde::{de::IgnoredAny, Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
-    AccessRequirementsSource, ApplyTargetPermissionSource, RequestPresencePermissionSource,
-    RowBoundarySource, UniqueSet,
+    AccessProfileSource, AccessRequirementsSource, ActorKindSource, ApplyTargetPermissionSource,
+    CompiledTaskGrantSource, ConsentRequirementSource, LookupPermissionSource,
+    MembershipBoundarySource, Operation, ProvenanceFieldSource, ReadPathPermissionSource,
+    RequestMetadataFieldSource, RequestPresencePermissionSource, RequestVisibilitySource,
+    RowBoundarySource, SpatialQueryPermissionSource, UniqueSet,
 };
 
 const UNRESTRICTED: &str = "unrestricted";
@@ -398,6 +401,199 @@ pub(super) fn serialize_access_requirements<S: Serializer>(
             row_boundaries: requirements.row_boundaries,
         })
         .serialize(serializer)
+}
+
+// The authored form of `AccessProfileSource`, as a module writes it onto an
+// entity. It reads the same sentinels a project profile does.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(rename = "AccessProfileSource"))]
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct AuthoredModuleProfile {
+    id: String,
+    #[serde(default)]
+    default: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    actor_kind: Option<ActorKindSource>,
+    /// The OAuth clients whose tokens may select this profile. Omit to accept every client.
+    #[serde(
+        default,
+        deserialize_with = "profile_clients",
+        skip_serializing_if = "UniqueSet::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Listed<UniqueSet<String>, ProfileClients>")
+    )]
+    requester_clients: UniqueSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_grant: Option<CompiledTaskGrantSource>,
+    #[serde(default)]
+    principal_claim: Option<String>,
+    /// The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present.
+    #[serde(
+        deserialize_with = "required_scopes",
+        serialize_with = "serialize_required_scopes"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "RequiredScopes"))]
+    required_scopes: UniqueSet<String>,
+    /// The verified token's purpose must match one listed value. Omit to accept every purpose.
+    #[serde(
+        default,
+        deserialize_with = "profile_purposes",
+        skip_serializing_if = "UniqueSet::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Listed<UniqueSet<String>, ProfilePurposes>")
+    )]
+    required_purposes: UniqueSet<String>,
+    operations: UniqueSet<Operation>,
+    #[serde(default)]
+    readable_fields: UniqueSet<String>,
+    /// Readable change-request decision detail.
+    #[serde(
+        default = "super::default_readable_request_fields",
+        skip_serializing_if = "super::is_default_readable_request_fields"
+    )]
+    readable_request_fields: UniqueSet<RequestMetadataFieldSource>,
+    #[serde(default)]
+    writable_fields: UniqueSet<String>,
+    #[serde(default)]
+    filterable_fields: UniqueSet<String>,
+    #[serde(default)]
+    sortable_fields: UniqueSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spatial_queries: Option<SpatialQueryPermissionSource>,
+    /// Row reach: `unrestricted`, or a list of at least one row boundary.
+    #[serde(
+        deserialize_with = "row_boundaries",
+        serialize_with = "serialize_row_boundaries"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "RowBoundaries"))]
+    row_boundaries: Vec<RowBoundarySource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    membership_boundaries: Vec<MembershipBoundarySource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    require_consent: Vec<ConsentRequirementSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request_visibility: Option<RequestVisibilitySource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    lookups: Vec<LookupPermissionSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    read_paths: Vec<ReadPathPermissionSource>,
+    #[serde(
+        default,
+        deserialize_with = "apply_targets",
+        serialize_with = "serialize_apply_targets",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<AuthoredApplyTarget>"))]
+    apply_targets: Vec<ApplyTargetPermissionSource>,
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    submitter_targets: UniqueSet<String>,
+    #[serde(
+        default,
+        deserialize_with = "request_presence",
+        serialize_with = "serialize_request_presence",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<AuthoredRequestPresence>"))]
+    request_presence: Vec<RequestPresencePermissionSource>,
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    allow_count: bool,
+    #[serde(default)]
+    revision_access: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    provenance_fields: Vec<ProvenanceFieldSource>,
+    #[serde(default)]
+    allow_data_export: bool,
+}
+
+impl From<AuthoredModuleProfile> for AccessProfileSource {
+    fn from(authored: AuthoredModuleProfile) -> Self {
+        Self {
+            id: authored.id,
+            default: authored.default,
+            actor_kind: authored.actor_kind,
+            requester_clients: authored.requester_clients,
+            task_grant: authored.task_grant,
+            principal_claim: authored.principal_claim,
+            required_scopes: authored.required_scopes,
+            required_purposes: authored.required_purposes,
+            operations: authored.operations,
+            readable_fields: authored.readable_fields,
+            readable_request_fields: authored.readable_request_fields,
+            writable_fields: authored.writable_fields,
+            filterable_fields: authored.filterable_fields,
+            sortable_fields: authored.sortable_fields,
+            spatial_queries: authored.spatial_queries,
+            row_boundaries: authored.row_boundaries,
+            membership_boundaries: authored.membership_boundaries,
+            require_consent: authored.require_consent,
+            request_visibility: authored.request_visibility,
+            lookups: authored.lookups,
+            read_paths: authored.read_paths,
+            apply_targets: authored.apply_targets,
+            submitter_targets: authored.submitter_targets,
+            request_presence: authored.request_presence,
+            allow_count: authored.allow_count,
+            revision_access: authored.revision_access,
+            provenance_fields: authored.provenance_fields,
+            allow_data_export: authored.allow_data_export,
+        }
+    }
+}
+
+impl From<AccessProfileSource> for AuthoredModuleProfile {
+    fn from(profile: AccessProfileSource) -> Self {
+        Self {
+            id: profile.id,
+            default: profile.default,
+            actor_kind: profile.actor_kind,
+            requester_clients: profile.requester_clients,
+            task_grant: profile.task_grant,
+            principal_claim: profile.principal_claim,
+            required_scopes: profile.required_scopes,
+            required_purposes: profile.required_purposes,
+            operations: profile.operations,
+            readable_fields: profile.readable_fields,
+            readable_request_fields: profile.readable_request_fields,
+            writable_fields: profile.writable_fields,
+            filterable_fields: profile.filterable_fields,
+            sortable_fields: profile.sortable_fields,
+            spatial_queries: profile.spatial_queries,
+            row_boundaries: profile.row_boundaries,
+            membership_boundaries: profile.membership_boundaries,
+            require_consent: profile.require_consent,
+            request_visibility: profile.request_visibility,
+            lookups: profile.lookups,
+            read_paths: profile.read_paths,
+            apply_targets: profile.apply_targets,
+            submitter_targets: profile.submitter_targets,
+            request_presence: profile.request_presence,
+            allow_count: profile.allow_count,
+            revision_access: profile.revision_access,
+            provenance_fields: profile.provenance_fields,
+            allow_data_export: profile.allow_data_export,
+        }
+    }
+}
+
+pub(super) fn module_access_profiles<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<AccessProfileSource>, D::Error> {
+    Ok(Vec::<AuthoredModuleProfile>::deserialize(deserializer)?
+        .into_iter()
+        .map(AccessProfileSource::from)
+        .collect())
+}
+
+pub(super) fn serialize_module_access_profiles<S: Serializer>(
+    profiles: &[AccessProfileSource],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(profiles.iter().cloned().map(AuthoredModuleProfile::from))
 }
 
 // The authored form of `ApplyTargetPermissionSource`.

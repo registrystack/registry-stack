@@ -79,6 +79,173 @@
       ],
       "type": "object"
     },
+    "AccessProfileSource": {
+      "additionalProperties": false,
+      "properties": {
+        "actorKind": {
+          "$ref": "#/$defs/ActorKindSource"
+        },
+        "allowCount": {
+          "type": "boolean"
+        },
+        "allowDataExport": {
+          "default": false,
+          "type": "boolean"
+        },
+        "applyTargets": {
+          "items": {
+            "$ref": "#/$defs/ApplyTargetPermissionSource"
+          },
+          "type": "array"
+        },
+        "default": {
+          "default": false,
+          "type": "boolean"
+        },
+        "filterableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "type": "string"
+        },
+        "lookups": {
+          "items": {
+            "$ref": "#/$defs/LookupPermissionSource"
+          },
+          "type": "array"
+        },
+        "membershipBoundaries": {
+          "items": {
+            "$ref": "#/$defs/MembershipBoundarySource"
+          },
+          "type": "array"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "principalClaim": {
+          "type": "string"
+        },
+        "provenanceFields": {
+          "items": {
+            "$ref": "#/$defs/ProvenanceFieldSource"
+          },
+          "type": "array"
+        },
+        "readPaths": {
+          "items": {
+            "$ref": "#/$defs/ReadPathPermissionSource"
+          },
+          "type": "array"
+        },
+        "readableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "readableRequestFields": {
+          "description": "Readable change-request decision detail.",
+          "items": {
+            "$ref": "#/$defs/RequestMetadataFieldSource"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requestPresence": {
+          "items": {
+            "$ref": "#/$defs/RequestPresencePermissionSource"
+          },
+          "type": "array"
+        },
+        "requestVisibility": {
+          "$ref": "#/$defs/RequestVisibilitySource"
+        },
+        "requesterClients": {
+          "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requireConsent": {
+          "items": {
+            "$ref": "#/$defs/ConsentRequirementSource"
+          },
+          "type": "array"
+        },
+        "requiredPurposes": {
+          "description": "The verified token's purpose must match one listed value. Omit to accept every purpose.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requiredScopes": {
+          "$ref": "#/$defs/RequiredScopes",
+          "description": "The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present."
+        },
+        "revisionAccess": {
+          "default": false,
+          "type": "boolean"
+        },
+        "rowBoundaries": {
+          "$ref": "#/$defs/RowBoundaries",
+          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
+        },
+        "sortableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "spatialQueries": {
+          "$ref": "#/$defs/SpatialQueryPermissionSource"
+        },
+        "submitterTargets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "taskGrant": {
+          "$ref": "#/$defs/CompiledTaskGrantSource"
+        },
+        "writableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "requiredScopes",
+        "operations",
+        "rowBoundaries"
+      ],
+      "type": "object"
+    },
     "AccessRequirementsSource": {
       "additionalProperties": false,
       "description": "Compile-time requirements, not grants. Profiles must explicitly satisfy them.",
@@ -621,6 +788,31 @@
           "type": "string"
         }
       },
+      "type": "object"
+    },
+    "ActorKindSource": {
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "ApplyTargetPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "rowBoundaries": {
+          "$ref": "#/$defs/RowBoundaries",
+          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
+        }
+      },
+      "required": [
+        "entity",
+        "rowBoundaries"
+      ],
       "type": "object"
     },
     "AttachmentSlotSource": {
@@ -1242,6 +1434,45 @@
       ],
       "type": "string"
     },
+    "CompiledTaskGrantPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "collection": {
+          "type": "string"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "collection",
+        "operations"
+      ],
+      "type": "object"
+    },
+    "CompiledTaskGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "permissions": {
+          "items": {
+            "$ref": "#/$defs/CompiledTaskGrantPermissionSource"
+          },
+          "type": "array"
+        },
+        "sourceIssuer": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceIssuer",
+        "permissions"
+      ],
+      "type": "object"
+    },
     "ConsentDecisionSource": {
       "additionalProperties": false,
       "description": "Maps the adopter's decision codes onto the engine's decision sets.",
@@ -1327,6 +1558,25 @@
         "scope",
         "decision",
         "validity"
+      ],
+      "type": "object"
+    },
+    "ConsentRequirementSource": {
+      "additionalProperties": false,
+      "description": "A consent check ANDed into one read permission.",
+      "properties": {
+        "on": {
+          "description": "The permission entity's field the consent subject references; `id` is\nthe row's own identity.",
+          "type": "string"
+        },
+        "record": {
+          "description": "The consent-record entity checked.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "record",
+        "on"
       ],
       "type": "object"
     },
@@ -1973,6 +2223,14 @@
     "EntityExtensionSource": {
       "additionalProperties": false,
       "properties": {
+        "accessProfiles": {
+          "default": [],
+          "description": "Module profile contributions, read through the sentinels a project profile uses.",
+          "items": {
+            "$ref": "#/$defs/AccessProfileSource"
+          },
+          "type": "array"
+        },
         "accessRequirements": {
           "$ref": "#/$defs/AccessRequirementsSource",
           "description": "Add mandatory requirements only when the entity has none; replacing them is refused."
@@ -2047,6 +2305,14 @@
         "accessLog": {
           "$ref": "#/$defs/AccessLogSource",
           "description": "Subject-facing record access history, separate from the operational audit."
+        },
+        "accessProfiles": {
+          "default": [],
+          "description": "Module profile contributions, read through the sentinels a project profile uses.",
+          "items": {
+            "$ref": "#/$defs/AccessProfileSource"
+          },
+          "type": "array"
         },
         "accessRequirements": {
           "$ref": "#/$defs/AccessRequirementsSource",
@@ -2502,6 +2768,65 @@
       ],
       "type": "object"
     },
+    "LookupPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "claimMapping": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "selector": {
+          "type": "string"
+        },
+        "valueOrigin": {
+          "$ref": "#/$defs/LookupValueOrigin"
+        }
+      },
+      "required": [
+        "selector",
+        "valueOrigin"
+      ],
+      "type": "object"
+    },
+    "LookupValueOrigin": {
+      "enum": [
+        "request",
+        "verified_claim"
+      ],
+      "type": "string"
+    },
+    "MembershipBoundarySource": {
+      "additionalProperties": false,
+      "description": "A one-hop current membership requirement, combined with every other row boundary.\nThe root field and membership key must reference the same entity. The active\nfield is Boolean, and principalField matches the profile's verified principal.",
+      "properties": {
+        "activeField": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "membershipEntity": {
+          "type": "string"
+        },
+        "membershipKeyField": {
+          "type": "string"
+        },
+        "principalField": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "membershipEntity",
+        "membershipKeyField",
+        "principalField",
+        "activeField"
+      ],
+      "type": "object"
+    },
     "MutationMode": {
       "enum": [
         "mutable",
@@ -2555,6 +2880,55 @@
           "type": "string"
         }
       ]
+    },
+    "ProvenanceFieldSource": {
+      "enum": [
+        "kind",
+        "reasonCode",
+        "reasonText",
+        "sourceReferences"
+      ],
+      "type": "string"
+    },
+    "ReadPathPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "allowCount": {
+          "default": false,
+          "type": "boolean"
+        },
+        "filterableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "path": {
+          "type": "string"
+        },
+        "readableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sortableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
     },
     "ReadPathSource": {
       "additionalProperties": false,
@@ -2630,6 +3004,74 @@
       ],
       "type": "object"
     },
+    "RequestMetadataFieldSource": {
+      "description": "Fields of request decision metadata governed separately from stored record fields.",
+      "enum": [
+        "actor_reference",
+        "reason",
+        "review_state"
+      ],
+      "type": "string"
+    },
+    "RequestPresencePermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "requestType": {
+          "type": "string"
+        },
+        "rowBoundaries": {
+          "$ref": "#/$defs/RowBoundaries",
+          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
+        }
+      },
+      "required": [
+        "requestType",
+        "rowBoundaries"
+      ],
+      "type": "object"
+    },
+    "RequestVisibilitySource": {
+      "const": "owner",
+      "description": "Expose only requests created by the current authenticated principal.",
+      "type": "string"
+    },
+    "RequiredScopes": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Require no scope.",
+          "type": "string"
+        },
+        {
+          "description": "Require every listed scope.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ],
+      "description": "The scopes a token must carry to select a profile: the keyword\n`unrestricted`, or a list of at least one scope."
+    },
+    "RowBoundaries": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Reach every row.",
+          "type": "string"
+        },
+        {
+          "description": "Reach the rows every listed boundary binds to the caller's claims.",
+          "items": {
+            "$ref": "#/$defs/RowBoundarySource"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ],
+      "description": "The rows a permission reaches: the keyword `unrestricted`, or a list of at\nleast one row boundary."
+    },
     "RowBoundarySource": {
       "additionalProperties": false,
       "properties": {
@@ -2667,6 +3109,31 @@
         "id",
         "fields"
       ],
+      "type": "object"
+    },
+    "SpatialBboxPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumLatitudeSpanDegrees": {
+          "type": "number"
+        },
+        "maximumLongitudeSpanDegrees": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "maximumLongitudeSpanDegrees",
+        "maximumLatitudeSpanDegrees"
+      ],
+      "type": "object"
+    },
+    "SpatialQueryPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "$ref": "#/$defs/SpatialBboxPermissionSource"
+        }
+      },
       "type": "object"
     },
     "StringFieldKindSchema": {

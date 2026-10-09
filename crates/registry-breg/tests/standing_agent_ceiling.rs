@@ -301,7 +301,8 @@ fn module_contributed_standing_agent_profiles_meet_the_same_ceiling() {
                         "id": "module-assistant", "principalClaim": "registry_principal",
                         "actorKind": "agent", "requesterClients": ["assistant-client"],
                         "operations": ["get", operation],
-                        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": []
+                        "readableFields": ["label"], "writableFields": ["label"],
+                        "requiredScopes": "unrestricted", "rowBoundaries": "unrestricted"
                     }]
                 }]
             }))
@@ -408,7 +409,8 @@ fn module_contributed_profiles_cannot_declare_a_task_grant() {
         "actorKind": "agent", "requesterClients": ["assistant-client"],
         "taskGrant": {"sourceIssuer": "http://not-https.example", "permissions": []},
         "operations": ["get", "list", "patch"],
-        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": []
+        "readableFields": ["label"], "writableFields": ["label"],
+                        "requiredScopes": "unrestricted", "rowBoundaries": "unrestricted"
     });
     for module in [
         json!({

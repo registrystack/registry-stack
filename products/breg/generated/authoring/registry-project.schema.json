@@ -92,6 +92,173 @@
         }
       ]
     },
+    "AccessProfileSource": {
+      "additionalProperties": false,
+      "properties": {
+        "actorKind": {
+          "$ref": "#/$defs/ActorKindSource"
+        },
+        "allowCount": {
+          "type": "boolean"
+        },
+        "allowDataExport": {
+          "default": false,
+          "type": "boolean"
+        },
+        "applyTargets": {
+          "items": {
+            "$ref": "#/$defs/ApplyTargetPermissionSource"
+          },
+          "type": "array"
+        },
+        "default": {
+          "default": false,
+          "type": "boolean"
+        },
+        "filterableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "type": "string"
+        },
+        "lookups": {
+          "items": {
+            "$ref": "#/$defs/LookupPermissionSource"
+          },
+          "type": "array"
+        },
+        "membershipBoundaries": {
+          "items": {
+            "$ref": "#/$defs/MembershipBoundarySource"
+          },
+          "type": "array"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "principalClaim": {
+          "type": "string"
+        },
+        "provenanceFields": {
+          "items": {
+            "$ref": "#/$defs/ProvenanceFieldSource"
+          },
+          "type": "array"
+        },
+        "readPaths": {
+          "items": {
+            "$ref": "#/$defs/ReadPathPermissionSource"
+          },
+          "type": "array"
+        },
+        "readableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "readableRequestFields": {
+          "description": "Readable change-request decision detail.",
+          "items": {
+            "$ref": "#/$defs/RequestMetadataFieldSource"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requestPresence": {
+          "items": {
+            "$ref": "#/$defs/RequestPresencePermissionSource"
+          },
+          "type": "array"
+        },
+        "requestVisibility": {
+          "$ref": "#/$defs/RequestVisibilitySource"
+        },
+        "requesterClients": {
+          "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requireConsent": {
+          "items": {
+            "$ref": "#/$defs/ConsentRequirementSource"
+          },
+          "type": "array"
+        },
+        "requiredPurposes": {
+          "description": "The verified token's purpose must match one listed value. Omit to accept every purpose.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requiredScopes": {
+          "$ref": "#/$defs/RequiredScopes",
+          "description": "The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present."
+        },
+        "revisionAccess": {
+          "default": false,
+          "type": "boolean"
+        },
+        "rowBoundaries": {
+          "$ref": "#/$defs/RowBoundaries",
+          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
+        },
+        "sortableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "spatialQueries": {
+          "$ref": "#/$defs/SpatialQueryPermissionSource"
+        },
+        "submitterTargets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "taskGrant": {
+          "$ref": "#/$defs/CompiledTaskGrantSource"
+        },
+        "writableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "requiredScopes",
+        "operations",
+        "rowBoundaries"
+      ],
+      "type": "object"
+    },
     "AccessRequirementsSource": {
       "additionalProperties": false,
       "description": "Compile-time requirements, not grants. Profiles must explicitly satisfy them.",
@@ -1332,6 +1499,45 @@
       ],
       "type": "string"
     },
+    "CompiledTaskGrantPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "collection": {
+          "type": "string"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "collection",
+        "operations"
+      ],
+      "type": "object"
+    },
+    "CompiledTaskGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "permissions": {
+          "items": {
+            "$ref": "#/$defs/CompiledTaskGrantPermissionSource"
+          },
+          "type": "array"
+        },
+        "sourceIssuer": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceIssuer",
+        "permissions"
+      ],
+      "type": "object"
+    },
     "ConsentDecisionSource": {
       "additionalProperties": false,
       "description": "Maps the adopter's decision codes onto the engine's decision sets.",
@@ -2266,6 +2472,14 @@
         "accessLog": {
           "$ref": "#/$defs/AccessLogSource",
           "description": "Subject-facing record access history, separate from the operational audit."
+        },
+        "accessProfiles": {
+          "default": [],
+          "description": "Module profile contributions, read through the sentinels a project profile uses.",
+          "items": {
+            "$ref": "#/$defs/AccessProfileSource"
+          },
+          "type": "array"
         },
         "accessRequirements": {
           "$ref": "#/$defs/AccessRequirementsSource",
@@ -3409,6 +3623,15 @@
         "requiredScopes"
       ],
       "type": "object"
+    },
+    "ProvenanceFieldSource": {
+      "enum": [
+        "kind",
+        "reasonCode",
+        "reasonText",
+        "sourceReferences"
+      ],
+      "type": "string"
     },
     "ReadPathPermissionSource": {
       "additionalProperties": false,

@@ -269,6 +269,7 @@ pub fn compile_project_with_assets(
     );
     validate_project_entity_access_profiles(project, &mut diagnostics);
     validate_module_access_profile_task_grants(&sources, &mut diagnostics);
+    let module_profiles = crate::access::module_profile_keys(&sources);
     expand_project_access(project, &mut sources, &mut diagnostics);
     let vocabularies =
         resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
@@ -278,6 +279,10 @@ pub fn compile_project_with_assets(
     crate::consent::validate(project, &sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
     findings.extend(crate::access::project_access_findings(project, &sources));
+    findings.extend(crate::access::module_access_findings(
+        &sources,
+        &module_profiles,
+    ));
     findings.extend(create_required_field_findings(&sources));
     validate_derived_assets(&sources, &origins.derived, assets, &mut diagnostics);
     validate_hook_assets(&sources, &origins.hooks, assets, &mut diagnostics);

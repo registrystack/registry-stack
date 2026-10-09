@@ -1716,6 +1716,9 @@ member when the file is read. The diagnostic names the fix.
 | `registry.yaml` | `/accessProfiles/*/permissions/*/targets/*/rowBoundaries` on an action permission | `unrestricted`, or a list of at least one row boundary | omitted, `[]` |
 | `registry.yaml`, `module.yaml` | `/entities/*/accessRequirements/requiredScopes`, `allowedPurposes`, `rowBoundaries` | omitted, or a list of at least one item | `[]`, `unrestricted` |
 | `module.yaml` | `/extendEntities/*/accessRequirements/requiredScopes`, `allowedPurposes`, `rowBoundaries` | omitted, or a list of at least one item | `[]`, `unrestricted` |
+| `module.yaml` | `/entities/*/accessProfiles/*/requiredScopes` and `/extendEntities/*/accessProfiles/*/requiredScopes` | `unrestricted`, or a list of at least one scope | omitted (`config.missing-key`), `[]` |
+| `module.yaml` | `/entities/*/accessProfiles/*/requiredPurposes`, `requesterClients` and the same under `/extendEntities/*` | omitted, or a list of at least one item | `[]`, `unrestricted` |
+| `module.yaml` | `/entities/*/accessProfiles/*/rowBoundaries`, `applyTargets/*/rowBoundaries`, `requestPresence/*/rowBoundaries` and the same under `/extendEntities/*` | `unrestricted`, or a list of at least one row boundary | omitted, `[]` |
 
 `requiredScopes` on a profile is now required, so a profile states whether
 it demands a scope. `requiredPurposes` and `requesterClients` stay optional
@@ -1747,8 +1750,19 @@ that declares `accessRequirements` without all three members gets a new
 digest: run `bregctl project lock` in each project that locks it.
 
 Module entity profiles under `/entities/*/accessProfiles` and
-`/extendEntities/*/accessProfiles` in `module.yaml` are unchanged: they
-still write `rowBoundaries: []` for every row and may omit `requiredScopes`.
+`/extendEntities/*/accessProfiles` in `module.yaml` follow the same rules as
+a project profile, and the published module schema states them.
+`requiredScopes` is required and takes `unrestricted` or a list of at least
+one scope. `rowBoundaries`, and the row reach of `applyTargets` and
+`requestPresence`, take `unrestricted` or a list of at least one boundary.
+`requiredPurposes` and `requesterClients` are omitted when they narrow
+nothing. A module profile written `[]` or without `requiredScopes` was
+accepted and granted every row or every scope; it is now refused, and the
+two project findings above (`breg.access.profile-subsumes-narrower` and
+`breg.access.wildcard-spelled-item`) also report a module-contributed
+profile, at `entities[id=...].accessProfiles[id=...]`. A module's digest is
+taken over the module as `bregctl` writes it, so a module that contributes a
+profile gets a new digest.
 
 `bregctl init`, `bregctl init --from publicschema`, the consent module, and
 the source `bregctl dev` prepares write the new spelling. `caseworkctl
@@ -1766,7 +1780,12 @@ To migrate a registry project:
    permissions, action `targets`, `applyTargets`, and `requestPresence`.
 4. Under `accessRequirements`, in `registry.yaml` and in every module,
    delete each member written as `[]`, then run `bregctl project lock`.
-5. Run `bregctl check`. Review each `breg.access.profile-subsumes-narrower`
+5. In every `module.yaml` that writes `accessProfiles` on an entity or an
+   extension, apply steps 1 to 3 to those profiles: add `requiredScopes:
+   unrestricted` (or name the scopes) where it is missing, and replace
+   `rowBoundaries: []` with `rowBoundaries: unrestricted`. Then run
+   `bregctl project lock` in each project that locks the module.
+6. Run `bregctl check`. Review each `breg.access.profile-subsumes-narrower`
    finding: give the unrestricted profile a scope, or accept that its grants
    are reachable by every caller of the narrower profile.
 

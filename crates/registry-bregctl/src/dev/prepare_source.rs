@@ -980,11 +980,6 @@ mod tests {
                 .unwrap();
             let mut permission = permissions.as_array_mut().unwrap().remove(0);
             permission.as_object_mut().unwrap().remove("entity");
-            // A module entity profile takes the compiled row reach, where an
-            // empty list reaches every row.
-            if permission["rowBoundaries"] == json!("unrestricted") {
-                permission["rowBoundaries"] = json!([]);
-            }
             operator
                 .as_object_mut()
                 .unwrap()

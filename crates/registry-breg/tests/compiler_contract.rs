@@ -2776,7 +2776,8 @@ fn root_project_entity_access_profiles_are_compile_time_errors() {
               "principalClaim":"sub",
               "operations":["get"],
               "readableFields":["case-code"],
-              "rowBoundaries": []
+              "requiredScopes":"unrestricted",
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
@@ -2820,7 +2821,8 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
               "principalClaim":"sub",
               "operations":["get"],
               "readableFields":["case-code"],
-              "rowBoundaries": []
+              "requiredScopes":"unrestricted",
+              "rowBoundaries": "unrestricted"
             }]
           }],
           "extendEntities":[{
@@ -2830,7 +2832,8 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
               "principalClaim":"sub",
               "operations":["get"],
               "readableFields":["case-code"],
-              "rowBoundaries": []
+              "requiredScopes":"unrestricted",
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
@@ -7296,10 +7299,10 @@ fn verified_module_digest_changes_compiled_closure_artifact_and_revision() {
       "id":"core","version":"1","entities":[
         {"id":"alpha-record","primaryDataset":"neutral","route":"alpha-records","mutationMode":"create_only","fields":[
           {"id":"code","type":"string","maxLength":8,"classification":"internal"}
-        ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "rowBoundaries": []}]},
+        ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]},
         {"id":"beta-record","primaryDataset":"neutral","route":"beta-records","mutationMode":"create_only","fields":[
           {"id":"code","type":"string","maxLength":8,"classification":"internal"}
-        ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "rowBoundaries": []}]}
+        ],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}
       ]
     }"#;
     let first_module = parse_module_json(module_source).expect("module parses");

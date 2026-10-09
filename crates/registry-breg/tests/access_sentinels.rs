@@ -472,3 +472,229 @@ fn an_item_spelled_like_a_wildcard_is_reported_as_one_name() {
         .required_scopes
         .contains("*"));
 }
+
+fn module_profile() -> Value {
+    json!({"id":"mod","principalClaim":"registry_principal","requiredScopes":["entry:read"],
+        "operations":["get","list"],"readableFields":["code"],"rowBoundaries":[boundary()]})
+}
+
+/// A module that contributes `profile` to `entry` by extension.
+fn extension_module(profile: Value) -> Value {
+    json!({"id":"extra","version":"1","extendEntities":[{"entity":"entry","accessProfiles":[profile]}]})
+}
+
+/// A module that introduces an entity carrying `profile`.
+fn entity_module(profile: Value) -> Value {
+    json!({"id":"extra","version":"1","entities":[{
+        "id":"other","primaryDataset":"test-dataset","route":"others","mutationMode":"mutable",
+        "classification":"internal",
+        "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],
+        "accessProfiles":[profile]}]})
+}
+
+fn read_module(module: &Value) -> Result<registry_breg::contract::RegistryModule, CompileFailure> {
+    parse_module_yaml(&serde_json::to_vec(module).unwrap())
+}
+
+fn module_refusal(module: &Value) -> (String, String, String) {
+    let failure = read_module(module).expect_err("the module is refused when it is read");
+    let [diagnostic] = failure.diagnostics() else {
+        panic!("one diagnostic refuses the module: {failure:?}");
+    };
+    (
+        diagnostic.code.clone(),
+        diagnostic.path.clone(),
+        diagnostic.message.clone(),
+    )
+}
+
+fn compile_with_module(module: &Value) -> Result<CompiledRegistry, CompileFailure> {
+    let module = read_module(module)?;
+    compile_project(&read(&source())?, &[module], CompileProfile::Authoring)
+}
+
+/// Both places a module writes an entity profile, with the path that
+/// prefixes its members.
+type ModuleSite = (fn(Value) -> Value, &'static str);
+
+fn module_sites() -> [ModuleSite; 2] {
+    [
+        (
+            extension_module,
+            "module.extendEntities[0].accessProfiles[0]",
+        ),
+        (entity_module, "module.entities[0].accessProfiles[0]"),
+    ]
+}
+
+#[test]
+fn a_module_profile_writes_required_scopes_as_unrestricted_or_a_nonempty_list() {
+    for (wrap, prefix) in module_sites() {
+        let mut omitted = module_profile();
+        omitted.as_object_mut().unwrap().remove("requiredScopes");
+        let (code, path, message) = module_refusal(&wrap(omitted));
+        assert_eq!(code, "config.missing-key", "{message}");
+        assert!(path.starts_with(prefix), "{path}");
+
+        for written in [json!([]), json!("everything")] {
+            let mut profile = module_profile();
+            profile["requiredScopes"] = written;
+            let (code, path, message) = module_refusal(&wrap(profile));
+            assert_eq!(code, "config.invalid-value", "{message}");
+            assert_eq!(path, format!("{prefix}.requiredScopes"));
+            assert!(
+                message.contains("write unrestricted to require none"),
+                "the refusal names the sentinel: {message}"
+            );
+        }
+
+        let mut open = module_profile();
+        open["requiredScopes"] = json!("unrestricted");
+        read_module(&wrap(open)).expect("unrestricted is accepted");
+        read_module(&wrap(module_profile())).expect("a list of scopes is accepted");
+    }
+}
+
+/// An entity serializes its absent optional blocks as null, which the
+/// reader refuses; the profile members are what these tests read back.
+fn without_nulls(value: Value) -> Value {
+    match value {
+        Value::Object(members) => Value::Object(
+            members
+                .into_iter()
+                .filter(|(_, member)| !member.is_null())
+                .map(|(key, member)| (key, without_nulls(member)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(without_nulls).collect()),
+        other => other,
+    }
+}
+
+#[test]
+fn a_module_profile_writes_row_reach_as_unrestricted_or_a_nonempty_list() {
+    for (wrap, prefix) in module_sites() {
+        let mut omitted = module_profile();
+        omitted.as_object_mut().unwrap().remove("rowBoundaries");
+        let (code, path, message) = module_refusal(&wrap(omitted));
+        assert_eq!(code, "config.missing-key", "{message}");
+        assert!(path.starts_with(prefix), "{path}");
+
+        let sites = [
+            ("rowBoundaries", json!([])),
+            (
+                "applyTargets",
+                json!([{"entity":"entry","rowBoundaries":[]}]),
+            ),
+            (
+                "requestPresence",
+                json!([{"requestType":"entry-change","rowBoundaries":[]}]),
+            ),
+        ];
+        for (member, written) in sites {
+            let mut profile = module_profile();
+            profile[member] = written;
+            let (code, path, message) = module_refusal(&wrap(profile));
+            assert_eq!(code, "config.invalid-value", "{message}");
+            assert!(path.starts_with(&format!("{prefix}.{member}")), "{path}");
+            assert!(
+                message.contains("write unrestricted to reach every row"),
+                "the refusal names the sentinel: {message}"
+            );
+        }
+
+        let mut open = module_profile();
+        open["rowBoundaries"] = json!("unrestricted");
+        open["applyTargets"] = json!([{"entity":"entry","rowBoundaries":"unrestricted"}]);
+        let module = read_module(&wrap(open)).expect("unrestricted is accepted");
+        let written = serde_json::to_value(&module).unwrap();
+        let profile = written
+            .pointer(&format!(
+                "/{}",
+                prefix
+                    .trim_start_matches("module.")
+                    .replace("[0]", "/0")
+                    .replace('.', "/")
+            ))
+            .unwrap_or_else(|| panic!("{written}"));
+        assert_eq!(profile["rowBoundaries"], "unrestricted");
+        assert_eq!(profile["requiredScopes"][0], "entry:read");
+        let read_back =
+            read_module(&without_nulls(written)).expect("the serialized module is read back");
+        assert_eq!(read_back, module);
+    }
+}
+
+#[test]
+fn a_module_profile_narrowing_members_are_omitted_not_written_empty() {
+    for (wrap, prefix) in module_sites() {
+        for member in ["requiredPurposes", "requesterClients"] {
+            let mut profile = module_profile();
+            profile[member] = json!([]);
+            let (code, path, message) = module_refusal(&wrap(profile));
+            assert_eq!(code, "config.invalid-value", "{message}");
+            assert_eq!(path, format!("{prefix}.{member}"));
+            assert!(message.contains(&format!("Omit {member}")), "{message}");
+        }
+    }
+}
+
+#[test]
+fn a_module_profile_is_reported_by_the_project_profile_findings() {
+    // An unrestricted module profile beside a narrower one.
+    let mut open = module_profile();
+    open["id"] = json!("open");
+    open["requiredScopes"] = json!("unrestricted");
+    let module = json!({"id":"extra","version":"1","extendEntities":[{
+        "entity":"entry","accessProfiles":[module_profile(), open]}]});
+    let compiled = compile_with_module(&module).expect("the module compiles");
+    assert_eq!(
+        finding_paths(&compiled, "breg.access.profile-subsumes-narrower"),
+        vec!["entities[id=entry].accessProfiles[id=open].requiredScopes"]
+    );
+    let finding = compiled
+        .findings()
+        .iter()
+        .find(|finding| finding.code == "breg.access.profile-subsumes-narrower")
+        .unwrap();
+    assert!(finding.message.contains("`mod`"), "{}", finding.message);
+    assert!(compiled.entities()["entry"].access_profiles["open"]
+        .required_scopes
+        .is_empty());
+
+    // An unrestricted module profile beside the project's narrower one.
+    let mut alone = module_profile();
+    alone["id"] = json!("open");
+    alone["requiredScopes"] = json!("unrestricted");
+    let compiled = compile_with_module(&extension_module(alone)).unwrap();
+    assert_eq!(
+        finding_paths(&compiled, "breg.access.profile-subsumes-narrower"),
+        vec!["entities[id=entry].accessProfiles[id=open].requiredScopes"]
+    );
+
+    // Unrestricted rows are reported at the module profile.
+    let mut rows = module_profile();
+    rows["operations"] = json!(["get"]);
+    rows["rowBoundaries"] = json!("unrestricted");
+    let compiled = compile_with_module(&extension_module(rows)).unwrap();
+    assert_eq!(
+        finding_paths(&compiled, "breg.access.profile-unrestricted-rows"),
+        vec!["entities[id=entry].accessProfiles[id=mod].rowBoundaries"]
+    );
+
+    // Items spelled like a wildcard are names.
+    let mut spelled = module_profile();
+    spelled["requiredScopes"] = json!(["*"]);
+    spelled["requiredPurposes"] = json!(["unrestricted"]);
+    spelled["actorKind"] = json!("service");
+    spelled["requesterClients"] = json!(["*", "portal"]);
+    let compiled = compile_with_module(&extension_module(spelled)).unwrap();
+    assert_eq!(
+        finding_paths(&compiled, "breg.access.wildcard-spelled-item"),
+        vec![
+            "entities[id=entry].accessProfiles[id=mod].requesterClients",
+            "entities[id=entry].accessProfiles[id=mod].requiredPurposes",
+            "entities[id=entry].accessProfiles[id=mod].requiredScopes",
+        ]
+    );
+}

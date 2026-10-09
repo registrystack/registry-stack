@@ -305,7 +305,9 @@ pub(crate) fn project_access_findings(
             let narrower = project
                 .access_profiles
                 .iter()
-                .filter(|other| other.id != profile.id && admits_every_token_of(profile, other))
+                .filter(|other| {
+                    other.id != profile.id && admits_every_token_of(profile.into(), (*other).into())
+                })
                 .map(|other| format!("`{}`", other.id))
                 .collect::<Vec<_>>();
             if !narrower.is_empty() {
@@ -336,15 +338,103 @@ pub(crate) fn project_access_findings(
     findings
 }
 
+/// The entity and identifier of every profile a module contributed, read
+/// before the project's profiles are copied onto the entities.
+pub(crate) fn module_profile_keys(
+    entities: &BTreeMap<String, EntitySource>,
+) -> BTreeSet<(String, String)> {
+    entities
+        .values()
+        .flat_map(|entity| {
+            entity
+                .access_profiles
+                .iter()
+                .map(|profile| (entity.id.clone(), profile.id.clone()))
+        })
+        .collect()
+}
+
+/// The project-profile findings, for the profiles a module contributed.
+/// A module profile is compared with every other profile on its entity,
+/// whether the module or the project wrote it.
+pub(crate) fn module_access_findings(
+    entities: &BTreeMap<String, EntitySource>,
+    module_profiles: &BTreeSet<(String, String)>,
+) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    for entity in entities.values() {
+        for profile in &entity.access_profiles {
+            if !module_profiles.contains(&(entity.id.clone(), profile.id.clone())) {
+                continue;
+            }
+            let path = profile_path(&entity.id, &profile.id);
+            if profile.required_scopes.is_empty() {
+                let narrower = entity
+                    .access_profiles
+                    .iter()
+                    .filter(|other| {
+                        other.id != profile.id
+                            && admits_every_token_of(profile.into(), (*other).into())
+                    })
+                    .map(|other| format!("`{}`", other.id))
+                    .collect::<Vec<_>>();
+                if !narrower.is_empty() {
+                    findings.push(Diagnostic::finding("breg.access.profile-subsumes-narrower", format!("{path}.requiredScopes"), &format!(
+                        "this profile requires no scope and admits every token admitted by {}, so a caller admitted there also reaches what this profile grants by selecting it. Review what this profile grants, or require a scope here",
+                        narrower.join(", "))));
+                }
+            }
+            for (member, items) in [
+                ("requiredScopes", &profile.required_scopes),
+                ("requiredPurposes", &profile.required_purposes),
+                ("requesterClients", &profile.requester_clients),
+            ] {
+                wildcard_spelled_finding(items, format!("{path}.{member}"), &mut findings);
+            }
+        }
+    }
+    findings
+}
+
+/// The members of a profile that decide which tokens may select it.
+struct TokenGates<'a> {
+    actor_kind: Option<ActorKindSource>,
+    principal_claim: Option<&'a str>,
+    required_purposes: &'a BTreeSet<String>,
+    requester_clients: &'a BTreeSet<String>,
+    task_grant: bool,
+}
+
+impl<'a> From<&'a ProjectAccessProfileSource> for TokenGates<'a> {
+    fn from(profile: &'a ProjectAccessProfileSource) -> Self {
+        Self {
+            actor_kind: profile.actor_kind,
+            principal_claim: profile.principal_claim.as_deref(),
+            required_purposes: &profile.required_purposes,
+            requester_clients: &profile.requester_clients,
+            task_grant: profile.task_grant.is_some(),
+        }
+    }
+}
+
+impl<'a> From<&'a AccessProfileSource> for TokenGates<'a> {
+    fn from(profile: &'a AccessProfileSource) -> Self {
+        Self {
+            actor_kind: profile.actor_kind,
+            principal_claim: profile.principal_claim.as_deref(),
+            required_purposes: &profile.required_purposes,
+            requester_clients: &profile.requester_clients,
+            task_grant: profile.task_grant.is_some(),
+        }
+    }
+}
+
 /// Whether `open`, a profile that requires no scope, admits every token
 /// `narrower` admits, whatever scopes `narrower` requires. It mirrors the
 /// request-time profile gates: a member `open` leaves out admits everything,
 /// a member it writes must cover what `narrower` writes, and a profile bound
 /// to a task grant admits no token another profile admits.
-fn admits_every_token_of(
-    open: &ProjectAccessProfileSource,
-    narrower: &ProjectAccessProfileSource,
-) -> bool {
+fn admits_every_token_of(open: TokenGates<'_>, narrower: TokenGates<'_>) -> bool {
     let covers = |open: &BTreeSet<String>, narrower: &BTreeSet<String>| {
         open.is_empty() || (!narrower.is_empty() && narrower.is_subset(open))
     };
@@ -353,11 +443,11 @@ fn admits_every_token_of(
     let same_actors = open.actor_kind == narrower.actor_kind
         || (open.actor_kind.is_none() && narrower.actor_kind != Some(ActorKindSource::Agent));
     open.principal_claim == narrower.principal_claim
-        && covers(&open.required_purposes, &narrower.required_purposes)
-        && covers(&open.requester_clients, &narrower.requester_clients)
+        && covers(open.required_purposes, narrower.required_purposes)
+        && covers(open.requester_clients, narrower.requester_clients)
         && same_actors
-        && open.task_grant.is_none()
-        && narrower.task_grant.is_none()
+        && !open.task_grant
+        && !narrower.task_grant
 }
 
 /// An allow-list item spelled like a wildcard is one name. Nothing here

@@ -610,10 +610,16 @@ pub struct EntitySource {
     pub constraints: Vec<ConstraintSource>,
     #[serde(default)]
     pub indexes: Vec<IndexSource>,
-    /// Internal/module profile contributions. Public project authoring should use
-    /// top-level `accessProfiles`.
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(skip))]
+    /// Module profile contributions, read through the sentinels a project profile uses.
+    #[serde(
+        default,
+        deserialize_with = "sentinel::module_access_profiles",
+        serialize_with = "sentinel::serialize_module_access_profiles"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Vec<sentinel::AuthoredModuleProfile>")
+    )]
     pub access_profiles: Vec<AccessProfileSource>,
     #[serde(default)]
     pub hooks: Vec<HookSource>,
@@ -844,10 +850,16 @@ pub struct EntityExtensionSource {
     pub constraints: Vec<ConstraintSource>,
     #[serde(default)]
     pub indexes: Vec<IndexSource>,
-    /// Internal/module profile contributions. Public project authoring should use
-    /// top-level `accessProfiles`.
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(skip))]
+    /// Module profile contributions, read through the sentinels a project profile uses.
+    #[serde(
+        default,
+        deserialize_with = "sentinel::module_access_profiles",
+        serialize_with = "sentinel::serialize_module_access_profiles"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Vec<sentinel::AuthoredModuleProfile>")
+    )]
     pub access_profiles: Vec<AccessProfileSource>,
     #[serde(default)]
     pub hooks: Vec<HookSource>,

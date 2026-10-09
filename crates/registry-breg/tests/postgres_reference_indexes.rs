@@ -505,7 +505,7 @@ const MODULE: &[u8] = br#"{"id":"core","version":"1","entities":[
              {"id":"owner","type":"reference","target":"site","classification":"internal"},
              {"id":"code","type":"string","maxLength":16,"required":true,"classification":"internal"}],
    "indexes":[{"id":"by-owner","fields":["owner","code"]}],
-   "accessProfiles":[{"rowBoundaries":[],"id":"reader","principalClaim":"principal","operations":["get","list"],
+   "accessProfiles":[{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"reader","principalClaim":"principal","operations":["get","list"],
      "readableFields":["site","owner","code"],"filterableFields":["site"]}]}]}"#;
 
 fn project_bytes(digest: &str) -> Vec<u8> {

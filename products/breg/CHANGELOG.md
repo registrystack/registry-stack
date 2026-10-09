@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- BREAKING: the access profiles a module writes on an entity
+  (`module.yaml` `/entities/*/accessProfiles` and
+  `/extendEntities/*/accessProfiles`) are read with the same rules as a
+  project profile: `requiredScopes` is required (`unrestricted` or a list of
+  at least one scope), `rowBoundaries`, `applyTargets`, and `requestPresence`
+  take `unrestricted` or a non-empty list, and `[]` is refused. The published
+  module schema states the member, and the project access findings
+  `breg.access.profile-subsumes-narrower` and
+  `breg.access.wildcard-spelled-item` also report a module profile. Migration
+  steps are in `release/notes/config-conventions/breg.md`.
 - BREAKING: an action permission in an access profile no longer accepts
   `rowBoundaries` (an action has no rows; the row reach of its targets is
   written on each target), and a statistical dataset permission must name its
