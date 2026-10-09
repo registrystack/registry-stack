@@ -777,7 +777,9 @@ type.
 **CFG-SCHEMA-6 (MUST). Every authored and operator format is mapped for
 editors** by
 `editors/configure.py`, per project directory; where file names collide
-across products, the modeline (CFG-SCHEMA-7) selects the schema.
+across products, the modeline (CFG-SCHEMA-7) selects the schema. A format
+whose files are JSON is mapped through a `json.schemas` entry, written for a
+pattern that ends in `.json`.
 
 **CFG-SCHEMA-7 (MUST). A tool that creates a YAML file writes the
 `# yaml-language-server: $schema=<$id>` modeline on its first line.** The
