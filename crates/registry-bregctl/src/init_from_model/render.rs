@@ -434,7 +434,10 @@ fn registry(plan: &Plan) -> String {
          the profile `bregctl dev` and the journeys use first. `check` reports \
          `breg.access.profile-unrestricted-collection` for it: it can list every record, and a \
          caller-supplied filter is not authorization. That is intended for a single \
-         operations team; close it with a `rowBoundaries` entry or by removing `list`.",
+         operations team; close it with a `rowBoundaries` entry or by removing `list`. \
+         `breg.access.profile-writable-row-boundary` follows for a bound field it can write: \
+         confirm that moving records between callers' rows is intended, or drop the field \
+         from `writableFields`.",
     );
     if let Some(note) = sensitive_note(plan) {
         yaml.comment(0, &note);

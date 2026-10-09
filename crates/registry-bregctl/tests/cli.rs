@@ -1057,6 +1057,7 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     assert!(registry.contains("hook declares `phase: after`"));
     assert!(registry.contains("{kind: url, destinationId: registry-events}"));
     assert!(!registry.contains("declare `events`"));
+    assert!(registry.contains("`breg.access.profile-writable-row-boundary` follows"));
     let journeys = fs::read_to_string(destination.join("tests/journeys.yaml"))
         .expect("initialized fixture journeys read");
     assert!(journeys.contains("entity: record"));
@@ -2118,6 +2119,7 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
 
     let registry =
         fs::read_to_string(destination.join("registry.yaml")).expect("derived project reads");
+    assert!(registry.contains("`breg.access.profile-writable-row-boundary` follows"));
     assert!(registry.contains("id: household-registry"));
     assert!(registry.contains("conceptUri: https://publicschema.org/Person"));
     assert!(registry.contains("route: group-memberships"));

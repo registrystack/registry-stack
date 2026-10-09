@@ -8922,7 +8922,10 @@ accessProfiles:
   # it can list every record, and a caller-supplied filter is not authorization.
   # That is intended for a single operations team running the whole registry.
   # Close it by giving the grant a `rowBoundaries` entry, the way `record-reader`
-  # below does, or by removing `list` from its operations.
+  # below does, or by removing `list` from its operations. Once the grant is
+  # row-bound, `breg.access.profile-writable-row-boundary` follows for a bound
+  # field the grant can write; it asks you to confirm that moving records
+  # between callers' rows is intended, or to drop the field from `writableFields`.
   - id: operator
     default: true
     principalClaim: registry_principal
