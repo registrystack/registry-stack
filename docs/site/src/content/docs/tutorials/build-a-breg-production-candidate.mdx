@@ -83,7 +83,7 @@ bregctl check --production tutorial-work/candidate-project
 ```
 
 ```text
-Production check passed; registry revision sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc.
+Production check passed; registry revision sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8.
 warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:141:24 /accessProfiles/0/permissions/1/rowBoundaries
   this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
@@ -358,11 +358,11 @@ SSL_CERT_FILE="$PWD/tutorial-work/candidate/postgres/ca.pem" bregctl test tutori
 ```text
 Fixture run passed. 1 journey.
   profile              production
-  registry revision    sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
-  schema fingerprint   sha256:c479ff47b061e3c53c6f460e7a897a58e867f7c090c8fd852d8075ab93d9e8e5
+  registry revision    sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8
+  schema fingerprint   sha256:c35b248e14c5fa4b234538625fbe2caf558ff14e4ca36f4dce62af7099ab0295
   successful journeys  record-lifecycle
-  receipt sha256       2345f4e51538a3bc1acb80ebd6f015d77eac1d084e57f706a6a8510005d2435e
-  receipt bytes        746
+  receipt sha256       1dff5f948882b9ac0f497030959305c7e7f953c5073dcd5d3c0d5d8e3df8a40e
+  receipt bytes        752
 ```
 
 `SSL_CERT_FILE` points the TLS client at your certificate authority, and the URL host `localhost`
@@ -384,8 +384,8 @@ bregctl package tutorial-work/candidate-project \
 ```text
 Sealed and published a deployment package.
   profile            production
-  package digest     sha256:f06c407cbddba19a094664d880e69a8935a0d8c7ad5f73d41f15760ef10463f7
-  registry revision  sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
+  package digest     sha256:e2aaf71126ca9b59ad210a6051edae8c0862155fff78666e7080b087ffeb0919
+  registry revision  sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8
   package files      19
 ```
 
@@ -419,10 +419,10 @@ bregctl verify --runtime-config "$PWD/tutorial-work/candidate/runtime.yaml"
 ```text
 Verified the package against the runtime it is bound to.
   assurance            runtime_bound
-  package digest       sha256:f06c407cbddba19a094664d880e69a8935a0d8c7ad5f73d41f15760ef10463f7
+  package digest       sha256:e2aaf71126ca9b59ad210a6051edae8c0862155fff78666e7080b087ffeb0919
   registry id          generic-registry
   registry version     0.1.0
-  registry revision    sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
+  registry revision    sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8
   modules              1
   entities             2
   routes               8
