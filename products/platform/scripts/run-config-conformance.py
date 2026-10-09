@@ -104,14 +104,17 @@ yet converged on the conventions, each with a digest of its sorted problem
 list, the formats with a check command that are not reached, and the cases
 that apply to no format. A failing cell outside it fails the run, and so does
 a listed cell whose problems no longer match the digest, or whose problems
-include a marker leak, a signal, an exit status above 3, or a timeout: those
-are never expected failures. When a format's baseline fails, its other check
+include a marker leak, a signal, an exit status above 3, a timeout, or a
+failure of the harness itself (a program that is not in the binary directory,
+a `prepare` command that failed, a report that is not the JSON the runner
+reads): those are never expected failures. When a format's baseline fails, its other check
 cells are `blocked` (not run), so the baseline entry is the format's one
 entry. With `--strict`, an entry that no longer holds (a cell that now
 passes, a format now reached, a case that now applies) fails the run too, as
 does an unlisted unreached format or inapplicable case.
 `--write-expected-failures` rewrites the file from the current results; it
-is the only writer, and it records no cell that leaks, crashes, or times out.
+is the only writer, and it records no cell that leaks, crashes, times out, or
+that the harness could not run; it exits 1 when it leaves one out.
 
 Run through products/platform/scripts/run-config-conformance.sh, which
 provides PyYAML.
@@ -196,6 +199,21 @@ LEAK = "the output repeats the planted marker value (CFG-SEC-3)"
 UNMASKABLE = re.compile(
     r"(?:^|: )(?:killed by signal \d+|the command did not finish within \d+ seconds|exit status (\d+), expected \d+)"
 )
+# The problems of a run the harness could not carry out, as opposed to what a
+# reader did with a file: a program that was not built, a `prepare` command
+# that failed, a report that is not the JSON the runner reads.
+NOT_BUILT = "is not in the binary directory"
+PREPARING = "preparing with `"
+NO_REPORT = "the command printed no JSON report"
+NOT_ONE_DOCUMENT = "the output is not one JSON document"
+NOT_AN_OBJECT = "the report is not a JSON object"
+NO_DIAGNOSTICS = "the report has no `diagnostics` list"
+HARNESS = re.compile(
+    rf"\S+ {re.escape(NOT_BUILT)}|{re.escape(PREPARING)}.*"
+    rf"|{'|'.join(re.escape(text) for text in (NO_REPORT, NOT_ONE_DOCUMENT, NOT_AN_OBJECT, NO_DIAGNOSTICS))}",
+    re.DOTALL,
+)
+NEVER_EXPECTED = "a leak, a crash, a timeout, or a failure of the harness is never an expected failure"
 
 
 class NotApplicable(Exception):
@@ -977,16 +995,16 @@ def resolve_expected(
 def parse_report(stdout: str) -> tuple[list[Any] | None, list[str]]:
     text = stdout.strip()
     if not text:
-        return None, ["the command printed no JSON report"]
+        return None, [NO_REPORT]
     try:
         value = json.loads(text)
     except ValueError:
-        return None, ["the output is not one JSON document"]
+        return None, [NOT_ONE_DOCUMENT]
     if not isinstance(value, dict):
-        return None, ["the report is not a JSON object"]
+        return None, [NOT_AN_OBJECT]
     diagnostics = value.get("diagnostics")
     if not isinstance(diagnostics, list):
-        return None, ["the report has no `diagnostics` list"]
+        return None, [NO_DIAGNOSTICS]
     return diagnostics, []
 
 
@@ -1268,8 +1286,8 @@ def digest(problems: list[str]) -> str:
 
 
 def unmaskable(problem: str) -> bool:
-    """A leak, a crash, or a hang: never an expected failure."""
-    if problem.endswith(LEAK):
+    """A leak, a crash, a hang, or a failure of the harness: never an expected failure."""
+    if problem.endswith(LEAK) or HARNESS.fullmatch(problem):
         return True
     match = UNMASKABLE.search(problem)
     return match is not None and (match.group(1) is None or int(match.group(1)) > 3)
@@ -1278,7 +1296,7 @@ def unmaskable(problem: str) -> bool:
 def unmasked(problems: list[str], listed: Listed) -> str | None:
     """Why a listed cell's problems still fail the run, or None when the entry covers them."""
     if any(unmaskable(problem) for problem in problems):
-        return "a leak, a crash, or a timeout is never an expected failure"
+        return NEVER_EXPECTED
     if digest(problems) != listed.digest:
         return (
             f"its problems changed since expected-failures.yaml recorded digest {listed.digest};"
@@ -1592,7 +1610,7 @@ def command_argv(
             raise HarnessError(f"{fmt.id}: no value for {leftover.group(0)} in `{command}`")
     program = bin_dir / argv[0]
     if not (program.is_file() and os.access(program, os.X_OK)):
-        return None, f"{argv[0]} is not in the binary directory"
+        return None, f"{argv[0]} {NOT_BUILT}"
     return [str(program), *argv[1:]], None
 
 
@@ -1603,7 +1621,7 @@ def check_argv(fmt: Format, values: dict[str, str], bin_dir: Path) -> tuple[list
 def prepare_problems(fmt: Format, staged: "Staged", env: dict[str, str], bin_dir: Path) -> list[str]:
     """Run the harness's `prepare` commands in order; the first one's problems."""
     for command in fmt.harness.get("prepare") or []:
-        prefix = f"preparing with `{command}`: "
+        prefix = f"{PREPARING}{command}`: "
         argv, missing = command_argv(command, fmt, staged.values, bin_dir)
         if argv is None:
             return [prefix + str(missing)]
@@ -1929,7 +1947,7 @@ def report(
         write_expected_failures(expected_path, value, [case.id for case in work.cases])
         for format_id, case_id in refused:
             print(f"FAIL {format_id} {case_id}")
-            print("  not recorded: a leak, a crash, or a timeout is never an expected failure")
+            print(f"  not recorded: {NEVER_EXPECTED}")
             for problem in results[(format_id, case_id)]:
                 print(f"  {problem}")
         print(

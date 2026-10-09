@@ -843,11 +843,34 @@ class ExpectedFailuresTest(unittest.TestCase):
             self.assertEqual(runner.statuses({("demo/a", "x"): problems}, listed), {("demo/a", "x"): "fail"}, problems)
             self.assertEqual(
                 runner.unmasked(problems, listed.failures[("demo/a", "x")]),
-                "a leak, a crash, or a timeout is never an expected failure",
+                "a leak, a crash, a timeout, or a failure of the harness is never an expected failure",
             )
         for problems in (["exit status 2, expected 1"], ["exit status 3, expected 0"], ["missing a at /b 1:1"]):
             listed = runner.Listed("r", runner.digest(problems))
             self.assertIsNone(runner.unmasked(problems, listed), problems)
+
+    def test_a_failure_of_the_harness_is_never_an_expected_failure(self) -> None:
+        shapes = [problem for stdout in ("", "not json", "[]", "{}") for problem in runner.parse_report(stdout)[1]]
+        self.assertEqual(len(shapes), 4)
+        for problem in (
+            "fakectl is not in the binary directory",
+            "preparing with `fakectl prepare {project}`: fakectl is not in the binary directory",
+            "preparing with `fakectl prepare {project}`: exit status 3, expected 0: error: cannot prepare",
+            *shapes,
+        ):
+            self.assertTrue(runner.unmaskable(problem), problem)
+            listed = runner.Listed("r", runner.digest([problem]))
+            self.assertEqual(
+                runner.unmasked([problem], listed),
+                "a leak, a crash, a timeout, or a failure of the harness is never an expected failure",
+            )
+        for problem in (
+            "exit status 3, expected 0: error: the project was not prepared",
+            "exit status 1, expected 0: error: the file is not in the binary directory",
+            "init: exit status 2, expected 0",
+            "diagnostic 0: the diagnostic is not a JSON object",
+        ):
+            self.assertFalse(runner.unmaskable(problem), problem)
 
     def test_a_listed_cell_whose_problems_changed_fails(self) -> None:
         listed = runner.Listed("r", runner.digest(["missing a at /b 1:1"]))
@@ -933,6 +956,8 @@ if args[0] == "prepare":
     raise SystemExit(0)
 if os.path.exists(os.path.join(project, "needs-prepare")) and not os.path.exists(os.path.join(project, "prepared")):
     print("error: the project was not prepared", file=sys.stderr)
+    if "--format" in args:
+        print(json.dumps({"ok": False, "diagnostics": []}))
     raise SystemExit(3)
 target = os.path.join(project, "project.yaml")
 seen = {}
@@ -971,7 +996,9 @@ if os.environ.get("FAKECTL_BAD_PATH"):
         item["path"] = item["path"].lstrip("/")
 if os.environ.get("FAKECTL_LEAK"):
     print(os.environ["REGISTRY_CONFORMANCE_VALUE"], file=sys.stderr)
-if "--format" in args:
+if "--format" in args and os.environ.get("FAKECTL_NOT_JSON"):
+    print("the project was read")
+elif "--format" in args:
     print(json.dumps({"ok": not diagnostics, "diagnostics": diagnostics}))
 else:
     for item in diagnostics:
@@ -1177,7 +1204,9 @@ class EndToEndTest(unittest.TestCase):
         code, stdout, _ = self.run_runner("--write-expected-failures", env={"FAKECTL_LEAK": "1"})
         self.assertEqual(code, 1, stdout)
         self.assertIn("FAIL demo/project baseline", stdout)
-        self.assertIn("not recorded: a leak, a crash, or a timeout is never an expected failure", stdout)
+        self.assertIn(
+            "not recorded: a leak, a crash, a timeout, or a failure of the harness is never an expected failure", stdout
+        )
         self.assertNotIn(runner.MARKER, stdout)
         value = runner.load_expected_failures(self.expected_path)
         self.assertEqual(value.failures, {})
@@ -1192,7 +1221,11 @@ class EndToEndTest(unittest.TestCase):
         code, stdout, _ = self.run_runner("--matrix", env={"FAKECTL_LEAK": "1"})
         self.assertEqual(code, 1, stdout)
         self.assertIn("demo/project\tbaseline\tfail", stdout)
-        self.assertIn("listed in expected-failures.yaml, but a leak, a crash, or a timeout is never an expected failure", stdout)
+        self.assertIn(
+            "listed in expected-failures.yaml, but a leak, a crash, a timeout, or a failure of the harness"
+            " is never an expected failure",
+            stdout,
+        )
 
     def test_a_failing_baseline_is_one_entry_and_blocks_the_other_cases(self) -> None:
         (self.root / "products/demo/example/needs-prepare").write_text("", encoding="utf-8")
@@ -1361,6 +1394,48 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("demo/project\tbaseline\tfail", stdout)
         self.assertIn("fakectl is not in the binary directory", stdout)
+
+    def refused_record(self, env: dict[str, str] | None = None) -> str:
+        """Record expected failures in a run the harness could not complete; what the runner printed."""
+        code, stdout, _ = self.run_runner("--write-expected-failures", env=env)
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("FAIL demo/project baseline", stdout)
+        self.assertIn(
+            "not recorded: a leak, a crash, a timeout, or a failure of the harness is never an expected failure", stdout
+        )
+        self.assertEqual(runner.load_expected_failures(self.expected_path).failures, {})
+        return stdout
+
+    def test_a_missing_binary_is_not_recorded_as_an_expected_failure(self) -> None:
+        (self.bin / "fakectl").unlink()
+        self.assertIn("fakectl is not in the binary directory", self.refused_record())
+
+    def test_a_failing_prepare_command_is_not_recorded_as_an_expected_failure(self) -> None:
+        (self.root / "products/demo/example/prepare-fails").write_text("", encoding="utf-8")
+        (self.root / "products/platform/conformance/yaml/formats.yaml").write_text(
+            "formats:\n  demo/project:\n    prepare: ['fakectl prepare {project}']\n", encoding="utf-8"
+        )
+        self.assertIn("preparing with `fakectl prepare {project}`: exit status 3, expected 0", self.refused_record())
+
+    def test_a_report_that_is_not_json_is_not_recorded_as_an_expected_failure(self) -> None:
+        self.assertIn("the output is not one JSON document", self.refused_record(env={"FAKECTL_NOT_JSON": "1"}))
+
+    def test_a_listed_cell_the_harness_could_not_run_still_fails(self) -> None:
+        problem = "fakectl is not in the binary directory"
+        self.write_expected(
+            {"expectedFailures": [
+                {"format": "demo/project", "case": "baseline", "reason": problem, "digest": runner.digest([problem])}
+            ]}
+        )
+        (self.bin / "fakectl").unlink()
+        code, stdout, _ = self.run_runner("--matrix")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("demo/project\tbaseline\tfail", stdout)
+        self.assertIn(
+            "listed in expected-failures.yaml, but a leak, a crash, a timeout, or a failure of the harness"
+            " is never an expected failure",
+            stdout,
+        )
 
 
 class CommittedCorpusTest(unittest.TestCase):
