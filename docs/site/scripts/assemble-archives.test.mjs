@@ -336,7 +336,7 @@ test('bootstrap isolates a dirty generated public archive and restores local fil
   await mkdir(resolve(docsRoot, 'public/examples'), { recursive: true });
   await writeFile(starterPath, 'generated from current source');
   await mkdir(resolve(docsRoot, 'src/data/generated'), { recursive: true });
-  for (const name of ['evidence-configuration', 'breg-configuration', 'configuration-formats']) {
+  for (const name of ['evidence-configuration', 'breg-configuration', 'scheduling-configuration', 'configuration-formats']) {
     await writeFile(
       resolve(docsRoot, `src/data/generated/${name}.json`),
       '{"renderer":"current"}',
