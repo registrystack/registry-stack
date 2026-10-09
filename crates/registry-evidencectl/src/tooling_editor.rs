@@ -569,7 +569,7 @@ fn manual_editor_recovery(project: &Path, files: &[EditorFile]) -> String {
         "'{}'",
         project.display().to_string().replace('\'', "'\"'\"'")
     );
-    format!("no files were changed. Keep existing settings. If schemas are not yet present, run `evidencectl tooling editor --project {quoted_project}` to prepare component-local schemas. Add the following mappings to your workspace settings, preserving other keys (VS Code requires the redhat.vscode-yaml extension):\n{settings}")
+    format!("no files were changed. Keep existing settings. If schemas are not yet present, run `evidencectl tooling editor {quoted_project}` to prepare component-local schemas. Add the following mappings to your workspace settings, preserving other keys (VS Code requires the redhat.vscode-yaml extension):\n{settings}")
 }
 
 fn managed_editor_recovery(_current_files: &[EditorFile]) -> String {
@@ -1373,7 +1373,7 @@ mod tests {
         for expected in [
             "no files were changed",
             "Keep existing settings",
-            "evidencectl tooling editor --project",
+            "evidencectl tooling editor '",
             "authoring-project/questions/*.yaml",
             "./authoring-project/.evidence-editor/schemas/question.schema.json",
             ".vscode/settings.json",
@@ -1388,6 +1388,37 @@ mod tests {
         assert!(!workspace.join(EDITOR_ROOT).exists());
         assert!(!project.join(EDITOR_ROOT).exists());
         assert!(!workspace.join(".zed").exists());
+    }
+
+    #[test]
+    fn recovery_next_step_names_a_command_the_cli_parses() {
+        use clap::Parser as _;
+        let temporary = tempfile::tempdir().unwrap();
+        let project = project(&temporary);
+        let workspace = temporary.path();
+        fs::create_dir(workspace.join(".vscode")).unwrap();
+        fs::write(workspace.join(".vscode/settings.json"), b"{}\n").unwrap();
+        let error = setup_workspace_editor(&project, workspace).unwrap_err();
+        let diagnostic = format!("{error:#}");
+        let command = diagnostic
+            .split('`')
+            .find(|part| part.starts_with("evidencectl tooling editor"))
+            .unwrap_or_else(|| panic!("no command in {diagnostic}"));
+        // The temporary project path holds no single quote, so unquoting the
+        // last word is the whole of the shell's work.
+        let mut words: Vec<String> = command.split(' ').map(str::to_owned).collect();
+        let last = words.pop().unwrap();
+        words.push(last.trim_matches('\'').to_owned());
+        let cli = crate::Cli::try_parse_from(&words)
+            .unwrap_or_else(|error| panic!("`{command}` does not parse: {error}"));
+        let crate::Command::Tooling(crate::tooling::ToolingCommand::Editor(args)) = cli.command
+        else {
+            panic!("`{command}` is not the tooling editor command");
+        };
+        assert_eq!(
+            args.project.canonicalize().unwrap(),
+            project.canonicalize().unwrap()
+        );
     }
 
     #[test]
