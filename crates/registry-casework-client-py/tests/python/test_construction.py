@@ -48,6 +48,22 @@ class ConstructionTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.kind, "invalid_request")
 
+    def test_review_task_discovery_keeps_ownership_closed_and_scoped(self) -> None:
+        client = CaseworkClient("https://casework.example.invalid/")
+        calls = (
+            lambda: client.review_tasks(
+                "valid-token", "staff", {"ownership": "someone_elses"}
+            ),
+            lambda: client.supervisory_review_tasks(
+                "valid-token", "supervisor", {"ownership": "unclaimed"}
+            ),
+        )
+        for call in calls:
+            with self.subTest(call=call):
+                with self.assertRaises(CaseworkClientError) as raised:
+                    call()
+                self.assertEqual(raised.exception.kind, "invalid_request")
+
 
 if __name__ == "__main__":
     unittest.main()

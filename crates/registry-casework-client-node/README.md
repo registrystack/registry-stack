@@ -7,6 +7,12 @@ Every operation accepts a bearer token and an explicit Casework profile for
 that call. Source-reading operations also require an explicit source profile.
 The binding does not retain credentials and exposes no browser credential API.
 
+`reviewTasks(token, profile, { ownership: 'assigned_to_me' })` filters the
+reviewer inbox before pagination. `supervisoryReviewTasks` provides current
+supervisors with bounded task and accountability references for served queues.
+Its `state` is a holder-free string. A single decided-task read carries `decisionReceipt` only for the principal
+whose decision it records.
+
 Task delegation uses the current human profile for template previews, grant
 approval, listing, and revocation. Approval accepts only the template ID and
 version, with the item revision and a caller-owned idempotency key. The preview

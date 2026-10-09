@@ -6,6 +6,14 @@ contract, including unified review request, result, task, draft, history,
 accountability, and kind discovery routes. It does not contain Base Registry
 Engine routes or policy authority.
 
+Reviewer discovery accepts the optional `ReviewTaskOwnership::AssignedToMe`
+or `Unclaimed` filter. `supervisory_review_tasks` is a separate bounded view
+for current supervisors of served queues; its rows contain only task and
+accountability references, and its state is a holder-free string. A single decided-task read includes
+`decision_receipt` only when `decided_by_caller` is true, so response-loss
+recovery exposes the caller's own decision without private reasons or result
+data.
+
 The client takes a bearer token and explicit Casework profile for each call.
 Source-reading calls also take an explicit source profile. It never retains a
 human token or follows redirects, and it resends a mutation only under the

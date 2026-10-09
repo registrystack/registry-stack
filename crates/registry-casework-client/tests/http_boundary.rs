@@ -294,6 +294,7 @@ async fn review_tasks_refuses_an_oversized_response_page() {
                 CaseworkAuth::new(&token, "staff"),
                 &registry_casework_client::ReviewTaskQuery {
                     queue: None,
+                    ownership: None,
                     cursor: None,
                     limit: Some(100),
                 },
@@ -352,6 +353,7 @@ async fn review_tasks_refuses_a_page_outside_the_requested_inbox() {
                 CaseworkAuth::new(&token, "staff"),
                 &registry_casework_client::ReviewTaskQuery {
                     queue: Some("reviews".to_owned()),
+                    ownership: None,
                     cursor: None,
                     limit: Some(100),
                 },
@@ -364,6 +366,140 @@ async fn review_tasks_refuses_a_page_outside_the_requested_inbox() {
         })
     ));
     server.abort();
+}
+
+#[tokio::test]
+async fn review_task_discovery_forwards_ownership_and_supervision_without_expanding_rows() {
+    let observations = Arc::new(Mutex::new(Vec::<(String, HeaderMap)>::new()));
+    let app = Router::new()
+        .route("/v1/review-tasks", get(capture_review_task_discovery))
+        .route(
+            "/v1/review-tasks/supervision",
+            get(capture_review_task_discovery),
+        )
+        .with_state(observations.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    client
+        .review_tasks(
+            CaseworkAuth::new(&token, "staff").with_source_profile("reviewer"),
+            &registry_casework_client::ReviewTaskQuery {
+                queue: Some("reviews".to_owned()),
+                ownership: Some(registry_casework_client::ReviewTaskOwnership::AssignedToMe),
+                cursor: Some(Uuid::from_u128(7)),
+                limit: Some(25),
+            },
+        )
+        .await
+        .expect("reviewer discovery");
+    let page = client
+        .supervisory_review_tasks(
+            CaseworkAuth::new(&token, "supervisor").with_source_profile("reviewer"),
+            &registry_casework_client::SupervisoryReviewTaskQuery {
+                queue: Some("reviews".to_owned()),
+                cursor: Some(Uuid::from_u128(8)),
+                limit: Some(10),
+            },
+        )
+        .await
+        .expect("supervisory discovery");
+    assert_eq!(page.value.items.len(), 1);
+    assert_eq!(
+        page.value.items[0].accountability_event_id,
+        Some(Uuid::from_u128(11))
+    );
+    assert!(matches!(
+        client
+            .supervisory_review_tasks(
+                CaseworkAuth::new(&token, "supervisor"),
+                &registry_casework_client::SupervisoryReviewTaskQuery {
+                    queue: Some("leaky".to_owned()),
+                    cursor: None,
+                    limit: Some(10),
+                },
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+
+    let observations = observations.lock().expect("observations");
+    assert_eq!(
+        observations[0].0,
+        "/v1/review-tasks?queue=reviews&ownership=assigned_to_me&cursor=00000000-0000-0000-0000-000000000007&limit=25"
+    );
+    assert_eq!(
+        observations[1].0,
+        "/v1/review-tasks/supervision?queue=reviews&cursor=00000000-0000-0000-0000-000000000008&limit=10"
+    );
+    assert_eq!(observations[1].1["registry-casework-profile"], "supervisor");
+    assert_eq!(observations[1].1["registry-source-profile"], "reviewer");
+    server.abort();
+}
+
+async fn capture_review_task_discovery(
+    State(observations): State<HistoryObservations>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    observations
+        .lock()
+        .expect("observations")
+        .push((uri.to_string(), headers));
+    let body = if uri
+        .query()
+        .is_some_and(|query| query.contains("queue=leaky"))
+    {
+        json!({
+            "items": [{
+                "taskId": Uuid::from_u128(7),
+                "requestId": Uuid::from_u128(9),
+                "queue": "leaky",
+                "revision": 2,
+                "state": {"held": {"holder": {
+                    "issuer": "https://issuer.example.test",
+                    "subject": "reviewer",
+                }}},
+            }],
+            "status": "complete",
+        })
+    } else if uri.path().ends_with("/supervision") {
+        json!({
+            "items": [{
+                "taskId": Uuid::from_u128(7),
+                "requestId": Uuid::from_u128(9),
+                "queue": "reviews",
+                "revision": 3,
+                "state": "decided",
+                "accountabilityEventId": Uuid::from_u128(11),
+            }],
+            "status": "complete",
+        })
+    } else {
+        json!({"items": [], "status": "complete"})
+    };
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/json"),
+            ("traceparent", TRACEPARENT),
+        ],
+        body.to_string(),
+    )
 }
 
 #[tokio::test]
@@ -1301,6 +1437,21 @@ async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
         task
     };
     let held = json!({"held": {"holder": {"issuer": "https://issuer.example.test", "subject": "someone"}}});
+    let receipt = |decision: &str, outcome: Option<&str>| {
+        let mut receipt = json!({
+            "policy": {
+                "id": "registry-correction",
+                "version": "1",
+                "digest": ContentDigest::for_bytes(b"registry-correction"),
+            },
+            "decision": decision,
+            "decidedAt": "2026-09-20T00:00:00Z",
+        });
+        if let Some(outcome) = outcome {
+            receipt["outcome"] = json!(outcome);
+        }
+        receipt
+    };
     let serve = |router: Router| async move {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1327,10 +1478,21 @@ async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
         )
     }
 
+    let mut decided_by_caller = task(json!("decided"), Some(true));
+    decided_by_caller["decisionReceipt"] = receipt("approve", None);
+    let mut receipt_for_other_caller = task(json!("decided"), Some(false));
+    receipt_for_other_caller["decisionReceipt"] = receipt("reject", Some("declined"));
+    let mut approve_with_outcome = task(json!("decided"), Some(true));
+    approve_with_outcome["decisionReceipt"] = receipt("approve", Some("invalid"));
+    let mut reject_without_outcome = task(json!("decided"), Some(true));
+    reject_without_outcome["decisionReceipt"] = receipt("reject", None);
     for (read, accepted) in [
-        (task(json!("decided"), Some(true)), true),
+        (decided_by_caller, true),
         (task(json!("decided"), Some(false)), true),
         (task(json!("decided"), None), false),
+        (receipt_for_other_caller, false),
+        (approve_with_outcome, false),
+        (reject_without_outcome, false),
         (task(json!("open"), Some(false)), false),
         (task(held.clone(), Some(true)), false),
     ] {
@@ -1344,12 +1506,14 @@ async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
             .review_task(CaseworkAuth::new(&token, "staff"), task_id)
             .await;
         if accepted {
+            let returned = result.expect("a conforming decided read").value;
             assert_eq!(
-                result
-                    .expect("a conforming decided read")
-                    .value
-                    .decided_by_caller,
+                returned.decided_by_caller,
                 read["decidedByCaller"].as_bool()
+            );
+            assert_eq!(
+                returned.decision_receipt.is_some(),
+                read.get("decisionReceipt").is_some()
             );
         } else {
             assert!(refused(result), "{read}");
@@ -1360,7 +1524,11 @@ async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
     let (client, server) = serve(
         Router::new()
             .route("/v1/review-tasks", get(review_task_fixture_response))
-            .with_state(json!({"items": [task(json!("decided"), Some(true))]})),
+            .with_state({
+                let mut listed = task(json!("open"), None);
+                listed["decisionReceipt"] = receipt("approve", None);
+                json!({"items": [listed], "status": "complete"})
+            }),
     )
     .await;
     assert!(refused(
@@ -1369,6 +1537,7 @@ async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
                 CaseworkAuth::new(&token, "staff"),
                 &registry_casework_client::ReviewTaskQuery {
                     queue: None,
+                    ownership: None,
                     cursor: None,
                     limit: Some(100),
                 },
@@ -1383,7 +1552,11 @@ async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
                 "/v1/review-tasks/{task}/claim",
                 post(review_task_fixture_response),
             )
-            .with_state(task(held, Some(false))),
+            .with_state({
+                let mut mutated = task(held, None);
+                mutated["decisionReceipt"] = receipt("approve", None);
+                mutated
+            }),
     )
     .await;
     assert!(refused(

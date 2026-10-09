@@ -21,6 +21,7 @@ export declare class CaseworkClient {
   reviewKind(token: string, profile: string, kindId: string): Promise<CaseworkOutcome>
   reviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   reviewTask(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  supervisoryReviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   reviewTaskContext(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
   previewReviewTaskTemplates(token: string, profile: string, sourceProfile: string, taskId: string): Promise<CaseworkOutcome>
   listReviewTaskGrants(token: string, profile: string, sourceProfile: string, taskId: string): Promise<CaseworkOutcome>

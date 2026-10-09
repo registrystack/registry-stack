@@ -114,15 +114,56 @@ value-free and may add the paired
 rejected values.
 
 Human reviewers use `/v1/review-tasks` to list, read, claim, assign, delegate,
-release, draft, and decide work. A decided task read carries `decidedByCaller`,
-true only when the current caller recorded the decision, so a reviewer whose
-decide response was lost can confirm the outcome without the Supervisor-only
-accountability record. Every mutation checks the current task revision,
-membership, queue service, exclusions, and idempotency binding in the committing
-transaction. `GET /v1/review-tasks/{taskId}/context` returns only the frozen
-submitted context, or a bounded current source projection authorized for the
-exact human caller, together with the policy snapshot pinned to that task.
-Kind descriptions supply the currently configured kinds for discovery; task
+release, draft, and decide work. Its optional `ownership=assigned_to_me` filter
+selects tasks held by the caller's effective issuer-qualified principal,
+including a delegated holding. `ownership=unclaimed` selects open tasks.
+Omitting `ownership` preserves the complete eligible active-task view. Casework
+applies either filter before pagination and still checks current role,
+membership, served queue, pinned deciding profile, and source visibility. The
+filter grants no authority.
+
+```text
+GET /v1/review-tasks?ownership=assigned_to_me&limit=50
+GET /v1/review-tasks?ownership=unclaimed&queue=decisions&limit=50
+```
+
+A decided single-task read always carries `decidedByCaller`. When it is true,
+the read also carries `decisionReceipt` for the retained decision recorded by
+the current caller's exact issuer-qualified principal. The receipt identifies
+the pinned policy, decision type, configured outcome when required, and
+decision time. It excludes the private reason and structured producer result.
+Task lists and mutation responses omit both fields. This lets a reviewer
+recover a lost decide response without receiving the Supervisor-only
+accountability record.
+
+Supervisors discover operational review work through
+`GET /v1/review-tasks/supervision`. It covers currently supervised queues and
+includes active tasks plus retained decided or closed tasks within the terminal
+result window. It does not require the Supervisor's profile to be a pinned
+deciding profile. Staff and Administrator profiles cannot use this route. Each
+row contains only the task and request ids, queue, revision, a holder-free
+`open`, `held`, or `decided` state, and an optional accountability event id.
+The state never identifies the holder. Source-context rows still require the
+caller's current source visibility. Resolving an event id through
+`GET /v1/review-accountability/{eventId}` performs that endpoint's independent
+Supervisor authority and audit checks.
+
+Reviewer and Supervisor task cursors identify an immutable task creation and id
+position in a live walk. Continue with the same queue and ownership filters.
+Each page rechecks current membership, queue service, retention, and task
+existence; reviewer pages also recheck the pinned deciding profile. A claim,
+release, or decision at the cursor anchor does not invalidate it, and the
+original policy anchor need not remain active. Restart without a cursor after a
+refresh or filter change to see earlier rows that newly entered the view.
+An unknown, erased, expired, or no-longer-authorized cursor anchor returns
+`410 review.result-expired`; so does continuing it under a different queue.
+
+Every mutation checks the current task revision, membership, queue service,
+exclusions, and idempotency binding in the committing transaction.
+`GET /v1/review-tasks/{taskId}/context` returns only the frozen submitted
+context, or a bounded current source projection authorized for the exact human
+caller, together with the policy snapshot pinned to that task. Kind
+descriptions supply the currently configured kinds for discovery; task
 handling uses the returned pinned snapshot. Casework pins the policy identity
 and submission digest once, so a later configuration change cannot reinterpret
 accepted work.

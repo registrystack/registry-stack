@@ -430,9 +430,18 @@ export type ReviewCancelResponse =
   | { outcome: 'cancelled'; result: ReviewResult }
   | { outcome: 'already_terminal'; result: ReviewResult }
 export interface ReviewPageQuery { cursor?: Uuid; limit?: SafeInteger }
-export interface ReviewTaskQuery extends ReviewPageQuery { queue?: string }
+export type ReviewTaskOwnership = 'assigned_to_me' | 'unclaimed'
+export interface ReviewTaskQuery extends ReviewPageQuery { queue?: string; ownership?: ReviewTaskOwnership }
+export interface SupervisoryReviewTaskQuery extends ReviewPageQuery { queue?: string }
 export interface WorkItemHistoryQuery { cursor?: string; limit?: SafeInteger }
 export type ReviewerTaskState = 'open' | { held: { holder: IssuerPrincipal } } | 'decided'
+export type ReviewDecisionType = 'approve' | 'reject' | 'changes_requested' | 'answer'
+export interface ReviewDecisionReceipt {
+  policy: ReviewPolicyBinding
+  decision: ReviewDecisionType
+  outcome?: string
+  decidedAt: string
+}
 export interface ReviewerTask {
   taskId: Uuid
   requestId: Uuid
@@ -443,8 +452,19 @@ export interface ReviewerTask {
   eligibleProfiles: ReadonlyArray<string>
   state: ReviewerTaskState
   decidedByCaller?: boolean
+  decisionReceipt?: ReviewDecisionReceipt
 }
 export interface ReviewTaskPage { items: ReadonlyArray<ReviewerTask>; nextCursor?: Uuid; status: PageStatus }
+export type SupervisoryReviewTaskState = 'open' | 'held' | 'decided'
+export interface SupervisoryReviewTask {
+  taskId: Uuid
+  requestId: Uuid
+  queue: string
+  revision: SafeInteger
+  state: SupervisoryReviewTaskState
+  accountabilityEventId?: Uuid
+}
+export interface SupervisoryReviewTaskPage { items: ReadonlyArray<SupervisoryReviewTask>; nextCursor?: Uuid; status: PageStatus }
 export type ReviewSourceBindingStatus = 'current' | 'binding_changed'
 export interface ReviewSourceProjection { binding: SourceBinding; displayReference?: string; display: Readonly<Record<string, JsonValue>> }
 export type ReviewTaskContextData =
@@ -515,6 +535,7 @@ export class CaseworkClient {
   reviewKinds(token: string, profile: string): Promise<CaseworkOutcome<ReadonlyArray<ReviewKindPolicySnapshot>>>
   reviewKind(token: string, profile: string, kindId: string): Promise<CaseworkOutcome<ReviewKindPolicySnapshot>>
   reviewTasks(token: string, profile: string, query?: ReviewTaskQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskPage>>
+  supervisoryReviewTasks(token: string, profile: string, query?: SupervisoryReviewTaskQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<SupervisoryReviewTaskPage>>
   reviewTask(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewerTask>>
   reviewTaskContext(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskContext>>
   previewReviewTaskTemplates(token: string, profile: string, sourceProfile: string, taskId: Uuid): Promise<CaseworkOutcome<TaskTemplatePreviews>>

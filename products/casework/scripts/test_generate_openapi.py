@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 import re
 import sys
 import unittest
@@ -42,6 +43,10 @@ REVIEW_OPERATION_DTO_INVENTORY = {
     ("post", "/v1/review-requests/{request_id}/cancel"): ("200", "ReviewCancelResponse"),
     ("get", "/v1/review-results"): ("200", "ReviewResultFeedPage"),
     ("get", "/v1/review-tasks"): ("200", "ReviewTaskPage"),
+    ("get", "/v1/review-tasks/supervision"): (
+        "200",
+        "SupervisoryReviewTaskPage",
+    ),
     ("get", "/v1/review-tasks/{task_id}"): ("200", "ReviewerTask"),
     ("get", "/v1/review-tasks/{task_id}/context"): ("200", "ReviewTaskContext"),
 }
@@ -179,6 +184,34 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertEqual({"type": "boolean"}, task_properties["decidedByCaller"])
         self.assertNotIn("decidedByCaller", schemas["ReviewerTask"]["required"])
         self.assertEqual(
+            {"$ref": "#/components/schemas/ReviewDecisionReceipt"},
+            task_properties["decisionReceipt"],
+        )
+        self.assertNotIn("decisionReceipt", schemas["ReviewerTask"]["required"])
+        receipt = schemas["ReviewDecisionReceipt"]
+        self.assertEqual(
+            ["approve", "reject", "changes_requested", "answer"],
+            schemas["ReviewDecisionType"]["enum"],
+        )
+        self.assertEqual(
+            {"$ref": "#/components/schemas/ReviewPolicyBinding"},
+            receipt["properties"]["policy"],
+        )
+        self.assertEqual(
+            {"$ref": "#/components/schemas/ReviewDecisionType"},
+            receipt["properties"]["decision"],
+        )
+        self.assertEqual(
+            ["policy", "decision", "decidedAt"], receipt["required"]
+        )
+        self.assertEqual(
+            {"not": {"required": ["outcome"]}},
+            receipt["allOf"][0]["then"],
+        )
+        self.assertEqual(
+            {"required": ["outcome"]}, receipt["allOf"][1]["then"]
+        )
+        self.assertEqual(
             (0, GENERATOR.MAXIMUM_PORTABLE_JSON_INTEGER),
             (
                 task_properties["stageIndex"]["minimum"],
@@ -199,6 +232,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         for path in (
             "/v1/review-results",
             "/v1/review-tasks",
+            "/v1/review-tasks/supervision",
             "/v1/review-requests/{request_id}/history",
         ):
             with self.subTest(cursor_path=path):
@@ -214,6 +248,61 @@ class GeneratedOpenApiTests(unittest.TestCase):
             {"type": "string", "format": "uuid"},
             feed_cursor,
         )
+
+        ownership = parameter_schema(
+            self.openapi, "get", "/v1/review-tasks", "ownership"
+        )
+        self.assertEqual(
+            {"type": "string", "enum": ["assigned_to_me", "unclaimed"]},
+            ownership,
+        )
+        reviewer_description = self.openapi["paths"]["/v1/review-tasks"]["get"][
+            "description"
+        ]
+        ownership_description = next(
+            parameter["description"]
+            for parameter in self.openapi["paths"]["/v1/review-tasks"]["get"][
+                "parameters"
+            ]
+            if parameter["name"] == "ownership"
+        )
+        self.assertIn("applied before pagination", ownership_description)
+        self.assertIn("live walk", reviewer_description)
+
+        supervisory = schemas["SupervisoryReviewTask"]
+        self.assertEqual(
+            {
+                "taskId",
+                "requestId",
+                "queue",
+                "revision",
+                "state",
+                "accountabilityEventId",
+            },
+            set(supervisory["properties"]),
+        )
+        self.assertNotIn("accountabilityEventId", supervisory["required"])
+        self.assertEqual(
+            {"$ref": "#/components/schemas/SupervisoryReviewTaskState"},
+            supervisory["properties"]["state"],
+        )
+        supervisory_state = schemas["SupervisoryReviewTaskState"]
+        self.assertEqual(
+            {"type": "string", "enum": ["open", "held", "decided"]},
+            supervisory_state,
+        )
+        self.assertNotIn("holder", json.dumps(supervisory_state))
+        supervision_operation = self.openapi["paths"][
+            "/v1/review-tasks/supervision"
+        ]["get"]
+        self.assertNotIn(
+            "ownership",
+            {parameter["name"] for parameter in supervision_operation["parameters"]},
+        )
+        self.assertIn("Supervisor-only", supervision_operation["description"])
+        self.assertIn("releases no context", supervision_operation["description"])
+        self.assertIn("holder identity", supervision_operation["description"])
+        self.assertIn("live walk", supervision_operation["description"])
 
         result_operation = self.openapi["paths"][
             "/v1/review-requests/{request_id}/result"

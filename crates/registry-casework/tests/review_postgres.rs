@@ -1098,6 +1098,22 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         Ok(ReviewTransition::StageAdvanced { .. })
     ));
 
+    let readback = fixture
+        .service_v2
+        .review_task(&fixture.reviewer_a, primary, None, "")
+        .await
+        .expect("read own decision through changed active policy");
+    let receipt = readback
+        .decision_receipt
+        .expect("retained first-stage decision receipt");
+    assert_eq!(receipt.policy, first.accepted.policy);
+    assert_eq!(
+        receipt.decision,
+        registry_casework_core::ReviewDecisionType::Approve
+    );
+    assert!(receipt.outcome.is_none());
+    assert_eq!(readback.decided_by_caller, Some(true));
+
     let secondary = task_id(&fixture, first.accepted.request_id, 1).await;
     fixture
         .service_v1
@@ -5989,6 +6005,105 @@ async fn source_context_task_inbox_reports_a_first_read_deadline_without_losing_
             .await,
         Err(ReviewRuntimeError::SourceUnavailable)
     ));
+}
+
+#[tokio::test]
+async fn review_task_lists_recheck_queue_after_source_io() {
+    let fixture = fixture().await;
+    let mut source_request = request("record-queue-race", "producer-ref-queue-race");
+    source_request.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: "registry:record:record-queue-race".to_owned(),
+        },
+    };
+    let created = fixture
+        .service_v2
+        .create_review_request(&fixture.producer, source_request, "create-queue-race")
+        .await
+        .expect("create source-context review");
+    fixture
+        .database
+        .batch_execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('intake','review-team',1)",
+        )
+        .await
+        .expect("same team serves the destination queue");
+
+    for supervisory in [false, true] {
+        fixture
+            .database
+            .execute(
+                "UPDATE casework_review_tasks SET queue_id='review' WHERE request_id=$1",
+                &[&created.accepted.request_id],
+            )
+            .await
+            .expect("restore the selected queue");
+        fixture.source_read_blocked.store(true, Ordering::SeqCst);
+        let service = fixture.service_v2.clone();
+        let actor = if supervisory {
+            fixture.supervisor.clone()
+        } else {
+            fixture.reviewer_a.clone()
+        };
+        let list = tokio::spawn(async move {
+            if supervisory {
+                service
+                    .supervisory_review_tasks(
+                        &actor,
+                        Some("staff"),
+                        "human-bearer",
+                        Some("review"),
+                        None,
+                        10,
+                    )
+                    .await
+                    .map(|page| page.items.len())
+            } else {
+                service
+                    .review_tasks_with_ownership(
+                        &actor,
+                        Some("staff"),
+                        "human-bearer",
+                        Some("review"),
+                        Some(registry_casework_core::ReviewTaskOwnership::Unclaimed),
+                        None,
+                        10,
+                    )
+                    .await
+                    .map(|page| page.items.len())
+            }
+        });
+        fixture.source_read_started.notified().await;
+        fixture
+            .database
+            .execute(
+                "UPDATE casework_review_tasks SET queue_id='intake' WHERE request_id=$1",
+                &[&created.accepted.request_id],
+            )
+            .await
+            .expect("move the task while its source read is pending");
+        fixture.source_read_continue.notify_one();
+        assert_eq!(
+            list.await.expect("list task joins").expect("current list"),
+            0,
+            "membership in both queues does not release a moved row from the old queue"
+        );
+    }
+    let destination = fixture
+        .service_v2
+        .supervisory_review_tasks(
+            &fixture.supervisor,
+            Some("staff"),
+            "human-bearer",
+            Some("intake"),
+            None,
+            10,
+        )
+        .await
+        .expect("discover work in its current queue");
+    assert_eq!(destination.items.len(), 1);
+    assert_eq!(destination.items[0].queue, "intake");
 }
 
 #[tokio::test]

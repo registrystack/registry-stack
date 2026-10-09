@@ -1293,6 +1293,15 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
     },
     OperationContract {
         method: "GET",
+        path: "/v1/review-tasks/supervision",
+        success_statuses: &[200],
+        extracts_path: false,
+        extracts_query: true,
+        accepts_json: false,
+        problems: REVIEW_TASK_PAGE,
+    },
+    OperationContract {
+        method: "GET",
         path: "/v1/review-tasks/{task_id}",
         success_statuses: &[200],
         extracts_path: true,

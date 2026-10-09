@@ -40,6 +40,11 @@ Wheels cover macOS arm64, Linux arm64 with glibc, and Linux x64 with glibc,
 and require glibc 2.17 or newer on Linux. Install the exact client version that
 matches the deployment.
 
+The Casework client supports reviewer inbox ownership filters and the separate
+`supervisory_review_tasks` discovery method. Supervisory rows carry bounded task
+and accountability references with a holder-free string state; a single decided-task read exposes a
+`decisionReceipt` only to the caller who recorded that decision.
+
 The `registry_client.breg` namespace includes the typed retained-history page,
 proposal, and inert result-reference classes exposed by the maintained BReg
 binding. Their helpers inspect only an already loaded page and do not fetch

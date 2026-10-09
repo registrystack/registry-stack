@@ -19,6 +19,7 @@ OTHER_ITEM_ID = "00000000-0000-4000-8000-000000000005"
 CLOCK_OCCURRENCE_ID = "00000000-0000-4000-8000-000000000002"
 PREVIEW_ID = "00000000-0000-4000-8000-000000000003"
 EXPIRED_CURSOR = "00000000-0000-4000-8000-000000000004"
+SUPERVISORY_CURSOR = "00000000-0000-4000-8000-000000000008"
 POLICY_DIGEST = (
     "sha256:38ea436942f78766fc2db332c18e3ed545ec4e907d3386ec41b0c2eeb60e7f6c"
 )
@@ -75,6 +76,22 @@ class _Handler(BaseHTTPRequestHandler):
                 "revision": 1,
                 "eligibleProfiles": ["staff"],
                 "state": "open",
+            })
+            return
+        if self.path == (
+            "/tenant/v1/review-tasks/supervision?queue=reviews"
+            f"&cursor={SUPERVISORY_CURSOR}&limit=10"
+        ):
+            self.respond({
+                "items": [{
+                    "taskId": ITEM_ID,
+                    "requestId": OTHER_ITEM_ID,
+                    "queue": "reviews",
+                    "revision": 3,
+                    "state": "decided",
+                    "accountabilityEventId": CLOCK_OCCURRENCE_ID,
+                }],
+                "status": "complete",
             })
             return
         if self.path == f"/tenant/v1/review-tasks/{ITEM_ID}/context":
@@ -457,10 +474,32 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(observation["profile"], "staff")
         self.assertEqual(observation["source_profile"], "source-one")
 
+    def test_supervisory_review_tasks_use_exact_route_and_bounded_row(self) -> None:
+        page = self.client.supervisory_review_tasks(
+            "supervisor-token",
+            "supervisor",
+            {"queue": "reviews", "cursor": SUPERVISORY_CURSOR, "limit": 10},
+            "source-one",
+        )
+
+        self.assertEqual(
+            page["value"]["items"][0]["accountabilityEventId"],
+            CLOCK_OCCURRENCE_ID,
+        )
+        observation = _Handler.observations[0]
+        self.assertEqual(
+            observation["path"],
+            "/tenant/v1/review-tasks/supervision?queue=reviews"
+            f"&cursor={SUPERVISORY_CURSOR}&limit=10",
+        )
+        self.assertEqual(observation["profile"], "supervisor")
+        self.assertEqual(observation["source_profile"], "source-one")
+
     def test_review_optional_arguments_may_be_omitted(self) -> None:
         calls = (
             lambda: self.client.review_results("", "requester"),
             lambda: self.client.review_tasks("", "staff"),
+            lambda: self.client.supervisory_review_tasks("", "supervisor"),
             lambda: self.client.review_task("", "staff", ITEM_ID),
             lambda: self.client.review_task_context("", "staff", ITEM_ID),
             lambda: self.client.claim_review_task("", "staff", ITEM_ID, 1, "claim-key"),

@@ -13,6 +13,8 @@ import {
   type ReviewResultOutcome,
   type ReviewTaskContext,
   type ReviewTaskDecisionRequest,
+  type ReviewTaskQuery,
+  type SupervisoryReviewTask,
   type WorkItem,
 } from '../client'
 
@@ -147,6 +149,9 @@ void client.reviewAccountability(token, 'supervisor', '00000000-0000-0000-0000-0
   })
 const reviewDecision: ReviewTaskDecisionRequest = { decision: { type: 'approve' } }
 void client.decideReviewTask(token, profile, item.itemId, item.revision, 'decide-43', reviewDecision, sourceProfile)
+const assignedReviewTasks: ReviewTaskQuery = { queue: 'review', ownership: 'assigned_to_me', limit: 25 }
+void client.reviewTasks(token, profile, assignedReviewTasks, sourceProfile)
+void client.supervisoryReviewTasks(token, 'supervisor', { queue: 'review', limit: 25 }, sourceProfile)
 
 function taskHolder(task: ReviewerTask): string | undefined {
   if (task.state === 'open' || task.state === 'decided') return undefined
@@ -155,9 +160,18 @@ function taskHolder(task: ReviewerTask): string | undefined {
 void taskHolder
 
 function decidedByMe(task: ReviewerTask): boolean {
-  return task.state === 'decided' && task.decidedByCaller === true
+  if (task.state !== 'decided' || task.decidedByCaller !== true) return false
+  const decision = task.decisionReceipt?.decision
+  return decision === 'approve' || decision === 'reject' || decision === 'changes_requested' || decision === 'answer'
 }
 void decidedByMe
+
+function accountabilityEvent(task: SupervisoryReviewTask): string | undefined {
+  const state: 'open' | 'held' | 'decided' = task.state
+  void state
+  return task.accountabilityEventId
+}
+void accountabilityEvent
 
 function resultTrace(outcome: ReviewResultOutcome): string {
   switch (outcome.kind) {
