@@ -10,6 +10,11 @@ client = casework.CaseworkClient("https://casework.example.invalid/")
 page = client.review_tasks(
     token,
     "staff",
+    {"queue": "review", "ownership": "assigned_to_me", "limit": 25},
+)
+supervised = client.supervisory_review_tasks(
+    supervisor_token,
+    "supervisor",
     {"queue": "review", "limit": 25},
 )
 ```
@@ -24,6 +29,10 @@ Requester review operations omit a source profile. Officer task reads, claims,
 assignment, delegation, drafts, decisions, history, notes, and review clocks
 accept an optional source profile when resolving source context. Accountability
 and kind discovery remain Casework-owned authorization paths.
+Supervisory discovery returns only bounded task and accountability references,
+with a holder-free string state.
+A single decided-task read includes `decisionReceipt` only when
+`decidedByCaller` is true.
 
 `CaseworkClientError` preserves problem codes, status, trace context, validation
 details, and original attempt identifiers. Callers can therefore handle cursor

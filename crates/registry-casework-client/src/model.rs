@@ -84,6 +84,20 @@ pub struct ReviewTaskQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<registry_casework_core::ReviewTaskOwnership>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+/// Bounded supervisory discovery over the queues the selected profile serves.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SupervisoryReviewTaskQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
@@ -101,4 +115,35 @@ pub enum ReviewResultResponse {
     Pending { trace_id: String },
     ConcealedOrUnknown { trace_id: String },
     Expired { trace_id: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ReviewTaskQuery, SupervisoryReviewTaskQuery};
+    use registry_casework_core::ReviewTaskOwnership;
+    use serde_json::json;
+
+    #[test]
+    fn reviewer_ownership_uses_the_closed_wire_names() {
+        let query = ReviewTaskQuery {
+            ownership: Some(ReviewTaskOwnership::AssignedToMe),
+            ..ReviewTaskQuery::default()
+        };
+        assert_eq!(
+            serde_json::to_value(query).expect("serialize query"),
+            json!({"ownership": "assigned_to_me"})
+        );
+        assert!(serde_json::from_value::<ReviewTaskQuery>(json!({
+            "ownership": "someone_elses"
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn supervisory_query_has_no_ownership_selector() {
+        assert!(serde_json::from_value::<SupervisoryReviewTaskQuery>(json!({
+            "ownership": "unclaimed"
+        }))
+        .is_err());
+    }
 }

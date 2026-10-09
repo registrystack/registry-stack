@@ -18,6 +18,10 @@ use registry_casework::{
     router, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState, HumanIdentityConfig,
     PostgresStore, ReviewTaskDecisionRequest,
 };
+use registry_casework_client::{
+    BearerToken, CaseworkAuth, CaseworkClient, CaseworkClientConfig, CaseworkClientError,
+    ReviewTaskOwnership, ReviewTaskQuery, SupervisoryReviewTaskQuery,
+};
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActorContext, AuthoritativeObservation, CallerSubjectView,
     CaseworkIdentity, CaseworkProject, CaseworkRole, ContentDigest, DiscoveryCursor,
@@ -321,7 +325,7 @@ fn review_request(reference: &str, issuer: &str) -> ReviewCreateRequest {
     review_request_for_subject("record-1", reference, issuer)
 }
 
-async fn app(
+async fn app_with_database(
     idp: &MockIdp,
 ) -> (
     axum::Router,
@@ -330,6 +334,7 @@ async fn app(
     Arc<AtomicBool>,
     Arc<AtomicU8>,
     Arc<Mutex<OccurrenceState>>,
+    tokio_postgres::Client,
 ) {
     let base = env::var("CASEWORK_REVIEW_TEST_DATABASE_URL")
         .expect("CASEWORK_REVIEW_TEST_DATABASE_URL is required for review HTTP tests");
@@ -373,7 +378,8 @@ async fn app(
              VALUES('review','review-team',1);
              INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
              VALUES('review-team','https://placeholder.invalid','reviewer','staff'),
-                   ('review-team','https://placeholder.invalid','colleague','staff');",
+                   ('review-team','https://placeholder.invalid','colleague','staff'),
+                   ('review-team','https://placeholder.invalid','supervisor','supervisor');",
         )
         .await
         .expect("seed review HTTP directory");
@@ -426,7 +432,22 @@ async fn app(
         changed,
         failure,
         source_state,
+        database,
     )
+}
+
+async fn app(
+    idp: &MockIdp,
+) -> (
+    axum::Router,
+    CaseworkService,
+    Arc<AtomicBool>,
+    Arc<AtomicBool>,
+    Arc<AtomicU8>,
+    Arc<Mutex<OccurrenceState>>,
+) {
+    let (app, service, revoked, changed, failure, source_state, _) = app_with_database(idp).await;
+    (app, service, revoked, changed, failure, source_state)
 }
 
 fn token(idp: &MockIdp) -> String {
@@ -463,6 +484,101 @@ fn colleague_token(idp: &MockIdp) -> String {
         "scope": "casework:staff",
         "registry_actor_kind": "human"
     }))
+}
+
+fn human_token(idp: &MockIdp, principal: &str, profile: &str) -> BearerToken {
+    BearerToken::new(idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_principal": principal,
+        "scope": format!("casework:{profile}"),
+        "registry_actor_kind": "human"
+    })))
+    .expect("synthetic human bearer")
+}
+
+async fn native_review_client(app: axum::Router) -> (CaseworkClient, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind owned Casework test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve candidate Casework router");
+    });
+    let client = CaseworkClient::new(
+        CaseworkClientConfig::new(
+            format!("http://{address}/")
+                .parse()
+                .expect("test service URL"),
+        )
+        .with_max_mutation_retries(0),
+    )
+    .expect("candidate native client");
+    (client, server)
+}
+
+async fn create_answer_task(
+    app: &axum::Router,
+    database: &tokio_postgres::Client,
+    idp: &MockIdp,
+    reference: &str,
+) -> (ReviewRequestAccepted, Uuid) {
+    let mut body = review_request_for_subject(reference, reference, &idp.issuer());
+    body.kind = "registry-answer".to_owned();
+    body.context = ReviewContext::Submitted {
+        snapshot: json!({}),
+    };
+    create_task(app, database, idp, &body).await
+}
+
+async fn create_task(
+    app: &axum::Router,
+    database: &tokio_postgres::Client,
+    idp: &MockIdp,
+    body: &ReviewCreateRequest,
+) -> (ReviewRequestAccepted, Uuid) {
+    let mut request = create_http_request(body, Some(&token(idp)));
+    request.headers_mut().insert(
+        "idempotency-key",
+        format!("create-{}", body.requester_reference)
+            .parse()
+            .expect("test key"),
+    );
+    let response = app.clone().oneshot(request).await.expect("create review");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let accepted: ReviewRequestAccepted = serde_json::from_slice(
+        &to_bytes(response.into_body(), 32 * 1024)
+            .await
+            .expect("bounded create response"),
+    )
+    .expect("accepted review");
+    let task_id = database
+        .query_one(
+            "SELECT task_id FROM casework_review_tasks WHERE request_id=$1",
+            &[&accepted.request_id],
+        )
+        .await
+        .expect("created task")
+        .get(0);
+    (accepted, task_id)
+}
+
+fn assert_client_status(error: CaseworkClientError, expected: u16) {
+    assert!(
+        matches!(error, CaseworkClientError::Problem { status, .. } if status == expected),
+        "expected a typed HTTP {expected} refusal, got {error:?}"
+    );
+}
+
+fn answer_decision() -> registry_casework_client::ReviewTaskDecisionRequest {
+    registry_casework_client::ReviewTaskDecisionRequest {
+        decision: ReviewerDecisionKind::Answer {
+            outcome: "found".to_owned(),
+            reason: Some("private-reason-canary".to_owned()),
+            result: Some(json!({"answer": "producer-result-canary"})),
+        },
+    }
 }
 
 fn initiator_token(idp: &MockIdp, principal: &str) -> String {
@@ -2148,6 +2264,9 @@ async fn a_reviewer_confirms_from_the_task_read_whether_they_decided_it_over_htt
             own.as_object_mut()
                 .expect("task object")
                 .remove("decidedByCaller");
+            own.as_object_mut()
+                .expect("task object")
+                .remove("decisionReceipt");
             own
         },
         {
@@ -2158,9 +2277,730 @@ async fn a_reviewer_confirms_from_the_task_read_whether_they_decided_it_over_htt
                 .remove("decidedByCaller");
             other
         },
-        "the two reads differ only by the caller-relative flag"
+        "the two reads differ only by caller-relative decision confirmation"
     );
 
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn reviewer_ownership_filters_precede_pagination_and_survive_state_changes_over_http() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _, database) = app_with_database(&idp).await;
+    let (_, first) = create_answer_task(&app, &database, &idp, "ownership-first").await;
+    let (_, held) = create_answer_task(&app, &database, &idp, "ownership-held").await;
+    let (_, later) = create_answer_task(&app, &database, &idp, "ownership-later").await;
+    let (_, assigned) = create_answer_task(&app, &database, &idp, "ownership-assigned").await;
+    let (_, elsewhere) = create_answer_task(&app, &database, &idp, "ownership-elsewhere").await;
+    database
+        .batch_execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+         VALUES('elsewhere','review-team',1);",
+        )
+        .await
+        .expect("serve a second queue");
+    database
+        .execute(
+            "UPDATE casework_review_tasks SET queue_id='elsewhere' WHERE task_id=$1",
+            &[&elsewhere],
+        )
+        .await
+        .expect("route a task to the second queue");
+    let (client, server) = native_review_client(app.clone()).await;
+    let reviewer = human_token(&idp, "reviewer", "staff");
+    let colleague = human_token(&idp, "colleague", "staff");
+    let supervisor = human_token(&idp, "supervisor", "supervisor");
+    let auth = || CaseworkAuth::new(&reviewer, "staff");
+    let colleague_auth = || CaseworkAuth::new(&colleague, "staff");
+    client
+        .claim_review_task(colleague_auth(), held, 1, "claim-other")
+        .await
+        .expect("other holder");
+    for task in [assigned, elsewhere] {
+        client
+            .assign_review_task(
+                CaseworkAuth::new(&supervisor, "supervisor"),
+                task,
+                1,
+                &format!("assign-{task}"),
+                &registry_casework_core::AssignmentRequest {
+                    assignee: registry_casework_core::IssuerPrincipal {
+                        issuer: idp.issuer(),
+                        subject: "reviewer".to_owned(),
+                    },
+                    reason: None,
+                },
+            )
+            .await
+            .expect("supervisor assigns beyond the first unfiltered page");
+    }
+    let first_page = client
+        .review_tasks(
+            auth(),
+            &ReviewTaskQuery {
+                queue: Some("review".to_owned()),
+                limit: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("default first page")
+        .value;
+    assert_eq!(first_page.items[0].task_id, first);
+    let assigned_query = ReviewTaskQuery {
+        queue: Some("review".to_owned()),
+        ownership: Some(ReviewTaskOwnership::AssignedToMe),
+        limit: Some(1),
+        ..Default::default()
+    };
+    let mine = client
+        .review_tasks(auth(), &assigned_query)
+        .await
+        .expect("assigned native view")
+        .value;
+    assert_eq!(mine.items.len(), 1);
+    assert_eq!(mine.items[0].task_id, assigned);
+    assert!(mine.next_cursor.is_none());
+    let unclaimed = ReviewTaskQuery {
+        queue: Some("review".to_owned()),
+        ownership: Some(ReviewTaskOwnership::Unclaimed),
+        limit: Some(1),
+        ..Default::default()
+    };
+    let available = client
+        .review_tasks(auth(), &unclaimed)
+        .await
+        .expect("available first page")
+        .value;
+    assert_eq!(available.items[0].task_id, first);
+    let cursor = available.next_cursor.expect("more available work");
+    client
+        .claim_review_task(auth(), first, 1, "claim-cursor-anchor")
+        .await
+        .expect("claim anchor");
+    let continuation = ReviewTaskQuery {
+        cursor: Some(cursor),
+        ..unclaimed.clone()
+    };
+    let after_claim = client
+        .review_tasks(auth(), &continuation)
+        .await
+        .expect("claim keeps scan position")
+        .value;
+    assert_eq!(
+        after_claim
+            .items
+            .iter()
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>(),
+        vec![later]
+    );
+    client
+        .decide_review_task(auth(), first, 2, "decide-cursor-anchor", &answer_decision())
+        .await
+        .expect("decide anchor");
+    let after_decision = client
+        .review_tasks(auth(), &continuation)
+        .await
+        .expect("decision keeps scan position")
+        .value;
+    assert_eq!(
+        after_decision
+            .items
+            .iter()
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>(),
+        vec![later]
+    );
+    // A delegated holder immediately leaves one person's view and enters the other's.
+    client
+        .delegate_review_task(
+            auth(),
+            assigned,
+            2,
+            "delegate-assigned",
+            &registry_casework_core::DelegateRequest {
+                delegate: registry_casework_core::IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "colleague".to_owned(),
+                },
+                reason: None,
+            },
+        )
+        .await
+        .expect("delegate assigned task");
+    assert!(client
+        .review_tasks(auth(), &assigned_query)
+        .await
+        .expect("refresh mine")
+        .value
+        .items
+        .is_empty());
+    let colleagues = client
+        .review_tasks(
+            colleague_auth(),
+            &ReviewTaskQuery {
+                limit: Some(100),
+                ..assigned_query.clone()
+            },
+        )
+        .await
+        .expect("refresh colleague")
+        .value;
+    assert_eq!(
+        colleagues
+            .items
+            .iter()
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>(),
+        vec![held, assigned]
+    );
+    let held_cursor = client
+        .review_tasks(colleague_auth(), &assigned_query)
+        .await
+        .expect("held first page")
+        .value
+        .next_cursor
+        .expect("second holding");
+    client
+        .release_review_task(colleague_auth(), held, 2, "release-held-anchor")
+        .await
+        .expect("release cursor anchor");
+    let after_release = client
+        .review_tasks(
+            colleague_auth(),
+            &ReviewTaskQuery {
+                cursor: Some(held_cursor),
+                ..assigned_query.clone()
+            },
+        )
+        .await
+        .expect("released anchor keeps scan position")
+        .value;
+    assert_eq!(after_release.items[0].task_id, assigned);
+    client
+        .release_review_task(colleague_auth(), assigned, 3, "release-delegated")
+        .await
+        .expect("release delegated task");
+    let refreshed = client
+        .review_tasks(
+            auth(),
+            &ReviewTaskQuery {
+                limit: Some(100),
+                ..unclaimed.clone()
+            },
+        )
+        .await
+        .expect("refresh available")
+        .value;
+    assert_eq!(
+        refreshed
+            .items
+            .iter()
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>(),
+        vec![held, later, assigned]
+    );
+    assert!(refreshed
+        .items
+        .iter()
+        .all(|task| task.decision_receipt.is_none()));
+    // Queue service and current membership remain authority checks for every ownership value.
+    database
+        .execute(
+            "DELETE FROM casework_memberships WHERE subject='reviewer'",
+            &[],
+        )
+        .await
+        .expect("remove membership");
+    assert!(client
+        .review_tasks(auth(), &assigned_query)
+        .await
+        .expect("revoked first page")
+        .value
+        .items
+        .is_empty());
+    assert_client_status(
+        client
+            .review_tasks(auth(), &continuation)
+            .await
+            .expect_err("revoked cursor"),
+        410,
+    );
+    assert!(client
+        .review_tasks(
+            CaseworkAuth::new(&supervisor, "supervisor"),
+            &assigned_query
+        )
+        .await
+        .expect("ineligible supervisor inbox")
+        .value
+        .items
+        .is_empty());
+    server.abort();
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn supervisors_discover_operational_reviews_without_decision_eligibility_over_http() {
+    let idp = MockIdp::start().await;
+    let (app, _, revoked, _, _, _, database) = app_with_database(&idp).await;
+    let (_, assigned) = create_answer_task(&app, &database, &idp, "supervision-assignment").await;
+    let (waiting_request, waiting) =
+        create_answer_task(&app, &database, &idp, "supervision-waiting").await;
+    let (_, unrelated) = create_answer_task(&app, &database, &idp, "supervision-unrelated").await;
+    database.batch_execute(
+        "INSERT INTO casework_teams(team_id,revision) VALUES('other-team',1);
+         INSERT INTO casework_queue_service(queue_id,team_id,revision) VALUES('other','other-team',1);",
+    ).await.expect("unrelated serving team");
+    database
+        .execute(
+            "UPDATE casework_review_tasks SET queue_id='other' WHERE task_id=$1",
+            &[&unrelated],
+        )
+        .await
+        .expect("route unrelated task");
+    let source_request =
+        review_request_for_subject("supervision-source", "supervision-source", &idp.issuer());
+    let (_, source_task) = create_task(&app, &database, &idp, &source_request).await;
+    let (client, server) = native_review_client(app.clone()).await;
+    let supervisor = human_token(&idp, "supervisor", "supervisor");
+    let reviewer = human_token(&idp, "reviewer", "staff");
+    let administrator = human_token(&idp, "administrator", "administrator");
+    let auth = || CaseworkAuth::new(&supervisor, "supervisor");
+    let query = SupervisoryReviewTaskQuery {
+        queue: Some("review".to_owned()),
+        limit: Some(1),
+        ..Default::default()
+    };
+    assert!(client
+        .review_tasks(auth(), &ReviewTaskQuery::default())
+        .await
+        .expect("supervisor remains ineligible as a reviewer")
+        .value
+        .items
+        .is_empty());
+    let first = client
+        .supervisory_review_tasks(auth(), &query)
+        .await
+        .expect("supervisor discovery")
+        .value;
+    assert_eq!(first.items[0].task_id, assigned);
+    let cursor = first.next_cursor.expect("bounded supervisor page");
+    let assignment = client
+        .assign_review_task(
+            auth(),
+            assigned,
+            first.items[0].revision,
+            "assign-discovered",
+            &registry_casework_core::AssignmentRequest {
+                assignee: registry_casework_core::IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "reviewer".to_owned(),
+                },
+                reason: None,
+            },
+        )
+        .await
+        .expect("discover then assign")
+        .value;
+    assert!(assignment.decision_receipt.is_none());
+    let claimed = client
+        .supervisory_review_tasks(auth(), &query)
+        .await
+        .expect("claimed task discovery")
+        .value;
+    assert_eq!(
+        serde_json::to_value(&claimed.items[0]).expect("claimed operational row"),
+        json!({
+            "taskId": assigned,
+            "requestId": first.items[0].request_id,
+            "queue": "review",
+            "revision": 2,
+            "state": "held"
+        }),
+        "claimed discovery omits holder issuer and subject"
+    );
+    let next = client
+        .supervisory_review_tasks(
+            auth(),
+            &SupervisoryReviewTaskQuery {
+                cursor: Some(cursor),
+                ..query.clone()
+            },
+        )
+        .await
+        .expect("assignment keeps supervisor cursor usable")
+        .value;
+    assert_eq!(next.items[0].task_id, waiting);
+    assert_client_status(
+        client
+            .claim_review_task(auth(), assigned, 2, "supervisor-claim")
+            .await
+            .expect_err("discovery grants no claim authority"),
+        403,
+    );
+    assert_client_status(
+        client
+            .decide_review_task(
+                auth(),
+                assigned,
+                2,
+                "supervisor-decision",
+                &answer_decision(),
+            )
+            .await
+            .expect_err("discovery grants no decision authority"),
+        403,
+    );
+    assert_client_status(
+        client
+            .review_task(auth(), assigned)
+            .await
+            .expect_err("no reviewer detail"),
+        404,
+    );
+    assert_client_status(
+        client
+            .review_task_context(auth(), assigned)
+            .await
+            .expect_err("no submitted context"),
+        404,
+    );
+    for (bearer, profile) in [(&reviewer, "staff"), (&administrator, "administrator")] {
+        assert_client_status(
+            client
+                .supervisory_review_tasks(CaseworkAuth::new(bearer, profile), &query)
+                .await
+                .expect_err("only supervisors discover this projection"),
+            403,
+        );
+    }
+    client
+        .decide_review_task(
+            CaseworkAuth::new(&reviewer, "staff"),
+            assigned,
+            2,
+            "decide-assigned",
+            &answer_decision(),
+        )
+        .await
+        .expect("assigned reviewer decides");
+    let all = SupervisoryReviewTaskQuery {
+        limit: Some(100),
+        ..query.clone()
+    };
+    let without_source = client
+        .supervisory_review_tasks(auth(), &all)
+        .await
+        .expect("submitted discovery")
+        .value;
+    assert_eq!(
+        without_source
+            .items
+            .iter()
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>(),
+        vec![assigned, waiting]
+    );
+    let completed = &without_source.items[0];
+    let event_id = completed
+        .accountability_event_id
+        .expect("accountability reference for decided work");
+    let wire = serde_json::to_value(completed).expect("operational row");
+    let mut fields = wire
+        .as_object()
+        .expect("discovery object")
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    fields.sort_unstable();
+    assert_eq!(
+        fields,
+        vec![
+            "accountabilityEventId",
+            "queue",
+            "requestId",
+            "revision",
+            "state",
+            "taskId"
+        ]
+    );
+    let producer = BearerToken::new(token(&idp)).expect("synthetic producer bearer");
+    client
+        .cancel_review_request(
+            CaseworkAuth::new(&producer, "producer"),
+            &waiting_request,
+            "cancel-waiting-discovery",
+            &registry_casework_core::ReviewCancelRequest {
+                subject: waiting_request.subject.clone(),
+                reason: "withdrawn".to_owned(),
+            },
+        )
+        .await
+        .expect("producer closes waiting work");
+    let closed = client
+        .supervisory_review_tasks(auth(), &all)
+        .await
+        .expect("retained closed discovery")
+        .value;
+    let closed = closed
+        .items
+        .iter()
+        .find(|task| task.task_id == waiting)
+        .expect("closed task reference");
+    assert_eq!(
+        closed.state,
+        registry_casework_core::SupervisoryReviewTaskState::Decided
+    );
+    assert!(closed.accountability_event_id.is_none());
+    let cancelled = client
+        .review_task(CaseworkAuth::new(&reviewer, "staff"), waiting)
+        .await
+        .expect("closed task read")
+        .value;
+    assert_eq!(cancelled.decided_by_caller, Some(false));
+    assert!(cancelled.decision_receipt.is_none());
+    let accountability = client
+        .review_accountability(auth(), event_id)
+        .await
+        .expect("existing accountability authority")
+        .value;
+    assert_eq!(
+        accountability.private_reason.as_deref(),
+        Some("private-reason-canary")
+    );
+    assert_client_status(
+        client
+            .review_accountability(CaseworkAuth::new(&reviewer, "staff"), event_id)
+            .await
+            .expect_err("private reasons stay supervisor-only"),
+        403,
+    );
+    let visible = client
+        .supervisory_review_tasks(auth().with_source_profile("reviewer-source"), &all)
+        .await
+        .expect("current source authority")
+        .value;
+    assert!(visible.items.iter().any(|task| task.task_id == source_task));
+    assert!(visible.items.iter().all(|task| task.task_id != unrelated));
+    revoked.store(true, Ordering::SeqCst);
+    let concealed = client
+        .supervisory_review_tasks(auth().with_source_profile("reviewer-source"), &all)
+        .await
+        .expect("source revocation conceals discovery")
+        .value;
+    assert!(concealed
+        .items
+        .iter()
+        .all(|task| task.task_id != source_task));
+    database
+        .execute(
+            "UPDATE casework_review_requests SET terminal_at=now()-interval '91 days',
+         result_available_until=now()-interval '1 day' WHERE request_id=$1",
+            &[&completed.request_id],
+        )
+        .await
+        .expect("expire decided task");
+    assert!(client
+        .supervisory_review_tasks(auth(), &all)
+        .await
+        .expect("retention conceals discovery")
+        .value
+        .items
+        .iter()
+        .all(|task| task.task_id != assigned));
+    database
+        .execute(
+            "DELETE FROM casework_memberships WHERE subject='supervisor'",
+            &[],
+        )
+        .await
+        .expect("remove supervision");
+    assert!(client
+        .supervisory_review_tasks(auth(), &all)
+        .await
+        .expect("current membership removal")
+        .value
+        .items
+        .is_empty());
+    assert_client_status(
+        client
+            .review_accountability(auth(), event_id)
+            .await
+            .expect_err("accountability revoked"),
+        404,
+    );
+    server.abort();
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn decision_receipts_disclose_only_the_callers_retained_pinned_outcome_over_http() {
+    let idp = MockIdp::start().await;
+    let (app, service, revoked, _, _, _, database) = app_with_database(&idp).await;
+    let (accepted, task) = create_answer_task(&app, &database, &idp, "own-receipt").await;
+    let (client, server) = native_review_client(app.clone()).await;
+    let reviewer = human_token(&idp, "reviewer", "staff");
+    let colleague = human_token(&idp, "colleague", "staff");
+    let auth = || CaseworkAuth::new(&reviewer, "staff");
+    client
+        .claim_review_task(auth(), task, 1, "claim-receipt")
+        .await
+        .expect("claim receipt task");
+    assert_client_status(
+        client
+            .decide_review_task(auth(), task, 1, "stale-receipt", &answer_decision())
+            .await
+            .expect_err("stale attempt refused"),
+        412,
+    );
+    assert!(client
+        .review_task(auth(), task)
+        .await
+        .expect("read after refused decision")
+        .value
+        .decision_receipt
+        .is_none());
+    client
+        .decide_review_task(auth(), task, 2, "decide-receipt", &answer_decision())
+        .await
+        .expect("commit exact answer");
+    // A new bearer and client recover only the authoritative decision, independent of local attempts.
+    let fresh_reviewer = human_token(&idp, "reviewer", "staff");
+    let own = client
+        .review_task(CaseworkAuth::new(&fresh_reviewer, "staff"), task)
+        .await
+        .expect("fresh session receipt")
+        .value;
+    assert_eq!(own.decided_by_caller, Some(true));
+    let receipt = own.decision_receipt.as_ref().expect("own retained receipt");
+    assert_eq!(receipt.policy, accepted.policy);
+    assert_eq!(
+        receipt.decision,
+        registry_casework_core::ReviewDecisionType::Answer
+    );
+    assert_eq!(receipt.outcome.as_deref(), Some("found"));
+    let receipt_wire = serde_json::to_value(receipt).expect("receipt wire");
+    assert_eq!(receipt_wire.as_object().expect("receipt object").len(), 4);
+    assert!(receipt_wire.get("privateReason").is_none());
+    assert!(receipt_wire.get("reason").is_none());
+    assert!(receipt_wire.get("result").is_none());
+    let other = client
+        .review_task(CaseworkAuth::new(&colleague, "staff"), task)
+        .await
+        .expect("colleague read")
+        .value;
+    assert_eq!(other.decided_by_caller, Some(false));
+    assert!(other.decision_receipt.is_none());
+    assert_client_status(
+        client
+            .decide_review_task(
+                CaseworkAuth::new(&colleague, "staff"),
+                task,
+                2,
+                "other-late-attempt",
+                &answer_decision(),
+            )
+            .await
+            .expect_err("another caller cannot replace decision"),
+        404,
+    );
+    let source = review_request_for_subject("source-receipt", "source-receipt", &idp.issuer());
+    let (_, source_task) = create_task(&app, &database, &idp, &source).await;
+    client
+        .claim_review_task(
+            auth().with_source_profile("reviewer-source"),
+            source_task,
+            1,
+            "claim-source-receipt",
+        )
+        .await
+        .expect("source-authorized claim");
+    client
+        .decide_review_task(
+            auth().with_source_profile("reviewer-source"),
+            source_task,
+            2,
+            "approve-source-receipt",
+            &registry_casework_client::ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Approve,
+            },
+        )
+        .await
+        .expect("source-authorized approval");
+    let approved = client
+        .review_task(auth().with_source_profile("reviewer-source"), source_task)
+        .await
+        .expect("own approval receipt")
+        .value
+        .decision_receipt
+        .expect("approval receipt");
+    assert_eq!(
+        approved.decision,
+        registry_casework_core::ReviewDecisionType::Approve
+    );
+    assert!(approved.outcome.is_none());
+    revoked.store(true, Ordering::SeqCst);
+    assert_client_status(
+        client
+            .review_task(auth().with_source_profile("reviewer-source"), source_task)
+            .await
+            .expect_err("source revocation conceals receipt"),
+        404,
+    );
+    database
+        .execute(
+            "DELETE FROM casework_memberships WHERE subject='reviewer'",
+            &[],
+        )
+        .await
+        .expect("remove reviewer");
+    assert_client_status(
+        client
+            .review_task(auth(), task)
+            .await
+            .expect_err("membership removal conceals receipt"),
+        404,
+    );
+    database.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('review-team',$1,'reviewer','staff')",
+        &[&idp.issuer()]).await.expect("restore membership");
+    database
+        .execute(
+            "UPDATE casework_review_requests SET terminal_at=now()-interval '91 days',
+         result_available_until=now()-interval '1 day' WHERE request_id=$1",
+            &[&accepted.request_id],
+        )
+        .await
+        .expect("expire own result");
+    assert_client_status(
+        client
+            .review_task(auth(), task)
+            .await
+            .expect_err("expiry conceals receipt"),
+        404,
+    );
+    service
+        .erase_expired_reviews()
+        .await
+        .expect("erase expired review payloads");
+    let decisions: i64 = database
+        .query_one(
+            "SELECT count(*) FROM casework_review_decisions WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("erased decision count")
+        .get(0);
+    assert_eq!(decisions, 0);
+    assert_client_status(
+        client
+            .review_task(auth(), task)
+            .await
+            .expect_err("erasure conceals receipt"),
+        404,
+    );
+    server.abort();
     idp.stop().await;
 }
 

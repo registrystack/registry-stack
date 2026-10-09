@@ -777,7 +777,11 @@ ReviewResultOutcome: TypeAlias = ReviewResultAvailable | ReviewResultPending | R
 class ReviewPageQuery(TypedDict, total=False):
     cursor: Uuid
     limit: SafeInteger
+ReviewTaskOwnership: TypeAlias = Literal["assigned_to_me", "unclaimed"]
 class ReviewTaskQuery(ReviewPageQuery, total=False):
+    queue: str
+    ownership: ReviewTaskOwnership
+class SupervisoryReviewTaskQuery(ReviewPageQuery, total=False):
     queue: str
 
 class WorkItemHistoryQuery(TypedDict, total=False):
@@ -807,8 +811,16 @@ class ReviewHeldTaskStateValue(TypedDict):
 class ReviewHeldTaskState(TypedDict):
     held: ReviewHeldTaskStateValue
 ReviewerTaskState: TypeAlias = Literal["open", "decided"] | ReviewHeldTaskState
+ReviewDecisionType: TypeAlias = Literal["approve", "reject", "changes_requested", "answer"]
+class _ReviewDecisionReceiptOptional(TypedDict, total=False):
+    outcome: str
+class ReviewDecisionReceipt(_ReviewDecisionReceiptOptional):
+    policy: ReviewPolicyBinding
+    decision: ReviewDecisionType
+    decidedAt: str
 class _ReviewerTaskOptional(TypedDict, total=False):
     decidedByCaller: bool
+    decisionReceipt: ReviewDecisionReceipt
 class ReviewerTask(_ReviewerTaskOptional):
     taskId: Uuid
     requestId: Uuid
@@ -822,6 +834,20 @@ class _ReviewTaskPageOptional(TypedDict, total=False):
     nextCursor: Uuid
 class ReviewTaskPage(_ReviewTaskPageOptional):
     items: list[ReviewerTask]
+    status: PageStatus
+class _SupervisoryReviewTaskOptional(TypedDict, total=False):
+    accountabilityEventId: Uuid
+SupervisoryReviewTaskState: TypeAlias = Literal["open", "held", "decided"]
+class SupervisoryReviewTask(_SupervisoryReviewTaskOptional):
+    taskId: Uuid
+    requestId: Uuid
+    queue: str
+    revision: SafeInteger
+    state: SupervisoryReviewTaskState
+class _SupervisoryReviewTaskPageOptional(TypedDict, total=False):
+    nextCursor: Uuid
+class SupervisoryReviewTaskPage(_SupervisoryReviewTaskPageOptional):
+    items: list[SupervisoryReviewTask]
     status: PageStatus
 ReviewSourceBindingStatus: TypeAlias = Literal["current", "binding_changed"]
 class _ReviewSourceProjectionOptional(TypedDict, total=False):
@@ -926,6 +952,7 @@ class CaseworkClient:
     def review_kinds(self, token: str, profile: str) -> Complete[list[ReviewKindPolicySnapshot]]: ...
     def review_kind(self, token: str, profile: str, kind_id: str) -> Complete[ReviewKindPolicySnapshot]: ...
     def review_tasks(self, token: str, profile: str, query: ReviewTaskQuery | None = None, source_profile: str | None = None) -> Complete[ReviewTaskPage]: ...
+    def supervisory_review_tasks(self, token: str, profile: str, query: SupervisoryReviewTaskQuery | None = None, source_profile: str | None = None) -> Complete[SupervisoryReviewTaskPage]: ...
     def review_task(self, token: str, profile: str, task_id: Uuid, source_profile: str | None = None) -> Complete[ReviewerTask]: ...
     def review_task_context(self, token: str, profile: str, task_id: Uuid, source_profile: str | None = None) -> Complete[ReviewTaskContext]: ...
     def preview_review_task_templates(self, token: str, profile: str, source_profile: str, task_id: Uuid) -> Complete[TaskTemplatePreviews]: ...

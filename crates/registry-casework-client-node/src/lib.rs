@@ -17,7 +17,7 @@ use registry_casework_client::{
     RecoverAttemptRequest, ReviewCancelRequest, ReviewCreateRequest, ReviewNoteRequest,
     ReviewPageQuery, ReviewRequestAccepted, ReviewResultResponse, ReviewTaskDecisionRequest,
     ReviewTaskDraftInput, ReviewTaskQuery, SaveDraftRequest, SubmissionDigest,
-    WorkItemHistoryQuery,
+    SupervisoryReviewTaskQuery, WorkItemHistoryQuery,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -247,6 +247,26 @@ impl CaseworkClient {
                 .review_task(
                     optional_source_auth(&token, &profile, source_profile.as_deref()),
                     uuid(&task_id)?,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn supervisory_review_tasks(
+        &self,
+        token: String,
+        profile: String,
+        query: Option<Value>,
+        source_profile: Option<String>,
+    ) -> Result<CaseworkOutcome> {
+        let token = bearer(token)?;
+        let query: SupervisoryReviewTaskQuery = query.map(input).transpose()?.unwrap_or_default();
+        outcome(
+            self.inner
+                .supervisory_review_tasks(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    &query,
                 )
                 .await,
         )

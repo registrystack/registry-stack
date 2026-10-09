@@ -25,8 +25,8 @@ use registry_stack_client::casework::{
     ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewPageQuery,
     ReviewRequestAccepted, ReviewRequestView, ReviewResultFeedPage, ReviewTaskContext,
     ReviewTaskDecisionRequest, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage,
-    ReviewTaskQuery, ReviewerTask, SaveDraftRequest, SubmissionDigest, Uuid, WorkItem,
-    WorkItemHistoryQuery, WorkItemPage,
+    ReviewTaskQuery, ReviewerTask, SaveDraftRequest, SubmissionDigest, SupervisoryReviewTaskPage,
+    SupervisoryReviewTaskQuery, Uuid, WorkItem, WorkItemHistoryQuery, WorkItemPage,
 };
 
 /// The client's public surface, read from the crate that publishes it.
@@ -63,6 +63,7 @@ async fn every_casework_method_names_its_types(
     review_page: &ReviewPageQuery,
     work_item_history_query: &WorkItemHistoryQuery,
     review_task_query: &ReviewTaskQuery,
+    supervisory_review_task_query: &SupervisoryReviewTaskQuery,
     list_query: &ListWorkItemsQuery,
     next_query: &NextWorkItemQuery,
     draft: &SaveDraftRequest,
@@ -120,6 +121,12 @@ async fn every_casework_method_names_its_types(
         .await?;
     let _: CaseworkComplete<ReviewTaskPage> = client
         .review_tasks(CaseworkAuth::new(token, profile), review_task_query)
+        .await?;
+    let _: CaseworkComplete<SupervisoryReviewTaskPage> = client
+        .supervisory_review_tasks(
+            CaseworkAuth::new(token, profile),
+            supervisory_review_task_query,
+        )
         .await?;
     let _: CaseworkComplete<ReviewerTask> = client
         .review_task(CaseworkAuth::new(token, profile), item_id)

@@ -34,6 +34,22 @@ test('a configuration value the sanitizer refuses is a configuration error', () 
   }
 });
 
+test('review task discovery keeps ownership closed and off the supervisory query', async () => {
+  const { CaseworkClient, CaseworkClientError } = require('../client');
+  const client = new CaseworkClient({ baseUrl: 'https://casework.example.test/' });
+  assert.equal(typeof client.supervisoryReviewTasks, 'function');
+  for (const call of [
+    client.reviewTasks('one-call-secret', 'staff', { ownership: 'someone_elses' }),
+    client.supervisoryReviewTasks('one-call-secret', 'supervisor', { ownership: 'unclaimed' }),
+  ]) {
+    await assert.rejects(call, (error) => {
+      assert.ok(error instanceof CaseworkClientError);
+      assert.equal(error.kind, 'invalid_request');
+      return true;
+    });
+  }
+});
+
 test('review task context uses the exact route and forwards the optional source profile', async (context) => {
   let observed;
   const server = http.createServer((request, response) => {
@@ -93,6 +109,55 @@ test('review task context uses the exact route and forwards the optional source 
   assert.equal(observed.path, '/v1/review-tasks/00000000-0000-0000-0000-000000000000/context');
   assert.equal(observed.headers.authorization, 'Bearer one-call-secret');
   assert.equal(observed.headers['registry-casework-profile'], 'staff');
+  assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+});
+
+test('supervisory review task discovery preserves the bounded row and query', async (context) => {
+  let observed;
+  const server = http.createServer((request, response) => {
+    observed = { path: request.url, headers: request.headers };
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
+      });
+      response.end(JSON.stringify({
+        items: [{
+          taskId: '00000000-0000-0000-0000-000000000007',
+          requestId: '00000000-0000-0000-0000-000000000009',
+          queue: 'reviews',
+          revision: 3,
+          state: 'decided',
+          accountabilityEventId: '00000000-0000-0000-0000-000000000011',
+        }],
+        status: 'complete',
+      }));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  const { CaseworkClient } = require('../client');
+  const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${port}/` });
+  const result = await client.supervisoryReviewTasks(
+    'one-call-secret',
+    'supervisor',
+    {
+      queue: 'reviews',
+      cursor: '00000000-0000-0000-0000-000000000008',
+      limit: 10,
+    },
+    'reviewer',
+  );
+
+  assert.equal(result.value.items[0].accountabilityEventId, '00000000-0000-0000-0000-000000000011');
+  assert.equal(observed.path, '/v1/review-tasks/supervision?queue=reviews&cursor=00000000-0000-0000-0000-000000000008&limit=10');
+  assert.equal(observed.headers['registry-casework-profile'], 'supervisor');
   assert.equal(observed.headers['registry-source-profile'], 'reviewer');
 });
 

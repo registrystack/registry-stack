@@ -34,6 +34,7 @@ ROUTES = {
     "/v1/review-requests/{request_id}/notes",
     "/v1/review-results",
     "/v1/review-tasks",
+    "/v1/review-tasks/supervision",
     "/v1/review-tasks/{task_id}",
     "/v1/review-tasks/{task_id}/context",
     "/v1/review-tasks/{task_id}/claim",
@@ -145,6 +146,13 @@ SCHEMA_STRUCTS = {
         "Description": "Description",
         "DraftResponse": "DraftResponse",
     },
+    "crates/registry-casework-core/src/review.rs": {
+        "ReviewDecisionReceipt": "ReviewDecisionReceipt",
+        "ReviewerTask": "ReviewerTask",
+        "ReviewTaskPage": "ReviewTaskPage",
+        "SupervisoryReviewTask": "SupervisoryReviewTask",
+        "SupervisoryReviewTaskPage": "SupervisoryReviewTaskPage",
+    },
     "crates/registry-casework-core/src/assignment.rs": {
         "AbsenceList": "AbsenceList",
         "AbsenceRecord": "AbsenceRecord",
@@ -218,6 +226,7 @@ OPERATION_IDS = {
     ("POST", "/v1/review-requests/{request_id}/notes"): "addReviewNote",
     ("GET", "/v1/review-results"): "listReviewResults",
     ("GET", "/v1/review-tasks"): "listReviewTasks",
+    ("GET", "/v1/review-tasks/supervision"): "listSupervisoryReviewTasks",
     ("GET", "/v1/review-tasks/{task_id}"): "getReviewTask",
     ("GET", "/v1/review-tasks/{task_id}/context"): "getReviewTaskContext",
     ("GET", "/v1/review-tasks/{task_id}/task-templates"): "previewReviewTaskTemplates",
@@ -367,6 +376,43 @@ def review_schemas() -> dict:
             {"const": "decided"},
         ]
     }
+    supervisory_review_task_state = {
+        "type": "string",
+        "enum": ["open", "held", "decided"],
+    }
+    review_decision_type = {
+        "type": "string",
+        "enum": ["approve", "reject", "changes_requested", "answer"],
+    }
+    decision_receipt = obj(
+        {
+            "policy": ref("ReviewPolicyBinding"),
+            "decision": ref("ReviewDecisionType"),
+            "outcome": text,
+            "decidedAt": instant,
+        },
+        ["policy", "decision", "decidedAt"],
+    )
+    decision_receipt["allOf"] = [
+        {
+            "if": {
+                "properties": {"decision": {"const": "approve"}},
+                "required": ["decision"],
+            },
+            "then": {"not": {"required": ["outcome"]}},
+        },
+        {
+            "if": {
+                "properties": {
+                    "decision": {
+                        "enum": ["reject", "changes_requested", "answer"]
+                    }
+                },
+                "required": ["decision"],
+            },
+            "then": {"required": ["outcome"]},
+        },
+    ]
     task = obj(
         {
             "taskId": uuid,
@@ -382,8 +428,20 @@ def review_schemas() -> dict:
             "eligibleProfiles": array(text),
             "state": ref("ReviewerTaskState"),
             "decidedByCaller": {"type": "boolean"},
+            "decisionReceipt": ref("ReviewDecisionReceipt"),
         },
         ["taskId", "requestId", "stageIndex", "stageId", "queue", "revision", "eligibleProfiles", "state"],
+    )
+    supervisory_task = obj(
+        {
+            "taskId": uuid,
+            "requestId": uuid,
+            "queue": text,
+            "revision": integer,
+            "state": ref("SupervisoryReviewTaskState"),
+            "accountabilityEventId": uuid,
+        },
+        ["taskId", "requestId", "queue", "revision", "state"],
     )
     decision = {
         "oneOf": [
@@ -541,9 +599,14 @@ def review_schemas() -> dict:
         "ReviewResultFeedPage": obj({"items": array(ref("ReviewResultFeedEntry")), "nextCursor": uuid}, ["items"]),
         "ReviewCancelRequest": obj({"subject": subject, "reason": text}, ["subject", "reason"]),
         "ReviewCancelResponse": cancel_response,
+        "ReviewDecisionType": review_decision_type,
+        "ReviewDecisionReceipt": decision_receipt,
         "ReviewerTaskState": reviewer_task_state,
         "ReviewerTask": task,
         "ReviewTaskPage": obj({"items": array(task), "nextCursor": uuid, "status": {"type": "string", "enum": ["complete", "budget_exhausted", "source_unavailable"]}}, ["items", "status"]),
+        "SupervisoryReviewTaskState": supervisory_review_task_state,
+        "SupervisoryReviewTask": supervisory_task,
+        "SupervisoryReviewTaskPage": obj({"items": array(supervisory_task), "nextCursor": uuid, "status": {"type": "string", "enum": ["complete", "budget_exhausted", "source_unavailable"]}}, ["items", "status"]),
         "ReviewTaskContextData": review_task_context_data,
         "ReviewTaskContext": obj({"taskId": uuid, "requestId": uuid, "subject": subject, "requesterReference": text, "policy": policy, "policySnapshot": ref("ReviewKindPolicySnapshot"), "resultConstraints": portable_json_object(), "context": ref("ReviewTaskContextData")}, ["taskId", "requestId", "subject", "requesterReference", "policy", "policySnapshot", "context"]),
         "ReviewTaskDraftInput": obj({"body": value}, ["body"]),
@@ -1542,8 +1605,9 @@ def document(contract: dict) -> dict:
         "/v1/review-requests/{request_id}/result": {"get": operation("Poll a requester-owned review result", "ReviewResult", parameters=[REQUEST_ID], description="Returns 200 with a retained terminal result, 202 while pending, empty 404 for concealed or unknown requests, and 410 after result retention expires.")},
         "/v1/review-requests/{request_id}/cancel": {"post": operation("Cancel a requester-owned active review", "ReviewCancelResponse", idempotency=True, body="ReviewCancelRequest", parameters=[REQUEST_ID])},
         "/v1/review-results": {"get": operation("List requester result-feed events", "ReviewResultFeedPage", parameters=[parameter("cursor", "query", "Last delivered event UUID.", {"type": "string", "format": "uuid"}, required=False), parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)])},
-        "/v1/review-tasks": {"get": operation("List current reviewer tasks", "ReviewTaskPage", source=True, source_required=False, parameters=[parameter("queue", "query", "Optional queue filter.", required=False), parameter("cursor", "query", "Last delivered task UUID.", {"type": "string", "format": "uuid"}, required=False), parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)])},
-        "/v1/review-tasks/{task_id}": {"get": operation("Read one current reviewer task", "ReviewerTask", source=True, source_required=False, parameters=[TASK_ID], description="A decided task carries decidedByCaller, true only when the current caller recorded its decision, so a reviewer whose decide response was lost can confirm the outcome. It never names another reviewer; the accountability record stays with supervisors.")},
+        "/v1/review-tasks": {"get": operation("List current reviewer tasks", "ReviewTaskPage", source=True, source_required=False, parameters=[parameter("queue", "query", "Optional queue filter.", required=False), parameter("ownership", "query", "Optional ownership filter applied before pagination. assigned_to_me selects tasks held by the current effective issuer-qualified principal, including a delegated holder. unclaimed selects open tasks. Omit it to list all eligible active tasks.", {"type": "string", "enum": ["assigned_to_me", "unclaimed"]}, required=False), parameter("cursor", "query", "Last delivered task UUID. It identifies an immutable created-at and task-id scan position, not a snapshot. Continue with the same queue and ownership filters. Current membership, queue service, pinned deciding profile, retention, and task existence are rechecked; ownership and the original policy anchor's active status are not cursor validity conditions. An unknown, erased, expired, no-longer-authorized, or different-queue anchor returns 410 review.result-expired. Refresh or change a filter by restarting without a cursor.", {"type": "string", "format": "uuid"}, required=False), parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Lists active tasks the current Staff or Supervisor caller may decide under a currently served queue and pinned deciding profile. The ownership filter narrows that authorized set and adds no authority. Each page is a live walk: rows after the cursor position are evaluated against current state, and a newly matching earlier row is visible after restarting the walk.")},
+        "/v1/review-tasks/supervision": {"get": operation("List review tasks for supervision", "SupervisoryReviewTaskPage", source=True, source_required=False, parameters=[parameter("queue", "query", "Optional currently supervised queue filter.", required=False), parameter("cursor", "query", "Last delivered task UUID. It identifies an immutable created-at and task-id scan position, not a snapshot. Continue with the same queue filter. Current Supervisor membership, queue service, retention, and task existence are rechecked; the original policy anchor's active status is not a cursor validity condition. An unknown, erased, expired, no-longer-authorized, or different-queue anchor returns 410 review.result-expired. Refresh or change the filter by restarting without a cursor.", {"type": "string", "format": "uuid"}, required=False), parameter("limit", "query", "Page size from 1 through 100. Zero or a value above 100 is request.limit-out-of-range; a value that is not a non-negative whole number is request.invalid.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)], description="Supervisor-only operational discovery over queues the caller currently supervises. It includes active tasks and retained decided or closed tasks within the terminal result window without requiring a pinned deciding profile. Staff and Administrator profiles are refused. Source-context rows require the current caller's source profile and visibility. Each row is deliberately minimal and releases no context, eligible profiles, holder identity, decision receipt, private reason, note, or producer result. Its state is only open, held, or decided. accountabilityEventId is present only for a retained decision and can be resolved through the separately authorized accountability endpoint. Each page is a live walk: rows after the cursor position are evaluated against current state, and an earlier row becomes visible after restarting the walk.")},
+        "/v1/review-tasks/{task_id}": {"get": operation("Read one current reviewer task", "ReviewerTask", source=True, source_required=False, parameters=[TASK_ID], description="A decided task read always carries decidedByCaller. When it is true, the read also carries decisionReceipt for the retained decision recorded by the current caller's exact issuer-qualified principal. The receipt pins the policy, decision type, optional configured outcome, and decision time. approve has no outcome; reject, changes_requested, and answer carry one. List and mutation responses omit both fields. The response never names another reviewer or releases a reason or structured producer result; protected accountability stays with supervisors.")},
         "/v1/review-tasks/{task_id}/context": {"get": operation("Read bounded review task context", "ReviewTaskContext", source=True, source_required=False, parameters=[TASK_ID], description="Submitted context returns the immutable snapshot. Source context requires the current human caller's source profile and token, exact binding, and configured contextProjection; binding changes suppress projected values.")},
         "/v1/review-tasks/{task_id}/claim": {"post": operation("Claim a review task", "ReviewerTask", source=True, source_required=False, mutation=True, parameters=[TASK_ID])},
         "/v1/review-tasks/{task_id}/assign": {"post": operation("Assign a review task", "ReviewerTask", source=True, source_required=False, mutation=True, body="AssignmentRequest", parameters=[TASK_ID])},
@@ -1903,6 +1967,26 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         rust_snake_case_unit_enum_values(model_source, "HistoryKind")
     ):
         raise ValueError("OpenAPI HistoryKind values drifted from Rust")
+    review_source = (
+        repository_root / "crates/registry-casework-core/src/review.rs"
+    ).read_text(encoding="utf-8")
+    if set(openapi_schemas["ReviewDecisionType"]["enum"]) != set(
+        rust_snake_case_unit_enum_values(review_source, "ReviewDecisionType")
+    ):
+        raise ValueError("OpenAPI ReviewDecisionType values drifted from Rust")
+    if set(openapi_schemas["SupervisoryReviewTaskState"]["enum"]) != set(
+        rust_snake_case_unit_enum_values(review_source, "SupervisoryReviewTaskState")
+    ):
+        raise ValueError("OpenAPI SupervisoryReviewTaskState values drifted from Rust")
+    ownership = next(
+        parameter["schema"]
+        for parameter in openapi["paths"]["/v1/review-tasks"]["get"]["parameters"]
+        if parameter["name"] == "ownership"
+    )
+    if set(ownership["enum"]) != set(
+        rust_snake_case_unit_enum_values(review_source, "ReviewTaskOwnership")
+    ):
+        raise ValueError("OpenAPI ReviewTaskOwnership values drifted from Rust")
     operation_name = openapi_schemas["OperationName"]
     if operation_name != {
         "type": "string",

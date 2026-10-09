@@ -90,7 +90,31 @@ class TypingContractTests(unittest.TestCase):
             for node in classes["_ReviewerTaskOptional"].body
             if isinstance(node, ast.AnnAssign)
         }
-        self.assertEqual(optional_task_fields, {"decidedByCaller": "bool"})
+        self.assertEqual(
+            optional_task_fields,
+            {"decidedByCaller": "bool", "decisionReceipt": "ReviewDecisionReceipt"},
+        )
+        self.assertEqual(
+            ast.unparse(aliases["ReviewTaskOwnership"].value),
+            "Literal['assigned_to_me', 'unclaimed']",
+        )
+        self.assertEqual(
+            ast.unparse(aliases["ReviewDecisionType"].value),
+            "Literal['approve', 'reject', 'changes_requested', 'answer']",
+        )
+        self.assertEqual(
+            ast.unparse(aliases["SupervisoryReviewTaskState"].value),
+            "Literal['open', 'held', 'decided']",
+        )
+        receipt_fields = {
+            node.target.id: ast.unparse(node.annotation)
+            for node in classes["ReviewDecisionReceipt"].body
+            if isinstance(node, ast.AnnAssign)
+        }
+        self.assertEqual(
+            receipt_fields,
+            {"policy": "ReviewPolicyBinding", "decision": "ReviewDecisionType", "decidedAt": "str"},
+        )
         draft_fields = {
             node.target.id: ast.unparse(node.annotation)
             for node in classes["ReviewTaskDraft"].body
@@ -103,6 +127,7 @@ class TypingContractTests(unittest.TestCase):
             "ReviewPageQuery",
             "_ReviewResultFeedPageOptional",
             "_ReviewTaskPageOptional",
+            "_SupervisoryReviewTaskPageOptional",
             "_ReviewHistoryPageOptional",
         ):
             cursor = next(
@@ -310,6 +335,11 @@ class TypingContractTests(unittest.TestCase):
         for page_name, optional_name, required in (
             ("ReviewResultFeedPage", "_ReviewResultFeedPageOptional", {"items"}),
             ("ReviewTaskPage", "_ReviewTaskPageOptional", {"items", "status"}),
+            (
+                "SupervisoryReviewTaskPage",
+                "_SupervisoryReviewTaskPageOptional",
+                {"items", "status"},
+            ),
             ("ReviewHistoryPage", "_ReviewHistoryPageOptional", {"items"}),
         ):
             with self.subTest(page=page_name):
@@ -330,6 +360,21 @@ class TypingContractTests(unittest.TestCase):
             if isinstance(node, ast.AnnAssign) and node.target.id == "status"
         )
         self.assertEqual(ast.unparse(task_page_status), "PageStatus")
+        supervisory_fields = {
+            node.target.id: ast.unparse(node.annotation)
+            for node in classes["SupervisoryReviewTask"].body
+            if isinstance(node, ast.AnnAssign)
+        }
+        self.assertEqual(
+            supervisory_fields,
+            {
+                "taskId": "Uuid",
+                "requestId": "Uuid",
+                "queue": "str",
+                "revision": "SafeInteger",
+                "state": "SupervisoryReviewTaskState",
+            },
+        )
 
         history = classes["ReviewHistoryEntry"]
         history_optional = classes["_ReviewHistoryEntryOptional"]

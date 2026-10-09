@@ -18,7 +18,7 @@ use casework_client_sdk::{
     NextWorkItemQuery, RecoverAttemptRequest, ReviewCancelRequest, ReviewCreateRequest,
     ReviewNoteRequest, ReviewPageQuery, ReviewRequestAccepted, ReviewResultResponse,
     ReviewTaskDecisionRequest, ReviewTaskDraftInput, ReviewTaskQuery, SaveDraftRequest,
-    SubmissionDigest, WorkItemHistoryQuery,
+    SubmissionDigest, SupervisoryReviewTaskQuery, WorkItemHistoryQuery,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -639,6 +639,28 @@ impl CaseworkClient {
                 self.runtime.block_on(
                     self.inner
                         .review_task(auth(&token, profile, source_profile), task_id),
+                )
+            }),
+        )
+    }
+
+    #[pyo3(signature = (token, profile, query=None, source_profile=None))]
+    fn supervisory_review_tasks<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        query: Option<&Bound<'_, PyAny>>,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let query: SupervisoryReviewTaskQuery = optional_input(py, query)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .supervisory_review_tasks(auth(&token, profile, source_profile), &query),
                 )
             }),
         )

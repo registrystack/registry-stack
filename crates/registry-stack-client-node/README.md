@@ -136,6 +136,11 @@ are resent only under the bounded same-key retry above; review request create
 and cancel are never resent. After a lost response, use
 `recoverDecisionByKey` with the original key so recovery does not depend on the
 attempt identifier being received.
+Reviewer inboxes accept an `ownership` filter before pagination.
+`supervisoryReviewTasks` returns only task and accountability references for
+queues the selected supervisor currently serves; its state is a holder-free
+string. A single decided-task read
+includes `decisionReceipt` only for the caller who recorded that decision.
 
 ## Documentation
 
