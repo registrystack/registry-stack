@@ -285,213 +285,29 @@ expectedFailures:
   reason: missing config.too-many-problems at the root (file); unexpected config.too-many-problems at the root 4:1
   digest: 9f8ca755c280
 - format: evidence/selector
-  case: comments-only-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected config.wrong-type at the root (file)
-  digest: 1558bd2ba971
-- format: evidence/selector
-  case: empty-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected config.wrong-type at the root (file)
-  digest: 1558bd2ba971
-- format: evidence/selector
   case: extension-field
-  reason: missing config.unknown-key at /x-conformance 15:1; unexpected evidence.bundle.shape at /selectorProfiles/record-reference-v1/x-conformance (file)
-  digest: 6728e095ebe2
-- format: evidence/selector
-  case: init-modeline
-  reason: the format registers no schema `$id` for the modeline to name
-  digest: 60e5b6a3446c
-- format: evidence/selector
-  case: missing-api-version
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
-- format: evidence/selector
-  case: missing-envelope
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
-- format: evidence/selector
-  case: missing-kind
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
+  reason: missing config.unknown-key at /x-conformance 18:1; unexpected evidence.bundle.shape at /selectorProfiles/record-reference-v1/x-conformance (file)
+  digest: 4bf92dc3b3f4
 - format: evidence/selector
   case: too-many-problems
-  reason: missing config.unknown-key at /conformanceUnknown001 15:1; missing config.unknown-key at /conformanceUnknown002 16:1 (and 100 more problems)
-  digest: c830bdf5f43e
+  reason: missing config.unknown-key at /conformanceUnknown001 18:1; missing config.unknown-key at /conformanceUnknown002 19:1 (and 100 more problems)
+  digest: d55d06e94c5e
 - format: evidence/selector
   case: unknown-keys
-  reason: missing config.unknown-key at /conformanceFirst 15:1; missing config.unknown-key at /conformanceSecond 16:1 (and 1 more problem)
-  digest: 01dd968373c9
-- format: evidence/selector
-  case: wrong-api-version
-  reason: missing config.unsupported-api-version at /apiVersion 6:13; unexpected evidence.bundle.shape at /selectorProfiles/record-reference-v1/apiVersion (file)
-  digest: 8148b1d18892
-- format: evidence/selector
-  case: wrong-kind
-  reason: missing config.wrong-kind at /kind 6:7; unexpected evidence.bundle.shape at /selectorProfiles/record-reference-v1/kind (file)
-  digest: e40e0fb97163
-- format: evidence/selector
-  case: wrong-kind-and-api-version
-  reason: missing config.wrong-kind at /kind 7:7; unexpected evidence.bundle.shape at /selectorProfiles/record-reference-v1/apiVersion (file)
-  digest: 0c276fc2e426
-- format: evidence/source
-  case: comments-only-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected config.wrong-type at the root (file)
-  digest: 1558bd2ba971
-- format: evidence/source
-  case: duplicate-set-item
-  reason: missing config.duplicate-item at /request/projection/1 44:49; unexpected evidence.bundle.shape at the root 6:1
-  digest: 7c016d564e2f
-- format: evidence/source
-  case: empty-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected config.wrong-type at the root (file)
-  digest: 1558bd2ba971
+  reason: missing config.unknown-key at /conformanceFirst 18:1; missing config.unknown-key at /conformanceSecond 19:1 (and 1 more problem)
+  digest: 105d16353d87
 - format: evidence/source
   case: extension-field
-  reason: missing config.unknown-key at /x-conformance 62:1; unexpected evidence.source.member-unknown at /x-conformance 62:16
-  digest: 4fe875802f5a
-- format: evidence/source
-  case: init-modeline
-  reason: the format registers no schema `$id` for the modeline to name
-  digest: 60e5b6a3446c
-- format: evidence/source
-  case: missing-api-version
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
-- format: evidence/source
-  case: missing-envelope
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
-- format: evidence/source
-  case: missing-kind
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
+  reason: missing config.unknown-key at /x-conformance 65:1; unexpected evidence.source.member-unknown at /x-conformance 65:16
+  digest: e79d399ac07a
 - format: evidence/source
   case: too-many-problems
-  reason: missing config.unknown-key at /conformanceUnknown001 62:1; missing config.unknown-key at /conformanceUnknown002 63:1 (and 100 more problems)
-  digest: 95bf90623815
+  reason: missing config.unknown-key at /conformanceUnknown001 65:1; missing config.unknown-key at /conformanceUnknown002 66:1 (and 100 more problems)
+  digest: abf349f9644d
 - format: evidence/source
   case: unknown-keys
-  reason: missing config.unknown-key at /conformanceFirst 62:1; missing config.unknown-key at /conformanceSecond 63:1 (and 1 more problem)
-  digest: 0c1c5da9659f
-- format: evidence/source
-  case: wrong-api-version
-  reason: missing config.unsupported-api-version at /apiVersion 6:13; unexpected evidence.source.member-unknown at /apiVersion 6:13
-  digest: 009fbb311dce
-- format: evidence/source
-  case: wrong-kind
-  reason: missing config.wrong-kind at /kind 6:7; unexpected evidence.source.member-unknown at /kind 6:7
-  digest: acd34f5938c2
-- format: evidence/source
-  case: wrong-kind-and-api-version
-  reason: missing config.wrong-kind at /kind 7:7; unexpected evidence.source.member-unknown at /apiVersion 6:13
-  digest: 3e9b51ef0e0c
-- format: evidence/target-governance
-  case: alias-spelling
-  reason: missing config.unknown-key at /rateLimits/burst_per_principal 23:130; unexpected evidence.target.publication-invalid at /publication (file)
-  digest: 223f1b55ebfe
-- format: evidence/target-governance
-  case: integer-member-exponent
-  reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 23:68; unexpected evidence.target.publication-invalid at /publication (file)
-  digest: d56f52b8cba5
-- format: evidence/target-governance
-  case: integer-member-fraction
-  reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 23:68; unexpected evidence.target.publication-invalid at /publication (file)
-  digest: d56f52b8cba5
-- format: evidence/target-governance
-  case: integer-member-quoted
-  reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 23:68; unexpected evidence.target.publication-invalid at /publication (file)
-  digest: d56f52b8cba5
-- format: evidence/target-governance
-  case: integer-member-underscore
-  reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 23:68; unexpected evidence.target.publication-invalid at /publication (file)
-  digest: d56f52b8cba5
-- format: evidence/target-governance
-  case: integer-member-with-unit
-  reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 23:68; unexpected evidence.target.publication-invalid at /publication (file)
-  digest: d56f52b8cba5
-- format: evidence/target-governance
-  case: planted-marker
-  reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 23:68; unexpected evidence.target.publication-invalid at /publication (file)
-  digest: d56f52b8cba5
-- format: evidence/target-governance
-  case: substitution-fallback-in-integer
-  reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 23:68; unexpected config.substitution-not-allowed at /rateLimits/burstPerPrincipal 23:68
-  digest: 7c51b99b2c96
-- format: evidence/target-governance
-  case: substitution-in-integer
-  reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 23:68; unexpected config.substitution-not-allowed at /rateLimits/burstPerPrincipal 23:68
-  digest: 7c51b99b2c96
-- format: evidence/target-governance
-  case: text-member-boolean
-  reason: missing config.expected-string at /issuer/id 5:14; unexpected evidence.target.publication-invalid at /publication (file)
-  digest: 2527a0635768
-- format: evidence/target-governance
-  case: text-member-integer
-  reason: missing config.expected-string at /issuer/id 5:14; unexpected evidence.target.publication-invalid at /publication (file)
-  digest: 2527a0635768
-- format: evidence/target-governance
-  case: text-member-number
-  reason: missing config.expected-string at /issuer/id 5:14; unexpected evidence.target.publication-invalid at /publication (file)
-  digest: 2527a0635768
-- format: evidence/target-settings
-  case: alias-spelling
-  reason: exit status 0, expected 1; missing config.unknown-key at /governance/audit/hash_key_version 33:5
-  digest: 7e21f2ff3425
-- format: evidence/target-settings
-  case: boolean-member-quoted
-  reason: exit status 0, expected 1; missing config.expected-boolean at /runtime/outboundTls/systemRoots 80:18
-  digest: 58959cc6bf3f
-- format: evidence/target-settings
-  case: boolean-member-yes
-  reason: exit status 0, expected 1; missing config.expected-boolean at /runtime/outboundTls/systemRoots 80:18
-  digest: 58959cc6bf3f
-- format: evidence/target-settings
-  case: integer-member-exponent
-  reason: exit status 0, expected 1; missing config.expected-integer at /governance/audit/hashKeyVersion 32:21
-  digest: 20a876dea177
-- format: evidence/target-settings
-  case: integer-member-fraction
-  reason: exit status 0, expected 1; missing config.expected-integer at /governance/audit/hashKeyVersion 32:21
-  digest: 20a876dea177
-- format: evidence/target-settings
-  case: integer-member-quoted
-  reason: exit status 0, expected 1; missing config.expected-integer at /governance/audit/hashKeyVersion 32:21
-  digest: 20a876dea177
-- format: evidence/target-settings
-  case: integer-member-underscore
-  reason: exit status 0, expected 1; missing config.expected-integer at /governance/audit/hashKeyVersion 32:21
-  digest: 20a876dea177
-- format: evidence/target-settings
-  case: integer-member-with-unit
-  reason: exit status 0, expected 1; missing config.expected-integer at /governance/audit/hashKeyVersion 32:21
-  digest: 20a876dea177
-- format: evidence/target-settings
-  case: planted-marker
-  reason: exit status 0, expected 1; missing config.expected-integer at /governance/audit/hashKeyVersion 32:21
-  digest: 20a876dea177
-- format: evidence/target-settings
-  case: substitution-fallback-in-integer
-  reason: missing config.expected-integer at /governance/audit/hashKeyVersion 32:21; unexpected config.substitution-not-allowed at /governance/audit/hashKeyVersion 32:21
-  digest: 7aaa8a0731b9
-- format: evidence/target-settings
-  case: substitution-in-boolean
-  reason: missing config.expected-boolean at /runtime/outboundTls/systemRoots 80:18; unexpected config.substitution-not-allowed at /runtime/outboundTls/systemRoots 80:18
-  digest: 8bf3c1b727bc
-- format: evidence/target-settings
-  case: substitution-in-integer
-  reason: missing config.expected-integer at /governance/audit/hashKeyVersion 32:21; unexpected config.substitution-not-allowed at /governance/audit/hashKeyVersion 32:21
-  digest: 7aaa8a0731b9
-- format: evidence/target-settings
-  case: text-member-boolean
-  reason: exit status 0, expected 1; missing config.expected-string at /governance/issuer/id 13:9
-  digest: 7562f1e6ddbf
-- format: evidence/target-settings
-  case: text-member-integer
-  reason: exit status 0, expected 1; missing config.expected-string at /governance/issuer/id 13:9
-  digest: 7562f1e6ddbf
-- format: evidence/target-settings
-  case: text-member-number
-  reason: exit status 0, expected 1; missing config.expected-string at /governance/issuer/id 13:9
-  digest: 7562f1e6ddbf
+  reason: missing config.unknown-key at /conformanceFirst 65:1; missing config.unknown-key at /conformanceSecond 66:1 (and 1 more problem)
+  digest: 9f577782b207
 - format: evidence/target-settings
   case: too-many-problems
   reason: missing config.too-many-problems at the root (file); unexpected config.too-many-problems at the root 4:1
