@@ -45,6 +45,9 @@
 - `registry-platform-yaml` `Debug` output for a node shows its kind and
   position and no scalar value, and an entry's key is redacted, where integers,
   floats, booleans, and keys printed.
+- `registry-platform-config` decides a refusal by `config.unknown-key` ahead
+  of any other value problem, so a typo of a required key names the typo, not
+  the missing member.
 - `registry-platform-httputil` adds the bounded same-key resend the BReg,
   Casework, Messaging, and Scheduling clients share:
   `client::retry_keyed_mutation`,

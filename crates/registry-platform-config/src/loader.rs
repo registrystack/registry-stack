@@ -179,8 +179,10 @@ impl RuntimeConfigError {
 
     /// The error a consumer words the refusal from: the first of the
     /// earliest rank (a file or syntax problem, then the envelope, then a
-    /// substitution, then a removed key, then any other value problem). A
-    /// consumer classifies it by the diagnostic's code and path.
+    /// substitution, then a removed key, then an unknown key, then any other
+    /// value problem). An unknown key decides ahead of the missing member it
+    /// is usually a typo of. A consumer classifies it by the diagnostic's code
+    /// and path.
     #[must_use]
     pub fn deciding_diagnostic(&self) -> &Diagnostic {
         let diagnostics = &self.detail.diagnostics;
@@ -220,7 +222,8 @@ fn rank(diagnostic: &Diagnostic) -> u8 {
         CODE_NOT_ALLOWED => 4,
         CODE_SUBSTITUTION => 5,
         "config.removed-key" => 6,
-        _ => 7,
+        "config.unknown-key" => 7,
+        _ => 8,
     }
 }
 

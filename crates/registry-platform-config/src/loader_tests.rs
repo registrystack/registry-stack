@@ -325,6 +325,29 @@ fn removed_keys_are_refused_with_their_replacement_named() {
 }
 
 #[test]
+fn a_typo_of_a_required_key_is_decided_by_the_unknown_key() {
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Needs {
+        #[allow(dead_code)]
+        api_version: String,
+        #[allow(dead_code)]
+        kind: String,
+        #[allow(dead_code)]
+        port: u16,
+    }
+    let error = loader()
+        .parse_str::<Needs>(&format!("{}poort: 80\n", header()), env(&[]))
+        .expect_err("typo refuses");
+    assert_deciding(
+        &error,
+        "config.unknown-key",
+        "/poort",
+        "typo of a required key",
+    );
+}
+
+#[test]
 fn cfg_diag_5_the_envelope_is_checked_before_removed_keys() {
     // Removed keys belong to a format, so they are looked for only once the
     // envelope names the format; a document with an envelope refusal is not
