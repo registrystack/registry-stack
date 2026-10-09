@@ -833,7 +833,9 @@ file reads no secret material: it checks every substitution expression and
 secret reference by syntax and position, and skips value checks that need
 substituted text unless asked to substitute from the current environment
 (`--environment`). It may report that a referenced secret file is missing or
-too widely readable, without reading it.
+too widely readable, without reading it. A format only a library reads is
+checked by the adopter tool that links the library, and the registry's `check`
+field names that command.
 
 **CFG-CHECK-2 (MUST). A product's project check reads every file of the
 project it owns,** including fixtures, journeys, development clients, and
