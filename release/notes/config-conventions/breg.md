@@ -1656,12 +1656,14 @@ member, and `claimContractError` in `AccessExplanation` no longer takes
 moves to the `v1alpha4` schemas and stops reading the member.
 
 The compiled model changes, so a project's compiled revision changes while
-its tables and its action fingerprints do not. A package an earlier release
-built reads as a predecessor when every profile in it was authenticated. A
-predecessor that granted unauthenticated access is refused when `bregctl
-test` or `bregctl package` reads it through `--baseline-package`, because a
-successor planned over it would keep row policies that admit a caller
-without a principal.
+its tables, its action fingerprints, and its change-request contract
+fingerprints do not: a proposal submitted under the earlier release does not
+ask for a rebase when the successor's request type did not change. A package
+an earlier release built reads as a predecessor when every profile in it was
+authenticated. A predecessor that granted unauthenticated access is refused
+when `bregctl test` or `bregctl package` reads it through
+`--baseline-package`, because a successor planned over it would keep row
+policies that admit a caller without a principal.
 
 A predecessor package is also read with the access spellings the earlier
 release wrote. When `bregctl test` or `bregctl package` compiles its packaged

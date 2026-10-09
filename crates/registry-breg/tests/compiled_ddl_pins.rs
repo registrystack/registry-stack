@@ -7,8 +7,8 @@
 //! existed. A deliberate DDL or artifact change updates these digests in the
 //! same commit that explains it.
 
-use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
+use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 use registry_breg::CompiledRegistry;
 use sha2::{Digest, Sha256};
 
@@ -121,4 +121,113 @@ const ACTION_FINGERPRINTS: &[&str] = &[
     "facility-registry-actions/register-facility: sha256:14179e571a8c08e1fb368972534e29143f084d2e858eafa4542963cb0da7fff8",
     "facility-registry-actions/transfer-facility: sha256:19df2b5b87d517e25815420acd0c3f8207575a2c48776eb451f62a2cd250c011",
     "household-contact-actions/register-household-contact: sha256:121d47d280e477162d48a4c41d4db80d1778c1a6ab2252c8bf638deae997caab",
+];
+
+struct RequestFixture {
+    name: &'static str,
+    project: &'static [u8],
+    modules: &'static [&'static [u8]],
+    assets: &'static [(Option<&'static str>, &'static str, &'static [u8])],
+}
+
+const REQUEST_FIXTURES: &[RequestFixture] = &[
+    RequestFixture {
+        name: "asset-site-placement-change-requests",
+        project: include_bytes!(
+            "../../../products/breg/acceptance/asset-site-placement-change-requests/registry.yaml"
+        ),
+        modules: &[include_bytes!(
+            "../../../products/breg/acceptance/asset-site-placement-change-requests/modules/asset-site-placement-core/module.yaml"
+        )],
+        assets: &[],
+    },
+    RequestFixture {
+        name: "person-name-change-rhai",
+        project: include_bytes!(
+            "../../../products/breg/acceptance/person-name-change-rhai/registry.yaml"
+        ),
+        modules: &[],
+        assets: &[(
+            None,
+            "scripts/person-name-change.rhai",
+            include_bytes!(
+                "../../../products/breg/acceptance/person-name-change-rhai/scripts/person-name-change.rhai"
+            ),
+        )],
+    },
+    RequestFixture {
+        name: "publicschema-household-change-requests",
+        project: include_bytes!(
+            "../../../products/breg/acceptance/publicschema-household-change-requests/registry.yaml"
+        ),
+        modules: &[
+            include_bytes!(
+                "../../../products/breg/acceptance/publicschema-household-change-requests/modules/publicschema-household-core/module.yaml"
+            ),
+            include_bytes!(
+                "../../../products/breg/acceptance/publicschema-household-change-requests/modules/publicschema-household-demographics/module.yaml"
+            ),
+        ],
+        assets: &[(
+            Some("publicschema-household-demographics"),
+            "sql/household-demographics.sql",
+            include_bytes!(
+                "../../../products/breg/acceptance/publicschema-household-change-requests/modules/publicschema-household-demographics/sql/household-demographics.sql"
+            ),
+        )],
+    },
+    RequestFixture {
+        name: "request-attachments",
+        project: include_bytes!(
+            "../../../products/breg/acceptance/request-attachments/registry.yaml"
+        ),
+        modules: &[],
+        assets: &[],
+    },
+];
+
+/// A submitted proposal is bound to its request type's contract fingerprint,
+/// and a successor package activates only while every submitted proposal still
+/// matches. These values are the ones the previous release compiled the same
+/// projects to, so an engine upgrade that leaves a project unchanged must leave
+/// every request fingerprint unchanged too.
+#[test]
+fn fixtures_keep_their_change_request_contract_fingerprints() {
+    let mut fingerprints = Vec::new();
+    for fixture in REQUEST_FIXTURES {
+        let project = parse_project_yaml(fixture.project).expect("fixture project parses");
+        let modules = fixture
+            .modules
+            .iter()
+            .map(|module| parse_module_yaml(module).expect("fixture module parses"))
+            .collect::<Vec<_>>();
+        let assets = fixture
+            .assets
+            .iter()
+            .map(|(module, path, bytes)| ModuleAssetSource {
+                module: module.map(str::to_owned),
+                path: (*path).to_owned(),
+                bytes: bytes.to_vec(),
+            })
+            .collect::<Vec<_>>();
+        let registry =
+            compile_project_with_assets(&project, &modules, &assets, CompileProfile::Authoring)
+                .expect("fixture compiles");
+        for (entity_id, entity) in registry.entities() {
+            if let Some(request) = &entity.change_request {
+                fingerprints.push(format!(
+                    "{}/{entity_id}: {}",
+                    fixture.name, request.contract_fingerprint
+                ));
+            }
+        }
+    }
+    assert_eq!(fingerprints, CHANGE_REQUEST_FINGERPRINTS);
+}
+
+const CHANGE_REQUEST_FINGERPRINTS: &[&str] = &[
+    "asset-site-placement-change-requests/placement-correction-request: sha256:e95a1e3b26ecc0f7f816bc62772c54bba9fa136bfbc367ef72f4cf2486a54003",
+    "person-name-change-rhai/person-name-change-request: sha256:141d45ada88aa8347bff812ebdeb6ac4bb45dd9aac3a4e9599119b6a4c3f4b61",
+    "publicschema-household-change-requests/register-household-contact-request: sha256:652ae970f524cb0b2eea0d1368b6ccbd77a956009906cb5fb52ebd2f4af2ee0a",
+    "request-attachments/correction-request: sha256:107cdf2dca9efad8858e6ec6541b5daacd2f7615256850279ca38105158aa761",
 ];

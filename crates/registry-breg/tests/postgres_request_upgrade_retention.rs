@@ -11,7 +11,7 @@ use std::env;
 
 use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::parse_project_json;
+use registry_breg::contract::{parse_module_yaml, parse_project_json, parse_project_yaml};
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
     verify_catalog_identity_for_catalog, ExpectedManagedCatalog, RegistryLockKey,
@@ -85,6 +85,46 @@ async fn active_request_upgrade_guard_allows_unrelated_changes_and_refuses_relev
         Err(RequestRetentionError::ActiveProposalRequiresRebase),
         "a changed native pattern cannot silently reinterpret a submitted frozen proposal"
     );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+/// The request contract fingerprint the previous release compiled the
+/// asset-site-placement acceptance project to, as it stored it beside every
+/// proposal submitted under that release.
+const PREVIOUS_RELEASE_REQUEST_FINGERPRINT: &str =
+    "sha256:e95a1e3b26ecc0f7f816bc62772c54bba9fa136bfbc367ef72f4cf2486a54003";
+
+#[tokio::test]
+async fn a_proposal_the_previous_release_submitted_does_not_block_an_unchanged_successor() {
+    load_postgres_env();
+    let project = parse_project_yaml(include_bytes!(
+        "../../../products/breg/acceptance/asset-site-placement-change-requests/registry.yaml"
+    ))
+    .expect("acceptance project parses");
+    let module = parse_module_yaml(include_bytes!(
+        "../../../products/breg/acceptance/asset-site-placement-change-requests/modules/asset-site-placement-core/module.yaml"
+    ))
+    .expect("acceptance module parses");
+    let successor = compile_project(&project, &[module], CompileProfile::Authoring)
+        .expect("acceptance project compiles");
+
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the compiled temporal prerequisite");
+    let (migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &successor, &database.runtime_role)
+        .await
+        .expect("compiled schema installs");
+    seed_submitted_request(&migration, PREVIOUS_RELEASE_REQUEST_FINGERPRINT).await;
+
+    guard_successor_activation(&migration, &successor)
+        .await
+        .expect("an engine upgrade alone leaves a submitted proposal bound to its request type");
 
     migration_task.abort();
     database.cleanup().await;

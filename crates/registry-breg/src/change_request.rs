@@ -2504,9 +2504,15 @@ fn authority_payload<const N: usize>(
                 .intersection(&operations)
                 .copied()
                 .collect::<BTreeSet<_>>();
+            // A profile once carried an `anonymous` member. A project that
+            // set it cannot compile without changing, so the member is false
+            // in every project that did not change. It stays in the
+            // fingerprint input at that value, so an engine upgrade keeps the
+            // identity of every request type whose project did not change.
             (
                 profile.id.clone(),
                 json!({
+                    "anonymous": false,
                     "principalClaim": profile.principal_claim,
                     "requiredScopes": profile.required_scopes,
                     "requiredPurposes": profile.required_purposes,
