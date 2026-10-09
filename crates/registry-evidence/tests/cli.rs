@@ -444,6 +444,11 @@ fn check_as_json_reports_the_envelope_on_success_and_refusal() {
     assert_eq!(report["ok"], true);
     assert_eq!(report["command"], "check");
     assert_eq!(report["status"], "complete");
+    assert_eq!(
+        report["apiVersion"],
+        "id.registrystack.org/formats/evidence/ctl-report/v1alpha1"
+    );
+    assert_eq!(report["kind"], "EvidenceCtlReport");
     assert_eq!(report["requirements"], 4);
     assert!(
         report["packageDigest"]
@@ -3581,6 +3586,8 @@ fn check_policy_positions_what_verify_reports_only_as_malformed() {
             "ok": true,
             "command": "check-policy",
             "status": "complete",
+            "apiVersion": "id.registrystack.org/formats/evidence/ctl-report/v1alpha1",
+            "kind": "EvidenceCtlReport",
             "filesChecked": 1,
             "diagnostics": []
         })

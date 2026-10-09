@@ -152,6 +152,24 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// `evidence check` prints the same envelope but cannot depend on this
+    /// crate, so the runtime states the two strings itself; this holds them
+    /// equal.
+    #[test]
+    fn the_runtime_check_report_states_the_same_envelope() {
+        let runtime = include_str!("../../registry-evidence/src/main.rs");
+        for (name, value) in [
+            ("CHECK_REPORT_API_VERSION", API_VERSION),
+            ("CHECK_REPORT_KIND", KIND),
+        ] {
+            let declaration = format!("const {name}: &str = \"{value}\";");
+            assert!(
+                runtime.contains(&declaration),
+                "registry-evidence must declare {declaration}"
+            );
+        }
+    }
+
     #[test]
     fn a_report_opens_with_its_envelope_in_order() {
         let rendered = render(&success(

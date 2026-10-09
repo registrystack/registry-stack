@@ -511,6 +511,13 @@ struct DependencyProof {
     without_audit_lock: bool,
 }
 
+/// The `apiVersion` and `kind` of the `evidence/ctl-report` format, which
+/// `evidencectl` reports carry too. The runtime cannot depend on
+/// `registry-evidencectl`, so `evidencectl` holds the same two strings and a
+/// test there keeps them equal.
+const CHECK_REPORT_API_VERSION: &str = "id.registrystack.org/formats/evidence/ctl-report/v1alpha1";
+const CHECK_REPORT_KIND: &str = "EvidenceCtlReport";
+
 /// The `evidence check --format json` document: the ctl report envelope
 /// around the CFG-DIAG-1 diagnostics.
 #[derive(serde::Serialize)]
@@ -519,6 +526,8 @@ struct CheckReport<'a> {
     ok: bool,
     command: &'static str,
     status: &'static str,
+    api_version: &'static str,
+    kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     package_digest: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -606,6 +615,8 @@ async fn run_check(request: CheckRequest) -> ExitCode {
                 ok: status == "complete",
                 command: "check",
                 status,
+                api_version: CHECK_REPORT_API_VERSION,
+                kind: CHECK_REPORT_KIND,
                 package_digest: accepted.as_deref().map(Bundle::package_digest),
                 requirements: accepted
                     .as_deref()
@@ -661,6 +672,8 @@ fn run_check_policy(
                 ok: status == "complete",
                 command: "check-policy",
                 status,
+                api_version: CHECK_REPORT_API_VERSION,
+                kind: CHECK_REPORT_KIND,
                 package_digest: None,
                 requirements: None,
                 files_checked: report.files_checked().unwrap_or(1),

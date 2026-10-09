@@ -94,6 +94,11 @@
 
 ### Evidence runtime
 
+- `evidence check --format json` and `evidence check-policy --format json`
+  carry `apiVersion` (`id.registrystack.org/formats/evidence/ctl-report/v1alpha1`)
+  and `kind` (`EvidenceCtlReport`) after `status`, as every `evidencectl`
+  report does. Two members are added and none moves, so this is not breaking
+  for a consumer that ignores unknown members.
 - BREAKING: plain `evidence check` is offline. It reads the runtime file,
   verifies and compiles the package, reads each CA bundle, and checks the
   bindings between them, and reads no secret material, file modes, extract
