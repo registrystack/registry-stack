@@ -1914,7 +1914,6 @@ impl RuntimeConfig {
     pub fn loader() -> RuntimeConfigLoader {
         RuntimeConfigLoader::new(EVIDENCE_RUNTIME_ENVELOPE)
             .removed_keys(EVIDENCE_RUNTIME_REMOVED_KEYS)
-            .max_bytes(MAX_CONFIG_BYTES as u64)
     }
 
     /// Parse and validate one runtime document with no environment: an

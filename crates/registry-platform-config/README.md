@@ -14,8 +14,8 @@ absolute path, through the shared configuration reader in
 - a relative path, or one with `.` or `..` components;
 - a symbolic link in any path component;
 - anything but a regular file, or one over the size bound (1 MiB,
-  `yaml.too-large`; a product may set a lower one, and the reader refuses a
-  larger document whatever the bound);
+  `yaml.too-large`; the reader refuses a larger document whatever the
+  bound);
 - an empty file, or one that holds only comments, as a missing envelope
   (`config.missing-envelope` at line 1, column 1);
 - text that is not UTF-8, and YAML outside the reader's subset: more than one

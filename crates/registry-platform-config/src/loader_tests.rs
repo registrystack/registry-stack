@@ -873,9 +873,9 @@ mod files {
         assert_deciding(&error, "config.missing-envelope", "", "empty file");
 
         let large = root.join("large.yaml");
-        std::fs::write(&large, format!("{}name: {}\n", header(), "x".repeat(200))).unwrap();
+        let padding = "x".repeat(usize::try_from(DEFAULT_MAX_RUNTIME_CONFIG_BYTES).unwrap());
+        std::fs::write(&large, format!("{}name: {padding}\n", header())).unwrap();
         let error = loader()
-            .max_bytes(128)
             .load_with::<Example>(&large, env(&[]))
             .expect_err("oversized refuses");
         assert_eq!(error.deciding_diagnostic().code, "yaml.too-large");

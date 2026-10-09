@@ -262,7 +262,6 @@ pub struct RuntimeConfigLoader {
     envelope: RuntimeEnvelope,
     removed_keys: &'static [RemovedKey],
     retired_api_versions: &'static [RetiredApiVersion<'static>],
-    max_bytes: u64,
     trusted_ownership: bool,
 }
 
@@ -273,7 +272,6 @@ impl RuntimeConfigLoader {
             envelope,
             removed_keys: &[],
             retired_api_versions: &[],
-            max_bytes: DEFAULT_MAX_RUNTIME_CONFIG_BYTES,
             trusted_ownership: false,
         }
     }
@@ -294,15 +292,6 @@ impl RuntimeConfigLoader {
         retired_api_versions: &'static [RetiredApiVersion<'static>],
     ) -> Self {
         self.retired_api_versions = retired_api_versions;
-        self
-    }
-
-    /// Change the size cap of the file read. The shared reader refuses a
-    /// document larger than 1 MiB whatever this cap (CFG-YAML-6), so a cap
-    /// above that has no further effect.
-    #[must_use]
-    pub const fn max_bytes(mut self, max_bytes: u64) -> Self {
-        self.max_bytes = max_bytes;
         self
     }
 
@@ -435,7 +424,7 @@ impl RuntimeConfigLoader {
         if self.trusted_ownership {
             require_trusted_ownership(path)?;
         }
-        read_bounded(path, self.max_bytes)
+        read_bounded(path, DEFAULT_MAX_RUNTIME_CONFIG_BYTES)
     }
 }
 

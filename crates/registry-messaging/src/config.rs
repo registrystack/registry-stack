@@ -75,9 +75,6 @@ where
     secret_reference(deserializer).map(Some)
 }
 
-/// The largest runtime document or package document the runtime reads.
-const MAXIMUM_DOCUMENT_BYTES: u64 = 1024 * 1024;
-
 /// The default listener binding. Each Registry Stack runtime has its own
 /// default port so a laptop can run several side by side.
 pub const DEFAULT_LISTENER_BIND: &str = "127.0.0.1:8107";
@@ -486,7 +483,6 @@ impl RuntimeConfig {
         RuntimeConfigLoader::new(MESSAGING_RUNTIME_ENVELOPE)
             .removed_keys(MESSAGING_REMOVED_KEYS)
             .retired_api_versions(MESSAGING_RETIRED_API_VERSIONS)
-            .max_bytes(MAXIMUM_DOCUMENT_BYTES)
     }
 
     /// Parse the operator document without checking it, for focused tests.
