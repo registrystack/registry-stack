@@ -55,8 +55,11 @@
   offline with `--runtime-config FILE` and `--environment`. Every JSON
   report names its format as `SchedulingCtlReport` at
   `id.registrystack.org/formats/scheduling/ctl-report/v1alpha1`, and `test`
-  with no fixture exits 1. A database an earlier release wrote is not read;
-  start from a new one. Migration steps are in
+  with no fixture exits 1. A database an earlier release wrote is not read:
+  `plan`, `apply`, and `records apply` refuse it with
+  `schedulingctl.activation.earlier-release`, and this release makes no
+  promise to upgrade a database v0.39.0 wrote, because the product has no
+  production deployment yet. Start from a new database. Migration steps are in
   `release/notes/config-conventions/scheduling.md`.
 - A hold or an appointment is owned by the verified token issuer and subject
   that booked it, stored on the claim, rather than by the audit-keyed

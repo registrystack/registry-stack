@@ -210,6 +210,7 @@ pub(crate) fn refusal_code(error: &StoreError) -> &'static str {
         StoreError::SchemaPending { .. } => "schedulingctl.activation.schema-pending",
         StoreError::SchemaNewer { .. } => "schedulingctl.activation.schema-newer",
         StoreError::DeploymentIdentity => "schedulingctl.activation.deployment-identity",
+        StoreError::EarlierRelease => "schedulingctl.activation.earlier-release",
         StoreError::PolicyInUse(_) => "schedulingctl.activation.policy-in-use",
         StoreError::CombinedInvariant(_) => "schedulingctl.activation.combined-invariant",
         StoreError::SupplyIdentifierCollision(_) => {

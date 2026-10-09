@@ -328,8 +328,11 @@ example `allowedClients: [scheduling-booking-agent]`. The shared
 
 The active policy, published windows, and environment records are retained
 in the database in the shape of the authored files, so a database an
-earlier Scheduling release wrote holds the old member names. The runtime
-refuses to read it: `the Scheduling database is not in the state this
-runtime expects`. Migration: start from a new database, then run
-`schedulingctl apply` and `schedulingctl records apply` with the migrated
-files.
+earlier Scheduling release wrote holds the old member names. `schedulingctl
+plan`, `apply`, and `records apply` refuse it with
+`schedulingctl.activation.earlier-release` (`the Scheduling database was
+written by an earlier release`). This release makes no promise to upgrade a
+Scheduling database written by v0.39.0: the product has no production
+deployment yet, so the operator-facing step is a restart. Migration: start
+from a new database, then run `schedulingctl apply` and `schedulingctl
+records apply` with the migrated files.

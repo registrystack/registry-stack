@@ -157,6 +157,13 @@ pub enum StoreError {
     Corrupt,
     #[error("the Scheduling database belongs to another deployment")]
     DeploymentIdentity,
+    /// A retained policy document carries the top-level `scheduling` block
+    /// the predecessor wrote where this release writes `project`. Nothing
+    /// the document holds is repeated.
+    #[error(
+        "the Scheduling database was written by an earlier release, which this release does not read; start from a new database, then run `schedulingctl apply --runtime-config FILE` and `schedulingctl records apply` again"
+    )]
+    EarlierRelease,
     /// A commit whose acknowledgment never arrived and whose outcome could
     /// not be read back: it may have taken effect.
     #[error(
@@ -304,6 +311,7 @@ impl StoreError {
                 | Self::LedgerUnreadable { .. }
                 | Self::RetainedHookBindings
                 | Self::DeploymentIdentity
+                | Self::EarlierRelease
                 | Self::PolicyInUse(_)
                 | Self::CombinedInvariant(_)
                 | Self::SupplyIdentifierCollision(_)
@@ -2921,8 +2929,14 @@ async fn publish_policy(
 /// Read a retained policy document. Earlier branch builds carried mutable
 /// window records inside the document; that member left the policy shape, so
 /// it is dropped rather than refused when an older document still carries it.
+/// A document that names its identity under the `scheduling` member, where
+/// this release writes `project`, was written by the previous release and is
+/// refused as such, not as a damaged database.
 fn retained_policy(mut document: Value) -> Result<SchedulingPolicy, StoreError> {
     if let Some(object) = document.as_object_mut() {
+        if object.contains_key("scheduling") && !object.contains_key("project") {
+            return Err(StoreError::EarlierRelease);
+        }
         object.remove("windows");
     }
     serde_json::from_value(document).map_err(|_| StoreError::Corrupt)

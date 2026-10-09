@@ -1087,6 +1087,18 @@ mod tests {
             .contains("run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"));
 
         let (exit, diagnostic) =
+            classify_failure(&activation::refusal_or_failure(StoreError::EarlierRelease));
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(
+            diagnostic["code"],
+            "schedulingctl.activation.earlier-release"
+        );
+        assert!(diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("start from a new database"));
+
+        let (exit, diagnostic) =
             classify_failure(&activation::refusal_or_failure(StoreError::Corrupt));
         assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
         assert_eq!(diagnostic["code"], "schedulingctl.store-unavailable");

@@ -8281,3 +8281,65 @@ async fn a_permission_refusal_the_destination_refuses_answers_service_unavailabl
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
     assert_eq!(problem["code"], "service.unavailable");
 }
+
+/// Rewrite the retained current policy document into the shape the previous
+/// release stored: the identity under a top-level `scheduling` member where
+/// this release stores `project`.
+async fn retain_predecessor_policy_document(fx: &Fixture) {
+    let mut document = serde_json::to_value(read_policy(POLICY).expect("the current policy"))
+        .expect("the policy serializes");
+    let object = document.as_object_mut().expect("a policy object");
+    let project = object.remove("project").expect("the project block");
+    object.insert("scheduling".to_owned(), project);
+    let updated = fx
+        .admin
+        .execute(
+            "UPDATE scheduling_policy_revisions SET policy_document=$1",
+            &[&document],
+        )
+        .await
+        .expect("retain the predecessor's document shape");
+    assert!(updated > 0, "a retained document was rewritten");
+}
+
+/// A database the previous release wrote retains its policy under a top-level
+/// `scheduling` member. Publication and the records swap name that cause and
+/// the way out, never a corrupt database, and repeat nothing the document
+/// holds.
+#[tokio::test]
+async fn a_database_an_earlier_release_wrote_is_refused_by_name() {
+    let fx = fixture().await;
+    retain_predecessor_policy_document(&fx).await;
+
+    let mut replacement = read_policy(POLICY).expect("the current policy");
+    replacement.project.version = "2".to_owned();
+    let digest = replacement.policy_digest();
+    let mut pool_ids: Vec<String> = replacement
+        .offerings
+        .iter()
+        .filter_map(|offering| offering.exact_time.as_ref().map(|exact| exact.pool.clone()))
+        .collect();
+    pool_ids.sort();
+    pool_ids.dedup();
+
+    let publication = fx
+        .store
+        .apply_policy(SCHEDULING_ID, &digest, &pool_ids, &replacement)
+        .await
+        .expect_err("the predecessor's retained document is not read");
+    let records = fx
+        .store
+        .replace_facts(SCHEDULING_ID, &records_without(&[]))
+        .await
+        .expect_err("the records swap does not read it either");
+    for refusal in [publication, records] {
+        assert!(
+            matches!(refusal, StoreError::EarlierRelease),
+            "{refusal:?} is not the earlier-release refusal"
+        );
+        let text = refusal.to_string();
+        assert!(text.contains("earlier release"), "{text}");
+        assert!(text.contains("new database"), "{text}");
+        assert!(!text.contains("registry-updates"), "{text}");
+    }
+}
