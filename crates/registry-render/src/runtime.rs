@@ -956,6 +956,31 @@ mod tests {
         }
     }
 
+    /// The runtime schema types `secretProviders.file` and `.environment` as
+    /// a bare reference, so a null member is refused as a null.
+    #[test]
+    fn a_null_secret_provider_is_refused() {
+        let (_dir, home) = home();
+        for (member, pointer) in [
+            ("file", "/secretProviders/file"),
+            ("environment", "/secretProviders/environment"),
+        ] {
+            let text = minimal(&home).replace(
+                &format!(
+                    "secretProviders:\n  file:\n    root: {}\n",
+                    home.join("secrets").display()
+                ),
+                &format!("secretProviders:\n  {member}:\n"),
+            );
+            let problem = refused(&home, &text);
+            assert!(
+                codes(&problem).contains(&("config.null-value", pointer)),
+                "{member}: {:?}",
+                codes(&problem)
+            );
+        }
+    }
+
     #[test]
     fn a_secret_reference_must_name_a_declared_provider() {
         let (_dir, home) = home();
