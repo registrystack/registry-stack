@@ -1113,9 +1113,22 @@ async fn startup_refuses_a_database_the_ledger_does_not_name_for_this_package() 
     );
     let error = registry_scheduling::runtime::serve_from_path(&pinned)
         .await
-        .expect_err("startup refuses a package its pin does not name")
-        .to_string();
-    assert!(error.contains("package.expectedDigest"), "{error}");
+        .expect_err("startup refuses a package its pin does not name");
+    let report = error
+        .configuration_report()
+        .unwrap_or_else(|| panic!("startup refusal carries a report: {error}"));
+    let findings: Vec<(&str, &str)> = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect();
+    assert_eq!(
+        findings,
+        [(
+            "scheduling.package.digest-mismatch",
+            "/package/expectedDigest"
+        )]
+    );
 
     assert_eq!(
         deployment.ledger_rows().await,
