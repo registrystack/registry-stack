@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `yaml.ambiguous-number` no longer offers quoting everywhere: its `next` says to
+  write the number in decimal digits and to quote it only where the key takes text.
 - A removed key's `next` sentence now opens with a capital letter, whatever case
   the product wrote its replacement in. Render writes its own with code formatting.
 - `registry-platform-yaml` is the shared configuration reader: one YAML

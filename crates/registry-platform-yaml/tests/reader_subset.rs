@@ -656,7 +656,7 @@ fn cfg_val_1_ambiguous_numbers_are_refused_together() {
     );
     assert_eq!(
         report.diagnostics()[0].suggested_action,
-        "Write a decimal number, or quote it as text."
+        "Write the number in decimal digits; quote it only where the key takes text."
     );
 }
 

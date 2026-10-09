@@ -10,4 +10,4 @@ expect:
     - code: yaml.ambiguous-number
       path: /conformanceNumber
       at: {line: 1, column: 20}
-      suggestedAction: Write a decimal number, or quote it as text.
+      suggestedAction: Write the number in decimal digits; quote it only where the key takes text.

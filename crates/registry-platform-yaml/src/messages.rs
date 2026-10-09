@@ -352,7 +352,7 @@ pub(crate) fn multiple_documents() -> Text {
 pub(crate) fn ambiguous_number() -> Text {
     text(
         "this unquoted value looks like a number but is not a plain decimal, and YAML versions read it differently",
-        "Write a decimal number, or quote it as text.",
+        "Write the number in decimal digits; quote it only where the key takes text.",
     )
 }
 
