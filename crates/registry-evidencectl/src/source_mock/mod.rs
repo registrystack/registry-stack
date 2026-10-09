@@ -70,7 +70,7 @@ pub struct ServeArgs {
     /// Materialized mock configuration whose checked body bytes are authoritative.
     #[arg(
         long,
-        conflicts_with_all = ["openapi", "project", "legacy_project", "operation", "seed", "as_of", "explain"]
+        conflicts_with_all = ["openapi", "project", "operation", "seed", "as_of", "explain"]
     )]
     config: Option<PathBuf>,
 
@@ -80,9 +80,6 @@ pub struct ServeArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "openapi", "config"])]
-    legacy_project: Option<PathBuf>,
 
     /// Narrow ephemeral discovery to one `METHOD /path/template` operation.
     #[arg(long)]
@@ -118,7 +115,6 @@ pub struct GenerateArgs {
             "openapi",
             "output",
             "project",
-            "legacy_project",
             "seed",
             "as_of"
         ]
@@ -135,9 +131,6 @@ pub struct GenerateArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "openapi", "config"])]
-    legacy_project: Option<PathBuf>,
 
     /// Select one `METHOD /path/template` operation.
     #[arg(long)]
@@ -176,9 +169,6 @@ pub struct CheckArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", conflicts_with = "config")]
     project: Option<PathBuf>,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "config"])]
-    legacy_project: Option<PathBuf>,
     /// Refuse a plan whose check reports any warning.
     #[arg(long)]
     deny_warnings: bool,
@@ -186,18 +176,9 @@ pub struct CheckArgs {
 
 pub fn run(command: MockCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
-        MockCommand::Serve(mut args) => {
-            args.project = args.legacy_project.take().or(args.project);
-            serve(args)
-        }
-        MockCommand::Generate(mut args) => {
-            args.project = args.legacy_project.take().or(args.project);
-            generate(args)
-        }
-        MockCommand::Check(mut args) => {
-            args.project = args.legacy_project.take().or(args.project);
-            check(args, format)
-        }
+        MockCommand::Serve(args) => serve(args),
+        MockCommand::Generate(args) => generate(args),
+        MockCommand::Check(args) => check(args, format),
     }
 }
 
@@ -1069,9 +1050,10 @@ fn current_root() -> Result<PathBuf> {
 fn project_root(project: Option<&Path>) -> Result<PathBuf> {
     match project {
         Some(project) => {
-            let metadata = fs::symlink_metadata(project).context("inspecting --project")?;
+            let metadata =
+                fs::symlink_metadata(project).context("inspecting the project directory")?;
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                bail!("--project must be a plain directory");
+                bail!("the project directory must be a plain directory");
             }
             Ok(project.to_path_buf())
         }

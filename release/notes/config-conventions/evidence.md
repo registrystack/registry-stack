@@ -782,3 +782,12 @@ The first line is the optional editor modeline. The schema is generated at
 members and leaves the body to the bundle grammar that `evidencectl check`
 applies after the compile. A BReg source export writes the
 two lines itself, so a source imported from an export needs no edit.
+
+### BREAKING: retired `evidencectl` argument spellings are refused
+
+`evidencectl source mock serve`, `generate`, and `check` no longer accept
+`--project <dir>`; `evidencectl client profile create` and `evidencectl client
+contracts fetch` no longer accept `--out`. Clap refuses each as an unexpected
+argument (`evidencectl.usage`, exit 2). Migration: pass the project directory
+as the positional argument (`evidencectl source mock check <dir>`), and write
+`--output` where a script wrote `--out` for those two commands.

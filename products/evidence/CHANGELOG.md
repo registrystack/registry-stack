@@ -25,6 +25,11 @@
 
 ### Evidence authoring tools
 
+- BREAKING: `evidencectl source mock serve`, `generate`, and `check` no longer
+  accept the retired `--project` flag (use the positional project directory),
+  and `evidencectl client profile create` and `client contracts fetch` no
+  longer accept `--out` (use `--output`). See "Evidence tooling files" in
+  `release/notes/config-conventions/evidence.md`.
 - BREAKING: a file under `sources/` opens with `apiVersion`
   (`id.registrystack.org/formats/evidence/source/v1alpha1`) and `kind`
   (`EvidenceSource`), and a file under `selectors/` with

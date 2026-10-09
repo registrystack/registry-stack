@@ -912,10 +912,7 @@ fn explicit_source_origin_wires_bare_project_mock_serve_create_only() {
     assert!(!repeated.status.success());
     assert_eq!(fs::read(&source_path).unwrap(), source_before);
 
-    let mut server = start_server(
-        temporary.path(),
-        &["source", "mock", "serve", "--project", "."],
-    );
+    let mut server = start_server(temporary.path(), &["source", "mock", "serve", "."]);
     assert_eq!(
         request(address, "GET", "/v1/people/person-123", &[]).status,
         200
@@ -1051,4 +1048,24 @@ fn snapshot_tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut snapshot = BTreeMap::new();
     visit(root, root, &mut snapshot);
     snapshot
+}
+
+#[test]
+fn the_retired_project_flag_is_refused_by_every_mock_command() {
+    let temporary = tempfile::tempdir().expect("tempdir");
+    for command in ["serve", "generate", "check"] {
+        let refused = run(
+            temporary.path(),
+            &["source", "mock", command, "--project", "."],
+        );
+        assert!(
+            !refused.status.success(),
+            "mock {command} accepted --project"
+        );
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            stderr.contains("evidencectl.usage"),
+            "mock {command}: {stderr}"
+        );
+    }
 }

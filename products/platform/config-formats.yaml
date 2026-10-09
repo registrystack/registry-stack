@@ -3393,7 +3393,7 @@ formats:
       file: crates/registry-evidencectl/src/source_mock/plan.rs
       function: parse_plan
       type: MockPlan
-    check: evidencectl source mock check --project {project}
+    check: evidencectl source mock check {project}
     example: products/evidence/reference/authoring-projects/example/mocks/source.yaml
     conformance:
       requiredText: /openapi

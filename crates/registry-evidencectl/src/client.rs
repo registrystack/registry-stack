@@ -121,7 +121,7 @@ pub struct ProfileCreateArgs {
     scopes: Vec<String>,
 
     /// New owner-only profile file.
-    #[arg(long, alias = "out")]
+    #[arg(long)]
     output: PathBuf,
 }
 
@@ -132,7 +132,7 @@ pub struct ContractsFetchArgs {
     pub(crate) profile: PathBuf,
 
     /// New owner-only contract-candidate file.
-    #[arg(long, alias = "out")]
+    #[arg(long)]
     pub(crate) output: PathBuf,
 }
 
