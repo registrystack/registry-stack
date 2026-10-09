@@ -5,6 +5,9 @@
 #[path = "package/tests/immediate_actions.rs"]
 mod immediate_action_tests;
 #[cfg(test)]
+#[path = "package/tests/predecessor_source.rs"]
+mod predecessor_source_tests;
+#[cfg(test)]
 #[path = "package/tests/retired_anonymous.rs"]
 mod retired_anonymous_tests;
 
@@ -18,6 +21,7 @@ use registry_platform_config::package::{
     plan_package, write_sum_file, PackageLimits as SharedPackageLimits,
     VerifiedPackage as SharedVerifiedPackage, REVISION_FILE, SUM_FILE,
 };
+use registry_platform_yaml::Reader;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -4433,7 +4437,8 @@ enum SourceSpelling {
 /// every row, and an omitted or empty `requiredScopes` demanded no scope, so
 /// both become `unrestricted`; an empty narrowing list narrowed nothing, so it
 /// is omitted. Only a predecessor read calls this; a current source keeps
-/// refusing the empty list.
+/// refusing the empty list. The source is read through the shared reader's
+/// structural pass, so a sealed source outside the YAML subset is refused.
 fn retired_access_spellings_read(bytes: &[u8]) -> Result<Vec<u8>> {
     fn unrestricted_rows(owner: &mut Value) {
         let Some(owner) = owner.as_object_mut() else {
@@ -4532,12 +4537,14 @@ fn retired_access_spellings_read(bytes: &[u8]) -> Result<Vec<u8>> {
             }
         }
     }
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the bytes are a sealed predecessor package the earlier release wrote, not operator configuration; the shared reader reads the rewritten bytes (CFG-YAML-1)"
-    )]
-    let parsed = serde_norway::from_slice(bytes);
-    let mut value: Value = parsed.map_err(|_| PackageError::Derivation)?;
+    // The shared reader's structural pass refuses YAML outside the
+    // configuration subset (anchors, aliases, tags, merge and duplicate keys);
+    // its report is not carried, so no value leaves. An empty or comment-only
+    // stream reads as null.
+    let mut value = Reader::new("predecessor source")
+        .scan(bytes)
+        .map_err(|_| PackageError::Derivation)?
+        .map_or(Value::Null, |node| node.to_json_value());
     without_nulls(&mut value);
     for item in value
         .get_mut("accessProfiles")
