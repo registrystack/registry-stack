@@ -849,6 +849,28 @@ class ProductStepsApplyTest(unittest.TestCase):
     def load(self, name: str, root: Path | None = None) -> Any:
         return upgrade_steps.load_document((root or self.root) / name)
 
+    def test_evidence_source_resolutions_take_an_envelope_and_type(self) -> None:
+        write(self.root, "source-resolutions.json", json.dumps({
+            "formatVersion": 1,
+            "artifacts": {
+                "adapters/a.rhai": {"choice": "keep"},
+                "adapters/b.rhai": {"choice": "file", "path": "reviewed/b.rhai"}}}))
+        self.apply("evidence-source-resolution-envelope")
+        document = self.load("source-resolutions.json")
+        self.assertEqual(list(document)[:3], ["apiVersion", "kind", "artifacts"])
+        self.assertEqual(document["apiVersion"],
+                         "id.registrystack.org/formats/evidence/source-resolution/v1alpha1")
+        self.assertEqual(document["kind"], "EvidenceSourceResolution")
+        self.assertEqual(document["artifacts"], {
+            "adapters/a.rhai": {"type": "keep"},
+            "adapters/b.rhai": {"type": "file", "path": "reviewed/b.rhai"}})
+
+    def test_evidence_dev_state_and_source_import_state_are_manual(self) -> None:
+        manual = self.apply("evidence-dev-state-reset", "evidence-source-import-state-reset")
+        self.assertEqual(len(manual), 2)
+        self.assertIn(".evidence/dev/state.json", manual[0])
+        self.assertIn(".evidence/source-imports", manual[1])
+
     def test_scheduling_project_keys(self) -> None:
         write(self.root, "scheduling.yaml", """\
 apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1

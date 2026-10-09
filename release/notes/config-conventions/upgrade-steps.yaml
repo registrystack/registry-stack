@@ -338,7 +338,7 @@ steps:
     tokenClient.resource to at most 512 bytes, delete a repeated audience, client, scope or algorithm, delete a key
     written as null, write out in full any anchor, alias or tag, keep the file under 1 MiB, write a literal ${NAME} as
     ${VARIABLE} with the text as that variable, and pass the real path of the file rather than a symbolic link.'}
-- {id: evidence-client-reader-refusals, product: evidence, kind: manual, file: client-profile.yaml, instruction: 'In a client
+- {id: evidence-client-reader-refusals, product: evidence, kind: manual, file: client-profile.json, instruction: 'In a client
     profile delete an optional member written as null, replace a surrogate-pair escape by the character itself, and
     in a reviewed contracts file keep the size under 1 MiB by reviewing a snapshot scoped to the requested definitions.'}
 - {id: breg-runtime-refused-forms, product: breg, kind: manual, file: runtime.yaml, instruction: 'Delete
@@ -671,3 +671,18 @@ steps:
     Rebuild the package with discoveryctl package --project <project> --output <new directory>, copy the
     printed package digest into package.expectedDigest in runtime.yaml when you pin it, and point
     package.root at the new directory.
+- id: evidence-source-resolution-envelope
+  product: evidence
+  kind: edit
+  file: '*resolutions.json'
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/source-resolution/v1alpha1, kind: EvidenceSourceResolution}
+  - {op: delete, path: formatVersion}
+  - {op: rename, path: artifacts.*.choice, to: type}
+- {id: evidence-dev-state-reset, product: evidence, kind: manual, file: .evidence/dev/state.json, instruction: 'Finish
+    the session with the evidencectl that started it (evidencectl dev stop, then evidencectl dev clean), then
+    run evidencectl dev start again.'}
+- {id: evidence-source-import-state-reset, product: evidence, kind: manual, file: .evidence/source-imports, instruction: 'Delete
+    .evidence/source-imports and run evidencectl source import again, then resolve each reported conflict;
+    for a journal left by an interrupted import, run evidencectl source import with the evidencectl that
+    started it to finish or roll back, then rerun.'}

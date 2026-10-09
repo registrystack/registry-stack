@@ -142,6 +142,7 @@ UNIT_TESTED_ONLY_STEPS = {
     "evidence-access-policy-envelope": "the Evidence starter writes no access policy file",
     "evidence-access-client-envelope": "the Evidence starter writes no access client file",
     "evidence-target-settings-envelope": "the Evidence starter writes no target settings file",
+    "evidence-source-resolution-envelope": "the Evidence starter writes no source resolution file",
     "evidence-mock-plan-envelope": "the Evidence starter writes no mock plan",
     "messaging-runtime-keys": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
     "messaging-template-envelope": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",

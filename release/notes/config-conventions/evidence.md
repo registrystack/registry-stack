@@ -695,7 +695,7 @@ refused unknown members, accepts `apiVersion` and `kind`; a script that read
 members by name needs no change.
 
 ### BREAKING: the development session state has an envelope
-<!-- upgrade: no-file -->
+<!-- upgrade: evidence-dev-state-reset -->
 
 `.evidence/dev/state.json` opens with `apiVersion:
 id.registrystack.org/formats/evidence/dev-state/v6` and `kind:
@@ -708,7 +708,7 @@ it (`evidencectl dev stop`, then `evidencectl dev clean`), then run
 `evidencectl dev start` again.
 
 ### BREAKING: the source-import baseline and journal have an envelope
-<!-- upgrade: no-file -->
+<!-- upgrade: evidence-source-import-state-reset -->
 
 `.evidence/source-imports/state.json` opens with `apiVersion:
 id.registrystack.org/formats/evidence/source-import-state/v1alpha1` and
@@ -725,7 +725,7 @@ import` with the evidencectl that started it to finish or roll back, then
 rerun.
 
 ### BREAKING: the source resolution file has an envelope
-<!-- upgrade: no-file -->
+<!-- upgrade: evidence-source-resolution-envelope -->
 
 A resolution file passed with `--resolutions` opens with `apiVersion:
 id.registrystack.org/formats/evidence/source-resolution/v1alpha1` and `kind:
