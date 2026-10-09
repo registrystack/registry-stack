@@ -637,6 +637,18 @@ fn substitute_string(
                 format!("Remove the NUL byte from {name}."),
             ));
         }
+        // The reader's own rule for text written in the file: a control
+        // character other than tab, line feed, and carriage return.
+        if value
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+        {
+            return Err(refusal(
+                CODE_SUBSTITUTION,
+                format!("the environment variable {name} holds a control character"),
+                format!("Remove the control character from {name}."),
+            ));
+        }
         substituted.push_str(&value);
         rest = &after_start[end + 1..];
     }

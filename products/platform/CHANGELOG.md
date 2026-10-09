@@ -32,6 +32,11 @@
   (`platform.runtime-config.unavailable`). The dotted field becomes the
   diagnostic's JSON pointer `path`; a missing `apiVersion` or `kind` is
   reported at the root, where the reader reports it.
+- BREAKING: `registry-platform-config` `RuntimeConfigLoader` refuses a
+  `${VAR}` value that holds a control character other than tab, line feed, or
+  carriage return, with `config.substitution` naming only the variable, as the
+  reader refuses the same character written in the file. Migration: remove
+  the control character from the variable.
 - `registry-platform-httputil` adds the bounded same-key resend the BReg,
   Casework, Messaging, and Scheduling clients share:
   `client::retry_keyed_mutation`,

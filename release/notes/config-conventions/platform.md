@@ -62,6 +62,12 @@ open with `apiVersion` and `kind`.
    stop the development session, delete the directory that holds
    `session.json`, and start the session again; the local issuer is set up
    afresh.
+8. **A substituted value holds no control character.** A `${VAR}` value
+   with a control character other than tab, line feed, or carriage return
+   (ESC, DEL, U+0085, and the like) is refused with `config.substitution`
+   naming the variable, as the same character written in the file is refused
+   with `yaml.control-character`. Migration: remove the control character
+   from the variable.
 
 ## Other changes
 

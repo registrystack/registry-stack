@@ -216,6 +216,37 @@ fn substitution_refuses_a_nul_byte() {
 }
 
 #[test]
+fn substitution_refuses_a_control_character_the_reader_refuses_as_written() {
+    static CASES: [[(&str, &str); 1]; 3] = [
+        [("ESC", "a\u{1b}b")],
+        [("DEL", "a\u{7f}b")],
+        [("NEL", "a\u{85}b")],
+    ];
+    for pairs in &CASES {
+        let variable = pairs[0].0;
+        let error = loader()
+            .parse_str::<Example>(&format!("{}name: ${{{variable}}}\n", header()), env(pairs))
+            .expect_err("control character refuses");
+        assert_eq!(error.deciding_diagnostic().code, "config.substitution");
+        assert_eq!(
+            error.diagnostics()[0].message,
+            format!("the environment variable {variable} holds a control character"),
+        );
+    }
+}
+
+#[test]
+fn substitution_accepts_tab_line_feed_and_carriage_return() {
+    let loaded = loader()
+        .parse_str::<Example>(
+            &format!("{}name: ${{WHITE}}\n", header()),
+            env(&[("WHITE", "a\tb\nc\rd")]),
+        )
+        .expect("tab, LF, and CR stay accepted");
+    assert_eq!(loaded.config.name.as_deref(), Some("a\tb\nc\rd"));
+}
+
+#[test]
 fn substitution_is_refused_in_every_reference_field() {
     for (text, field) in [
         ("audit:\n  hashKeyRef: ${NAME}\n", "audit.hashKeyRef"),
