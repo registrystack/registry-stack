@@ -1,6 +1,10 @@
 apiVersion: id.registrystack.org/formats/release/upgrade-steps/v1alpha1
 kind: ReleaseUpgradeSteps
 steps:
+- {id: casework-fixture-file-extension, product: casework, kind: manual, file: fixtures/*.yml,
+  instruction: 'Rename each fixtures/*.yml file to .yaml before the fixture spelling changes, which the
+    upgrade applies only to .yaml files. The previous release did not run a .yml fixture; this release
+    reads it and refuses one written in the old spelling.'}
 - id: casework-fixture-spelling
   product: casework
   kind: edit

@@ -291,7 +291,7 @@ project changes.
 | `--against-breg-package` with a missing or stale description | unchanged code, `casework.yaml:/sources/N/description` | unchanged code, `/sources/N/description` |
 
 ## BREAKING: fixtures, simulations, and holiday sets are read by the shared reader
-<!-- upgrade: casework-fixture-spelling, casework-fixture-target, casework-simulation-file-extension, casework-simulation-spelling, casework-holiday-set-envelope, casework-holiday-set-file-name -->
+<!-- upgrade: casework-fixture-file-extension, casework-fixture-spelling, casework-fixture-target, casework-simulation-file-extension, casework-simulation-spelling, casework-holiday-set-envelope, casework-holiday-set-file-name -->
 
 `caseworkctl check`, `test`, and `simulate` read the files under
 `fixtures/`, `simulations/`, and `simulations/holiday-sets/` through the
@@ -323,6 +323,7 @@ spelling:
 |---|---|
 | a simulation with no envelope | `apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1` and `kind: CaseworkSimulation` |
 | a holiday set with no envelope | `apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1` and `kind: CaseworkHolidaySet` |
+| a fixture file named `*.yml` | rename it to `*.yaml` first; the previous release did not run a `.yml` fixture, this release reads it and refuses the old spelling, and the automated spelling changes apply only to `.yaml` files |
 | a simulation file named `*.yml` | rename it to `*.yaml` first; the automated spelling changes apply only to `.yaml` files |
 | `subject.id` | `subject.recordId` |
 | `expect.ruleId` | `expect.rule` |

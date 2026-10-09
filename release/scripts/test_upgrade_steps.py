@@ -725,6 +725,13 @@ expect: {ruleId: first, dueState: atRisk}
         self.assertLess(catalog.index("casework-simulation-file-extension"),
                         catalog.index("casework-simulation-spelling"))
 
+    def test_the_casework_fixture_extension_step_is_manual_and_precedes_the_fixture_spelling_step(self) -> None:
+        catalog = list(upgrade_steps.load_catalog())
+        step = upgrade_steps.load_catalog()["casework-fixture-file-extension"]
+        self.assertEqual((step["kind"], step["file"]), ("manual", "fixtures/*.yml"))
+        self.assertLess(catalog.index("casework-fixture-file-extension"),
+                        catalog.index("casework-fixture-spelling"))
+
     def test_the_messaging_null_member_steps_are_manual_and_name_the_refused_members(self) -> None:
         catalog = upgrade_steps.load_catalog()
         project = catalog["messaging-project-null-members"]
