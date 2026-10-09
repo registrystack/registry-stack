@@ -4448,12 +4448,25 @@ fn retired_access_spellings_read(bytes: &[u8]) -> Result<Vec<u8>> {
             owner.insert("rowBoundaries".into(), json!("unrestricted"));
         }
     }
-    // An earlier release wrote an absent optional member as `null`.
+    // An earlier release read a `null` optional member as absent. A null that
+    // is data stays as written: an `equals` comparison literal, the literals
+    // of a hook's `beforeEquals` and `afterEquals`, and anything inside a
+    // field's foreign JSON Schema.
     fn without_nulls(value: &mut Value) {
         match value {
             Value::Object(members) => {
-                members.retain(|_, member| !member.is_null());
-                members.values_mut().for_each(without_nulls);
+                members.retain(|name, member| name == "equals" || !member.is_null());
+                for (name, member) in members {
+                    match (name.as_str(), member) {
+                        ("equals" | "beforeEquals" | "afterEquals" | "schema", _) => {}
+                        // The adopter names the members of these mappings, so
+                        // a name in one says nothing about the value under it.
+                        ("set" | "selectors" | "subjects" | "exemptions", Value::Object(named)) => {
+                            named.values_mut().for_each(without_nulls);
+                        }
+                        (_, member) => without_nulls(member),
+                    }
+                }
             }
             Value::Array(items) => items.iter_mut().for_each(without_nulls),
             _ => {}

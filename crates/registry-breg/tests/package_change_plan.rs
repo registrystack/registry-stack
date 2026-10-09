@@ -518,6 +518,82 @@ fn a_predecessor_module_changed_after_it_was_sealed_is_still_refused() {
     assert_eq!(refused, Some(PackageError::Envelope));
 }
 
+/// A project with an action that places only an asset whose rank is unset:
+/// its requirement compares the field with the `null` literal.
+#[cfg(feature = "tooling")]
+fn null_comparing_source() -> SourceFixture {
+    let mut module: serde_json::Value =
+        serde_json::from_slice(&module_bytes(Variant::NewEntity)).unwrap();
+    module["actions"] = json!([{
+        "id": "place-asset",
+        "requires": [{"input": "asset", "field": "rank", "equals": null}],
+        "inputs": [
+            {"id": "asset", "type": "reference", "target": "asset", "required": true, "classification": "internal"},
+            {"id": "site", "type": "reference", "target": "site", "required": true, "classification": "internal"}
+        ],
+        "effects": [{
+            "id": "placement",
+            "target": {"entity": "placement"},
+            "operation": "create",
+            "set": {"asset": {"fromField": "asset"}, "site": {"fromField": "site"}}
+        }]
+    }]);
+    let module_bytes = serde_json::to_vec(&module).unwrap();
+    let module = parse_module_yaml(&module_bytes).expect("the module parses");
+    let mut project: serde_json::Value =
+        serde_json::from_slice(&project_bytes(&module_digest(&module))).unwrap();
+    project["accessProfiles"] = json!([{
+        "id": "registrar",
+        "principalClaim": "principal",
+        "requiredScopes": "unrestricted",
+        "permissions": [{
+            "action": "place-asset",
+            "operations": ["invoke"],
+            "targets": [
+                {"entity": "asset", "rowBoundaries": "unrestricted"},
+                {"entity": "placement", "rowBoundaries": "unrestricted"},
+                {"entity": "site", "rowBoundaries": "unrestricted"}
+            ],
+            "results": ["placement"]
+        }]
+    }]);
+    SourceFixture {
+        project_bytes: serde_json::to_vec(&project).unwrap(),
+        module_bytes,
+    }
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn a_predecessor_requirement_comparing_a_field_with_null_keeps_its_literal() {
+    let root = tempfile::Builder::new()
+        .prefix("registry-null-literal-predecessor-")
+        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .unwrap();
+    let package = root.path().join("package");
+    let source = null_comparing_source();
+    let current = prepare_package(build_request(
+        None,
+        source.project_bytes,
+        source.module_bytes,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    ))
+    .expect("the package builds");
+    current.publish_to_directory(&package).unwrap();
+
+    // An earlier release read this literal as a value, and so does this one:
+    // the predecessor compiles to the registry the same source compiles to
+    // when it is read as a current source.
+    let (_, registry) = load_predecessor_rehearsal_baseline(
+        &package,
+        &PackageLoadContext {
+            database_initialization_environment: "local",
+        },
+    )
+    .expect("a predecessor comparing a field with null compiles for a rehearsal");
+    assert_eq!(&registry, current.registry());
+}
+
 #[cfg(feature = "tooling")]
 #[test]
 fn rhai_planner_predecessor_plans_an_additive_successor() {

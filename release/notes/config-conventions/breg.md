@@ -1671,10 +1671,12 @@ sources for a rehearsal, `rowBoundaries: []` reads as `unrestricted`, an
 omitted or empty `requiredScopes` reads as `unrestricted`, an empty
 `requiredPurposes`, `requesterClients`, or access-requirement list reads as
 omitted, an action permission's empty `rowBoundaries` is dropped, `anonymous:
-false` is dropped, and a `null` optional member reads as absent. Each keeps the
-meaning the earlier release gave it. This applies to the predecessor only: a
-project or module you check, build, package as the successor, or start still
-refuses the empty list.
+false` is dropped, and a `null` optional member reads as absent. A `null` that
+is a value stays one: an `equals` comparison literal, a literal under a hook
+condition's `beforeEquals` or `afterEquals`, and a `null` inside a structured
+field's `schema`. Each keeps the meaning the earlier release gave it. This
+applies to the predecessor only: a project or module you check, build, package
+as the successor, or start still refuses the empty list.
 A predecessor's module lock is not compared with its module either: the
 earlier release computed that digest over the spellings it wrote, and the
 sealed package already binds every module byte to the package digest the
