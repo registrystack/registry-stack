@@ -267,6 +267,10 @@ fn validate_key_id(key_id: &str) -> Result<(), EvidenceSigningError> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
     use async_trait::async_trait;
     use rand_core::OsRng;

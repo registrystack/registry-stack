@@ -1184,8 +1184,8 @@ fn render_candidate_preserving_authored_text(
     } else if !has_permission {
         rendered = insert_reader_permission(&rendered, entity_id, reader)?;
     }
-    let round_trip =
-        authored_yaml("registry.yaml", rendered.as_bytes()).context("parsing narrow BReg YAML patch")?;
+    let round_trip = authored_yaml("registry.yaml", rendered.as_bytes())
+        .context("parsing narrow BReg YAML patch")?;
     if &round_trip != expected {
         bail!("narrow BReg YAML patch changed unexpected authored content; no files were written");
     }
@@ -1979,8 +1979,8 @@ fn plan_breg_dev_clients(
 
     match fs::read(&dev_clients_path) {
         Ok(original) => {
-            let mut authored_dev_clients =
-                authored_yaml("dev-clients.yaml", &original).context("parsing BReg dev-clients.yaml")?;
+            let mut authored_dev_clients = authored_yaml("dev-clients.yaml", &original)
+                .context("parsing BReg dev-clients.yaml")?;
             let mut changes = apply_dev_clients_candidate(&mut authored_dev_clients, &clients)?;
             for (authority_id, authority) in &local_review_authorities {
                 apply_local_review_authority_candidate(
@@ -2919,6 +2919,10 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
     use registry_platform_yaml::Severity;
 

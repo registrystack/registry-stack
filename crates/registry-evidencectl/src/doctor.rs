@@ -1226,6 +1226,10 @@ fn print_diagnostics(report: &DoctorReport) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::{YamlValue, GATED_ACQUISITION_CAPABILITIES, REQUEST_BATCH_MAXIMUM_ITEMS};
 
     /// The rate-limit check restates the request-batch item ceiling; the

@@ -126,6 +126,10 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::{
         documents, ACCESS_CLIENT_SCHEMA_FILE, MOCK_PLAN_SCHEMA_FILE, SELECTOR_SCHEMA_FILE,
         SOURCE_RESOLUTION_SCHEMA_FILE, SOURCE_SCHEMA_FILE, TARGET_GOVERNANCE_SCHEMA_FILE,

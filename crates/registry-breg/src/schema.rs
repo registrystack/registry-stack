@@ -158,6 +158,10 @@ fn render(value: Value) -> Result<String, serde_json::Error> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use std::{fs, path::Path};
 
     use jsonschema::{Draft, JSONSchema};

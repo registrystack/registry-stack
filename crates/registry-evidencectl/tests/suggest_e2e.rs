@@ -6,6 +6,10 @@
 //! written into a temporary directory, and the command is asked to draft one
 //! source from them. Nothing here reaches the network, and no sample value is
 //! expected in any assertion: only bounds derived from the sample are.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 
 use std::{
     path::{Path, PathBuf},

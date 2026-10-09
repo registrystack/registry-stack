@@ -111,10 +111,7 @@ fn a_discovery_jwks_source_refuses_the_members_of_the_other_kinds() {
 #[test]
 fn a_jwks_source_refuses_a_missing_or_unknown_kind() {
     for text in ["uri: https://keys.example.test/jwks", "kind: remote"] {
-        assert!(
-            serde_norway::from_str::<JwksSource>(text).is_err(),
-            "{text}"
-        );
+        assert!(read_block::<JwksSource>(text).is_err(), "{text}");
     }
 }
 
@@ -653,9 +650,9 @@ fn oidc_clients_default_to_no_rule_and_bound_the_assertion_issuer_map() {
 
 #[test]
 fn an_empty_assertion_issuer_map_is_refused_and_omission_applies_no_rule() {
-    let error = serde_norway::from_str::<OidcClientsConfig>("assertionIssuers: {}")
+    let error = read_block::<OidcClientsConfig>("assertionIssuers: {}")
         .expect_err("an empty map is not how a file says no rule");
     assert!(error.to_string().contains("at least one client"), "{error}");
-    let omitted = serde_norway::to_string(&clients("{}")).expect("serialize");
+    let omitted = serde_json::to_string(&clients("{}")).expect("serialize");
     assert!(!omitted.contains("assertionIssuers"), "{omitted}");
 }

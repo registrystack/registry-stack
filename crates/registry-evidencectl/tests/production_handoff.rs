@@ -5,6 +5,10 @@
 //! starts services and requires `python3` and `openssl` on the host. The pinned
 //! stock-issuer journey lives in the Evidence client acceptance suite; this
 //! suite keeps the strict production HTTPS, signing, and audit handoff proof.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 
 use std::{
     collections::BTreeMap,

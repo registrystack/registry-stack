@@ -1,5 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
-
 #![cfg(all(feature = "postgres-test", feature = "tooling", unix))]
 
 #[path = "support/postgres_harness.rs"]

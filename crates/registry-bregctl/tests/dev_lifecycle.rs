@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
 //! Installed-binary proof. Opt in after building breg and bregctl; Docker
 //! must be available. This creates and removes only its own synthetic database.

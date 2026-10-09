@@ -947,6 +947,10 @@ fn replace_authoring(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
     fn source_fixture() -> (tempfile::TempDir, State) {
         source_fixture_with_top_level_profiles(true)
