@@ -794,3 +794,12 @@ contracts fetch` no longer accept `--out`. Clap refuses each as an unexpected
 argument (`evidencectl.usage`, exit 2). Migration: pass the project directory
 as the positional argument (`evidencectl source mock check <dir>`), and write
 `--output` where a script wrote `--out` for those two commands.
+
+The same refusal applies to the second spellings of other arguments.
+`--project <dir>` is refused on `evidencectl target explain`, `dev stop`,
+`dev clean`, `source add`, `source suggest`, `source detach`, `fixtures run`,
+and `tooling editor`; `evidencectl keygen` refuses `--out-dir`, `--public-out`,
+and `--out`, and `evidencectl jwks` refuses `--out`. Migration: pass the
+project directory as the positional argument (`evidencectl fixtures run
+<dir>`), and write `--output-dir`, `--public-output`, and `--output` for the
+`keygen` and `jwks` flags.

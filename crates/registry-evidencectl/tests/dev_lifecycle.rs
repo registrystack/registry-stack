@@ -638,7 +638,7 @@ fn dev_stop_and_clean_without_a_session_name_what_is_missing_in_both_formats() {
             "No active local development session",
         ),
         (
-            vec!["dev", "clean", "--project"],
+            vec!["dev", "clean"],
             "evidence.dev.no-stopped-session",
             "No completed stopped local development session",
         ),
@@ -702,7 +702,7 @@ impl Project {
         let secrets = self.root.join("secrets");
         assert_success(
             &evidencectl()
-                .args(["keygen", "signing", "--out-dir"])
+                .args(["keygen", "signing", "--output-dir"])
                 .arg(&secrets)
                 .output()
                 .expect("signing key"),
@@ -711,7 +711,7 @@ impl Project {
         for name in ["audit-hmac-key", "subject-binding-hmac-key"] {
             assert_success(
                 &evidencectl()
-                    .args(["keygen", "secret", "--out"])
+                    .args(["keygen", "secret", "--output"])
                     .arg(secrets.join(name))
                     .output()
                     .expect("HMAC key"),
@@ -816,7 +816,7 @@ impl Project {
 
     fn dev_stop(&self) -> Output {
         evidencectl()
-            .args(["dev", "stop", "--project"])
+            .args(["dev", "stop"])
             .arg(&self.root)
             .output()
             .expect("dev stop")

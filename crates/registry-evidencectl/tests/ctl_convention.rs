@@ -361,21 +361,15 @@ fn refusals_name_the_command_that_refused() {
 }
 
 #[test]
-fn the_retired_project_flag_still_selects_the_project() {
+fn the_retired_project_flag_is_refused() {
     let workspace = tempfile::tempdir().expect("workspace");
     let project = scaffold(workspace.path());
-    for arguments in [
-        vec!["tooling", "editor"],
-        vec!["tooling", "editor", "--project"],
-    ] {
-        let output = evidencectl()
-            .args(["--format", "json"])
-            .args(&arguments)
-            .arg(&project)
-            .output()
-            .expect("run tooling editor");
-        conforming(&output, "tooling editor", SUCCESS, "complete");
-    }
+    let output = evidencectl()
+        .args(["--format", "json", "tooling", "editor", "--project"])
+        .arg(&project)
+        .output()
+        .expect("run tooling editor");
+    assert_eq!(output.status.code(), Some(2));
 }
 
 #[test]

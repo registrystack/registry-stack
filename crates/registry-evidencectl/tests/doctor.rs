@@ -840,12 +840,17 @@ sourceToken: secret:file/source-bearer-token
     run_ok(&[
         "keygen",
         "signing",
-        "--out-dir",
+        "--output-dir",
         secrets.to_str().expect("secret root"),
     ]);
     for name in SECRET_FILES {
         let out = secrets.join(name);
-        run_ok(&["keygen", "secret", "--out", out.to_str().expect("secret")]);
+        run_ok(&[
+            "keygen",
+            "secret",
+            "--output",
+            out.to_str().expect("secret"),
+        ]);
     }
 }
 
@@ -890,7 +895,7 @@ fn enable_acquisition_capability_twice(project: &Path) {
 
 fn provision_bearer_token(project: &Path) {
     let out = project.join("secrets/source-bearer-token");
-    run_ok(&["keygen", "token", "--out", out.to_str().expect("token")]);
+    run_ok(&["keygen", "token", "--output", out.to_str().expect("token")]);
 }
 
 fn doctor(project: &Path, extra: &[&str]) -> Output {

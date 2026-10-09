@@ -41,47 +41,47 @@ pub enum KeygenCommand {
 #[derive(Debug, Args)]
 pub struct SigningArgs {
     /// Secret directory receiving the private JWK file (created 0700).
-    #[arg(long, alias = "out-dir")]
+    #[arg(long)]
     pub output_dir: PathBuf,
 
     /// Public JWK output path; defaults to a file inside the secret directory.
-    #[arg(long, alias = "public-out")]
+    #[arg(long)]
     pub public_output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 pub struct SecretArgs {
     /// Output file for the raw secret (written 0600).
-    #[arg(long, alias = "out")]
+    #[arg(long)]
     pub output: PathBuf,
 }
 
 #[derive(Debug, Args)]
 pub struct TokenArgs {
     /// Output file for the bearer token (written 0600).
-    #[arg(long, alias = "out")]
+    #[arg(long)]
     pub output: PathBuf,
 }
 
 #[derive(Debug, Args)]
 pub struct HolderArgs {
     /// Directory receiving the holder private JWK file (created 0700).
-    #[arg(long, alias = "out-dir")]
+    #[arg(long)]
     pub output_dir: PathBuf,
 
     /// Public JWK output path; defaults to a file inside the secret directory.
-    #[arg(long, alias = "public-out")]
+    #[arg(long)]
     pub public_output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 pub struct ClientAssertionArgs {
     /// Secret directory receiving the private JWK file (created 0700).
-    #[arg(long, alias = "out-dir")]
+    #[arg(long)]
     pub output_dir: PathBuf,
 
     /// Public JWK output path; defaults to a file inside the secret directory.
-    #[arg(long, alias = "public-out")]
+    #[arg(long)]
     pub public_output: Option<PathBuf>,
 
     /// Name of the private JWK file, which is the `secret:file/NAME` a source's

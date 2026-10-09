@@ -30,6 +30,15 @@
   and `evidencectl client profile create` and `client contracts fetch` no
   longer accept `--out` (use `--output`). See "Evidence tooling files" in
   `release/notes/config-conventions/evidence.md`.
+- BREAKING: `evidencectl` no longer accepts the second spellings of arguments
+  that have a current one. `--project` is refused on `target explain`,
+  `dev stop`, `dev clean`, `source add`, `source suggest`, `source detach`,
+  `fixtures run`, and `tooling editor` (use the positional project directory);
+  `keygen` refuses `--out-dir`, `--public-out`, and `--out` (use
+  `--output-dir`, `--public-output`, and `--output`); `jwks` refuses `--out`
+  (use `--output`). The seed of a mock plan is bounded by the shared reader
+  and refused as `config.out-of-range`. See "Evidence tooling files" in
+  `release/notes/config-conventions/evidence.md`.
 - BREAKING: a file under `sources/` opens with `apiVersion`
   (`id.registrystack.org/formats/evidence/source/v1alpha1`) and `kind`
   (`EvidenceSource`), and a file under `selectors/` with

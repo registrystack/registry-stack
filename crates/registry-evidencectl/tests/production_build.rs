@@ -1068,7 +1068,6 @@ maximumAggregateBytes: 128\nfields:\n  reference: {type: string, minimumBytes: 1
             .arg("target")
             .arg("explain")
             .arg(&self.target)
-            .arg("--project")
             .arg(&self.project)
             .env("EVIDENCE_BIN", &self.evidence)
             .env("FAKE_EVIDENCE_LOG", &self.log)

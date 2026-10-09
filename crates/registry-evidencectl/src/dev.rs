@@ -262,9 +262,6 @@ struct TokenArgs {
 struct StopArgs {
     /// Project root. Defaults to the current directory.
     project: Option<PathBuf>,
-    /// Compatibility spelling for the project root.
-    #[arg(long = "project", hide = true, conflicts_with = "project")]
-    legacy_project: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -272,14 +269,6 @@ struct CleanArgs {
     /// Project root. Defaults to the current directory.
     #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(
-        long = "project",
-        value_name = "PROJECT",
-        hide = true,
-        conflicts_with = "project"
-    )]
-    legacy_project: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -574,17 +563,10 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
             )
         }
         Some(DevAction::Stop(stop)) => {
-            let project = stop
-                .project
-                .as_deref()
-                .or(stop.legacy_project.as_deref())
-                .unwrap_or_else(|| Path::new("."));
+            let project = stop.project.as_deref().unwrap_or_else(|| Path::new("."));
             stop_dev(project, format)
         }
-        Some(DevAction::Clean(clean)) => clean_dev(
-            clean.legacy_project.as_ref().unwrap_or(&clean.project),
-            format,
-        ),
+        Some(DevAction::Clean(clean)) => clean_dev(&clean.project, format),
         Some(DevAction::Token(token)) => fresh_token(&token.project, &token.client, format),
         Some(DevAction::Grant(args)) => approved_grant(args, format),
         Some(DevAction::Check(args)) => Ok(check_platform_file(&args, format)),

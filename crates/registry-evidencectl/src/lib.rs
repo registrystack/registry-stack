@@ -496,7 +496,6 @@ fn run_entry() -> ExitCode {
                     junit,
                     command: "test",
                     explain: args.explain,
-                    legacy_project: None,
                 }))
                 .map_err(|error| authored::project_refusal(error, &project, &project)),
                 "evidence.test.failed",
@@ -1311,10 +1310,10 @@ mod tests {
         assert_eq!(failure.exit(), report::OPERATIONAL_FAILURE_EXIT);
     }
 
-    /// The retired `--project` spelling of `source suggest` stays accepted
-    /// but hidden, so the usage line names only the documented alternatives.
+    /// The usage line of `source suggest` names the two alternatives and no
+    /// `--project` flag.
     #[test]
-    fn source_suggest_usage_omits_the_retired_project_flag() {
+    fn source_suggest_usage_names_the_two_alternatives() {
         let mut command = command();
         let suggest = command
             .find_subcommand_mut("source")
@@ -1323,10 +1322,6 @@ mod tests {
         let usage = suggest.render_usage().to_string();
         assert!(usage.contains("<--openapi <OPENAPI>|PROJECT>"), "{usage}");
         assert!(!usage.contains("--project"), "{usage}");
-        assert!(
-            Cli::try_parse_from(["evidencectl", "source", "suggest", "--project", "project"])
-                .is_ok()
-        );
     }
 
     #[test]
@@ -1465,9 +1460,7 @@ mod tests {
         .is_ok());
         assert!(Cli::try_parse_from(["evidencectl", "dev", "--detach"]).is_ok());
         assert!(Cli::try_parse_from(["evidencectl", "dev", "stop"]).is_ok());
-        assert!(
-            Cli::try_parse_from(["evidencectl", "dev", "stop", "--project", "project",]).is_ok()
-        );
+        assert!(Cli::try_parse_from(["evidencectl", "dev", "stop", "project"]).is_ok());
 
         // The bare-form compatibility flags stay parseable beside an action
         // subcommand so `run_with_format` can refuse them while naming both
@@ -1946,17 +1939,13 @@ mod tests {
             projects.iter().map(|(path, _)| path).collect::<Vec<_>>()
         );
 
-        // A hidden `--project` beside a positional PROJECT is the retired
-        // spelling of that same argument, still parseable.
+        // A positional PROJECT has no second spelling as a flag.
         for (path, argument) in &projects {
-            if argument.get_id() == "legacy_project" {
-                assert!(
-                    projects.iter().any(|(other, positional)| other == path
-                        && positional.get_id() == "project"
-                        && positional.is_positional()),
-                    "{path} keeps --project only as the retired spelling of its positional PROJECT"
-                );
-            }
+            assert_ne!(
+                argument.get_id(),
+                "legacy_project",
+                "{path} must not keep `--project` beside its positional PROJECT"
+            );
         }
 
         // These commands name their own project shape in their help and are
@@ -2115,7 +2104,7 @@ mod tests {
     }
 
     #[test]
-    fn retired_output_spellings_keep_parsing() {
+    fn retired_output_spellings_are_refused() {
         for arguments in [
             vec!["evidencectl", "keygen", "secret", "--out", "audit-hmac-key"],
             vec!["evidencectl", "keygen", "token", "--out", "source-token"],
@@ -2124,7 +2113,7 @@ mod tests {
                 "evidencectl",
                 "keygen",
                 "signing",
-                "--out-dir",
+                "--output-dir",
                 "secrets",
                 "--public-out",
                 "signing.jwk.json",
@@ -2134,7 +2123,7 @@ mod tests {
                 "evidencectl",
                 "keygen",
                 "client-assertion",
-                "--out-dir",
+                "--output-dir",
                 "secrets",
                 "--public-out",
                 "assertion.jwk.json",
@@ -2147,9 +2136,35 @@ mod tests {
                 "signing-p256-public.jwk.json",
             ],
         ] {
-            assert!(
-                Cli::try_parse_from(&arguments).is_ok(),
-                "{arguments:?} must keep working as already published"
+            let error = Cli::try_parse_from(&arguments).expect_err("the old spelling is refused");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::UnknownArgument,
+                "{arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_project_flag_is_refused_where_the_project_is_positional() {
+        for command in [
+            &["target", "explain"][..],
+            &["dev", "stop"],
+            &["dev", "clean"],
+            &["source", "add"],
+            &["source", "suggest"],
+            &["source", "detach"],
+            &["fixtures", "run"],
+            &["tooling", "editor"],
+        ] {
+            let mut arguments = vec!["evidencectl"];
+            arguments.extend_from_slice(command);
+            arguments.extend(["--project", "."]);
+            let error = Cli::try_parse_from(&arguments).expect_err("--project is refused");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::UnknownArgument,
+                "{arguments:?}"
             );
         }
     }

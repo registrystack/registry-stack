@@ -165,7 +165,7 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -222,7 +222,7 @@ fn fixture_selection_runs_only_one_exact_referenced_fixture() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .args(["--fixture", "fixtures/a.yaml"])
         .args(["--case", "positive"])
@@ -275,7 +275,7 @@ fn fixture_selection_refuses_non_exact_names_without_rendering_them() {
     let unreferenced = "fixtures/a.yaml-private-canary";
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .args(["--fixture", unreferenced])
         .arg("--evidence-bin")
@@ -321,7 +321,7 @@ fn editable_sqlite_starter_compiles_and_runs_through_bundle_only_seams() {
     let stub = write_stub_evidence(dir.path());
     let argv_log = dir.path().join("argv.log");
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -366,7 +366,7 @@ fn check_failure_short_circuits_before_any_fixture_evaluation() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -404,7 +404,7 @@ fn one_failing_fixture_is_reported_with_its_stderr_and_the_rest_still_run() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -448,7 +448,7 @@ fn a_failing_fixture_carries_the_case_and_classes_the_binary_named() {
                 (expected class string, observed class integer)";
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -487,7 +487,7 @@ fn a_failing_fixture_carries_the_case_and_classes_the_binary_named() {
 
     // The human mode relays the same line through the captured stderr.
     let human = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -511,7 +511,7 @@ fn a_failing_case_without_classes_carries_no_class_fields() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -546,7 +546,7 @@ fn an_unstructured_failure_names_no_case() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -579,7 +579,7 @@ fn json_output_is_one_parseable_document_on_stdout_with_expected_pass_fail_value
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -631,7 +631,7 @@ fn the_summary_totals_the_cases_each_fixture_evaluated() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -655,7 +655,7 @@ fn the_summary_totals_the_cases_each_fixture_evaluated() {
     // A failing fixture still reports how many cases it reached, so the total
     // is not short just because one fixture failed.
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -691,7 +691,7 @@ fn an_unrecognized_summary_line_is_counted_as_nothing() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -765,7 +765,7 @@ fn a_run_that_evaluated_no_case_fails_instead_of_reporting_success() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -817,7 +817,7 @@ fn a_foreign_evidence_binary_is_refused_before_any_step() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -854,7 +854,7 @@ fn a_mismatched_evidence_binary_is_refused_naming_both_versions() {
     let reported = "0.0.1-another-build";
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -893,7 +893,7 @@ fn explain_is_asked_of_every_evaluation_and_the_trace_is_relayed() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -961,7 +961,7 @@ fn an_unexplained_run_relays_no_trace() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -1000,7 +1000,7 @@ fn an_explained_json_run_carries_each_trace_in_its_report() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -1039,7 +1039,7 @@ fn missing_runtime_yaml_errors_clearly_without_invoking_evidence() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -1060,7 +1060,7 @@ fn unresolvable_evidence_binary_errors_clearly() {
     let missing_bin = dir.path().join("nowhere").join("evidence");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&missing_bin)
@@ -1096,7 +1096,7 @@ fn fixtures_are_discovered_at_a_relative_package_root_named_in_runtime_yaml() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -1135,7 +1135,7 @@ fn fixtures_are_discovered_at_an_absolute_package_root_named_in_runtime_yaml() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--evidence-bin")
         .arg(&stub)
@@ -1167,7 +1167,7 @@ fn a_non_executable_evidence_on_path_is_skipped_with_a_clear_resolution_error() 
     fs::set_permissions(&candidate, permissions).expect("chmod candidate non-executable");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .env("PATH", &path_dir)
         .env_remove("EVIDENCE_BIN")
@@ -1190,7 +1190,7 @@ fn evidence_bin_env_var_is_used_when_the_flag_is_omitted() {
     let argv_log = dir.path().join("argv.log");
 
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .env("EVIDENCE_BIN", &stub)
         .env("ARGV_LOG", &argv_log)
@@ -1335,7 +1335,7 @@ fn local_target_created_before_questions_uses_current_local_caller_governance() 
     let stub = write_stub_evidence(&root);
     let argv_log = root.join("argv.log");
     let output = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--target")
         .arg(&target)
@@ -1357,7 +1357,7 @@ fn local_target_created_before_questions_uses_current_local_caller_governance() 
     )
     .unwrap();
     let rejected = evidencectl()
-        .args(["fixtures", "run", "--project"])
+        .args(["fixtures", "run"])
         .arg(&project)
         .arg("--target")
         .arg(&target)

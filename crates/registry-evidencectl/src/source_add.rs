@@ -38,14 +38,6 @@ pub(crate) struct SourceAddArgs {
     /// editable project when the directory is absent.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(
-        long = "project",
-        value_name = "PROJECT",
-        hide = true,
-        conflicts_with = "project"
-    )]
-    pub legacy_project: Option<PathBuf>,
     /// Existing registry entity; prompted when omitted in a terminal.
     #[arg(long)]
     pub entity: Option<String>,
@@ -150,10 +142,7 @@ struct RowScope {
     value_file: PathBuf,
 }
 
-pub(crate) fn run(mut args: SourceAddArgs, format: OutputFormat) -> Result<ExitCode> {
-    if let Some(project) = args.legacy_project.take() {
-        args.project = project;
-    }
+pub(crate) fn run(args: SourceAddArgs, format: OutputFormat) -> Result<ExitCode> {
     let binary = args
         .bregctl_bin
         .clone()

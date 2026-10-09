@@ -170,7 +170,7 @@ fn tooling_editor_publishes_its_setup_report_in_json() {
     .expect("project marker");
 
     let output = evidencectl()
-        .args(["--format", "json", "tooling", "editor", "--project"])
+        .args(["--format", "json", "tooling", "editor"])
         .arg(&project)
         .output()
         .expect("run tooling editor");

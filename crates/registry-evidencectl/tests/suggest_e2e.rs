@@ -103,7 +103,6 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
         path_argument(&sample),
         "--source-id".to_owned(),
         "source-b".to_owned(),
-        "--project".to_owned(),
         path_argument(&project),
     ];
     let output = evidencectl(&arguments);
@@ -236,7 +235,6 @@ fn a_project_always_uses_its_retained_openapi() {
     let output = evidencectl(&[
         "source".to_owned(),
         "suggest".to_owned(),
-        "--project".to_owned(),
         path_argument(&project),
         "--openapi".to_owned(),
         path_argument(&other),
@@ -694,7 +692,6 @@ fn a_delivered_draft_reports_the_written_files_and_equivalent_command_in_json() 
         "/total".to_owned(),
         "--source-id".to_owned(),
         "source-b".to_owned(),
-        "--project".to_owned(),
         path_argument(&project),
     ];
     let output = evidencectl(&arguments);

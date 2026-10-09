@@ -121,13 +121,11 @@ The `doctor --project <target>` compatibility form retains artifact inspection;
 use `artifact inspect <target>` for that operation and reserve `doctor --runtime-config` for
 live startup dependency checks. Every command that reads one project names it as a positional
 `<project>` argument, defaulting to the current directory where the command allows it. The former
-`--project <project>` spelling remains accepted, but hidden, on commands whose project is now
-positional. Only `source import`, `source diff`, and `source update`, whose positional argument is
+`--project <project>` spelling is refused on commands whose project is positional. Only `source import`, `source diff`, and `source update`, whose positional argument is
 the export, and `target new`, whose positional argument is the target, document `--project`.
 `doctor` keeps its visible `--project <target>` option, and the `access` commands and
 `audit show` act on the current directory; none of these takes a positional project. Do
-not combine a canonical positional project with its former `--project` flag; conflicting old and
-new forms are usage errors.
+pass `--project` to a command whose project is positional; clap refuses it as an unexpected argument.
 Request preparation uses `--response-format signed-jws|sd-jwt-vc` so the
 response choice cannot collide with global report formatting. The released
 `request prepare --format` spelling remains accepted only for those two legacy

@@ -70,14 +70,6 @@ pub(crate) struct SourceDetachArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub(crate) project: PathBuf,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(
-        long = "project",
-        value_name = "PROJECT",
-        hide = true,
-        conflicts_with = "project"
-    )]
-    pub(crate) legacy_project: Option<PathBuf>,
 }
 
 pub(crate) fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCode> {
@@ -88,12 +80,7 @@ pub(crate) fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCo
         SourceCommand::Diff(args) => diff(args, format),
         SourceCommand::Import(args) => apply(args, "source import", format),
         SourceCommand::Update(args) => apply(args, "source update", format),
-        SourceCommand::Detach(mut args) => {
-            if let Some(project) = args.legacy_project.take() {
-                args.project = project;
-            }
-            detach(args)
-        }
+        SourceCommand::Detach(args) => detach(args),
     }
 }
 

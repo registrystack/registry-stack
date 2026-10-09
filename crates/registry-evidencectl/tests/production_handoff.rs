@@ -621,7 +621,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
     fixture.stage_local_project_without_governance();
     assert_success(
         evidencectl()
-            .args(["keygen", "token", "--out"])
+            .args(["keygen", "token", "--output"])
             .arg(fixture.project.join("secrets/source-token"))
             .output()
             .expect("local source token keygen starts"),
@@ -1594,9 +1594,9 @@ privacy_expectation:
         let public = self.root.join("oidc-public.jwk.json");
         assert_success(
             evidencectl()
-                .args(["keygen", "signing", "--out-dir"])
+                .args(["keygen", "signing", "--output-dir"])
                 .arg(self.oidc_private.parent().expect("OIDC private directory"))
-                .arg("--public-out")
+                .arg("--public-output")
                 .arg(&public)
                 .output()
                 .expect("OIDC keygen starts"),
@@ -1604,7 +1604,7 @@ privacy_expectation:
         );
         assert_success(
             evidencectl()
-                .args(["jwks", "--out"])
+                .args(["jwks", "--output"])
                 .arg(&self.oidc_jwks)
                 .arg(&public)
                 .output()
@@ -1619,9 +1619,9 @@ privacy_expectation:
         let generated_public = self.root.join("evidence-transit-public.jwk.json");
         assert_success(
             evidencectl()
-                .args(["keygen", "signing", "--out-dir"])
+                .args(["keygen", "signing", "--output-dir"])
                 .arg(self.root.join("transit-evidence-key"))
-                .arg("--public-out")
+                .arg("--public-output")
                 .arg(&generated_public)
                 .output()
                 .expect("Evidence Transit fixture keygen starts"),
@@ -1767,7 +1767,7 @@ authorityProfiles:
         for name in ["audit-hmac-key", "subject-binding-hmac-key"] {
             assert_success(
                 evidencectl()
-                    .args(["keygen", "secret", "--out"])
+                    .args(["keygen", "secret", "--output"])
                     .arg(self.secrets.join(name))
                     .output()
                     .expect("HMAC keygen starts"),
@@ -1776,7 +1776,7 @@ authorityProfiles:
         }
         assert_success(
             evidencectl()
-                .args(["keygen", "token", "--out"])
+                .args(["keygen", "token", "--output"])
                 .arg(&self.source_token)
                 .output()
                 .expect("source token keygen starts"),
@@ -1784,7 +1784,7 @@ authorityProfiles:
         );
         assert_success(
             evidencectl()
-                .args(["jwks", "--out"])
+                .args(["jwks", "--output"])
                 .arg(&self.evidence_jwks)
                 .arg(self.active_evidence_public_jwk())
                 .output()

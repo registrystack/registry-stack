@@ -32,14 +32,6 @@ pub struct RunArgs {
     /// beside bundle/.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(
-        long = "project",
-        value_name = "PROJECT",
-        hide = true,
-        conflicts_with = "project"
-    )]
-    pub legacy_project: Option<PathBuf>,
 
     /// Path to the evidence binary; defaults to `evidence` on PATH.
     #[arg(long)]
@@ -188,12 +180,7 @@ fn failed_run_diagnostic(command: &str) -> JsonValue {
 
 pub fn run(command: FixturesCommand) -> Result<ExitCode> {
     match command {
-        FixturesCommand::Run(mut args) => {
-            if let Some(project) = args.legacy_project.take() {
-                args.project = project;
-            }
-            run_fixtures(args)
-        }
+        FixturesCommand::Run(args) => run_fixtures(args),
     }
 }
 

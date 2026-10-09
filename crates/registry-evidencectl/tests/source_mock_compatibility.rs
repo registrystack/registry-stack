@@ -871,7 +871,6 @@ fn explicit_source_origin_wires_bare_project_mock_serve_create_only() {
         &[
             "source",
             "suggest",
-            "--project",
             ".",
             "--operation",
             "GET /people/{person_id}",
@@ -897,7 +896,6 @@ fn explicit_source_origin_wires_bare_project_mock_serve_create_only() {
         &[
             "source",
             "suggest",
-            "--project",
             ".",
             "--operation",
             "GET /people/{person_id}",

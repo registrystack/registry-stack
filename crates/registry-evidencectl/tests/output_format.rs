@@ -343,7 +343,7 @@ fn malformed_source_export(root: &Path) -> std::path::PathBuf {
 fn legacy_json_flags_fail_with_one_json_document() {
     let cases: &[&[&str]] = &[
         &["target", "explain", "missing", "--json"],
-        &["fixtures", "run", "--project", "missing", "--json"],
+        &["fixtures", "run", "missing", "--json"],
         &["doctor", "--project", "missing", "--json"],
     ];
     let directory = tempfile::tempdir().expect("temporary working directory");

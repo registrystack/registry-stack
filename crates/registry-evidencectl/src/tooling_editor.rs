@@ -159,14 +159,6 @@ pub struct EditorArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(
-        long = "project",
-        value_name = "PROJECT",
-        hide = true,
-        conflicts_with = "project"
-    )]
-    pub legacy_project: Option<PathBuf>,
 
     /// Editor workspace directory containing the Evidence project.
     ///
@@ -255,10 +247,7 @@ std::thread_local! {
     };
 }
 
-pub fn run(mut args: EditorArgs, format: crate::OutputFormat) -> Result<ExitCode> {
-    if let Some(project) = args.legacy_project.take() {
-        args.project = project;
-    }
+pub fn run(args: EditorArgs, format: crate::OutputFormat) -> Result<ExitCode> {
     let report = setup_workspace_editor(
         &args.project,
         args.workspace.as_deref().unwrap_or(&args.project),

@@ -86,15 +86,6 @@ pub(crate) struct ExplainArgs {
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub project: PathBuf,
 
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(
-        long = "project",
-        value_name = "PROJECT",
-        hide = true,
-        conflicts_with = "project"
-    )]
-    pub legacy_project: Option<PathBuf>,
-
     /// Emit one machine-readable JSON report on standard output.
     #[arg(long)]
     pub json: bool,
@@ -175,12 +166,7 @@ struct TargetReport {
 pub(crate) fn run(command: TargetCommand) -> Result<ExitCode> {
     match command {
         TargetCommand::New(args) => new(args),
-        TargetCommand::Explain(mut args) => {
-            if let Some(project) = args.legacy_project.take() {
-                args.project = project;
-            }
-            explain(args)
-        }
+        TargetCommand::Explain(args) => explain(args),
     }
 }
 

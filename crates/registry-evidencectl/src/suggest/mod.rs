@@ -42,16 +42,12 @@ pub enum SourceCommand {
     Mock(crate::source_mock::MockCommand),
 }
 
-// The retired `--project` flag has to stay in the group so it alone still
-// satisfies it, and clap prints every group member in the usage line, hidden
-// or not. The usage is therefore stated here, naming the documented spellings.
 #[derive(Debug, Args)]
-#[command(override_usage = "evidencectl source suggest [OPTIONS] <--openapi <OPENAPI>|PROJECT>")]
 #[command(group(
     ArgGroup::new("source")
         .required(true)
         .multiple(false)
-        .args(["openapi", "project", "legacy_project"])
+        .args(["openapi", "project"])
 ))]
 pub struct SuggestArgs {
     /// OpenAPI 3.0 or 3.1 document for a print-only draft. With a project,
@@ -100,17 +96,11 @@ pub struct SuggestArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT")]
     pub project: Option<std::path::PathBuf>,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(long = "project", value_name = "PROJECT", hide = true)]
-    pub legacy_project: Option<std::path::PathBuf>,
 }
 
 pub fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
-        SourceCommand::Suggest(mut args) => {
-            args.project = args.legacy_project.take().or(args.project);
-            suggest(args, format)
-        }
+        SourceCommand::Suggest(args) => suggest(args, format),
         SourceCommand::Mock(command) => crate::source_mock::run(command, format),
     }
 }

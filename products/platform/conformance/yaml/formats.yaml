@@ -180,7 +180,7 @@ formats:
   evidence/fixture:
     project: crates/registry-evidencectl/templates/sqlite-extract
     prepare:
-      - evidencectl keygen signing --out-dir {project}/secrets
+      - evidencectl keygen signing --output-dir {project}/secrets
     init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: fixtures/record-status.yaml}
   evidence/question:
     project: crates/registry-evidencectl/templates/sqlite-extract

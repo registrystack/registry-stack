@@ -22,7 +22,7 @@ const OUTPUT_FILE_MODE: u32 = 0o644;
 #[derive(Debug, Args)]
 pub struct JwksArgs {
     /// Output JWKS document path.
-    #[arg(long, alias = "out")]
+    #[arg(long)]
     pub output: PathBuf,
 
     /// Overwrite an existing output file.
