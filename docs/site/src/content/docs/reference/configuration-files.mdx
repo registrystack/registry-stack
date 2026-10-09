@@ -49,7 +49,9 @@ Registry Messaging reads `MessagingRuntimeConfig` through the same reader.
 
 The shared reader is the `registry-platform-yaml` library. Every product's check command reads
 its authored files through it, as the runtimes above read their runtime files, so one YAML subset,
-one value table, one header check, and one diagnostic format apply to every file on this page. Two
+one value table, one header check, and one diagnostic format apply to every file on this page that
+is not marked External format or Exchange model; those files follow the grammar of the project that
+owns them, as [formats by product](#formats-by-product) explains. Two
 rules belong to runtime files alone: the absolute path in
 [how a runtime reads its file](#how-a-runtime-reads-its-file), and `${...}` substitution in
 [values from the environment](#values-from-the-environment). The reference linked for each format
