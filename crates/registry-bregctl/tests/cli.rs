@@ -2048,6 +2048,213 @@ fn check_substitutes_the_environment_only_when_asked_and_never_repeats_a_value()
     assert_eq!(filled.status.code(), Some(0), "{filled:?}");
 }
 
+/// The minimal runtime file with every block that takes a URL, a URI, or an
+/// absolute path, each such member written as an expression, then `tail`.
+fn runtime_config_with_deferred_locations(scratch: &TestProject, tail: &str) -> PathBuf {
+    const BLOCKS: &str = r"attachmentStorage:
+  kind: s3
+  endpoint: ${BREG_CHECK_TEST_STORAGE}
+  bucket: test-bucket
+  region: us-east-1
+  accessKeyIdRef: secret:file/access
+  secretAccessKeyRef: secret:file/key
+attachmentVerification:
+  kind: http
+  endpoint: ${BREG_CHECK_TEST_VERIFIER}
+  policyId: scanner-rules-v1
+  authorizationRef: secret:file/verifier-token
+fieldEncryption:
+  provider:
+    kind: transit
+    unixSocketPath: ${BREG_CHECK_TEST_TRANSIT_SOCKET}
+    mount: transit
+    keyName: breg-field-dek
+eventDestinations:
+  case-operations:
+    origin: ${BREG_CHECK_TEST_EVENTS_ORIGIN}
+    path: ${BREG_CHECK_TEST_EVENTS_PATH}
+    networkProfile: productionHttps
+    dnsFamily: dualStackStrict
+    allowedPrivateCidrs: []
+    hmacSha256KeyRef: secret:file/event-hmac-key
+    classificationCeiling: restricted
+    deliveryCeilings:
+      attemptTimeoutMilliseconds: 4000
+      maximumAttempts: 4
+evidenceProviders:
+  civil:
+    baseUrl: ${BREG_CHECK_TEST_EVIDENCE_URL}
+    trustBindingId: civil
+    tokenRef: secret:file/evidence-token
+    trustedJwksRef: secret:file/evidence-jwks
+reviewAuthorities:
+  casework:
+    endpoint: ${BREG_CHECK_TEST_REVIEW_URL}
+    profile: producer
+    producerId: registry-producer
+    recoveryDays: 7
+    privateKeyJwt:
+      tokenEndpoint: ${BREG_CHECK_TEST_TOKEN_URL}
+      clientIdRef: secret:file/review-client-id
+      clientAssertionKeyRef: secret:file/review-private-jwk
+      assertionAudience: ${BREG_CHECK_TEST_TOKEN_AUDIENCE}
+      resource: ${BREG_CHECK_TEST_REVIEW_RESOURCE}
+      scopes: [casework:reviews:request]
+reviewExecutors:
+  applier:
+    endpoint: ${BREG_CHECK_TEST_EXECUTOR_URL}
+    registryId: registry-a
+    accessProfile: automatic-applier
+    privateKeyJwt:
+      tokenEndpoint: ${BREG_CHECK_TEST_TOKEN_URL}
+      clientIdRef: secret:file/executor-client-id
+      clientAssertionKeyRef: secret:file/executor-private-jwk
+      assertionAudience: ${BREG_CHECK_TEST_TOKEN_AUDIENCE}
+      resource: ${BREG_CHECK_TEST_EXECUTOR_RESOURCE}
+      scopes: [registry:apply]
+taskGrantStatus:
+  - sourceIssuer: ${BREG_CHECK_TEST_CASEWORK_ISSUER}
+    baseUrl: ${BREG_CHECK_TEST_CASEWORK_URL}
+    tokenEndpoint: ${BREG_CHECK_TEST_TOKEN_URL}
+    clientAssertionAudience: ${BREG_CHECK_TEST_TOKEN_AUDIENCE}
+    clientId: registry
+    privateKeyRef: secret:file/casework-key
+    caseworkResource: ${BREG_CHECK_TEST_CASEWORK_RESOURCE}
+";
+    edited_runtime_config(scratch, |source| {
+        let source = source
+            .replace(
+                "  bind: 127.0.0.1:8080\n",
+                "  bind: 127.0.0.1:8080\n  publicOrigin: ${BREG_CHECK_TEST_ORIGIN}\n",
+            )
+            .replace(
+                "    issuer: https://issuer.example.com\n",
+                "    issuer: ${BREG_CHECK_TEST_ISSUER}\n    jwksSource:\n      kind: uri\n      \
+                 uri: ${BREG_CHECK_TEST_JWKS}\n",
+            )
+            .replace(
+                "  path: /var/log/breg/audit.jsonl\n",
+                "  path: ${BREG_CHECK_TEST_AUDIT_PATH}\n",
+            );
+        for expression in ["ORIGIN", "ISSUER", "JWKS", "AUDIT_PATH"] {
+            assert!(
+                source.contains(&format!("${{BREG_CHECK_TEST_{expression}}}")),
+                "the minimal runtime file takes the {expression} expression"
+            );
+        }
+        format!("{source}{BLOCKS}{tail}")
+    })
+}
+
+/// A URL, URI, or absolute path written as an expression is read through a
+/// stand-in its member and the rules about its block accept, so the check
+/// goes on to everything after it.
+#[test]
+fn check_reads_past_every_location_written_as_an_expression() {
+    let scratch = TestProject::asset_fixture();
+    let example = minimal_example();
+    let check = |tail: &str| {
+        bregctl(&[
+            "--format",
+            "json",
+            "check",
+            path(&example),
+            "--runtime-config",
+            path(&runtime_config_with_deferred_locations(&scratch, tail)),
+            "--deny-warnings",
+        ])
+    };
+
+    let complete = check("");
+    let report = json_stdout(&complete);
+    assert_eq!(report["diagnostics"], json!([]), "{report}");
+    assert_eq!(complete.status.code(), Some(0), "{complete:?}");
+
+    // A refusal after the expressions is still found, whether the reader or
+    // a runtime rule makes it: the check never passes a file it stopped
+    // reading.
+    for (tail, code, pointer) in [
+        (
+            "operationalTimeouts:\n  httpRequestMilliseconds: 0\n",
+            "config.out-of-range",
+            "/operationalTimeouts/httpRequestMilliseconds",
+        ),
+        (
+            "metricsListener:\n  bind: 127.0.0.1:8080\n",
+            "breg.runtime.invalid-metrics-listener",
+            "/metricsListener",
+        ),
+    ] {
+        let refused = check(tail);
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        let report = json_stdout(&refused);
+        let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+        assert_eq!(diagnostics.len(), 1, "{report}");
+        assert_check_diagnostic(&diagnostics[0], Some("BRegRuntimeConfig"));
+        assert_eq!(diagnostics[0]["severity"], "error");
+        assert_eq!(diagnostics[0]["code"], code);
+        assert_eq!(diagnostics[0]["path"], pointer);
+    }
+}
+
+/// A check an expression stopped ends with a warning at the place it stopped,
+/// never with a clean pass: a member that refuses its stand-in stops the
+/// reader, and a rule that needs the value of an expression stops the rules.
+#[test]
+fn check_says_so_when_an_expression_stops_it() {
+    let scratch = TestProject::asset_fixture();
+    let example = minimal_example();
+    let stopped_reader: fn(&str) -> String = |source| {
+        source.replace(
+            "allowedAlgorithm: EdDSA",
+            "allowedAlgorithm: ${BREG_CHECK_TEST_ALGORITHM}",
+        )
+    };
+    // The stand-in of a metrics listener is the address this file gives the
+    // registry listener, so the rule that keeps the two apart cannot decide.
+    let stopped_rules: fn(&str) -> String = |source| {
+        format!(
+            "{}metricsListener:\n  bind: ${{BREG_CHECK_TEST_METRICS_BIND}}\n",
+            source.replace("bind: 127.0.0.1:8080", "bind: 127.0.0.1:9100")
+        )
+    };
+    for (edit, pointer) in [
+        (stopped_reader, "/authentication/oidc/allowedAlgorithm"),
+        (stopped_rules, "/metricsListener"),
+    ] {
+        let runtime = edited_runtime_config(&scratch, edit);
+        let check = |deny_warnings: bool| {
+            let mut arguments = vec![
+                "--format",
+                "json",
+                "check",
+                path(&example),
+                "--runtime-config",
+                path(&runtime),
+            ];
+            if deny_warnings {
+                arguments.push("--deny-warnings");
+            }
+            bregctl(&arguments)
+        };
+
+        let warned = check(false);
+        assert_eq!(warned.status.code(), Some(0), "{warned:?}");
+        let report = json_stdout(&warned);
+        let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+        assert_eq!(diagnostics.len(), 1, "{report}");
+        assert_check_diagnostic(&diagnostics[0], Some("BRegRuntimeConfig"));
+        assert_eq!(diagnostics[0]["severity"], "warning");
+        assert_eq!(
+            diagnostics[0]["code"],
+            "platform.runtime-config.check-incomplete"
+        );
+        assert_eq!(diagnostics[0]["path"], pointer);
+
+        assert_eq!(check(true).status.code(), Some(1), "{pointer}");
+    }
+}
+
 /// One numbered step, read back out of the rendering: the ordinal line and the
 /// continuation lines hanging under it, checked for the column the renderer
 /// folds them into and rejoined into the sentence the step states.

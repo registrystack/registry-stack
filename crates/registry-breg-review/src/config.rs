@@ -1177,6 +1177,21 @@ audit:
         assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
     }
 
+    /// Two scopes, each written as its own expression, are two scopes: the
+    /// check does not read one placeholder into both and then refuse the
+    /// list as a repeat.
+    #[test]
+    fn distinct_deferred_scopes_are_not_a_repeat() {
+        let text = document().replace(
+            "scopes: [address-correction:self]",
+            "scopes: ['${BREG_REVIEW_TEST_UNSET_FIRST}', '${BREG_REVIEW_TEST_UNSET_SECOND}']",
+        );
+        assert_ne!(text, document());
+        let (_directory, path) = written(&text);
+        let check = check_runtime(&path, false);
+        assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
+    }
+
     #[test]
     fn a_refused_value_is_not_echoed() {
         const CANARY: &str = "x-canary";

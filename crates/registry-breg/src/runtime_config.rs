@@ -496,9 +496,12 @@ pub struct RuntimeConfigCheck {
 ///
 /// With `substitute` set, `${NAME}` expressions are filled from the process
 /// environment and every value is checked. Without it, each expression is
-/// checked by syntax and position only, and a runtime rule about a block that
-/// holds one is skipped, because it needs the substituted text. The runtime's
-/// own rules stop at their first refusal, as they do at startup. The package
+/// checked by syntax and position only, and a member that takes a URL, a URI,
+/// or an absolute path is read as a placeholder of that form. The runtime's
+/// own rules stop at their first refusal, as they do at startup; when that
+/// refusal is about a block that holds an expression, it says nothing about
+/// the file, and the check reports the warning
+/// `platform.runtime-config.check-incomplete` there in its place. The package
 /// root and the file secret provider root are not looked for: a runtime file
 /// is checked before the deployment it describes exists.
 ///
@@ -522,15 +525,28 @@ pub fn check_runtime_config(
         match RuntimeConfig::from_raw(loaded.config) {
             Err(error) => {
                 for refusal in error.diagnostics(None) {
-                    if !check.defers_within(&refusal.path) {
-                        diagnostics.push(check.error_at(
+                    diagnostics.push(if check.defers_within(&refusal.path) {
+                        // The rule read a stand-in, so its refusal says
+                        // nothing about the file; the rules after it did
+                        // not run, and the check says so.
+                        let mut warning = check.error_at(
+                            RUNTIME_CONFIG_KIND,
+                            registry_platform_config::INCOMPLETE_CODE,
+                            &refusal.path,
+                            "The check does not fill an expression this block holds, and a rule about the block needs its value; the check stopped here, and the rules after it were not checked.",
+                            "Check the file again with --environment, where the variable the expression names is set.",
+                        );
+                        warning.severity = Severity::Warning;
+                        warning
+                    } else {
+                        check.error_at(
                             RUNTIME_CONFIG_KIND,
                             &refusal.code,
                             &refusal.path,
                             refusal.message,
                             refusal.suggested_action,
-                        ));
-                    }
+                        )
+                    });
                 }
             }
             Ok(config) => {
@@ -588,16 +604,31 @@ fn authentication_refusal_site(error: AuthenticationConfigError) -> (&'static st
 }
 
 /// A value that satisfies the member at `pointer`, so a deferred expression
-/// never decides whether its neighbours decode.
+/// decides neither whether its neighbours decode nor whether the rules about
+/// its block run. Every member that takes a URL, a URI, or an absolute path
+/// has one; any other member takes the shared default.
 fn runtime_stand_in(pointer: &str) -> &'static str {
-    match pointer {
-        "/listener/bind" => "127.0.0.1:8080",
-        "/metricsListener/bind" => "127.0.0.1:9100",
-        "/listener/publicOrigin" => "https://registry.invalid",
-        "/authentication/oidc/issuer" => "https://issuer.invalid",
-        "/package/root" => "/",
-        "/package/expectedDigest" => {
+    let segments: Vec<&str> = pointer.split('/').skip(1).collect();
+    match segments.as_slice() {
+        ["listener", "bind"] => "127.0.0.1:8080",
+        ["metricsListener", "bind"] => "127.0.0.1:9100",
+        ["listener", "publicOrigin"] => "https://registry.invalid",
+        ["authentication", "oidc", "issuer"] => "https://issuer.invalid",
+        ["authentication", "oidc", "jwksSource", "uri"] => "https://issuer.invalid/jwks",
+        ["package", "root"] => "/",
+        ["package", "expectedDigest"] => {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        }
+        ["audit", "path"]
+        | ["fieldEncryption", "provider", "unixSocketPath"]
+        | ["eventDestinations", _, "path"] => "/deferred",
+        ["attachmentStorage" | "attachmentVerification", "endpoint"]
+        | ["eventDestinations", _, "origin"]
+        | ["evidenceProviders", _, "baseUrl"]
+        | ["taskGrantStatus", _, "baseUrl" | "sourceIssuer"]
+        | ["reviewAuthorities" | "reviewExecutors", _, "endpoint"]
+        | ["reviewAuthorities" | "reviewExecutors", _, "privateKeyJwt", "tokenEndpoint" | "assertionAudience" | "resource"] => {
+            "https://deferred.invalid/"
         }
         _ => registry_platform_config::DEFAULT_STAND_IN,
     }

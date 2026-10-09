@@ -794,6 +794,12 @@ fn loopback_host(url: &url::Url) -> bool {
 /// A value that satisfies the member at `pointer`, so a deferred expression
 /// never decides whether its neighbours decode.
 fn stand_in_for(pointer: &str) -> &'static str {
+    if let Some(index) = pointer.strip_prefix("/resourceServer/algorithms/") {
+        // The list is a set, so each position takes its own algorithm.
+        const ALGORITHMS: [&str; 5] = ["RS256", "RS384", "ES256", "ES384", "EdDSA"];
+        let index = index.parse::<usize>().unwrap_or(0);
+        return ALGORITHMS[index % ALGORITHMS.len()];
+    }
     match pointer {
         "/listener/bind" => "127.0.0.1:8080",
         "/listener/tlsTermination" => "operator-controlled-upstream",
@@ -807,7 +813,6 @@ fn stand_in_for(pointer: &str) -> &'static str {
         "/registry/audience" => "urn:deferred",
         "/audit/destination" => "file",
         "/audit/path" => "/audit.jsonl",
-        pointer if pointer.starts_with("/resourceServer/algorithms/") => "ES256",
         _ => registry_platform_config::DEFAULT_STAND_IN,
     }
 }
@@ -1611,5 +1616,69 @@ rateLimits:
         let (_directory, path) = written(&text);
         let check = check_runtime(&path, false);
         assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
+    }
+
+    /// Two items of a list that must not repeat an item, each written as its
+    /// own expression, are two items: the check does not read one placeholder
+    /// into both and then refuse the list as a repeat.
+    #[test]
+    fn distinct_deferred_items_of_one_list_are_not_a_repeat() {
+        for (from, to) in [
+            (
+                "algorithms: [EdDSA, ES256]",
+                "algorithms: ['${BREG_MCP_TEST_UNSET_FIRST}', '${BREG_MCP_TEST_UNSET_SECOND}']",
+            ),
+            (
+                "allowedClients: [chat-host]",
+                "allowedClients: ['${BREG_MCP_TEST_UNSET_FIRST}', '${BREG_MCP_TEST_UNSET_SECOND}']",
+            ),
+            (
+                "requiredScopes: [address-correction:self]",
+                "requiredScopes: ['${BREG_MCP_TEST_UNSET_FIRST}', '${BREG_MCP_TEST_UNSET_SECOND}']",
+            ),
+            (
+                "  scopes: [address-correction:self]",
+                "  scopes: ['${BREG_MCP_TEST_UNSET_FIRST}', '${BREG_MCP_TEST_UNSET_SECOND}']",
+            ),
+        ] {
+            let text = document().replacen(from, to, 1);
+            assert_ne!(text, document(), "{to}");
+            let (_directory, path) = written(&text);
+            let check = check_runtime(&path, false);
+            assert!(
+                check.diagnostics.is_empty(),
+                "{to}: {:?}",
+                check.diagnostics
+            );
+        }
+    }
+
+    /// A member the check cannot fill stops the read, and the check says so:
+    /// it never answers with nothing about a document it did not decode.
+    #[test]
+    fn a_deferred_expression_that_stops_the_read_is_reported() {
+        let text = document().replace("kind: uri", "kind: ${BREG_MCP_TEST_UNSET_KIND}");
+        assert_ne!(text, document());
+        let (_directory, path) = written(&text);
+        let check = check_runtime(&path, false);
+        let found: Vec<_> = check
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.code.as_str(),
+                    diagnostic.path.as_str(),
+                    diagnostic.severity,
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [(
+                registry_platform_config::INCOMPLETE_CODE,
+                "/resourceServer/jwksSource/kind",
+                registry_platform_yaml::Severity::Warning
+            )]
+        );
     }
 }

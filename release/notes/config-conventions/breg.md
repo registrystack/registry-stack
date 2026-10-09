@@ -296,6 +296,16 @@ secret provider, and prints the reader's diagnostics unchanged. Without
 position only; with it, the expressions are filled from the process
 environment, and a filled value is never repeated in a diagnostic.
 
+Without `--environment`, the check reads the rest of the file with a
+placeholder in place of each expression. A member that takes a URL, a URI, or
+an absolute path takes a placeholder of that form, so an expression there does
+not hide a refusal elsewhere in the file. Where a rule needs the value an
+expression stands for, the check cannot decide it: it stops there and reports
+the warning `platform.runtime-config.check-incomplete` at that block instead
+of passing, and the rules after it were not checked. The warning exits 0, or 1
+under `--deny-warnings`; run the check again with `--environment` to have
+every rule decided.
+
 ### BREAKING: the package format is named `id.registrystack.org/formats/breg/package/v2`
 <!-- upgrade: breg-rebuild-package -->
 
