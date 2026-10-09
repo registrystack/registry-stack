@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- BREAKING: a client listed twice in `authentication.oidc.allowedClients` is
+  refused with `config.duplicate-item` at the second item. Migration: list
+  each client once.
 - BREAKING: the `messagingctl --format json` reports of `check` and
   `package` name the project the way the `--project` flag does: `project`,
   `projectDigest`, and `projectFiles` replace `package`, `packageDigest`, and
