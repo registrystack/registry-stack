@@ -500,13 +500,35 @@ def write(root: Path, name: str, text: str) -> Path:
     return path
 
 
+# The one file in the fragments directory that is not a product fragment: the
+# index of breaking changes by product. It repeats the product fragments'
+# headings and carries no markers.
+INDEX_FRAGMENT = "stack.md"
+
+
+def product_fragments(directory: Path) -> list[Path]:
+    """Every fragment in the directory except the index."""
+
+    return sorted(path for path in directory.glob("*.md") if path.name != INDEX_FRAGMENT)
+
+
+class FragmentSelectionTest(unittest.TestCase):
+    def test_only_the_index_is_excluded_and_an_unknown_fragment_is_not(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("stack.md", "known.md", "brand-new.md"):
+                (root / name).write_text("# x\n", encoding="utf-8")
+            self.assertEqual([path.name for path in product_fragments(root)],
+                             ["brand-new.md", "known.md"])
+
+
 class ReleaseCatalogTest(unittest.TestCase):
     """The shipped catalog and the shipped release-note fragments agree."""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.catalog = upgrade_steps.load_catalog()
-        cls.fragments = sorted(upgrade_steps.FRAGMENTS.glob("*.md"))
+        cls.fragments = product_fragments(upgrade_steps.FRAGMENTS)
         cls.items = {}
         cls.refused = {}
         for fragment in cls.fragments:
@@ -692,6 +714,13 @@ name: x
         self.assertEqual(self.load("examples/scenarios.json"), {
             "apiVersion": "id.registrystack.org/formats/breg/example-scenarios/v1alpha1",
             "kind": "BRegExampleScenarios", "scenarios": []})
+
+    def test_breg_example_inputs_without_a_record_reference_are_left_alone(self) -> None:
+        write(self.root, "examples/inputs/plain.json", json.dumps({"x": {"name": "n"}}))
+        write(self.root, "examples/inputs/ref.json", json.dumps({"x": {"recordRef": "made"}}))
+        self.apply("breg-example-inputs")
+        self.assertEqual(self.load("examples/inputs/plain.json"), {"x": {"name": "n"}})
+        self.assertEqual(self.load("examples/inputs/ref.json"), {"x": {"recordCapture": "made"}})
 
     def test_breg_registry_period_and_unrestricted_members(self) -> None:
         write(self.root, "registry.yaml", """\
@@ -969,21 +998,43 @@ class RehearsalEnvelopeTieTest(unittest.TestCase):
             migrated = upgrade_steps.load_document(root / "credentials.yaml")
         self.assertEqual({key: migrated[key] for key in ("apiVersion", "kind")}, envelope["to"])
 
-    def test_every_step_the_rehearsal_applies_is_a_documented_edit(self) -> None:
+    def rehearsal(self) -> Any:
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "rehearse_upgrade_for_lists", SCRIPTS / "rehearse-upgrade.py")
         module = importlib.util.module_from_spec(spec)
         sys.modules["rehearse_upgrade_for_lists"] = module
         spec.loader.exec_module(module)
+        return module
+
+    LEG_LISTS = ("BREG_UPGRADE_STEPS", "BREG_RUNTIME_UPGRADE_STEPS", "CASEWORK_UPGRADE_STEPS",
+                 "EVIDENCE_UPGRADE_STEPS")
+
+    def test_every_step_the_rehearsal_applies_is_a_documented_edit(self) -> None:
+        module = self.rehearsal()
         catalog = upgrade_steps.load_catalog()
-        for name in ("BREG_UPGRADE_STEPS", "CASEWORK_UPGRADE_STEPS",
-                     "EVIDENCE_UPGRADE_STEPS"):
+        for name in self.LEG_LISTS:
             ids = getattr(module, name)
             self.assertTrue(ids, name)
             for step in ids:
                 self.assertIn(step, catalog, f"{name}: {step} is not in the catalog")
                 self.assertIn("edits", catalog[step], f"{name}: {step} is not an edit")
+
+    def test_every_edit_step_is_in_a_leg_or_listed_as_unit_tested_only(self) -> None:
+        module = self.rehearsal()
+        catalog = upgrade_steps.load_catalog()
+        in_legs = {step for name in self.LEG_LISTS for step in getattr(module, name)}
+        unit_only = module.UNIT_TESTED_ONLY_STEPS
+        edits = {step_id for step_id, step in catalog.items() if step["kind"] == "edit"}
+        self.assertEqual(sorted(edits - in_legs - set(unit_only)), [],
+                         "an edit step no rehearsal leg applies needs a reason in "
+                         "UNIT_TESTED_ONLY_STEPS")
+        self.assertEqual(sorted(set(unit_only) - edits), [],
+                         "UNIT_TESTED_ONLY_STEPS names a step that is not a catalog edit")
+        self.assertEqual(sorted(set(unit_only) & in_legs), [],
+                         "a step a leg applies is not unit-tested only")
+        for step_id, reason in unit_only.items():
+            self.assertTrue(reason.strip(), f"{step_id} has no reason")
 
 
 if __name__ == "__main__":

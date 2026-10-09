@@ -1299,13 +1299,21 @@ uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/tes
 ```
 
 The upgrade rehearsal (`release/scripts/rehearse-upgrade.py`) applies the
-`edit` steps listed in `BREG_UPGRADE_STEPS`, `CASEWORK_UPGRADE_STEPS` and
-`EVIDENCE_UPGRADE_STEPS` to the project on disk after the previous release
-wrote state and before the new binaries run. Messaging is not wired: its
-applied package ledger names a digest an applied step would change. Every
-other step, and the BReg registry and runtime steps, is proven only by the
-unit tests applying it to a sample document; no real rehearsal has run them.
+`edit` steps listed in `BREG_UPGRADE_STEPS`, `BREG_RUNTIME_UPGRADE_STEPS`,
+`CASEWORK_UPGRADE_STEPS` and `EVIDENCE_UPGRADE_STEPS` to the project on disk
+after the previous release wrote state and before the new binaries run.
+Messaging is not wired: its applied package ledger names a digest an applied
+step would change.
+
+Every other `edit` step is listed in `UNIT_TESTED_ONLY_STEPS` in the same file,
+each with a one-line reason (no leg for the product, or the starter does not
+write the file). Such a step is proven only by the unit tests applying it to a
+sample document; no rehearsal has run it. A test in `test_upgrade_steps.py`
+fails when a catalog `edit` step is in neither a leg list nor
+`UNIT_TESTED_ONLY_STEPS`, when that list names a step that is not an `edit`
+step, or when a step is in both.
 
 To add a step, append an entry to the steps file, cite its id from the
 `BREAKING` item's marker, and, if the rehearsal's starter project carries the
-file, add the id to the product's list in `rehearse-upgrade.py`.
+file, add the id to the product's list in `rehearse-upgrade.py`; otherwise add
+it to `UNIT_TESTED_ONLY_STEPS` with the reason.

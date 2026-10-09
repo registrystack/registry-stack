@@ -133,6 +133,37 @@ EVIDENCE_UPGRADE_STEPS = (
 )
 
 
+# Catalog `edit` steps no rehearsal leg applies, each with the reason. A unit
+# test in test_upgrade_steps.py holds every other edit step to a leg list above
+# and holds this list to steps that exist and are not in a leg.
+UNIT_TESTED_ONLY_STEPS = {
+    "casework-simulation-spelling": "the Casework starter writes no simulation file",
+    "casework-holiday-set-envelope": "the Casework starter writes no holiday set",
+    "evidence-access-policy-envelope": "the Evidence starter writes no access policy file",
+    "evidence-access-client-envelope": "the Evidence starter writes no access client file",
+    "evidence-target-settings-envelope": "the Evidence starter writes no target settings file",
+    "evidence-mock-plan-envelope": "the Evidence starter writes no mock plan",
+    "messaging-runtime-keys": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
+    "messaging-template-envelope": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
+    "messaging-provider-envelope": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
+    "messaging-project-renames": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
+    "messaging-provider-capabilities": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
+    "messaging-required-scopes": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
+    "breg-example-inputs": "the BReg starter writes no example input file",
+    "breg-schema-test-credentials": "the BReg starter writes no schema test credentials file",
+    "breg-model-selection": "the BReg starter writes no model selection file",
+    "breg-example-scenarios": "the BReg starter writes no example scenarios file",
+    "breg-statistical-period": "the BReg starter registry declares no statistical period",
+    "scheduling-project-keys": "no Scheduling leg for the previous release",
+    "scheduling-records-envelope": "no Scheduling leg for the previous release",
+    "scheduling-fixture-keys": "no Scheduling leg for the previous release",
+    "scheduling-runtime-keys": "no Scheduling leg for the previous release",
+    "render-manifest-keys": "no Render leg for the previous release",
+    "render-runtime-keys": "no Render leg for the previous release",
+    "platform-task-connection-envelope": "no product starter writes a task connection file",
+}
+
+
 def apply_upgrade_steps(product: str, ids: tuple[str, ...], **roots: Path) -> None:
     """Apply the documented steps to the on-disk roots; report manual ones."""
 

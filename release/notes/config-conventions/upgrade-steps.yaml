@@ -270,7 +270,7 @@ steps:
   kind: edit
   file: examples/inputs/*.json
   edits:
-  - {op: rename, path: '**.recordRef', to: recordCapture}
+  - {op: rename, path: '**.recordRef', to: recordCapture, optional: true}
 - {id: breg-schema-test-receipt, product: breg, kind: manual, file: schema-test-receipt.json, instruction: Run
     bregctl test again with this bregctl to write a current receipt; never edit the file by hand.}
 - id: breg-schema-test-credentials
