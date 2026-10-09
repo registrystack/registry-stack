@@ -271,6 +271,12 @@ The derivation performs four operations:
 
 Evidence Gateway validates the returned name and boolean form before signing.
 
+If you run `evidencectl check .` now, it exits 0 with the status `incomplete` and two warnings:
+`evidence.question.governance-missing` and `evidence.answer.stable-id-missing`. Both are expected.
+The project is a local authoring project with no deployment assurance claim, and a question gains
+its governance and a stable concept `uri` for the answer only when you author it for a deployment.
+This tutorial does not deploy, so leave both warnings.
+
 ## Keep exact cases for the tutorial
 
 The ephemeral preview is the shortest route from OpenAPI to a running source. The remaining tutorials
