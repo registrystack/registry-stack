@@ -16,13 +16,22 @@
   scalars while the document is read, so a diagnostic about a substituted
   value points at the expression; a substituted value never fills a number or
   boolean, and an expression in a key, `apiVersion`, or `kind` is refused.
-  `RuntimeConfigError` keeps `kind()`, `code()`, `file()`, and `field()`,
-  adds `diagnostics()`, and its `Display` renders every diagnostic as
-  `error[code] file:line:col /pointer`, then the message and `next:` with the
-  fix. `message()` is the deciding diagnostic on one line; its text is no
-  longer the `serde` decoder's. `reject_environment_expressions_in_authored_yaml`
+  `RuntimeConfigError` carries `file()` and `diagnostics()`, and its `Display`
+  renders every diagnostic as `error[code] file:line:col /pointer`, then the
+  message and `next:` with the fix. The text of a diagnostic is no longer the
+  `serde` decoder's. `reject_environment_expressions_in_authored_yaml`
   reads authored files with the same reader, so it also refuses YAML outside
   the shared subset.
+- BREAKING: `registry-platform-config` removes the second, legacy code system
+  from `RuntimeConfigError`. `RuntimeConfigErrorKind`, `kind()`, `code()`,
+  `field()`, and `message()` are gone, with the `runtime_config.*` and
+  `authored_config.*` codes they reported. Match on a diagnostic's `code`
+  instead: `deciding_diagnostic()` is the error a consumer words the refusal
+  from, `diagnostics()` lists them all, and `Display` renders them. The code
+  of a refusal for a file that cannot be read is `UNAVAILABLE_CODE`
+  (`platform.runtime-config.unavailable`). The dotted field becomes the
+  diagnostic's JSON pointer `path`; a missing `apiVersion` or `kind` is
+  reported at the root, where the reader reports it.
 - `registry-platform-httputil` adds the bounded same-key resend the BReg,
   Casework, Messaging, and Scheduling clients share:
   `client::retry_keyed_mutation`,

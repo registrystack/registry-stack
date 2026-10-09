@@ -14,8 +14,7 @@ use registry_platform_yaml::{
 use serde::de::DeserializeOwned;
 
 use crate::{
-    contains_environment_expression, LoadedRuntimeConfig, RuntimeConfigErrorKind,
-    RuntimeConfigLoader,
+    contains_environment_expression, LoadedRuntimeConfig, RuntimeConfigLoader, UNAVAILABLE_CODE,
 };
 
 /// The stand-in for a deferred expression whose member names no other.
@@ -118,7 +117,10 @@ impl RuntimeConfigLoader {
                     .filter(|diagnostic| !deferred.hides(diagnostic))
                     .cloned()
                     .collect(),
-                error.kind() == RuntimeConfigErrorKind::Unavailable,
+                error
+                    .diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == UNAVAILABLE_CODE),
             ),
         };
         RuntimeFileCheck {

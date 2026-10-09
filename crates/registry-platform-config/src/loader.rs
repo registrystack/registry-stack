@@ -84,82 +84,6 @@ pub const REMOVED_OIDC_JWKS_URI: RemovedKey = RemovedKey {
     replacement: "declare authentication.oidc.jwksSource with kind: uri and uri: <https URL>",
 };
 
-/// What kind of rule a runtime configuration broke.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RuntimeConfigErrorKind {
-    /// The configured path is not absolute and lexically normal.
-    Path,
-    /// A path component is a symbolic link, the file is not a regular file, or
-    /// it changed while it was read.
-    UnsafeFile,
-    /// The file could not be read.
-    Unavailable,
-    /// The file is larger than the cap.
-    Bounds,
-    /// The file is not UTF-8.
-    Encoding,
-    /// The document is not in the shared YAML subset, or is not a mapping.
-    Syntax,
-    /// A removed key is present.
-    RemovedKey,
-    /// `apiVersion` or `kind` is not the product's envelope.
-    Envelope,
-    /// An environment expression could not be substituted.
-    Substitution,
-    /// An environment expression appears where substitution is refused: a
-    /// key, a secret-reference field, or anything under `secretProviders`.
-    SubstitutionInReference,
-    /// A value does not satisfy the product's typed configuration.
-    InvalidValue,
-    /// An authored project file holds an environment expression.
-    AuthoredExpression,
-    /// An authored project file is not YAML the environment-expression check
-    /// can read.
-    AuthoredSyntax,
-}
-
-impl RuntimeConfigErrorKind {
-    /// The stable diagnostic code for this refusal.
-    #[must_use]
-    pub const fn code(self) -> &'static str {
-        match self {
-            Self::Path => "runtime_config.path",
-            Self::UnsafeFile => "runtime_config.unsafe_file",
-            Self::Unavailable => "runtime_config.unavailable",
-            Self::Bounds => "runtime_config.bounds",
-            Self::Encoding => "runtime_config.encoding",
-            Self::Syntax => "runtime_config.syntax",
-            Self::RemovedKey => "runtime_config.removed_key",
-            Self::Envelope => "runtime_config.envelope",
-            Self::Substitution => "runtime_config.substitution",
-            Self::SubstitutionInReference => "runtime_config.substitution_in_reference",
-            Self::InvalidValue => "runtime_config.invalid_value",
-            Self::AuthoredExpression => "authored_config.environment_expression",
-            Self::AuthoredSyntax => "authored_config.syntax",
-        }
-    }
-}
-
-/// When a refusal carries several diagnostics, the kind of the first error of
-/// the earliest kind in this order is the refusal's kind.
-const RUNTIME_PRECEDENCE: [RuntimeConfigErrorKind; 8] = [
-    RuntimeConfigErrorKind::Bounds,
-    RuntimeConfigErrorKind::Encoding,
-    RuntimeConfigErrorKind::Syntax,
-    RuntimeConfigErrorKind::Envelope,
-    RuntimeConfigErrorKind::SubstitutionInReference,
-    RuntimeConfigErrorKind::Substitution,
-    RuntimeConfigErrorKind::RemovedKey,
-    RuntimeConfigErrorKind::InvalidValue,
-];
-
-/// An authored file that the reader cannot read is refused before one that
-/// only holds an expression, so a file never passes unchecked.
-const AUTHORED_PRECEDENCE: [RuntimeConfigErrorKind; 2] = [
-    RuntimeConfigErrorKind::AuthoredSyntax,
-    RuntimeConfigErrorKind::AuthoredExpression,
-];
-
 /// Codes of the refusals the loader reports itself, before the reader runs
 /// (CFG-DIAG-3).
 const CODE_PATH: &str = "platform.runtime-config.path";
@@ -175,15 +99,14 @@ const CODE_NOT_ALLOWED: &str = "config.substitution-not-allowed";
 /// The reader's code for a `${...}` expression that cannot be substituted.
 const CODE_SUBSTITUTION: &str = "config.substitution";
 
-/// A refused runtime configuration: which rule broke, at which field, and
-/// the diagnostics that say where and what to do (CFG-DIAG-1). No part of it
-/// repeats a configured value.
+/// A refused runtime configuration: the diagnostics that say where and what to
+/// do (CFG-DIAG-1). A consumer classifies a refusal by a diagnostic's `code`.
+/// No part of it repeats a configured value.
 ///
 /// `Display` renders every diagnostic in the human form (CFG-DIAG-2).
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("{}", self.render())]
 pub struct RuntimeConfigError {
-    kind: RuntimeConfigErrorKind,
     /// Boxed, so the products' error types that carry a refusal stay small.
     detail: Box<RefusalDetail>,
 }
@@ -191,92 +114,36 @@ pub struct RuntimeConfigError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RefusalDetail {
     file: Option<PathBuf>,
-    field: String,
-    message: String,
     diagnostics: Vec<Diagnostic>,
-    /// The index of the diagnostic the kind, field, and message come from.
-    deciding: usize,
 }
 
 impl RuntimeConfigError {
     /// A refusal about the file as a whole, found before the reader ran.
     fn file_level(
-        kind: RuntimeConfigErrorKind,
         code: &str,
         message: impl Into<String>,
         suggested_action: impl Into<String>,
     ) -> Self {
-        Self::from_diagnostics(
-            vec![Diagnostic::error(code, "", message, suggested_action)],
-            |_| kind,
-            &[kind],
-        )
+        Self::from_report(Report::new(vec![Diagnostic::error(
+            code,
+            "",
+            message,
+            suggested_action,
+        )]))
     }
 
-    fn from_diagnostics(
-        diagnostics: Vec<Diagnostic>,
-        classify: impl Fn(&Diagnostic) -> RuntimeConfigErrorKind,
-        precedence: &[RuntimeConfigErrorKind],
-    ) -> Self {
-        let rank = |kind: RuntimeConfigErrorKind| {
-            precedence
-                .iter()
-                .position(|candidate| *candidate == kind)
-                .unwrap_or(precedence.len())
-        };
-        let deciding = diagnostics
-            .iter()
-            .enumerate()
-            .filter(|(_, diagnostic)| diagnostic.severity == Severity::Error)
-            .min_by_key(|(_, diagnostic)| rank(classify(diagnostic)))
-            .map_or(0, |(index, _)| index);
-        let decided = diagnostics
-            .get(deciding)
-            .expect("a refusal carries at least one diagnostic");
-        let kind = classify(decided);
-        let field = dotted(&decided.path);
-        let message = one_line(&field, decided);
+    fn from_report(report: Report) -> Self {
+        let diagnostics = report.into_diagnostics();
+        assert!(
+            !diagnostics.is_empty(),
+            "a refusal carries at least one diagnostic"
+        );
         Self {
-            kind,
             detail: Box::new(RefusalDetail {
                 file: None,
-                field,
-                message,
                 diagnostics,
-                deciding,
             }),
         }
-    }
-
-    fn from_runtime_report(report: Report) -> Self {
-        Self::from_diagnostics(report.into_diagnostics(), runtime_kind, &RUNTIME_PRECEDENCE)
-    }
-
-    fn from_authored_report(report: Report) -> Self {
-        Self::from_diagnostics(
-            report.into_diagnostics(),
-            authored_kind,
-            &AUTHORED_PRECEDENCE,
-        )
-    }
-
-    /// The reader reports a missing envelope member at the mapping that
-    /// lacks it, the root; the field names the member itself, `apiVersion`
-    /// before `kind`, as consumers match on it.
-    fn naming_missing_envelope_member(mut self, file: &str, bytes: &[u8]) -> Self {
-        if self.kind == RuntimeConfigErrorKind::Envelope && self.detail.field == "/" {
-            let has_api_version = matches!(
-                Reader::new(file).scan(bytes),
-                Ok(Some(root)) if root.get("apiVersion").is_some()
-            );
-            let member = if has_api_version {
-                "kind"
-            } else {
-                "apiVersion"
-            };
-            self.detail.field = member.to_owned();
-        }
-        self
     }
 
     /// Name `file` as the refused file, and as the source of every
@@ -296,33 +163,10 @@ impl RuntimeConfigError {
         self
     }
 
-    #[must_use]
-    pub const fn kind(&self) -> RuntimeConfigErrorKind {
-        self.kind
-    }
-
-    #[must_use]
-    pub const fn code(&self) -> &'static str {
-        self.kind.code()
-    }
-
     /// The runtime configuration file, when the refusal came from one.
     #[must_use]
     pub fn file(&self) -> Option<&Path> {
         self.detail.file.as_deref()
-    }
-
-    /// The dotted field the refusal concerns; `/` for the whole document.
-    #[must_use]
-    pub fn field(&self) -> &str {
-        &self.detail.field
-    }
-
-    /// The deciding diagnostic on one line, without the file: the dotted
-    /// field, the message, and after `next:` the suggested action.
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.detail.message
     }
 
     /// Every diagnostic the refusal carries, in the order the reader
@@ -333,15 +177,18 @@ impl RuntimeConfigError {
         &self.detail.diagnostics
     }
 
-    /// The diagnostic the kind, field, and message come from: the first
-    /// error of the earliest kind. A consumer that words the refusal itself
-    /// classifies it by this diagnostic's code and path.
+    /// The error a consumer words the refusal from: the first of the
+    /// earliest rank (a file or syntax problem, then the envelope, then a
+    /// substitution, then a removed key, then any other value problem). A
+    /// consumer classifies it by the diagnostic's code and path.
     #[must_use]
     pub fn deciding_diagnostic(&self) -> &Diagnostic {
-        self.detail
-            .diagnostics
-            .get(self.detail.deciding)
-            .expect("the deciding index is within the diagnostics")
+        let diagnostics = &self.detail.diagnostics;
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Error)
+            .min_by_key(|diagnostic| rank(diagnostic))
+            .unwrap_or(&diagnostics[0])
     }
 
     fn render(&self) -> String {
@@ -356,61 +203,24 @@ impl RuntimeConfigError {
     }
 }
 
-/// The kind of a runtime-file diagnostic, by its reader code and path.
-fn runtime_kind(diagnostic: &Diagnostic) -> RuntimeConfigErrorKind {
+/// How early a diagnostic decides the refusal; lower decides first.
+fn rank(diagnostic: &Diagnostic) -> u8 {
     let envelope_member = diagnostic.path == "/apiVersion" || diagnostic.path == "/kind";
     match diagnostic.code.as_str() {
-        "yaml.too-large" => RuntimeConfigErrorKind::Bounds,
-        "yaml.not-utf8" => RuntimeConfigErrorKind::Encoding,
-        code if code.starts_with("yaml.") => RuntimeConfigErrorKind::Syntax,
-        "config.invalid-type" if diagnostic.path.is_empty() => RuntimeConfigErrorKind::Syntax,
+        "yaml.too-large" => 0,
+        "yaml.not-utf8" => 1,
+        code if code.starts_with("yaml.") => 2,
+        "config.invalid-type" if diagnostic.path.is_empty() => 2,
         "config.missing-envelope"
         | "config.wrong-kind"
         | "config.unsupported-api-version"
         | "config.retired-api-version"
-        | "config.deprecated-api-version" => RuntimeConfigErrorKind::Envelope,
-        "config.expected-string" | "config.null-value" | CODE_NOT_ALLOWED if envelope_member => {
-            RuntimeConfigErrorKind::Envelope
-        }
-        CODE_NOT_ALLOWED => RuntimeConfigErrorKind::SubstitutionInReference,
-        CODE_SUBSTITUTION => RuntimeConfigErrorKind::Substitution,
-        "config.removed-key" => RuntimeConfigErrorKind::RemovedKey,
-        _ => RuntimeConfigErrorKind::InvalidValue,
-    }
-}
-
-/// The kind of an authored-file diagnostic: an expression the hook refused,
-/// or anything else the reader could not read.
-fn authored_kind(diagnostic: &Diagnostic) -> RuntimeConfigErrorKind {
-    if diagnostic.code == CODE_NOT_ALLOWED {
-        RuntimeConfigErrorKind::AuthoredExpression
-    } else {
-        RuntimeConfigErrorKind::AuthoredSyntax
-    }
-}
-
-/// `field: message; next: action`, or without the field for the whole
-/// document.
-fn one_line(field: &str, diagnostic: &Diagnostic) -> String {
-    let message = diagnostic.message.trim_end_matches('.');
-    let action = &diagnostic.suggested_action;
-    if field == "/" {
-        format!("{message}; next: {action}")
-    } else {
-        format!("{field}: {message}; next: {action}")
-    }
-}
-
-/// An RFC 6901 pointer as the dotted field the loader has always reported;
-/// `/` for the root.
-fn dotted(pointer: &str) -> String {
-    match pointer.strip_prefix('/') {
-        None => "/".to_owned(),
-        Some(rest) => rest
-            .split('/')
-            .map(|segment| segment.replace("~1", "/").replace("~0", "~"))
-            .collect::<Vec<_>>()
-            .join("."),
+        | "config.deprecated-api-version" => 3,
+        "config.expected-string" | "config.null-value" | CODE_NOT_ALLOWED if envelope_member => 3,
+        CODE_NOT_ALLOWED => 4,
+        CODE_SUBSTITUTION => 5,
+        "config.removed-key" => 6,
+        _ => 7,
     }
 }
 
@@ -571,15 +381,11 @@ impl RuntimeConfigLoader {
         let decoded = Reader::new(file)
             .with_hook(&mut substitution)
             .decode::<T>(bytes, &Expect::one(&format))
-            .map_err(|report| {
-                RuntimeConfigError::from_runtime_report(report)
-                    .naming_missing_envelope_member(file, bytes)
-            })?;
+            .map_err(RuntimeConfigError::from_report)?;
         let canonical =
             registry_platform_canonical_json::canonicalize_json(&decoded.document.to_json_value())
                 .map_err(|_| {
                     RuntimeConfigError::file_level(
-                        RuntimeConfigErrorKind::InvalidValue,
                         "platform.runtime-config.canonical-form",
                         "the runtime configuration holds a value that has no canonical JSON form",
                         "Write every number as a plain decimal within the range JSON can carry.",
@@ -669,7 +475,7 @@ pub fn reject_environment_expressions_in_authored_yaml(
         .with_hook(&mut hook)
         .scan(text.as_bytes())
         .map(|_| ())
-        .map_err(RuntimeConfigError::from_authored_report)
+        .map_err(RuntimeConfigError::from_report)
 }
 
 /// Refuses every environment expression in a key or text value of an
@@ -878,17 +684,11 @@ fn unresolved(expression: &str) -> Refusal {
 }
 
 fn unsafe_file(message: &str, suggested_action: &str) -> RuntimeConfigError {
-    RuntimeConfigError::file_level(
-        RuntimeConfigErrorKind::UnsafeFile,
-        CODE_UNSAFE_FILE,
-        message,
-        suggested_action,
-    )
+    RuntimeConfigError::file_level(CODE_UNSAFE_FILE, message, suggested_action)
 }
 
 fn unavailable() -> RuntimeConfigError {
     RuntimeConfigError::file_level(
-        RuntimeConfigErrorKind::Unavailable,
         UNAVAILABLE_CODE,
         "the runtime configuration could not be read",
         "Check that the file exists and that the runtime user can read it.",
@@ -897,7 +697,6 @@ fn unavailable() -> RuntimeConfigError {
 
 fn out_of_bounds(maximum: u64) -> RuntimeConfigError {
     RuntimeConfigError::file_level(
-        RuntimeConfigErrorKind::Bounds,
         CODE_TOO_LARGE,
         format!("the runtime configuration is larger than {maximum} bytes"),
         format!("Keep the runtime configuration to at most {maximum} bytes."),
@@ -933,7 +732,6 @@ fn validate_absolute_lexical_path(path: &Path) -> Result<(), RuntimeConfigError>
         Ok(())
     } else {
         Err(RuntimeConfigError::file_level(
-            RuntimeConfigErrorKind::Path,
             CODE_PATH,
             "the runtime configuration path must be absolute, without . or .. components",
             "Give the absolute path of the runtime configuration file, without . or .. \

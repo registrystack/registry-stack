@@ -36,9 +36,10 @@ Every refusal names the file, the field, and the fix, and never repeats a
 configured value. A `RuntimeConfigError` carries the reader's diagnostics
 (`diagnostics()`), each with a two-segment code, a JSON pointer, a line and
 column, a message, and a suggested action; its `Display` renders every one of
-them in the human form `error[code] file:line:col /pointer`. `kind()`,
-`field()` (dotted) and `message()` describe the diagnostic that decided the
-refusal. A refusal found before the reader ran carries one
+them in the human form `error[code] file:line:col /pointer`. A consumer
+classifies a refusal by a diagnostic's `code`; `deciding_diagnostic()` is the
+one it words the refusal from, and `UNAVAILABLE_CODE` is the code of a file
+that cannot be read. A refusal found before the reader ran carries one
 `platform.runtime-config.*` diagnostic.
 
 ## Environment substitution

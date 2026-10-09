@@ -109,10 +109,10 @@ fn substitution_leaves_comments_and_keys_untouched() {
 
     let error = parse(&format!("{}\"${{NAME}}\": x\n", header())).expect_err("key stays literal");
     assert_eq!(
-        error.kind(),
-        RuntimeConfigErrorKind::SubstitutionInReference
+        error.deciding_diagnostic().code,
+        "config.substitution-not-allowed"
     );
-    assert_eq!(error.field(), "${NAME}");
+    assert_eq!(error.deciding_diagnostic().path, "/${NAME}");
 }
 
 #[test]
@@ -140,8 +140,8 @@ fn substituted_values_stay_strings_even_when_they_look_like_yaml() {
             env(&[("COUNT", "3")]),
         )
         .expect_err("a substituted number is still a string");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::InvalidValue);
-    assert_eq!(error.field(), "count");
+    assert_eq!(error.deciding_diagnostic().code, "config.expected-integer");
+    assert_eq!(error.deciding_diagnostic().path, "/count");
 }
 
 #[test]
@@ -159,22 +159,21 @@ fn substitution_supports_default_and_required_message_forms() {
         header()
     ))
     .expect_err("required message form refuses");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::Substitution);
-    assert_eq!(error.field(), "name");
+    assert_eq!(error.deciding_diagnostic().code, "config.substitution");
+    assert_eq!(error.deciding_diagnostic().path, "/name");
     // The operator-authored message is configuration too, so the refusal
     // names the variable and withholds the message.
-    assert!(error.message().contains("MISSING"), "{error}");
-    assert!(error.message().contains("withheld"), "{error}");
-    assert!(!error.message().contains("counter name"), "{error}");
+    assert!(error.to_string().contains("MISSING"), "{error}");
+    assert!(error.to_string().contains("withheld"), "{error}");
+    assert!(!error.to_string().contains("counter name"), "{error}");
 }
 
 #[test]
 fn substitution_refuses_an_unset_or_empty_variable_without_default() {
     for text in ["name: ${MISSING}\n", "name: ${EMPTY}\n"] {
         let error = parse(&format!("{}{text}", header())).expect_err("unset refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Substitution);
-        assert_eq!(error.code(), "runtime_config.substitution");
-        assert_eq!(error.field(), "name");
+        assert_eq!(error.deciding_diagnostic().code, "config.substitution");
+        assert_eq!(error.deciding_diagnostic().path, "/name");
     }
 }
 
@@ -186,7 +185,11 @@ fn substitution_refuses_malformed_expressions() {
         "name: \"${}\"\n",
     ] {
         let error = parse(&format!("{}{text}", header())).expect_err("malformed refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Substitution, "{text}");
+        assert_eq!(
+            error.deciding_diagnostic().code,
+            "config.substitution",
+            "{text}"
+        );
     }
 }
 
@@ -209,7 +212,7 @@ fn substitution_refuses_a_nul_byte() {
             env(&[("NUL", "a\0b")]),
         )
         .expect_err("NUL refuses");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::Substitution);
+    assert_eq!(error.deciding_diagnostic().code, "config.substitution");
 }
 
 #[test]
@@ -233,13 +236,12 @@ fn substitution_is_refused_in_every_reference_field() {
     ] {
         let error = parse(&format!("{}{text}", header())).expect_err("reference refuses");
         assert_eq!(
-            error.kind(),
-            RuntimeConfigErrorKind::SubstitutionInReference,
+            error.deciding_diagnostic().code,
+            "config.substitution-not-allowed",
             "{text}"
         );
-        assert_eq!(error.code(), "runtime_config.substitution_in_reference");
-        assert_eq!(error.field(), field);
-        assert!(error.message().contains("secret:env/NAME"), "{error}");
+        assert_eq!(error.deciding_diagnostic().path, pointer(field));
+        assert!(error.to_string().contains("secret:env/NAME"), "{error}");
     }
 
     let loaded = parse(&format!(
@@ -257,12 +259,15 @@ fn substitution_is_refused_in_every_reference_field() {
 fn removed_keys_are_refused_with_their_replacement_named() {
     let error = parse(&format!("{}server:\n  bind: 127.0.0.1:1\n", header()))
         .expect_err("removed key refuses");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::RemovedKey);
-    assert_eq!(error.code(), "runtime_config.removed_key");
-    assert_eq!(error.field(), "server.bind");
+    assert_eq!(error.deciding_diagnostic().code, "config.removed-key");
+    assert_eq!(error.deciding_diagnostic().path, "/server/bind");
     assert_eq!(
-        error.message(),
-        "server.bind: `bind` is no longer accepted; next: use listener.bind."
+        error.deciding_diagnostic().message,
+        "`bind` is no longer accepted"
+    );
+    assert_eq!(
+        error.deciding_diagnostic().suggested_action,
+        "use listener.bind."
     );
     // `server` is not a member either, so it is reported beside the removed
     // key below it.
@@ -273,8 +278,8 @@ fn removed_keys_are_refused_with_their_replacement_named() {
         header()
     ))
     .expect_err("wildcard removed key refuses");
-    assert_eq!(error.field(), "sources.people.file");
-    assert!(error.message().contains("sources.<id>.path"));
+    assert_eq!(error.deciding_diagnostic().path, "/sources/people/file");
+    assert!(error.to_string().contains("sources.<id>.path"));
 }
 
 #[test]
@@ -288,7 +293,7 @@ fn cfg_diag_5_the_envelope_is_checked_before_removed_keys() {
             env(&[]),
         )
         .expect_err("envelope first");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::Envelope);
+    assert!(is_envelope_refusal(&error), "{error}");
     assert!(error
         .diagnostics()
         .iter()
@@ -358,7 +363,7 @@ fn the_deciding_diagnostic_is_the_one_the_kind_and_field_come_from() {
             env(&[]),
         )
         .expect_err("removed key");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::RemovedKey);
+    assert_eq!(error.deciding_diagnostic().code, "config.removed-key");
     assert!(error
         .diagnostics()
         .iter()
@@ -366,7 +371,7 @@ fn the_deciding_diagnostic_is_the_one_the_kind_and_field_come_from() {
     let deciding = error.deciding_diagnostic();
     assert_eq!(deciding.code, "config.removed-key");
     assert_eq!(deciding.path, "/server/bind");
-    assert_eq!(error.field(), "server.bind");
+    assert_eq!(error.deciding_diagnostic().path, "/server/bind");
 
     let error = loader()
         .parse_str::<Example>(&format!("{}count: many\n", header()), env(&[]))
@@ -388,7 +393,7 @@ fn a_retired_api_version_is_refused_with_its_replacement() {
             env(&[]),
         )
         .expect_err("retired apiVersion refuses");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::Envelope);
+    assert!(is_envelope_refusal(&error), "{error}");
     let diagnostic = &error.diagnostics()[0];
     assert_eq!(diagnostic.code, "config.retired-api-version");
     assert_eq!(diagnostic.path, "/apiVersion");
@@ -416,19 +421,15 @@ fn the_envelope_must_be_literal() {
         let error = loader()
             .parse_str::<Example>(&text, env(&[("API", ENVELOPE.api_version)]))
             .expect_err("envelope refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Envelope, "{text}");
+        assert!(is_envelope_refusal(&error), "{text}");
     }
 }
 
 #[test]
-fn an_envelope_refusal_names_the_member_at_fault_as_its_field() {
+fn an_envelope_refusal_points_at_the_member_at_fault() {
     // The reader reports a missing member at the mapping that lacks it, so
-    // the diagnostic points at the root; the loader's field still names the
-    // member, apiVersion first, as consumers match on it.
+    // that diagnostic points at the root.
     for (text, field) in [
-        (format!("kind: {}\n", ENVELOPE.kind), "apiVersion"),
-        (format!("apiVersion: {}\n", ENVELOPE.api_version), "kind"),
-        ("name: x\n".to_owned(), "apiVersion"),
         (
             format!("apiVersion: other/v1\nkind: {}\n", ENVELOPE.kind),
             "apiVersion",
@@ -439,8 +440,8 @@ fn an_envelope_refusal_names_the_member_at_fault_as_its_field() {
         ),
     ] {
         let error = parse(&text).expect_err("envelope refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Envelope, "{text}");
-        assert_eq!(error.field(), field, "{text}");
+        assert!(is_envelope_refusal(&error), "{text}");
+        assert_eq!(error.deciding_diagnostic().path, pointer(field), "{text}");
     }
     let missing = parse(&format!("kind: {}\n", ENVELOPE.kind)).expect_err("refuses");
     assert_eq!(missing.diagnostics()[0].code, "config.missing-envelope");
@@ -465,7 +466,11 @@ fn the_document_must_be_one_mapping_with_string_keys_and_no_tags() {
         format!("{}name: a\nname: b\n", header()),
     ] {
         let error = parse(&text).expect_err("syntax refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Syntax, "{text}");
+        assert!(
+            error.deciding_diagnostic().code.starts_with("yaml.")
+                || error.deciding_diagnostic().code == "config.invalid-type",
+            "{text}: {error}"
+        );
     }
 }
 
@@ -476,7 +481,7 @@ fn a_typed_refusal_names_the_field_without_the_value() {
         header()
     ))
     .expect_err("type refuses");
-    assert_eq!(error.field(), "count");
+    assert_eq!(error.deciding_diagnostic().path, "/count");
     assert!(!error.to_string().contains("DO_NOT_DISCLOSE"), "{error}");
 }
 
@@ -495,14 +500,14 @@ fn a_substitution_refusal_never_echoes_a_value() {
 fn no_refusal_echoes_an_invalid_name_or_an_unknown_variant() {
     let error = parse(&format!("{}name: \"${{DO_NOT DISCLOSE}}\"\n", header()))
         .expect_err("invalid name refuses");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::Substitution);
+    assert_eq!(error.deciding_diagnostic().code, "config.substitution");
     assert!(!error.to_string().contains("DISCLOSE"), "{error}");
 
     let error = parse(&format!("{}mode: DO_NOT_DISCLOSE\n", header()))
         .expect_err("unknown variant refuses");
-    assert_eq!(error.field(), "mode");
+    assert_eq!(error.deciding_diagnostic().path, "/mode");
     assert_eq!(error.diagnostics()[0].code, "config.unknown-variant");
-    assert!(error.message().contains("strict"), "{error}");
+    assert!(error.to_string().contains("strict"), "{error}");
     assert!(!error.to_string().contains("DISCLOSE"), "{error}");
 
     let error = loader()
@@ -534,12 +539,12 @@ fn substitution_is_refused_under_secret_providers() {
     ] {
         let error = parse(&format!("{}{text}", header())).expect_err("provider refuses");
         assert_eq!(
-            error.kind(),
-            RuntimeConfigErrorKind::SubstitutionInReference,
+            error.deciding_diagnostic().code,
+            "config.substitution-not-allowed",
             "{text}"
         );
-        assert_eq!(error.field(), field);
-        assert!(error.message().contains("secret provider"), "{error}");
+        assert_eq!(error.deciding_diagnostic().path, pointer(field));
+        assert!(error.to_string().contains("secret provider"), "{error}");
     }
     let loaded = parse(&format!(
         "{}secretProviders:\n  file:\n    root: /run/secrets\n",
@@ -576,13 +581,15 @@ fn environment_expressions_are_detected_in_authored_yaml() {
     reject_environment_expressions_in_authored_yaml("a: plain\n# ${A}\n").expect("comment ok");
     let error = reject_environment_expressions_in_authored_yaml("a:\n  b: [x, \"${HOST}\"]\n")
         .expect_err("value refuses");
-    assert_eq!(error.field(), "a.b.1");
-    assert!(error.message().contains("runtime.yaml only"));
+    assert_eq!(error.deciding_diagnostic().path, "/a/b/1");
+    assert!(error.to_string().contains("runtime.yaml only"));
     let error = reject_environment_expressions_in_authored_yaml("\"${HOST}\": x\n")
         .expect_err("key refuses");
-    assert_eq!(error.field(), "${HOST}");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::AuthoredExpression);
-    assert_eq!(error.code(), "authored_config.environment_expression");
+    assert_eq!(error.deciding_diagnostic().path, "/${HOST}");
+    assert_eq!(
+        error.deciding_diagnostic().code,
+        "config.substitution-not-allowed"
+    );
 }
 
 #[test]
@@ -596,13 +603,12 @@ fn the_authored_check_fails_closed_on_text_that_does_not_parse() {
     ] {
         let error =
             reject_environment_expressions_in_authored_yaml(text).expect_err("unparsed refuses");
-        assert_eq!(
-            error.kind(),
-            RuntimeConfigErrorKind::AuthoredSyntax,
+        assert_ne!(
+            error.deciding_diagnostic().code,
+            "config.substitution-not-allowed",
             "{text}"
         );
-        assert_eq!(error.code(), "authored_config.syntax");
-        assert!(!error.message().contains("HOST"), "{error}");
+        assert!(!error.to_string().contains("HOST"), "{error}");
     }
 }
 
@@ -656,7 +662,7 @@ mod files {
             let error = loader()
                 .load_with::<Example>(&path, env(&[]))
                 .expect_err("file refuses");
-            assert_eq!(error.field(), "/");
+            assert_eq!(error.deciding_diagnostic().path, "");
             let [diagnostic] = error.diagnostics() else {
                 panic!("one diagnostic: {error}");
             };
@@ -668,7 +674,7 @@ mod files {
             assert!(error
                 .to_string()
                 .starts_with(&format!("error[{code}] {}\n", path.display())));
-            assert!(error.message().contains("; next: "), "{error}");
+            assert!(error.to_string().contains("next: "), "{error}");
         }
     }
 
@@ -683,7 +689,11 @@ mod files {
             let error = loader()
                 .load_with::<Example>(&path, env(&[]))
                 .expect_err("path refuses");
-            assert_eq!(error.kind(), RuntimeConfigErrorKind::Path, "{path:?}");
+            assert_eq!(
+                error.deciding_diagnostic().code,
+                "platform.runtime-config.path",
+                "{path:?}"
+            );
         }
     }
 
@@ -703,7 +713,11 @@ mod files {
             let error = loader()
                 .load_with::<Example>(&path, env(&[]))
                 .expect_err("symlink refuses");
-            assert_eq!(error.kind(), RuntimeConfigErrorKind::UnsafeFile, "{path:?}");
+            assert_eq!(
+                error.deciding_diagnostic().code,
+                "platform.runtime-config.unsafe-file",
+                "{path:?}"
+            );
         }
     }
 
@@ -713,19 +727,25 @@ mod files {
         let error = loader()
             .load_with::<Example>(&root, env(&[]))
             .expect_err("directory refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::UnsafeFile);
+        assert_eq!(
+            error.deciding_diagnostic().code,
+            "platform.runtime-config.unsafe-file"
+        );
 
         let error = loader()
             .load_with::<Example>(&root.join("absent.yaml"), env(&[]))
             .expect_err("absent refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Unavailable);
+        assert_eq!(
+            error.deciding_diagnostic().code,
+            "platform.runtime-config.unavailable"
+        );
 
         let empty = root.join("empty.yaml");
         std::fs::write(&empty, "").unwrap();
         let error = loader()
             .load_with::<Example>(&empty, env(&[]))
             .expect_err("empty refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Envelope);
+        assert!(is_envelope_refusal(&error), "{error}");
 
         let large = root.join("large.yaml");
         std::fs::write(&large, format!("{}name: {}\n", header(), "x".repeat(200))).unwrap();
@@ -733,8 +753,7 @@ mod files {
             .max_bytes(128)
             .load_with::<Example>(&large, env(&[]))
             .expect_err("oversized refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Bounds);
-        assert_eq!(error.code(), "runtime_config.bounds");
+        assert_eq!(error.deciding_diagnostic().code, "yaml.too-large");
     }
 
     #[test]
@@ -768,7 +787,7 @@ mod files {
         let error = loader()
             .load_with::<Example>(&large, env(&[]))
             .expect_err("oversized refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Bounds);
+        assert_eq!(error.deciding_diagnostic().code, "yaml.too-large");
         let [diagnostic] = error.diagnostics() else {
             panic!("one diagnostic: {error}");
         };
@@ -787,7 +806,7 @@ mod files {
         let error = loader()
             .load_with::<Example>(&path, env(&[]))
             .expect_err("encoding refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Encoding);
+        assert_eq!(error.deciding_diagnostic().code, "yaml.not-utf8");
     }
 
     #[cfg(unix)]
@@ -809,7 +828,10 @@ mod files {
             .require_trusted_ownership()
             .load_with::<Example>(&path, env(&[]))
             .expect_err("world-writable refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::UnsafeFile);
+        assert_eq!(
+            error.deciding_diagnostic().code,
+            "platform.runtime-config.unsafe-file"
+        );
         loader()
             .load_with::<Example>(&path, env(&[]))
             .expect("the ownership rule is opt-in");
@@ -829,8 +851,11 @@ fn the_shared_removed_jwks_uri_key_names_jwks_source() {
             env(&[]),
         )
         .unwrap_err();
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::RemovedKey);
-    assert_eq!(error.field(), "authentication.oidc.jwksUri");
+    assert_eq!(error.deciding_diagnostic().code, "config.removed-key");
+    assert_eq!(
+        error.deciding_diagnostic().path,
+        "/authentication/oidc/jwksUri"
+    );
     assert!(error.to_string().contains("authentication.oidc.jwksSource"));
     assert!(!error.to_string().contains("issuer.example.test"));
 }
@@ -843,6 +868,25 @@ fn located(error: &RuntimeConfigError) -> (&str, Option<usize>, Option<usize>) {
         .as_ref()
         .expect("a reader diagnostic has a source");
     (diagnostic.code.as_str(), source.line, source.column)
+}
+
+/// An RFC 6901 pointer for a dotted field name.
+fn pointer(field: &str) -> String {
+    format!("/{}", field.replace('.', "/"))
+}
+
+fn is_envelope_refusal(error: &RuntimeConfigError) -> bool {
+    matches!(
+        error.deciding_diagnostic().code.as_str(),
+        "config.missing-envelope"
+            | "config.wrong-kind"
+            | "config.unsupported-api-version"
+            | "config.retired-api-version"
+            | "config.deprecated-api-version"
+            | "config.expected-string"
+            | "config.null-value"
+            | "config.substitution-not-allowed"
+    )
 }
 
 fn has_code(error: &RuntimeConfigError, code: &str) -> bool {
@@ -860,18 +904,18 @@ fn cfg_sec_2_a_key_is_never_substituted() {
     ] {
         let error = parse(&format!("{}{text}", header())).expect_err("key refuses");
         assert_eq!(
-            error.kind(),
-            RuntimeConfigErrorKind::SubstitutionInReference,
+            error.deciding_diagnostic().code,
+            "config.substitution-not-allowed",
             "{text}"
         );
-        assert_eq!(error.field(), field);
+        assert_eq!(error.deciding_diagnostic().path, pointer(field));
         assert_eq!(
             error.diagnostics()[0].code,
             "config.substitution-not-allowed"
         );
         assert!(
             error
-                .message()
+                .to_string()
                 .contains("a key is never filled by substitution"),
             "{error}"
         );
@@ -897,14 +941,16 @@ fn cfg_sec_2_api_version_and_kind_are_never_substituted() {
         let error = loader()
             .parse_str::<Example>(&text, lookup())
             .expect_err("envelope refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Envelope, "{text}");
-        assert_eq!(error.field(), member);
+        assert!(is_envelope_refusal(&error), "{text}");
+        assert_eq!(error.deciding_diagnostic().path, pointer(member));
         assert!(
             has_code(&error, "config.substitution-not-allowed"),
             "{error}"
         );
         assert!(
-            error.message().contains("is never filled by substitution"),
+            error
+                .to_string()
+                .contains("is never filled by substitution"),
             "{error}"
         );
     }
@@ -926,16 +972,16 @@ fn cfg_sec_2_a_ref_member_is_never_substituted() {
     ))
     .expect_err("reference refuses");
     assert_eq!(
-        error.kind(),
-        RuntimeConfigErrorKind::SubstitutionInReference
+        error.deciding_diagnostic().code,
+        "config.substitution-not-allowed"
     );
-    assert_eq!(error.field(), "audit.hashKeyRef");
+    assert_eq!(error.deciding_diagnostic().path, "/audit/hashKeyRef");
     assert_eq!(
         located(&error),
         ("config.substitution-not-allowed", Some(4), Some(15))
     );
-    assert!(error.message().contains("`hashKeyRef`"), "{error}");
-    assert!(error.message().contains("secret:env/NAME"), "{error}");
+    assert!(error.to_string().contains("`hashKeyRef`"), "{error}");
+    assert!(error.to_string().contains("secret:env/NAME"), "{error}");
     assert!(!error.to_string().contains("north"), "{error}");
 }
 
@@ -955,16 +1001,16 @@ fn cfg_sec_2_a_refs_member_and_everything_below_it_is_never_substituted() {
     ] {
         let error = parse(&format!("{}{text}", header())).expect_err("references refuse");
         assert_eq!(
-            error.kind(),
-            RuntimeConfigErrorKind::SubstitutionInReference,
+            error.deciding_diagnostic().code,
+            "config.substitution-not-allowed",
             "{text}"
         );
-        assert_eq!(error.field(), field);
+        assert_eq!(error.deciding_diagnostic().path, pointer(field));
         assert_eq!(
             error.diagnostics()[0].code,
             "config.substitution-not-allowed"
         );
-        assert!(error.message().contains(key), "{error}");
+        assert!(error.to_string().contains(key), "{error}");
     }
 }
 
@@ -976,10 +1022,13 @@ fn cfg_sec_2_nothing_under_secret_providers_is_substituted() {
     ))
     .expect_err("provider setting refuses");
     assert_eq!(
-        error.kind(),
-        RuntimeConfigErrorKind::SubstitutionInReference
+        error.deciding_diagnostic().code,
+        "config.substitution-not-allowed"
     );
-    assert_eq!(error.field(), "secretProviders.file.root");
+    assert_eq!(
+        error.deciding_diagnostic().path,
+        "/secretProviders/file/root"
+    );
     let diagnostic = &error.diagnostics()[0];
     assert_eq!(diagnostic.code, "config.substitution-not-allowed");
     assert_eq!(
@@ -1021,7 +1070,7 @@ fn cfg_sec_2_a_required_message_is_withheld() {
         header()
     ))
     .expect_err("required refuses");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::Substitution);
+    assert_eq!(error.deciding_diagnostic().code, "config.substitution");
     assert_eq!(
         error.diagnostics()[0].message,
         "the environment variable MISSING is unset or empty; the message written for it is \
@@ -1038,7 +1087,7 @@ fn cfg_sec_2_a_nul_byte_is_refused_by_the_variable_name() {
             env(&[("NULLED", "DO_NOT_DISCLOSE\0b")]),
         )
         .expect_err("NUL refuses");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::Substitution);
+    assert_eq!(error.deciding_diagnostic().code, "config.substitution");
     assert_eq!(
         error.diagnostics()[0].message,
         "the environment variable NULLED holds a NUL byte"
@@ -1056,7 +1105,11 @@ fn cfg_sec_2_a_malformed_expression_is_refused_without_repeating_it() {
         "name: \"${DO_NOT DISCLOSE}\"\n",
     ] {
         let error = parse(&format!("{}{text}", header())).expect_err("malformed refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Substitution, "{text}");
+        assert_eq!(
+            error.deciding_diagnostic().code,
+            "config.substitution",
+            "{text}"
+        );
         let diagnostic = &error.diagnostics()[0];
         assert_eq!(diagnostic.code, "config.substitution", "{text}");
         assert_eq!(
@@ -1091,8 +1144,11 @@ fn cfg_sec_2_text_that_is_not_an_expression_is_accepted() {
 fn cfg_sec_2_an_authored_expression_is_refused_with_the_remedy() {
     let error = reject_environment_expressions_in_authored_yaml("title: x\nhost: \"${HOST:-a}\"\n")
         .expect_err("authored expression refuses");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::AuthoredExpression);
-    assert_eq!(error.field(), "host");
+    assert_eq!(
+        error.deciding_diagnostic().code,
+        "config.substitution-not-allowed"
+    );
+    assert_eq!(error.deciding_diagnostic().path, "/host");
     assert_eq!(
         located(&error),
         ("config.substitution-not-allowed", Some(2), Some(7))
@@ -1166,8 +1222,7 @@ fn cfg_val_3_a_substituted_value_never_fills_an_integer_or_boolean() {
                 env(&[("COUNT", "3"), ("ENABLED", "true")]),
             )
             .expect_err("a substituted value is text");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::InvalidValue, "{text}");
-        assert_eq!(error.field(), field);
+        assert_eq!(error.deciding_diagnostic().path, pointer(field));
         assert_eq!(located(&error), (code, Some(3), Some(column)));
     }
 
@@ -1184,8 +1239,8 @@ fn cfg_diag_2_display_renders_every_diagnostic_in_the_human_form() {
         header()
     ))
     .expect_err("unknown and removed keys refuse");
-    assert_eq!(error.kind(), RuntimeConfigErrorKind::RemovedKey);
-    assert_eq!(error.field(), "sources.people.file");
+    assert_eq!(error.deciding_diagnostic().code, "config.removed-key");
+    assert_eq!(error.deciding_diagnostic().path, "/sources/people/file");
     let mut codes: Vec<&str> = error
         .diagnostics()
         .iter()
