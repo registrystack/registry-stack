@@ -1266,6 +1266,87 @@ class SchemaTests(ConventionsTestCase):
         self.repo.project["$defs"]["Queue"]["then"] = {"required": ["enabled"]}
         self.assertNoFinding(self.repo.run(), "CFG-SCHEMA-4")
 
+    def test_a_member_only_a_conditional_keyword_declares_meets_every_other_rule(self) -> None:
+        bound = {"type": "integer", "minimum": 1, "maximum": 10}
+        for keyword, value, inner in (
+            ("if", {"properties": {"maxItems": bound}}, "/if"),
+            ("then", {"properties": {"maxItems": bound}}, "/then"),
+            ("else", {"properties": {"maxItems": bound}}, "/else"),
+            ("not", {"properties": {"maxItems": bound}}, "/not"),
+            ("dependentSchemas", {"mode": {"properties": {"maxItems": bound}}}, "/dependentSchemas/mode"),
+        ):
+            with self.subTest(keyword=keyword):
+                self.repo.project = project_schema()
+                self.repo.project["$defs"]["Queue"][keyword] = value
+                report = self.repo.run()
+                self.assertFinding(
+                    report, "CFG-NAME-3", P, at(PROJECT_SCHEMA, f"/$defs/Queue{inner}/properties/maxItems")
+                )
+                self.assertNoFinding(report, "CFG-SCHEMA-4")
+
+    def test_a_conditional_keyword_that_constrains_a_declared_member_adds_no_finding(self) -> None:
+        # Each value would be a finding where its member is declared: an
+        # untyped id, a value that is not kebab-case, a URL that is not a Url.
+        constraints = {
+            "id": {"type": "string", "minLength": 2},
+            "mode": {"const": "First_Come"},
+        }
+        for keyword, value in (
+            ("if", {"properties": constraints}),
+            ("then", {"properties": constraints}),
+            ("else", {"properties": constraints}),
+            ("not", {"properties": constraints}),
+            ("dependentSchemas", {"mode": {"properties": constraints}}),
+        ):
+            with self.subTest(keyword=keyword):
+                self.repo.project = project_schema()
+                self.repo.project["$defs"]["Queue"][keyword] = value
+                self.assertEqual(sorted(keys(self.repo.run().findings)), [])
+
+    def test_a_conditional_keyword_on_a_member_constrains_that_member(self) -> None:
+        self.repo.project["$defs"]["Queue"]["properties"]["mode"]["not"] = {"enum": ["Round_Robin"]}
+        self.repo.project["properties"]["homepageUrl"] = {
+            "allOf": [{"$ref": "#/$defs/Url"}, {"if": {"pattern": "^http:"}, "then": {"maxLength": 64}}]
+        }
+        self.assertEqual(sorted(keys(self.repo.run().findings)), [])
+
+    def test_a_member_declared_elsewhere_is_found_through_references_lists_mappings_and_branches(self) -> None:
+        # The conditional sits in an allOf branch of the root; the members it
+        # constrains are declared behind $ref, items, additionalProperties,
+        # and an anyOf branch.
+        self.repo.project["allOf"] = [
+            {
+                "if": {"properties": {"project": {"properties": {"id": {"const": "Demo_One"}}}}},
+                "then": {
+                    "properties": {
+                        "queues": {"items": {"properties": {"mode": {"const": "Round_Robin"}}}},
+                        "accessProfiles": {
+                            "additionalProperties": {"properties": {"requiredScopes": {"items": {"const": "Read_All"}}}}
+                        },
+                        "homepageUrl": {"type": "string", "pattern": "^https:"},
+                    }
+                },
+            }
+        ]
+        self.assertEqual(sorted(keys(self.repo.run().findings)), [])
+
+    def test_a_member_a_conditional_keyword_adds_below_a_declared_member_meets_the_rules(self) -> None:
+        bound = {"type": "integer", "minimum": 1, "maximum": 10}
+        self.repo.project["then"] = {
+            "properties": {
+                "queues": {"items": {"properties": {"maxItems": bound}}},
+                "limits": {"type": "object", "properties": {"queueLimit": bound}},
+            }
+        }
+        report = self.repo.run()
+        self.assertEqual(
+            sorted(keys(report.findings)),
+            [
+                ("CFG-NAME-3", P, at(PROJECT_SCHEMA, "/then/properties/limits/properties/queueLimit")),
+                ("CFG-NAME-3", P, at(PROJECT_SCHEMA, "/then/properties/queues/items/properties/maxItems")),
+            ],
+        )
+
     def test_cfg_schema_5_reports_a_product_copy_of_a_shared_block(self) -> None:
         self.repo.project["$defs"]["RawListenerConfig"] = copy.deepcopy(CANONICAL_DEFS["ListenerConfig"])
         changed = copy.deepcopy(CANONICAL_DEFS["ProjectIdentity"])

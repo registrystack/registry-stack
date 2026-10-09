@@ -889,42 +889,140 @@ class Visit:
     names: tuple[str, ...]
     member: str | None
     parent: dict | None
+    # Under a keyword that constrains what its schema already describes: the
+    # closure rule exempts the node (CFG-SCHEMA-4).
+    conditional: bool = False
+    # The node constrains a value the constrained schema declares elsewhere,
+    # where every rule reads it; no rule reads it here.
+    constraint: bool = False
+
+
+# A subschema that constrains the value its schema already describes. Each
+# value of `dependentSchemas` is one more.
+CONDITIONAL_SCHEMAS = ("if", "then", "else", "not")
+
+
+def same_value_schemas(root: object, nodes: list[dict]) -> list[dict]:
+    """The nodes and every schema `$ref`, `allOf`, `anyOf`, and `oneOf` apply to the same value."""
+
+    found: list[dict] = []
+    seen: set[int] = set()
+    stack: list[object] = list(reversed(nodes))
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict) or id(node) in seen:
+            continue
+        seen.add(id(node))
+        found.append(node)
+        if isinstance(node.get("$ref"), str):
+            stack.append(resolve_ref(root, node["$ref"]))
+        for keyword in ("allOf", "anyOf", "oneOf"):
+            stack += node.get(keyword) or []
+    return found
+
+
+def declared_member(root: object, nodes: list[dict], key: str) -> list[dict]:
+    """The schemas the nodes declare for one member, empty when they declare none."""
+
+    found: list[dict] = []
+    for part in same_value_schemas(root, nodes):
+        properties = part.get("properties") or {}
+        if key in properties:
+            found.append(properties[key] if isinstance(properties[key], dict) else {})
+            continue
+        for pattern, sub in (part.get("patternProperties") or {}).items():
+            try:
+                if re.search(pattern, key):
+                    found.append(sub if isinstance(sub, dict) else {})
+            except re.error:
+                continue
+        if isinstance(part.get("additionalProperties"), dict):
+            found.append(part["additionalProperties"])
+    return found
+
+
+def declared_values(root: object, nodes: list[dict]) -> list[dict]:
+    """The schemas the nodes declare for the items of a list or the values of a mapping."""
+
+    found: list[dict] = []
+    for part in same_value_schemas(root, nodes):
+        items = part.get("items")
+        subs = [items] if isinstance(items, dict) else list(items) if isinstance(items, list) else []
+        subs += part.get("prefixItems") or []
+        subs += list((part.get("patternProperties") or {}).values())
+        subs.append(part.get("additionalProperties"))
+        found += [sub for sub in subs if isinstance(sub, dict)]
+    return found
 
 
 def walk(schema: object, canonical: dict) -> list[Visit]:
+    """Every subschema of a schema, each marked with how the rules read it.
+
+    A subschema under `if`, `then`, `else`, `not`, or `dependentSchemas`
+    constrains the value its schema already describes. A member it names that
+    the constrained schema declares is a constraint, and so is everything it
+    says about that member; a member the constrained schema does not declare
+    is declared here, and the rules read it as they read any other member.
+    """
+
     visits: list[Visit] = []
 
     def visit(node: object, tokens: tuple[str, ...], names: tuple[str, ...],
-              member: str | None, parent: dict | None) -> None:
+              member: str | None, parent: dict | None, conditional: bool,
+              declared: list[dict] | None, anchor: dict | None) -> None:
+        # `declared` holds the constrained schema's own schemas for this value
+        # when the node is a constraint. `anchor` is the schema that describes
+        # the value an applicator branch shares with it.
         if node is True:
             node = {}
         if not isinstance(node, dict) or FOREIGN in node:
             return
-        visits.append(Visit(tokens, node, names, member, parent))
+        if anchor is None:
+            anchor = node
+        visits.append(Visit(tokens, node, names, member, parent, conditional, declared is not None))
+
+        def below(sub: object, step: tuple[str, ...], below_names: tuple[str, ...],
+                  below_member: str | None, known: list[dict] | None) -> None:
+            # A value the constrained schema does not declare is declared by
+            # the conditional subschema itself.
+            visit(sub, tokens + step, below_names, below_member, node, conditional, known or None, None)
+
+        def values() -> list[dict] | None:
+            return None if declared is None else declared_values(schema, declared)
+
         for key, sub in (node.get("properties") or {}).items():
-            visit(sub, tokens + ("properties", key), names + (key,), key, node)
+            known = None if declared is None else declared_member(schema, declared, key)
+            below(sub, ("properties", key), names + (key,), key, known)
         for key, sub in (node.get("patternProperties") or {}).items():
-            visit(sub, tokens + ("patternProperties", key), names, None, node)
+            below(sub, ("patternProperties", key), names, None, values())
         for keyword in ("$defs", "definitions"):
             for key, sub in (node.get(keyword) or {}).items():
                 if not tokens and key in canonical and sub == canonical[key]:
                     continue
-                visit(sub, tokens + (keyword, key), names + (def_context(key),), None, node)
+                visit(sub, tokens + (keyword, key), names + (def_context(key),), None, node, False, None, None)
         if isinstance(node.get("additionalProperties"), dict):
-            visit(node["additionalProperties"], tokens + ("additionalProperties",), names, None, node)
+            below(node["additionalProperties"], ("additionalProperties",), names, None, values())
         items = node.get("items")
         if isinstance(items, dict):
-            visit(items, tokens + ("items",), names, None, node)
+            below(items, ("items",), names, None, values())
         elif isinstance(items, list):
             for index, sub in enumerate(items):
-                visit(sub, tokens + ("items", str(index)), names, None, node)
+                below(sub, ("items", str(index)), names, None, values())
         for index, sub in enumerate(node.get("prefixItems") or []):
-            visit(sub, tokens + ("prefixItems", str(index)), names, None, node)
+            below(sub, ("prefixItems", str(index)), names, None, values())
         for keyword in ("allOf", "anyOf", "oneOf"):
             for index, sub in enumerate(node.get(keyword) or []):
-                visit(sub, tokens + (keyword, str(index)), names, None, node)
+                visit(sub, tokens + (keyword, str(index)), names, None, node, conditional, declared, anchor)
+        constrained = declared if declared is not None else [anchor]
+        for keyword in CONDITIONAL_SCHEMAS:
+            if isinstance(node.get(keyword), dict):
+                visit(node[keyword], tokens + (keyword,), names, None, node, True, constrained, anchor)
+        dependents = node.get("dependentSchemas")
+        for key, sub in (dependents.items() if isinstance(dependents, dict) else ()):
+            if isinstance(sub, dict):
+                visit(sub, tokens + ("dependentSchemas", key), names, None, node, True, constrained, anchor)
 
-    visit(schema, (), (), None, None)
+    visit(schema, (), (), None, None, False, None, None)
     return visits
 
 
@@ -1610,6 +1708,8 @@ class Lint:
                 self.find(rule, fid, path, pointer(visit.tokens + suffix), message, fix)
 
         for visit in walk(document, self.canonical if entry is not None else {}):
+            if visit.constraint:
+                continue
             node, key = visit.node, visit.member
             exempt_value = len(visit.tokens) == 2 and visit.tokens[0] in ("$defs", "definitions") and visit.tokens[1] in VALUE_TYPES
             numeric = bool(types_of(node) & {"integer", "number"})
@@ -1761,7 +1861,7 @@ class Lint:
                     detail = " (minimum 0 is the unsigned type's implicit bound)" if implicit else ""
                     find("CFG-QTY-4", visit, f"an integer without a stated {' and '.join(missing)}{detail}",
                          "Read it with BoundedU32/BoundedU64 and state both bounds")
-            closing = self.closing_problem(document, visit)
+            closing = None if visit.conditional else self.closing_problem(document, visit)
             passthrough = self.passthrough_problem(entry, node)
             if passthrough:
                 find("CFG-SCHEMA-4", visit, passthrough[0], passthrough[1])
