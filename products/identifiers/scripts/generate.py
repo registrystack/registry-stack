@@ -42,6 +42,37 @@ def read_json(path: Path) -> Any:
         raise CatalogError(f"could not read JSON {path}: {error}") from error
 
 
+YAML_SCHEMA_KEY = re.compile(r"^(\$id|title):[ \t]*(\S.*?)[ \t]*$", re.MULTILINE)
+
+
+def read_schema_header(path: Path) -> dict[str, str]:
+    """The `$id` and `title` of a schema file.
+
+    A `.schema.yaml` file is not parsed: only its top-level `$id` and `title`
+    lines are read, so the generator needs no YAML dependency. A JSON file is
+    read whole.
+    """
+
+    if path.suffix != ".yaml":
+        document = read_json(path)
+        return document if isinstance(document, dict) else {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise CatalogError(f"could not read YAML {path}: {error}") from error
+    header: dict[str, str] = {}
+    for match in YAML_SCHEMA_KEY.finditer(text):
+        value = match.group(2)
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        header.setdefault(match.group(1), value)
+    return header
+
+
+def schema_media_type(path: Path) -> str:
+    return "application/yaml" if path.suffix == ".yaml" else "application/schema+json"
+
+
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -177,15 +208,13 @@ def public_schema_files(
 ) -> dict[str, Path]:
     found: dict[str, Path] = {}
     for path in repository_paths:
-        if path.suffix != ".json":
+        if path.suffix not in (".json", ".yaml"):
             continue
         if path_is_excluded(repo_root, path, exclusions):
             continue
         try:
-            document = read_json(path)
+            document = read_schema_header(path)
         except CatalogError:
-            continue
-        if not isinstance(document, dict):
             continue
         uri = document.get("$id")
         if not isinstance(uri, str) or not uri.startswith(f"{BASE_URL}/"):
@@ -242,8 +271,8 @@ def schema_entries(
                 raise CatalogError(
                     f"schema source belongs to multiple groups: {relative_path(repo_root, path)}"
                 )
-            document = read_json(path)
-            uri = document.get("$id") if isinstance(document, dict) else None
+            document = read_schema_header(path)
+            uri = document.get("$id")
             if not isinstance(uri, str) or not uri.startswith(f"{BASE_URL}/"):
                 continue
             covered_paths.add(path)
@@ -267,7 +296,7 @@ def schema_entries(
                     "artifact": {
                         "path": relative_path(repo_root, path),
                         "sha256": digest,
-                        "mediaType": "application/schema+json",
+                        "mediaType": schema_media_type(path),
                     },
                 }
             )
@@ -405,7 +434,7 @@ def validate_entries(repo_root: Path, entries: list[dict[str, Any]]) -> None:
             if sha256(artifact_path) != artifact["sha256"]:
                 raise CatalogError(f"artifact digest does not match: {artifact['path']}")
             if entry["kind"] == "schema":
-                document = read_json(artifact_path)
+                document = read_schema_header(artifact_path)
                 if document.get("$id") != uri:
                     raise CatalogError(f"schema $id and catalog URI disagree: {uri}")
 
