@@ -281,6 +281,13 @@ steps:
     1 with apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1 and kind: BRegDevClients,
     rename each *File member to its *Ref member holding secret:file/<name> or secret:env/<NAME>, declare
     secretProviders, and move the files into the declared owner-only directory.'}
+- {id: breg-dev-clients-types, product: breg, kind: manual, file: dev-clients.yaml, instruction: 'Rename
+    an identifier that starts with a digit, write each exchange issuer and Evidence provider baseUrl as
+    an absolute http or https URL, and replace the mapping values institutional_grant and first_party
+    with institutional-grant and first-party.'}
+- {id: breg-action-row-boundaries, product: breg, kind: manual, file: registry.yaml, instruction: 'Delete
+    rowBoundaries from every access-profile permission that has action:; write the row reach on each
+    of its targets.'}
 - id: breg-example-scenarios
   product: breg
   kind: edit

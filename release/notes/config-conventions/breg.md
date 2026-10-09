@@ -1550,6 +1550,7 @@ Both changes add a member; no existing member moves or changes meaning.
   list on success, like every other report.
 
 ### BREAKING: development clients identifiers, URLs, and exchange mapping (`dev-clients.yaml`)
+<!-- upgrade: breg-dev-clients-types -->
 
 The development clients schema states the reader's types, so the reader now
 decodes these members through the shared types and refuses a value they
@@ -1924,6 +1925,7 @@ To migrate a registry project, for each entry under `statisticalDatasets`:
    `statisticalDatasets` with the grants you removed.
 
 ### BREAKING: an action permission takes no `rowBoundaries`
+<!-- upgrade: breg-action-row-boundaries -->
 
 An access-profile permission that names an `action` is refused when it also
 writes `rowBoundaries`, with `config.invalid-value` at the permission and the
