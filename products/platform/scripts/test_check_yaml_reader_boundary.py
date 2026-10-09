@@ -120,6 +120,51 @@ class BanTest(unittest.TestCase):
         self.assertEqual(gate.ban_problems(text, {"serde_yaml_ng"}), [])
 
 
+class OtherParserBanTest(unittest.TestCase):
+    ALLOWED = {
+        "saphyr-parser": ["registry-platform-yaml"],
+        "serde_yaml": ["hayagriva", "typst-library"],
+        "yaml-rust": ["syntect"],
+        "serde_yml": [],
+        "yaml-rust2": [],
+        "saphyr": [],
+    }
+
+    def deny(self, *, skip: str = "", extra_wrapper: tuple[str, str] | None = None) -> str:
+        entries = []
+        for name, wrappers in self.ALLOWED.items():
+            if name == skip:
+                continue
+            if extra_wrapper and extra_wrapper[0] == name:
+                wrappers = [*wrappers, extra_wrapper[1]]
+            clause = f", wrappers = {wrappers!r}".replace("'", '"') if wrappers else ""
+            entries.append(f'{{ crate = "{name}"{clause}, reason = "x" }}')
+        return "[bans]\ndeny = [" + ", ".join(entries) + "]\n"
+
+    def test_the_complete_set_of_bans_passes(self) -> None:
+        self.assertEqual(gate.other_parser_ban_problems(self.deny()), [])
+
+    def test_every_other_yaml_parser_must_be_banned(self) -> None:
+        for name in self.ALLOWED:
+            with self.subTest(name=name):
+                problems = gate.other_parser_ban_problems(self.deny(skip=name))
+                self.assertEqual(len(problems), 1)
+                self.assertIn(f'crate = "{name}"', problems[0])
+
+    def test_a_wrapper_beyond_the_known_ones_is_refused(self) -> None:
+        for name in self.ALLOWED:
+            with self.subTest(name=name):
+                problems = gate.other_parser_ban_problems(
+                    self.deny(extra_wrapper=(name, "some-new-crate"))
+                )
+                self.assertEqual(len(problems), 1)
+                self.assertIn("some-new-crate", problems[0])
+
+    def test_the_repository_bans_every_other_yaml_parser(self) -> None:
+        text = (ROOT / "deny.toml").read_text(encoding="utf-8")
+        self.assertEqual(gate.other_parser_ban_problems(text), [])
+
+
 class RegisterTest(unittest.TestCase):
     def test_external_formats_are_read_from_the_register(self) -> None:
         text = """\

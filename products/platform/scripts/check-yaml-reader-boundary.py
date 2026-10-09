@@ -35,6 +35,16 @@ from functools import cached_property
 from pathlib import Path, PurePosixPath
 
 READERS = ("serde_norway", "serde_yaml_ng")
+# Other YAML parsers the workspace must never gain a direct use of, each with
+# the only crates deny.toml may let bring it in.
+OTHER_PARSER_BANS = {
+    "saphyr-parser": ("registry-platform-yaml",),
+    "serde_yaml": ("hayagriva", "typst-library"),
+    "yaml-rust": ("syntect",),
+    "serde_yml": (),
+    "yaml-rust2": (),
+    "saphyr": (),
+}
 ENTRY_POINTS = (
     "from_str",
     "from_slice",
@@ -127,8 +137,8 @@ def configuration_problems(name: str, text: str) -> list[str]:
     return problems
 
 
-def ban_problems(deny_text: str, absent: set[str] | frozenset[str]) -> list[str]:
-    """Problems with the deny.toml bans that stand in for dormant entries."""
+def banned_crates(deny_text: str) -> dict[str, dict[str, object]]:
+    """The [bans] deny entries of deny.toml, by crate name."""
 
     bans = tomllib.loads(deny_text).get("bans", {}).get("deny", [])
     banned: dict[str, dict[str, object]] = {}
@@ -138,7 +148,35 @@ def ban_problems(deny_text: str, absent: set[str] | frozenset[str]) -> list[str]
         elif isinstance(entry, dict):
             name = entry.get("crate", entry.get("name", ""))
             banned[str(name).split("@")[0]] = entry
+    return banned
 
+
+def other_parser_ban_problems(deny_text: str) -> list[str]:
+    """Problems with the deny.toml bans on every other YAML parser."""
+
+    banned = banned_crates(deny_text)
+    problems = []
+    for name, allowed in OTHER_PARSER_BANS.items():
+        entry = banned.get(name)
+        if entry is None:
+            problems.append(
+                f'deny.toml does not ban {name}. Add {{ crate = "{name}", reason = "..." }} '
+                "to [bans] deny, so no crate can read YAML around registry_platform_yaml."
+            )
+            continue
+        extra = sorted(set(entry.get("wrappers", [])) - set(allowed))
+        if extra:
+            problems.append(
+                f"deny.toml lets {', '.join(extra)} bring in {name}. Only "
+                f"{', '.join(allowed) or 'no crate'} may."
+            )
+    return problems
+
+
+def ban_problems(deny_text: str, absent: set[str] | frozenset[str]) -> list[str]:
+    """Problems with the deny.toml bans that stand in for dormant entries."""
+
+    banned = banned_crates(deny_text)
     problems = []
     for reader in sorted(absent):
         entry = banned.get(reader)
@@ -606,7 +644,9 @@ def main(argv: list[str]) -> int:
     problems = []
     for name in configurations:
         problems.extend(configuration_problems(name, (root / name).read_text(encoding="utf-8")))
-    problems.extend(ban_problems((root / "deny.toml").read_text(encoding="utf-8"), absent))
+    deny_text = (root / "deny.toml").read_text(encoding="utf-8")
+    problems.extend(ban_problems(deny_text, absent))
+    problems.extend(other_parser_ban_problems(deny_text))
     suppressions, accepted = suppression_problems(sources, external)
     problems.extend(suppressions)
     problems.extend(alias_problems(sources))
