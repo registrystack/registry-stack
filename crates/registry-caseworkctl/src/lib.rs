@@ -18,7 +18,7 @@ use registry_casework::{AttemptSettlementError, RuntimeConfigError, StoreError};
 use registry_casework_core::{
     AttemptSettlement, AttemptSettlementOutcome, AttemptUncertainMarking, ConfigLoadError,
 };
-use registry_platform_config::RuntimeConfigErrorKind;
+use registry_platform_config::UNAVAILABLE_CODE;
 use registry_platform_yaml::{Diagnostic, Report};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -734,7 +734,10 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
         || matches!(
             runtime_error,
             Some(RuntimeConfigError::Load(load))
-                if load.kind() == RuntimeConfigErrorKind::Unavailable
+                if load
+                    .diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == UNAVAILABLE_CODE)
         );
     let runtime_dependency_unavailable = matches!(runtime_error, Some(RuntimeConfigError::Oidc));
     let domain = !io_failure

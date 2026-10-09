@@ -476,7 +476,10 @@ fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
         let unavailable = matches!(
             &error,
             registry_casework::RuntimeConfigError::Load(load)
-                if load.kind() == registry_platform_config::RuntimeConfigErrorKind::Unavailable
+                if load
+                    .diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == registry_platform_config::UNAVAILABLE_CODE)
         );
         match registry_casework::startup_report(path, &error) {
             Some(report) => RuntimeConfigRefusal {

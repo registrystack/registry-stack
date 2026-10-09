@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -1600,7 +1601,6 @@ fn stand_in_for(pointer: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_platform_config::RuntimeConfigErrorKind;
     use registry_platform_config::{
         MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS,
         MAX_ASSERTION_ISSUER_CLIENT_BYTES, SUM_FILE,
@@ -2151,7 +2151,7 @@ reviewProducers:
                 matches!(
                     &error,
                     RuntimeConfigError::Load(load)
-                        if load.code() == "runtime_config.substitution_in_reference"
+                        if load.deciding_diagnostic().code == "config.substitution-not-allowed"
                 ),
                 "{error}"
             );
@@ -2415,7 +2415,7 @@ reviewProducers:
                 panic!("{member}: {error:?}");
             };
             assert_eq!(load.deciding_diagnostic().path, member, "{error}");
-            assert_eq!(load.field(), pointer, "{error}");
+            assert_eq!(error.path(), pointer, "{error}");
         }
     }
 
@@ -3292,7 +3292,7 @@ reviewProducers:
 
         assert!(matches!(
             RuntimeConfig::load("runtime.yaml"),
-            Err(RuntimeConfigError::Load(load)) if load.kind() == RuntimeConfigErrorKind::Path
+            Err(RuntimeConfigError::Load(load)) if load.deciding_diagnostic().code == "platform.runtime-config.path"
         ));
 
         std::fs::write(
@@ -3302,7 +3302,7 @@ reviewProducers:
         .unwrap();
         assert!(matches!(
             RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::Load(load)) if load.kind() == RuntimeConfigErrorKind::Envelope
+            Err(RuntimeConfigError::Load(load)) if load.deciding_diagnostic().code == "config.unsupported-api-version"
         ));
 
         std::fs::write(
@@ -3332,7 +3332,7 @@ reviewProducers:
         let error = RuntimeConfig::load(&operator).unwrap_err();
         assert!(matches!(
             &error,
-            RuntimeConfigError::Load(load) if load.kind() == RuntimeConfigErrorKind::RemovedKey
+            RuntimeConfigError::Load(load) if load.deciding_diagnostic().code == "config.removed-key"
         ));
         assert_eq!(error.path(), "authentication.oidc.principalClaim");
         assert!(error
@@ -3400,8 +3400,6 @@ reviewProducers:
         let RuntimeConfigError::Load(load) = error else {
             panic!("the reader did not refuse {field}: {error:?}");
         };
-        assert_eq!(load.kind(), RuntimeConfigErrorKind::InvalidValue, "{error}");
-        assert_eq!(load.field(), field, "{error}");
         assert_eq!(load.deciding_diagnostic().code, code, "{error}");
         assert_eq!(error.path(), field);
         // The rendered refusal also names the file, whose temporary name is
@@ -3840,11 +3838,23 @@ pub enum RuntimeConfigError {
 const REBUILD_PACKAGE: &str =
     "Rebuild the package with `caseworkctl package`, then point package.root at it.";
 
+/// An RFC 6901 pointer as the dotted member path; `/` for the whole document.
+fn dotted(pointer: &str) -> String {
+    match pointer.strip_prefix('/') {
+        None => "/".to_owned(),
+        Some(rest) => rest
+            .split('/')
+            .map(|segment| segment.replace("~1", "/").replace("~0", "~"))
+            .collect::<Vec<_>>()
+            .join("."),
+    }
+}
+
 impl RuntimeConfigError {
     #[must_use]
-    pub fn path(&self) -> &str {
-        match self {
-            Self::Load(error) => error.field(),
+    pub fn path(&self) -> Cow<'_, str> {
+        Cow::Borrowed(match self {
+            Self::Load(error) => return Cow::Owned(dotted(&error.deciding_diagnostic().path)),
             Self::Block(error) | Self::BindingSecret { error, .. } => error.field(),
             Self::InvalidApiVersion => "apiVersion",
             Self::InvalidKind => "kind",
@@ -3876,7 +3886,7 @@ impl RuntimeConfigError {
             Self::PackageDigest(_) => "package.expectedDigest",
             Self::InvalidStrandedWorkAcknowledgement => "package.acknowledgeStrandedWork",
             Self::Invalid => "/",
-        }
+        })
     }
 
     /// The JSON Pointer, in the runtime file, of the member this refusal
