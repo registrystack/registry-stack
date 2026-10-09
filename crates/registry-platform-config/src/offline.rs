@@ -16,14 +16,20 @@ use crate::{
 /// The stand-in for a deferred expression whose member names no other.
 pub const DEFAULT_STAND_IN: &str = "deferred";
 
+/// The code of the warning that a check without the environment stopped at a
+/// member holding an expression, and did not read the members after it.
+pub const INCOMPLETE_CODE: &str = "platform.runtime-config.check-incomplete";
+
 /// What an offline check of one runtime file found.
 #[derive(Debug)]
 pub struct RuntimeFileCheck<T> {
     /// The decoded configuration, when the loader accepted the file. A
     /// member that holds a deferred expression carries its stand-in.
     pub loaded: Option<LoadedRuntimeConfig<T>>,
-    /// Every loader finding, each naming the file as the path was given,
-    /// less those that depend on the value of a deferred expression.
+    /// Every loader finding, each naming the file as the path was given. A
+    /// finding that depends on the value of a deferred expression is left
+    /// out; in its place stands a warning, coded [`INCOMPLETE_CODE`], that
+    /// the check stopped at that member.
     pub diagnostics: Vec<Diagnostic>,
     /// The file could not be read at all, as opposed to read and refused.
     pub unavailable: bool,
@@ -82,10 +88,15 @@ impl RuntimeConfigLoader {
     ///
     /// With `substitute` set, `${NAME}` expressions are filled from the
     /// process environment and every value is checked. Without it, each
-    /// expression is checked by syntax and position only: the loader fills
-    /// it with the stand-in `stand_in_for` returns for the pointer of the
-    /// member that holds it, so the members around it are still decoded, and
-    /// a finding about that member's value is left out.
+    /// expression is checked by syntax and position only: the loader replaces
+    /// a value that holds one, as a whole, with the stand-in `stand_in_for`
+    /// returns for the pointer of its member, so the members around it are
+    /// still decoded, and a finding about that member's value is left out.
+    /// Where `stand_in_for` returns [`DEFAULT_STAND_IN`], each different value
+    /// takes a different stand-in, so two expressions in a set are not a
+    /// repeat. A member that refuses its stand-in stops the decode: the check
+    /// then reports a warning at that member, coded [`INCOMPLETE_CODE`], for
+    /// the members it did not read.
     pub fn check_offline<T: DeserializeOwned>(
         &self,
         path: &Path,
@@ -105,8 +116,8 @@ impl RuntimeConfigLoader {
             if substitute {
                 self.parse_file::<T>(path, &bytes, &|name| std::env::var(name).ok())
             } else {
-                self.parse_file::<T>(path, &bytes, &|name| {
-                    Some(deferred.stand_in(name).to_owned())
+                self.parse_file_with_stand_ins::<T>(path, &bytes, &|pointer| {
+                    deferred.stand_in(pointer).to_owned()
                 })
             }
         });
@@ -117,8 +128,10 @@ impl RuntimeConfigLoader {
                 error
                     .diagnostics()
                     .iter()
-                    .filter(|diagnostic| !deferred.hides(diagnostic))
-                    .cloned()
+                    .map(|diagnostic| match deferred.hides(diagnostic) {
+                        true => incomplete(diagnostic),
+                        false => diagnostic.clone(),
+                    })
                     .collect(),
                 error
                     .diagnostics()
@@ -143,12 +156,31 @@ fn scan(file: &str, bytes: &[u8]) -> Option<Node> {
     Reader::new(file).scan(bytes).ok().flatten()
 }
 
-/// The members that hold a `${NAME}` expression, and a stand-in value for
-/// each name that satisfies the member it fills.
+/// The warning that stands for `hidden`, a finding about the value of a
+/// member that holds a deferred expression: the stand-in did not satisfy the
+/// member, so the decode stopped there. It names the member and never a
+/// value.
+fn incomplete(hidden: &Diagnostic) -> Diagnostic {
+    let mut diagnostic = Diagnostic::warning(
+        INCOMPLETE_CODE,
+        hidden.path.clone(),
+        "the check does not fill the expression this member holds, and the value it puts in its \
+         place is not one the member accepts; the check stopped here, and the members after it \
+         were not checked",
+        "Check the file again with --environment, where the variable the expression names is \
+         set.",
+    );
+    diagnostic.artifact.clone_from(&hidden.artifact);
+    diagnostic.source.clone_from(&hidden.source);
+    diagnostic
+}
+
+/// The members that hold a `${NAME}` expression, each with the stand-in
+/// value that fills it.
 #[derive(Debug, Default)]
 struct Deferred {
     pointers: Vec<String>,
-    stand_ins: BTreeMap<String, &'static str>,
+    stand_ins: BTreeMap<String, String>,
 }
 
 /// The codes whose finding depends on a member's value rather than its
@@ -163,24 +195,33 @@ const VALUE_CODES: &[&str] = &[
 impl Deferred {
     fn collect(root: &Node, stand_in_for: fn(&str) -> &'static str) -> Deferred {
         let mut deferred = Deferred::default();
-        deferred.walk(root, &mut String::new(), stand_in_for);
+        deferred.walk(root, &mut String::new(), stand_in_for, &mut BTreeMap::new());
         deferred
     }
 
-    fn walk(&mut self, node: &Node, pointer: &mut String, stand_in_for: fn(&str) -> &'static str) {
+    /// `defaults` numbers each different value met so far whose member names
+    /// no stand-in of its own, in file order.
+    fn walk<'n>(
+        &mut self,
+        node: &'n Node,
+        pointer: &mut String,
+        stand_in_for: fn(&str) -> &'static str,
+        defaults: &mut BTreeMap<&'n str, usize>,
+    ) {
         match &node.value {
             NodeValue::String(text) if contains_environment_expression(&text.text) => {
-                let stand_in = stand_in_for(pointer);
-                for name in expression_names(&text.text) {
-                    self.stand_ins.entry(name.to_owned()).or_insert(stand_in);
-                }
+                let stand_in = match stand_in_for(pointer) {
+                    DEFAULT_STAND_IN => default_stand_in(&text.text, defaults),
+                    named => named.to_owned(),
+                };
+                self.stand_ins.insert(pointer.clone(), stand_in);
                 self.pointers.push(pointer.clone());
             }
             NodeValue::Sequence(items) => {
                 for (index, item) in items.iter().enumerate() {
                     let length = pointer.len();
                     pointer.push_str(&format!("/{index}"));
-                    self.walk(item, pointer, stand_in_for);
+                    self.walk(item, pointer, stand_in_for, defaults);
                     pointer.truncate(length);
                 }
             }
@@ -189,7 +230,7 @@ impl Deferred {
                     let length = pointer.len();
                     pointer.push('/');
                     pointer.push_str(&escape_pointer_segment(&entry.key));
-                    self.walk(&entry.value, pointer, stand_in_for);
+                    self.walk(&entry.value, pointer, stand_in_for, defaults);
                     pointer.truncate(length);
                 }
             }
@@ -197,11 +238,10 @@ impl Deferred {
         }
     }
 
-    fn stand_in(&self, name: &str) -> &'static str {
+    fn stand_in(&self, pointer: &str) -> &str {
         self.stand_ins
-            .get(name)
-            .copied()
-            .unwrap_or(DEFAULT_STAND_IN)
+            .get(pointer)
+            .map_or(DEFAULT_STAND_IN, String::as_str)
     }
 
     fn covers(&self, path: &str) -> bool {
@@ -226,25 +266,16 @@ impl Deferred {
     }
 }
 
-/// The variable names of the `${NAME}`, `${NAME:-...}` and `${NAME:?...}`
-/// expressions in `text`.
-fn expression_names(text: &str) -> Vec<&str> {
-    let mut names = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("${") {
-        let after = &rest[start + 2..];
-        let end = after
-            .find(|character: char| character != '_' && !character.is_ascii_alphanumeric())
-            .unwrap_or(after.len());
-        let (name, tail) = after.split_at(end);
-        if !name.is_empty()
-            && (tail.starts_with('}') || tail.starts_with(":-") || tail.starts_with(":?"))
-        {
-            names.push(name);
-        }
-        rest = after;
+/// The stand-in for `text`, the value of a member that names none of its
+/// own: [`DEFAULT_STAND_IN`] for the first value in `defaults`, and that word
+/// with a number for each different value after it. The same value written
+/// twice takes the same stand-in, as it takes the same text in the runtime.
+fn default_stand_in<'n>(text: &'n str, defaults: &mut BTreeMap<&'n str, usize>) -> String {
+    let next = defaults.len() + 1;
+    match *defaults.entry(text).or_insert(next) {
+        1 => DEFAULT_STAND_IN.to_owned(),
+        number => format!("{DEFAULT_STAND_IN}-{number}"),
     }
-    names
 }
 
 #[cfg(test)]
@@ -266,6 +297,12 @@ mod tests {
         api_version: String,
         kind: String,
         bind: crate::ListenerBind,
+        #[serde(default)]
+        label: Option<registry_platform_yaml::LocalId>,
+        #[serde(default)]
+        origin: Option<registry_platform_yaml::Url>,
+        #[serde(default)]
+        names: registry_platform_yaml::UniqueList<registry_platform_yaml::LocalId>,
         count: registry_platform_yaml::BoundedU32<1, 10>,
     }
 
@@ -319,6 +356,89 @@ mod tests {
         assert_eq!(check.diagnostics.len(), 1);
         assert_eq!(check.diagnostics[0].code, "config.out-of-range");
         assert_eq!(check.diagnostics[0].path, "/count");
+    }
+
+    #[test]
+    fn cfg_check_1_a_value_of_several_expressions_takes_the_stand_in_of_its_member() {
+        let text = format!(
+            "{HEAD}bind: \"${{OFFLINE_CHECK_UNSET_HOST}}:${{OFFLINE_CHECK_UNSET_PORT}}\"\ncount: 11\n"
+        );
+        let check = check(&text, false);
+        assert!(check.defers("/bind"));
+        // The member after the expressions is still read.
+        let found: Vec<(&str, &str)> = check
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(found, [("config.out-of-range", "/count")]);
+    }
+
+    #[test]
+    fn cfg_check_1_one_variable_in_two_members_takes_the_stand_in_of_each() {
+        let text = format!(
+            "{HEAD}bind: \"${{OFFLINE_CHECK_UNSET_SHARED}}\"\n\
+             label: \"${{OFFLINE_CHECK_UNSET_SHARED}}\"\ncount: 3\n"
+        );
+        let check = check(&text, false);
+        assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
+        let config = check.loaded.expect("both members decode").config;
+        assert_eq!(config.bind.socket_addr().port(), 8080);
+        assert_eq!(config.label.as_deref(), Some(DEFAULT_STAND_IN));
+    }
+
+    #[test]
+    fn cfg_check_1_two_expressions_in_a_set_are_not_a_repeat() {
+        let text = format!(
+            "{HEAD}bind: 127.0.0.1:8080\ncount: 3\n\
+             names: [\"${{OFFLINE_CHECK_UNSET_A}}\", \"${{OFFLINE_CHECK_UNSET_B}}\"]\n"
+        );
+        let check = check(&text, false);
+        assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
+        let config = check.loaded.expect("the set decodes").config;
+        assert_eq!(config.names.len(), 2);
+        assert_ne!(config.names[0], config.names[1]);
+    }
+
+    #[test]
+    fn cfg_check_1_one_expression_twice_in_a_set_is_a_repeat() {
+        let text = format!(
+            "{HEAD}bind: 127.0.0.1:8080\ncount: 3\n\
+             names: [\"${{OFFLINE_CHECK_UNSET_A}}\", \"${{OFFLINE_CHECK_UNSET_A}}\"]\n"
+        );
+        let check = check(&text, false);
+        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
+        assert_eq!(check.diagnostics[0].code, "config.duplicate-item");
+    }
+
+    #[test]
+    fn cfg_check_1_a_stand_in_the_member_refuses_leaves_the_check_incomplete() {
+        // `origin` takes a URL and this product names no stand-in for it, so
+        // the decode stops there and `count` is never read.
+        let text = format!(
+            "{HEAD}bind: 127.0.0.1:8080\norigin: \"${{OFFLINE_CHECK_UNSET_ORIGIN}}\"\ncount: 11\n"
+        );
+        // Substituting from the environment checks the value itself.
+        let substituted = check(&text, true);
+        assert_eq!(substituted.diagnostics[0].code, "config.substitution");
+
+        let check = check(&text, false);
+        assert!(check.loaded.is_none());
+        assert!(!check.unavailable);
+        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
+        let diagnostic = &check.diagnostics[0];
+        assert_eq!(
+            diagnostic.severity,
+            registry_platform_yaml::Severity::Warning
+        );
+        assert_eq!(diagnostic.code, INCOMPLETE_CODE);
+        assert_eq!(diagnostic.path, "/origin");
+        let source = diagnostic.source.as_ref().unwrap();
+        assert_eq!((source.line, source.column), (Some(4), Some(9)));
+        for text in [&diagnostic.message, &diagnostic.suggested_action] {
+            assert!(!text.contains("OFFLINE_CHECK_UNSET_ORIGIN"), "{text}");
+            assert!(!text.contains(DEFAULT_STAND_IN), "{text}");
+        }
     }
 
     #[test]
@@ -402,13 +522,5 @@ mod tests {
         // Nothing of the link's target was read, so no member has a position.
         let positioned = check.error_at("ExampleRuntimeConfig", "example.code", "/bind", "m", "a");
         assert_eq!(positioned.source.unwrap().line, None);
-    }
-
-    #[test]
-    fn expression_names_are_read_from_every_expression_form() {
-        assert_eq!(
-            expression_names("${A}:${B:-x}/${C:?set C}${ not}${}"),
-            ["A", "B", "C"]
-        );
     }
 }

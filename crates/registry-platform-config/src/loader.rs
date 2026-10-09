@@ -354,7 +354,20 @@ impl RuntimeConfigLoader {
         bytes: &[u8],
         lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
-        self.parse(&path.display().to_string(), bytes, lookup)
+        self.parse(&path.display().to_string(), bytes, Fill::Variables(lookup))
+            .map_err(|error| error.in_file(path))
+    }
+
+    /// Apply every rule after the file read to the `bytes` read from `path`,
+    /// with no environment: a value that holds an expression is replaced as a
+    /// whole by what `stand_in` returns for the pointer of its member.
+    pub(crate) fn parse_file_with_stand_ins<T: DeserializeOwned>(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        stand_in: &dyn Fn(&str) -> String,
+    ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
+        self.parse(&path.display().to_string(), bytes, Fill::StandIns(stand_in))
             .map_err(|error| error.in_file(path))
     }
 
@@ -366,14 +379,14 @@ impl RuntimeConfigLoader {
         text: &str,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
-        self.parse(BUFFER_NAME, text.as_bytes(), &lookup)
+        self.parse(BUFFER_NAME, text.as_bytes(), Fill::Variables(&lookup))
     }
 
     fn parse<T: DeserializeOwned>(
         &self,
         file: &str,
         bytes: &[u8],
-        lookup: &dyn Fn(&str) -> Option<String>,
+        fill: Fill<'_>,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
         let removed: Vec<(String, String)> = self
             .removed_keys
@@ -396,7 +409,7 @@ impl RuntimeConfigLoader {
             },
             removed_keys: &removed,
         };
-        let mut substitution = Substitution { lookup };
+        let mut substitution = Substitution { fill };
         let decoded = Reader::new(file)
             .with_hook(&mut substitution)
             .decode::<T>(bytes, &Expect::one(&format))
@@ -541,7 +554,16 @@ fn refusal(code: &str, message: impl Into<String>, suggested_action: impl Into<S
 /// Substitutes environment expressions in an operator file's string values
 /// while the reader builds the document (CFG-SEC-2).
 struct Substitution<'l> {
-    lookup: &'l dyn Fn(&str) -> Option<String>,
+    fill: Fill<'l>,
+}
+
+/// What fills a value that holds an environment expression.
+enum Fill<'l> {
+    /// Each expression, by the variable it names.
+    Variables(&'l dyn Fn(&str) -> Option<String>),
+    /// The whole value, by the stand-in of the member that holds it, named by
+    /// its pointer. The expressions are still checked by syntax.
+    StandIns(&'l dyn Fn(&str) -> String),
 }
 
 /// Why substitution is refused at a value.
@@ -616,7 +638,13 @@ impl ScalarHook for Substitution<'_> {
         if let Some(literal) = literal_at(site) {
             return Err(literal.refusal());
         }
-        substitute_string(site.text, self.lookup).map(Some)
+        match self.fill {
+            Fill::Variables(lookup) => substitute_string(site.text, lookup).map(Some),
+            Fill::StandIns(stand_in) => {
+                substitute_string(site.text, &|_| Some(String::from("set")))?;
+                Ok(Some(stand_in(site.pointer)))
+            }
+        }
     }
 }
 

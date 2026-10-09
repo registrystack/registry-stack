@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `registry-platform-config` `check_offline` without the environment chooses the
+  stand-in for a value that holds an expression by its member, and replaces the
+  whole value, so `${HOST}:${PORT}` in a listener address and one variable in
+  two members of different types no longer stop the check silently. Two
+  different expressions in a set take different default stand-ins and are not
+  reported as a repeat. When a member refuses its stand-in, the check reports
+  the warning `platform.runtime-config.check-incomplete` (`INCOMPLETE_CODE`) at
+  that member, where it returned no diagnostic and no configuration.
 - A file with a kind no format reads and a retired `apiVersion` reports both
   `config.wrong-kind` and `config.retired-api-version`; `config.wrong-kind` still
   decides the refusal.

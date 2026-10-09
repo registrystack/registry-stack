@@ -2938,6 +2938,27 @@ holdPolicy:
     }
 
     #[test]
+    fn cfg_check_1_a_member_after_a_value_of_two_expressions_is_still_checked() {
+        let root = canonical_tempdir();
+        let mut document = operator_value(&root.path().join("package"), "development-loopback");
+        document["listener"]["bind"] = serde_json::json!(
+            "${SCHEDULING_OFFLINE_CHECK_UNSET_HOST}:${SCHEDULING_OFFLINE_CHECK_UNSET_PORT}"
+        );
+        document["retention"]["hookPayloadRetentionDays"] = serde_json::json!(0);
+        let path = write_operator(root.path(), document);
+        let check = check_runtime(&path, None, false);
+        let found: Vec<(&str, &str)> = check
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(
+            found,
+            [("config.out-of-range", "/retention/hookPayloadRetentionDays")]
+        );
+    }
+
+    #[test]
     fn cfg_check_1_the_policy_rules_run_against_the_given_policy() {
         let root = canonical_tempdir();
         let document = operator_value(&root.path().join("package"), "development-loopback");

@@ -514,7 +514,13 @@ and no secret is read. `bregctl doctor --runtime-config <absolute-file>` goes fu
 it also connects to the database and the other dependencies the file names, so it is a deployment
 preflight rather than an offline check.
 
+Without `--environment`, the check reads the rest of the file by putting a placeholder in place of
+each value that holds an expression. When a member refuses its placeholder, the check stops there
+and reports the warning `platform.runtime-config.check-incomplete` at that member. The members
+after it were not checked, so run the check again with `--environment`.
+
 {/* Evidence: products/platform/config-formats.yaml;
+    crates/registry-platform-config/src/offline.rs, check_offline() and INCOMPLETE_CODE;
     crates/registry-discoveryctl/src/lib.rs, deny_warnings;
     crates/registry-platform-yaml/src/diagnostic.rs, render_human() and to_json_value();
     crates/registry-bregctl/src/lib.rs, DoctorArgs;
