@@ -29,6 +29,8 @@ pub(super) const MAX_PLAN_BYTES: usize = registry_platform_yaml::MAXIMUM_DOCUMEN
 /// The largest seed a plan stores: the greatest integer every JSON consumer
 /// reads exactly.
 pub(super) const MAX_SEED: u64 = 9_007_199_254_740_991;
+/// A generation seed, bounded where the reader reads it.
+pub(super) type Seed = registry_platform_yaml::BoundedU64<0, MAX_SEED>;
 pub(super) const MAX_OPERATIONS: usize = 256;
 pub(super) const MAX_CASES_PER_OPERATION: usize = 256;
 pub(super) const MAX_TOTAL_CASES: usize = 1024;
@@ -61,11 +63,7 @@ pub(super) struct MockPlan {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct GenerationSettings {
     pub contract: String,
-    #[cfg_attr(
-        feature = "schema",
-        schemars(range(min = 0, max = 9_007_199_254_740_991_u64))
-    )]
-    pub seed: u64,
+    pub seed: Seed,
     pub as_of: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[cfg_attr(
@@ -242,9 +240,6 @@ pub(super) fn validate_plan(plan: &MockPlan) -> Result<()> {
     if let Some(generation) = &plan.generation {
         if generation.contract != GENERATOR_CONTRACT {
             bail!("generation.contract is not the V1 generator contract");
-        }
-        if generation.seed > MAX_SEED {
-            bail!("generation.seed exceeds the largest exactly representable integer");
         }
         generation.as_of_date()?;
         if generation.datasets.len() > MAX_DATASETS {
@@ -481,7 +476,7 @@ mod tests {
             ),
             generation: Some(GenerationSettings {
                 contract: GENERATOR_CONTRACT.to_owned(),
-                seed: 0,
+                seed: Seed::new(0).expect("seed"),
                 as_of: "2025-01-01".to_owned(),
                 datasets: BTreeMap::new(),
             }),
@@ -572,13 +567,19 @@ mod tests {
     }
 
     #[test]
-    fn a_seed_beyond_the_exact_integer_range_is_refused() {
-        let mut at_the_bound = plan();
-        at_the_bound.generation.as_mut().expect("generation").seed = MAX_SEED;
-        assert!(validate_plan(&at_the_bound).is_ok());
-        let mut past_the_bound = plan();
-        past_the_bound.generation.as_mut().expect("generation").seed = MAX_SEED + 1;
-        assert!(validate_plan(&past_the_bound).is_err());
+    fn a_seed_beyond_the_exact_integer_range_is_refused_by_the_reader() {
+        let rendered = String::from_utf8(render_plan(&plan()).expect("render")).unwrap();
+        let with_seed = |seed: u64| rendered.replace("seed: 0", &format!("seed: {seed}"));
+        assert!(parse_plan("source.yaml", with_seed(MAX_SEED).as_bytes()).is_ok());
+
+        let error =
+            parse_plan("source.yaml", with_seed(MAX_SEED + 1).as_bytes()).expect_err("refused");
+        let found = crate::authored::report_in(&error).expect("the reader's report");
+        let diagnostic = &found.diagnostics()[0];
+        assert_eq!(diagnostic.code, "config.out-of-range");
+        assert_eq!(diagnostic.path, "/generation/seed");
+        assert!(diagnostic.message.contains("9007199254740991"));
+        assert!(!diagnostic.message.contains("9007199254740992"));
     }
 
     #[test]

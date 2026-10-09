@@ -496,7 +496,7 @@ fn generate_initial(args: GenerateArgs) -> Result<ExitCode> {
         openapi_digest: Some(Digest::from_bytes(prepared.normalized_digest)),
         generation: Some(GenerationSettings {
             contract: generator::GENERATOR_CONTRACT.to_owned(),
-            seed,
+            seed: plan::Seed::new(seed).context("--seed must be at most 9007199254740991")?,
             as_of: as_of.to_string(),
             datasets: prepared
                 .datasets
@@ -569,7 +569,7 @@ fn generate_missing(args: GenerateArgs) -> Result<ExitCode> {
         let (generated, body) =
             checked
                 .prepared
-                .generate(operation, &raw, generation.seed, as_of)?;
+                .generate(operation, &raw, generation.seed.get(), as_of)?;
         explanations.extend(generated.inference);
         publications.push(PublicationFile::new(&case.body, body));
     }
@@ -626,7 +626,7 @@ fn append_generated_case(args: GenerateArgs) -> Result<ExitCode> {
     let (generated, body) = checked.prepared.generate(
         operation,
         &parameters,
-        generation.seed,
+        generation.seed.get(),
         generation.as_of_date()?,
     )?;
     let body_path = case_body_path(&selected, case_name);
