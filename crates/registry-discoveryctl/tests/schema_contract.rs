@@ -533,3 +533,19 @@ fn shared_negative_corpus_is_refused_by_both_schema_and_rust() {
         "the shared negative corpus must cover every closed contract"
     );
 }
+
+/// An optional member is left out, never written as `null`: the reader
+/// refuses the null, so the schema must too.
+#[test]
+fn a_null_jurisdiction_is_refused_by_both_schema_and_rust() {
+    let mut mapping = positive_document("evidence-mapping");
+    set_pointer(&mut mapping, "/jurisdiction", Value::Null);
+    assert!(
+        !validators()["evidence-mapping"].is_valid(&mapping),
+        "the mapping schema accepts a null jurisdiction"
+    );
+    assert!(
+        !accepted_by_rust("evidence-mapping", &mapping),
+        "the reader accepts a null jurisdiction"
+    );
+}

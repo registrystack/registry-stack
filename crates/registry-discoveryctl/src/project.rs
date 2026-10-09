@@ -149,7 +149,7 @@ pub struct AuthoredEvidenceMapping {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(
         feature = "schema",
-        schemars(url, length(min = 1, max = MAX_IDENTIFIER_CHARACTERS), regex(pattern = IDENTIFIER_PATTERN))
+        schemars(with = "String", url, length(min = 1, max = MAX_IDENTIFIER_CHARACTERS), regex(pattern = IDENTIFIER_PATTERN))
     )]
     pub jurisdiction: Option<String>,
     /// One to 32 alternatives; any one of them satisfies the requirement.

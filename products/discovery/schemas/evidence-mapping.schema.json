@@ -61,10 +61,7 @@
       "maxLength": 4096,
       "minLength": 1,
       "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": "string"
     },
     "mappingAuthorityId": {
       "description": "An absolute URI of at most 4096 characters.",
