@@ -79,12 +79,10 @@ authentication:
     scopeClaim: scope
     # The read scope defaults to `scheduling-read` and the explain scope to
     # `scheduling-explain`; the two must differ. `allowedClients` names the
-    # client ids the runtime admits. Development loopback leaves it empty by
-    # default, which admits every client the issuer verifies; behind
-    # listener.tlsTermination: operator-controlled-upstream an empty or
-    # absent list is a startup refusal, so a production deployment must name
-    # the clients it admits.
-    # allowedClients: [scheduling-booking-agent]
+    # client ids the runtime admits. It is required in every file, development
+    # loopback included: an omitted or empty list is a startup refusal,
+    # because it would admit every client the issuer verifies.
+    allowedClients: [scheduling-booking-agent]
     # `assertionIssuers` maps a client id to the assertion authorities it may
     # exchange a subject token from. A deployment that performs no token
     # exchange leaves it empty; once a client is listed, a token it

@@ -46,7 +46,8 @@ fn serve_with_stdout_audit(rust_log: Option<&str>) -> std::process::Output {
         },
         "authentication": {"oidc": {
             "issuer": "https://identity.example.test",
-            "audience": "urn:example:scheduling"
+            "audience": "urn:example:scheduling",
+            "allowedClients": ["scheduling-test-client"]
         }},
         "audit": {"destination": "stdout", "hashKeyRef": "secret:env/SCHEDULING_TEST_AUDIT_KEY"},
         "destinations": {},

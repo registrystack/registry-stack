@@ -246,6 +246,7 @@ impl Deployment {
              secretProviders:\n  environment: {{}}\n\
              authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
              \x20   audience: urn:example:scheduling\n\
+             \x20   allowedClients: [scheduling-test-client]\n\
              \x20   jwksSource:\n      kind: static\n      documentRef: secret:env/{jwks}\n\
              database:\n  runtimeUrlRef: secret:env/{runtime}\n\
              \x20 migrationUrlRef: secret:env/{migration}\n\

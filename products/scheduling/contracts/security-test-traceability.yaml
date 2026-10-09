@@ -180,7 +180,7 @@ entries:
       - {path: crates/registry-scheduling/src/config.rs, name: the_access_token_profile_admits_only_the_rfc_9068_pair}
   - id: SCHEDULING-SEC-21
     tests:
-      - {path: crates/registry-scheduling/src/config.rs, name: a_production_deployment_must_name_the_clients_it_admits}
+      - {path: crates/registry-scheduling/src/config.rs, name: every_deployment_must_name_the_clients_it_admits}
   - id: SCHEDULING-SEC-22
     tests:
       - {path: crates/registry-scheduling/src/auth.rs, name: an_exchanged_token_is_refused_until_its_authority_is_declared}

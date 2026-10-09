@@ -306,6 +306,19 @@ Migration: a script that matched the old code on an `id` path matches
 `config.duplicate-id`. The file is refused as before; give each item its own
 `id`.
 
+## BREAKING: `authentication.oidc.allowedClients` is required in every file
+
+An omitted `allowedClients` and `allowedClients: []` are refused with
+`scheduling.runtime.allowed-clients-required` at
+`/authentication/oidc/allowedClients`, in every mode. Development loopback
+accepted both before, which admitted every client the issuer verifies; a
+development file copied toward production kept doing so. The generated
+runtime schema requires the member with at least one item.
+
+Migration: add the member and list the client ids the deployment admits, for
+example `allowedClients: [scheduling-booking-agent]`. The shared
+`unrestricted` keyword is not accepted here.
+
 ## BREAKING: a database an earlier release wrote is not read
 <!-- upgrade: scheduling-database-restart -->
 

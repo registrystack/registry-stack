@@ -160,12 +160,12 @@ and `schedulingctl init` set that explicit override. `readsScope` defaults to
 `scheduling-read` and `explainScope` to `scheduling-explain`; the two must
 differ, because the explain path can name member-level causes the public
 availability read never discloses. `allowedClients` lists the exact client ids
-the runtime admits. A deployment whose `listener.tlsTermination` is
-`operator-controlled-upstream` must name them: an empty or absent list is a
-startup refusal there, because a forgotten field would otherwise admit every
-client the issuer verifies, including an application in the same realm that has
-nothing to do with booking. Development loopback keeps the empty-means-any
-convenience, since it is not a deployment an unrelated client can reach.
+the runtime admits. It is required in every file, development loopback
+included: an omitted member and `[]` are startup refusals
+(`scheduling.runtime.allowed-clients-required`), because a forgotten field
+would otherwise admit every client the issuer verifies, including an
+application in the same realm that has nothing to do with booking, and a
+development file is copied toward production.
 
 `assertionIssuers` maps a client id to the assertion authorities that client may
 exchange a subject token from. A deployment that performs no token exchange

@@ -736,12 +736,10 @@ impl RuntimeConfig {
         }
         // An empty client list admits every client the issuer verifies, so a
         // deployment that simply forgot the field would accept a token minted
-        // for an unrelated application in the same realm. Development loopback
-        // keeps that convenience; a deployment behind an operator-controlled
-        // terminator must name the clients it admits.
-        if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
-            && oidc.clients.allowed_clients.is_empty()
-        {
+        // for an unrelated application in the same realm. A development file
+        // is copied toward production, so the member is decided in every file
+        // (CFG-EMPTY-2): omitted and `[]` are refused in every mode.
+        if oidc.clients.allowed_clients.is_empty() {
             findings.push(RuntimeConfigError::AllowedClientsRequired);
         }
         for (path, value) in [
@@ -1097,7 +1095,6 @@ fn reads_deferred_value(
 ) -> bool {
     let reads: &[&str] = match finding {
         RuntimeConfigError::InvalidListener => &["/listener"],
-        RuntimeConfigError::AllowedClientsRequired => &["/listener/tlsTermination"],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             &["/listener/tlsTermination"]
         }
@@ -1198,7 +1195,7 @@ pub enum RuntimeConfigError {
         reason: &'static str,
     },
     #[error(
-        "authentication.oidc.allowedClients must name every client the deployment admits under operator-controlled-upstream; an empty list admits every client the issuer verifies"
+        "authentication.oidc.allowedClients must name every client the deployment admits; an omitted or empty list would admit every client the issuer verifies"
     )]
     AllowedClientsRequired,
     #[error(
@@ -1235,7 +1232,12 @@ impl RuntimeConfigError {
         }
     }
 
-    /// The dotted name of the member this refusal concerns.
+    /// The member this refusal concerns, as a dotted name (`listener.bind`).
+    /// Three kinds of refusal return something else, and `pointer` answers
+    /// them before it splits this name into a JSON Pointer: `Load` returns
+    /// the JSON Pointer its diagnostic already carries, and the package
+    /// refusals return a package path (`package.root`,
+    /// `package.root/scheduling.yaml`).
     fn member(&self) -> &str {
         match self {
             Self::Load(error) => &error.deciding_diagnostic().path,
@@ -2482,41 +2484,39 @@ holdPolicy:
     }
 
     #[test]
-    fn a_production_deployment_must_name_the_clients_it_admits() {
+    fn every_deployment_must_name_the_clients_it_admits() {
         let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
-
-        let mut document = operator_value(&package, "operator-controlled-upstream");
-        document["authentication"]["oidc"]
-            .as_object_mut()
-            .unwrap()
-            .remove("allowedClients");
-        let error = RuntimeConfig::load(write_operator(root.path(), document))
-            .expect_err("a production deployment with no allowedClients was accepted");
-        assert_eq!(
-            refusal(&error),
-            (
-                "scheduling.runtime.allowed-clients-required".to_owned(),
-                "/authentication/oidc/allowedClients".to_owned()
-            )
+        let expected = (
+            "scheduling.runtime.allowed-clients-required".to_owned(),
+            "/authentication/oidc/allowedClients".to_owned(),
         );
 
-        let operator = write_operator(
-            root.path(),
-            operator_value(&package, "operator-controlled-upstream"),
-        );
-        RuntimeConfig::load(&operator).expect("a named client list is accepted");
+        // An omitted member and an empty list are refused in every mode,
+        // development loopback included (CFG-EMPTY-2).
+        for termination in ["operator-controlled-upstream", "development-loopback"] {
+            let mut omitted = operator_value(&package, termination);
+            omitted["authentication"]["oidc"]
+                .as_object_mut()
+                .unwrap()
+                .remove("allowedClients");
+            let error = RuntimeConfig::load(write_operator(root.path(), omitted))
+                .expect_err("a deployment with no allowedClients was accepted");
+            assert_eq!(refusal(&error), expected, "{termination}");
 
-        // Development loopback keeps the convenience: it is not a deployment
-        // an unrelated client can reach.
-        let mut document = operator_value(&package, "development-loopback");
-        document["authentication"]["oidc"]
-            .as_object_mut()
-            .unwrap()
-            .remove("allowedClients");
-        RuntimeConfig::load(write_operator(root.path(), document))
-            .expect("development loopback stays permissive");
+            let mut empty = operator_value(&package, termination);
+            empty["authentication"]["oidc"]["allowedClients"] = serde_json::json!([]);
+            let error = RuntimeConfig::load(write_operator(root.path(), empty))
+                .expect_err("a deployment with an empty allowedClients was accepted");
+            assert_eq!(refusal(&error), expected, "{termination}");
+
+            RuntimeConfig::load(write_operator(
+                root.path(),
+                operator_value(&package, termination),
+            ))
+            .expect("a named client list is accepted");
+        }
     }
 
     #[test]

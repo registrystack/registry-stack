@@ -227,13 +227,15 @@ there is no configuration key to widen it. *Test:*
 `the_access_token_profile_admits_only_the_rfc_9068_pair`,
 `crates/registry-scheduling/src/config.rs`.
 
-**B. A production deployment names the clients it admits.** *Threat:* an
-absent `allowedClients` admitted every client the issuer verifies, so any
-application in the issuer's realm could reach a Scheduling deployment.
-*Default:* a non-loopback deployment refuses to start without a named
-client list; development loopback stays permissive because it is not a
-deployment an unrelated client can reach. *Test:*
-`a_production_deployment_must_name_the_clients_it_admits`,
+**B. Every deployment names the clients it admits.** *Threat:* an
+absent or empty `allowedClients` admitted every client the issuer
+verifies, so any application in the issuer's realm could reach a
+Scheduling deployment, and a development file copied toward production
+kept doing so. *Enforcement point:* `RuntimeConfig::check` in
+`crates/registry-scheduling/src/config.rs`. *Refusal:*
+`scheduling.runtime.allowed-clients-required` at
+`/authentication/oidc/allowedClients`, in every mode, development loopback
+included. *Test:* `every_deployment_must_name_the_clients_it_admits`,
 `crates/registry-scheduling/src/config.rs`.
 
 **C. Exchanged credentials are bound to declared assertion authorities.**

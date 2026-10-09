@@ -294,11 +294,11 @@
       "description": "The access tokens this runtime accepts: the issuer and its keys, the\nclients admitted, and the scopes each route family requires.",
       "properties": {
         "allowedClients": {
-          "default": [],
-          "description": "Client identifiers whose access tokens are admitted. A runtime decides\nwhether an empty list is acceptable in production.",
+          "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list is refused.",
           "items": {
             "type": "string"
           },
+          "minItems": 1,
           "type": "array"
         },
         "assertionIssuers": {
@@ -355,7 +355,8 @@
       },
       "required": [
         "issuer",
-        "audience"
+        "audience",
+        "allowedClients"
       ],
       "type": "object"
     },

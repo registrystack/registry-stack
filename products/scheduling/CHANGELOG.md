@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: `authentication.oidc.allowedClients` is required in every file. An
+  omitted member and `[]` are refused with
+  `scheduling.runtime.allowed-clients-required`, development loopback
+  included; before, only `operator-controlled-upstream` refused them. The
+  generated runtime schema requires the member with at least one item.
+  Migration: list the clients the deployment admits.
 - BREAKING: a repeated `id` in a project, records, or fixture-facts list is
   refused with `config.duplicate-id` at the second item's `id`, where the
   finding was `scheduling.project.duplicate-identifier`,

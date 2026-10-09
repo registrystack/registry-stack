@@ -2255,7 +2255,7 @@ formats:
       - pointer: /listener/bind
         whenOmitted: refused
       - pointer: /authentication/oidc/allowedClients
-        whenOmitted: open
+        whenOmitted: refused
       - pointer: /authentication/oidc/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
@@ -2446,7 +2446,7 @@ formats:
       - pointer: /metricsListener/bind
         whenOmitted: open
       - pointer: /authentication/oidc/allowedClients
-        whenOmitted: open
+        whenOmitted: refused
       - pointer: /authentication/oidc/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
