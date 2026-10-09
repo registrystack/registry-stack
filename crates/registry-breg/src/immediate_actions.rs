@@ -1997,7 +1997,6 @@ fn entity_permission_fields_empty(grant: &crate::contract::AccessPermissionSourc
         && grant.writable_fields.is_empty()
         && grant.filterable_fields.is_empty()
         && grant.sortable_fields.is_empty()
-        && grant.row_boundaries.is_empty()
         && grant.membership_boundaries.is_empty()
         && grant.require_consent.is_empty()
         && grant.lookups.is_empty()
