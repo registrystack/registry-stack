@@ -155,7 +155,7 @@ position.
 - Anchors and aliases (`yaml.anchor`, `yaml.alias`) and explicit tags such as
   `!!str` (`yaml.tag`) are refused. Migration: write the value in full,
   quoted where it is text.
-- A file larger than 1 MiB is refused as `platform.runtime-config.size`.
+- A file larger than 1 MiB is refused as `yaml.too-large`.
 - `${NAME}` in a text value is substituted from the process environment when
   `serve` or `inspect` starts, where it was read literally. In
   `apiVersion`, `kind`, `tokenClient.privateKeyRef`, and under
@@ -385,7 +385,11 @@ Track: Evidence authoring tools (`evidencectl`, `registry-evidence-authoring`,
    Each document holds at most 1 MiB (`yaml.too-large`); this also applies to
    a target's `governance.yaml` and to `mocks/source.yaml`. Migration: expand
    each anchor or alias in place, remove the tag or the unknown key, or
-   correct its spelling as the diagnostic names.
+   correct its spelling as the diagnostic names. A mock plan's
+   `generation.seed` is an integer from 0 to 9007199254740991 inclusive; a
+   value outside that range is refused as `config.out-of-range` at
+   `/generation/seed`. Migration: choose a seed in range; regenerating a mock
+   with a different seed changes its output.
 6. **`evidencectl check --production` requires `--target`.** Without it the
    command is a usage error (exit 2). Migration: name the target, for example
    `evidencectl check <project> --production --target targets/production`.
