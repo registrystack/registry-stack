@@ -90,7 +90,7 @@ def _no_alias_dumper() -> Any:
     class NoAliasDumper(yaml.SafeDumper):
         # An alias in an old file is expanded in full, as the fragments tell an
         # operator to do, so a shared mapping is written out at each use.
-        def ignore_aliases(self, data: Any) -> bool:
+        def ignore_aliases(self, _data: Any) -> bool:
             return True
 
     return NoAliasDumper

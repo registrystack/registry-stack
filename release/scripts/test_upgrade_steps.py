@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 SCRIPTS = Path(__file__).resolve().parent
 if str(SCRIPTS) not in sys.path:
@@ -30,7 +31,7 @@ def edit(**fields: object) -> dict[str, object]:
 class EditKindsTest(unittest.TestCase):
     """One sample document per edit kind."""
 
-    def apply(self, document: object, **fields: object) -> object:
+    def apply(self, document: Any, **fields: Any) -> Any:
         return upgrade_steps.apply_edit(document, edit(**fields), "sample-step")
 
     def test_envelope_puts_the_header_first_and_replaces_an_old_one(self) -> None:
