@@ -239,11 +239,21 @@ pub fn read(text: &str) -> Value {
             "crates/a/tests/read.rs",
             "crates/a/examples/driver.rs",
             "crates/a/benches/read.rs",
-            "crates/a/src/tests.rs",
-            "crates/a/src/blocks_tests.rs",
         ):
             with self.subTest(path=path):
                 self.assertEqual(audit({path: source}), [])
+
+    def test_a_test_named_file_under_src_is_test_code_only_when_declared_under_cfg_test(self) -> None:
+        source = self.PRODUCTION.replace("REASON", "reads back this tool's own output")
+        for name in ("tests", "blocks_tests"):
+            path = f"crates/a/src/{name}.rs"
+            with self.subTest(name=name, gated=False):
+                problems = audit({"crates/a/src/lib.rs": f"mod {name};\n", path: source})
+                self.assertEqual(len(problems), 1)
+                self.assertIn(path, problems[0])
+            with self.subTest(name=name, gated=True):
+                gated = f"#[cfg(test)]\nmod {name};\n"
+                self.assertEqual(audit({"crates/a/src/lib.rs": gated, path: source}), [])
 
     def test_an_inline_test_module_is_test_code_and_what_follows_it_is_not(self) -> None:
         test_allow = '#[allow(clippy::disallowed_methods, reason = "tool output")]'

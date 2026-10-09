@@ -424,8 +424,9 @@ class Tree:
         roots = []
         for path, file in self.files.items():
             parts = PurePosixPath(path).parts
-            name = parts[-1]
-            if TEST_DIRECTORIES.intersection(parts[:-1]) or name == "tests.rs" or name.endswith("_tests.rs"):
+            # Under `src/` a file is test code only when a `#[cfg(test)]`
+            # declaration reaches it, whatever its name.
+            if "src" not in parts and TEST_DIRECTORIES.intersection(parts[:-1]):
                 roots.append(path)
             elif "test" in file.text and "cfg" in file.text:
                 if any(start == 0 and end == len(file.code) for start, end in file.test_ranges):
