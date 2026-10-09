@@ -109,8 +109,8 @@ reference and resolved by the shared secret providers when `serve` or
   `secretProviders.file.root` is `evidence.oid4vci.secret-file-root`.
 - `evidence-oid4vci check` no longer reads the key. It resolves no secret
   and opens no socket. `serve` and `inspect` resolve the key at startup and
-  log `the secret reference <reference> could not be resolved: <reason>`
-  when it fails, naming the reference and never the key. Migration: a
+  log `the secret reference configured at <member path> could not be resolved: <reason>`
+  when it fails, naming the member and never the reference or the key. Migration: a
   deployment step that relied on `check` to prove the key file was readable
   runs `evidence-oid4vci inspect --config <file>` instead, which resolves the
   key and reads the Evidence metadata.
@@ -251,7 +251,7 @@ problem now.
 | `a supervised local development endpoint must be an absolute URL` | `config.invalid-value` |
 | `a supervised local development endpoint must be a canonical 127.0.0.1 HTTP origin with an explicit port and no query or fragment` | `evidence.oid4vci.supervised-endpoint` |
 | `a supervised local development credential issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port` | `evidence.oid4vci.supervised-issuer` |
-| `the client key file is unavailable`, `... is not a regular, single-link, owner-only file`, `... is too large`, `... could not be read`, `... is not valid UTF-8` (at `check`, `serve`, or `inspect`) | No longer reported by `check`. At `serve` and `inspect` startup: `the secret reference <reference> could not be resolved: <reason>` |
+| `the client key file is unavailable`, `... is not a regular, single-link, owner-only file`, `... is too large`, `... could not be read`, `... is not valid UTF-8` (at `check`, `serve`, or `inspect`) | No longer reported by `check`. At `serve` and `inspect` startup: `the secret reference configured at <member path> could not be resolved: <reason>` |
 
 New codes with no old message: `evidence.oid4vci.wildcard-spelled-item` (warning),
 `evidence.oid4vci.secret-providers`,

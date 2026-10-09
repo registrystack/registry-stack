@@ -311,18 +311,20 @@ fn serve_refuses_a_secret_file_others_can_read() {
     assert_eq!(project.check(&[]).code, Some(0));
     let outcome = project.serve_failing("warn");
     let message = startup_failure(&outcome);
-    assert!(message.contains("secret:file/gateway-key"), "{message}");
+    assert!(message.contains("could not be resolved"), "{message}");
+    assert!(!message.contains("secret:file/gateway-key"), "{message}");
     assert!(!outcome.output().contains(&project.key_secret));
     assert!(!project.directory.path().join("audit").exists());
 }
 
 #[test]
-fn serve_names_the_safe_reference_of_a_missing_secret() {
+fn serve_names_the_member_but_not_the_reference_of_a_missing_secret() {
     let project = Project::new();
     std::fs::remove_file(project.directory.path().join("secrets").join("audit-key"))
         .expect("secret removes");
     let message = startup_failure(&project.serve_failing("error"));
-    assert!(message.contains("secret:file/audit-key"), "{message}");
+    assert!(message.contains("could not be resolved"), "{message}");
+    assert!(!message.contains("secret:file/audit-key"), "{message}");
 }
 
 /// `BREG_MCP_LOG` is a closed level, not a filter: `error`, `warn`, or

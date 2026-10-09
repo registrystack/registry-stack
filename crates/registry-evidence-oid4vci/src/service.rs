@@ -262,7 +262,7 @@ impl DeliveryService {
 /// Resolve the client key through the configured secret providers.
 ///
 /// The key is returned zeroizing, read once, and never logged or rendered: a
-/// refusal names the field, the reference, and the reason only.
+/// refusal names the field and the reason only.
 fn resolve_client_key(config: &DeliveryConfig) -> Result<Zeroizing<String>, ServiceError> {
     const FIELD: &str = "tokenClient.privateKeyRef";
     let reference = &config.token_client.private_key_ref;
@@ -1479,7 +1479,8 @@ mod tests {
             panic!("a missing key must be refused as a key fault, got {error:?}");
         };
         assert!(
-            sentence.contains("secret:file/delivery-client.jwk.json")
+            sentence.contains("tokenClient.privateKeyRef")
+                && !sentence.contains("secret:file/delivery-client.jwk.json")
                 && sentence.contains("no readable secret"),
             "{sentence}"
         );

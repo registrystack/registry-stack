@@ -447,9 +447,8 @@ async fn serve_refuses_an_unreadable_secret_by_its_safe_reference() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.contains(
-            "the secret reference secret:file/audit-key could not be resolved: no readable secret"
-        ),
+        stderr.contains("could not be resolved: no readable secret")
+            && !stderr.contains("secret:file/audit-key"),
         "{stderr}"
     );
     assert!(

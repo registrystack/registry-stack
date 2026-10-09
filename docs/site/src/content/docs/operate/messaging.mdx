@@ -815,7 +815,7 @@ Each of these is the process's whole output on standard error, and each exits no
 | Output | Cause |
 | --- | --- |
 | `messaging: MESSAGING_LOG must be one of error, warn, or info` | `MESSAGING_LOG` holds another value. Exits 2 |
-| `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference secret:file/runtime-database-url could not be resolved: no readable secret of that name exists under the configured provider` | The secret file is missing or unreadable. `messagingctl plan`, `apply`, and `status` report the applicable database connection the same way |
+| `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference configured at database.runtimeUrlRef could not be resolved: no readable secret of that name exists under the configured provider` | The secret file is missing or unreadable. `messagingctl plan`, `apply`, and `status` report the applicable database connection the same way |
 | `messaging: the OIDC issuer could not be initialized` | The issuer's discovery document or keys could not be fetched. Check reachability, or declare a static `jwksSource` |
 | `messaging: the Messaging schema readiness check failed: the Messaging query failed: db error` | `serve` ran against a database `messagingctl apply` has not prepared |
 | `messaging: the Messaging package ledger names no active package; record package sha256:… with messagingctl apply before serving` | No package was recorded. Review `messagingctl plan`, then run `messagingctl apply` |

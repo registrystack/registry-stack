@@ -2517,7 +2517,8 @@ mod tests {
                 "{chain}"
             );
             assert!(
-                chain.contains("secret:file/migration-database-url could not be resolved"),
+                chain.contains("could not be resolved")
+                    && !chain.contains("secret:file/migration-database-url"),
                 "{chain}"
             );
             assert!(!chain.contains(RUNTIME_URL), "{chain}");

@@ -1252,8 +1252,8 @@ mod tests {
 
         let message = error.to_string();
         assert!(
-            message.contains("secret:file/casework-audit-key"),
-            "the failure does not name the reference: {message}"
+            !message.contains("secret:file/casework-audit-key"),
+            "the failure repeats the reference: {message}"
         );
         assert!(
             message.contains("0400 or 0600"),

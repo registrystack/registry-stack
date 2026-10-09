@@ -656,3 +656,24 @@ fn an_empty_assertion_issuer_map_is_refused_and_omission_applies_no_rule() {
     let omitted = serde_json::to_string(&clients("{}")).expect("serialize");
     assert!(!omitted.contains("assertionIssuers"), "{omitted}");
 }
+
+#[test]
+fn a_secret_failure_names_the_member_and_never_the_reference() {
+    for error in [
+        SecretError::InvalidReference,
+        SecretError::ProviderDisabled,
+        SecretError::InvalidProviderConfiguration,
+        SecretError::Unavailable,
+        SecretError::UnsafeFile,
+        SecretError::Read,
+        SecretError::InvalidValue,
+    ] {
+        let sentence = describe_secret_failure(
+            "tokenClient.privateKeyRef",
+            "secret:file/reference-canary",
+            &error,
+        );
+        assert!(sentence.contains("tokenClient.privateKeyRef"), "{sentence}");
+        assert!(!sentence.contains("reference-canary"), "{sentence}");
+    }
+}

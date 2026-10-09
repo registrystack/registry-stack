@@ -1768,11 +1768,11 @@ reviewProducers:
     }
 
     /// The commented alternative in the operator example must be loadable
-    /// exactly as written, and its refusal must name the reference an operator
+    /// exactly as written, and its refusal must name the member an operator
     /// has to go and fix.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_static_jwks_source_loads_and_names_its_reference_when_refused() {
+    async fn a_static_jwks_source_loads_and_is_refused_without_its_reference() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let root = canonical_tempdir();
@@ -1816,8 +1816,8 @@ reviewProducers:
             .expect_err("a group-readable JWKS document is refused")
             .to_string();
         assert!(
-            message.contains("secret:file/jwks.json") && message.contains("0400 or 0600"),
-            "the failure does not name the reference and the mode rule: {message}"
+            !message.contains("secret:file/jwks.json") && message.contains("0400 or 0600"),
+            "the failure repeats the reference or omits the mode rule: {message}"
         );
 
         let literal_secret = "literal-jwks-credential-canary";

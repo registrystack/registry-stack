@@ -210,11 +210,12 @@ impl SecretProvidersConfig {
 
 /// Explain one refused secret reference without disclosing what it protects.
 ///
-/// A valid reference is safe and useful to name, but invalid operator-authored
-/// text might itself be a literal credential, so only its field is named. The
-/// resolved bytes and opened path never appear.
+/// The reference is operator-authored text read from a configuration file, so
+/// it is never repeated: the member path and a fixed reason are named. The
+/// resolved bytes and opened path never appear either. The reference parameter
+/// stays so a caller keeps one call shape; it is not read.
 #[must_use]
-pub fn describe_secret_failure(field: &str, reference: &str, error: &SecretError) -> String {
+pub fn describe_secret_failure(field: &str, _reference: &str, error: &SecretError) -> String {
     let reason = match error {
         SecretError::InvalidReference => {
             "it is not an exact secret:env/NAME or secret:file/name reference".to_owned()
@@ -237,11 +238,7 @@ pub fn describe_secret_failure(field: &str, reference: &str, error: &SecretError
              without NUL bytes"
         ),
     };
-    if error == &SecretError::InvalidReference {
-        format!("the secret reference configured at {field} could not be resolved: {reason}")
-    } else {
-        format!("the secret reference {reference} could not be resolved: {reason}")
-    }
+    format!("the secret reference configured at {field} could not be resolved: {reason}")
 }
 
 /// The PostgreSQL connection a stateful runtime uses. Both URLs are secret

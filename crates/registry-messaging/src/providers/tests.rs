@@ -416,7 +416,9 @@ async fn a_provider_that_cannot_be_activated_names_itself_and_never_a_secret() {
     )
     .expect_err("missing smtp credential");
     assert_eq!(error.provider, "mail-relay");
-    assert!(error.to_string().contains("smtp-user"), "{error}");
+    let text = error.to_string();
+    assert!(text.contains("authentication.usernameRef"), "{text}");
+    assert!(!text.contains("smtp-user"), "{text}");
 }
 
 #[tokio::test]
