@@ -40,6 +40,8 @@ const MODULE_ARTIFACT: &str = registry_breg::contract::MODULE_FORMAT.kind;
 
 const CORRECT_SOURCE: &str =
     "Correct the source at this path so it meets the rule the message states.";
+const WRITE_REQUIRED_ROW_BOUNDARY: &str =
+    "Write a rowBoundaries list on this permission with one entry for each boundary the entity's accessRequirements declare (field, claim, and operator); the unrestricted sentinel does not satisfy a requirement.";
 const REVIEW_FINDING: &str =
     "Review the finding, and change the source if the behavior it describes is not intended.";
 const RUN_SCHEMA_TEST: &str =
@@ -829,6 +831,7 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         | "breg.module.lock-stale"
         | "breg.module.lock-source-missing"
         | "breg.source.modules-unlocked" => LOCK_MODULES,
+        "breg.access.requirements-row-boundary-missing" => WRITE_REQUIRED_ROW_BOUNDARY,
         _ if severity == Severity::Warning => REVIEW_FINDING,
         _ => CORRECT_SOURCE,
     }
@@ -985,6 +988,17 @@ mod tests {
         read_project_yaml("registry.yaml", text.as_bytes())
             .expect("the test project reads")
             .document
+    }
+
+    #[test]
+    fn a_missing_requirement_row_boundary_names_the_member_and_the_accepted_form() {
+        let action = action_for(
+            "breg.access.requirements-row-boundary-missing",
+            Severity::Error,
+        );
+        assert_ne!(action, CORRECT_SOURCE);
+        assert!(action.contains("rowBoundaries"), "{action}");
+        assert!(action.contains("unrestricted"), "{action}");
     }
 
     #[test]
