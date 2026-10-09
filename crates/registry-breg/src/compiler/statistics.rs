@@ -1131,7 +1131,7 @@ impl DatasetGrants {
         for profile in &project.access_profiles {
             let mut named = false;
             for permission in &profile.dataset_permissions {
-                if permission.dataset != dataset {
+                if permission.dataset.as_str() != dataset {
                     continue;
                 }
                 if named {
@@ -1176,11 +1176,14 @@ fn validate_permission_datasets(project: &RegistryProject, errors: &mut Vec<Diag
             if !project
                 .statistical_datasets
                 .iter()
-                .any(|dataset| *dataset.id == *permission.dataset)
+                .any(|dataset| dataset.id == permission.dataset)
             {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.permission-dataset-unknown",
-                    "project.accessProfiles[].permissions[].dataset",
+                    format!(
+                        "project.accessProfiles[id={}].permissions[dataset={}].dataset",
+                        profile.id, permission.dataset
+                    ),
                     &format!(
                         "access profile `{}` holds a permission on statistical dataset `{}`, which the project does not declare; declare it under statisticalDatasets or remove the permission",
                         profile.id, permission.dataset

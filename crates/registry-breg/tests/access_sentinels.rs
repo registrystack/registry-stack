@@ -209,6 +209,27 @@ fn an_entity_permission_that_omits_its_row_reach_is_refused_with_the_sentinel_na
 }
 
 #[test]
+fn an_action_permission_has_no_row_reach_to_write_and_serializes_none() {
+    let mut value = source();
+    value["accessProfiles"][0]["permissions"] = json!([
+        {"action":"register","operations":["invoke"],
+         "targets":[{"entity":"entry","rowBoundaries":[boundary()]}]}
+    ]);
+    let project = read(&value).expect("an action permission needs no row reach");
+    let written = serde_json::to_value(&project).expect("the project serializes");
+    assert_eq!(
+        written.pointer("/accessProfiles/0/permissions/0/rowBoundaries"),
+        None,
+        "an action permission serializes without rowBoundaries"
+    );
+
+    value["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!("unrestricted");
+    let (code, path, message) = refusal(&value);
+    assert_eq!(code, "config.invalid-value", "{message}");
+    assert_eq!(path, "project.accessProfiles[0].permissions[0]");
+}
+
+#[test]
 fn an_access_requirement_only_narrows_so_it_takes_no_empty_list_and_no_unrestricted() {
     for member in ["requiredScopes", "allowedPurposes", "rowBoundaries"] {
         for written in [json!([]), json!("unrestricted")] {

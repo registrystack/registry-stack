@@ -27,8 +27,8 @@ Before the server looks at any record, it admits the request against the selecte
 ```text
 Access:
   all required scopes must be present
-  one allowed purpose must match; empty means unrestricted
-  all claim-bound row predicates must hold; explicit empty boundaries mean no
+  one allowed purpose must match; a profile that names none accepts every purpose
+  all claim-bound row predicates must hold; rowBoundaries written as unrestricted mean no
     claim-bound row restriction; requestVisibility owner additionally limits request
     reads
   one profile per request; selecting its name never grants authority and profiles are

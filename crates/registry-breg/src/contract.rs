@@ -3112,7 +3112,7 @@ pub struct AccessProfileSource {
     pub sortable_fields: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spatial_queries: Option<SpatialQueryPermissionSource>,
-    /// Explicit row reach; an empty array intentionally permits all rows.
+    /// Compiled row reach; an empty array permits every row, as the authored `unrestricted` does.
     pub row_boundaries: Vec<RowBoundarySource>,
     /// Current active membership required for each stored reference key.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3601,6 +3601,16 @@ enum WrittenPermission {
 impl Serialize for WrittenPermission {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
+            // An action has no rows, so its permission is written without the
+            // row reach every entity permission states.
+            Self::Record(permission) if permission.entity.is_empty() => {
+                let mut written =
+                    serde_json::to_value(permission).map_err(serde::ser::Error::custom)?;
+                if let Some(members) = written.as_object_mut() {
+                    members.remove("rowBoundaries");
+                }
+                written.serialize(serializer)
+            }
             Self::Record(permission) => permission.serialize(serializer),
             Self::Dataset(permission) => permission.serialize(serializer),
         }
@@ -3640,7 +3650,7 @@ impl schemars::JsonSchema for WrittenPermission {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DatasetPermissionSource {
     /// The statistical dataset the permission names.
-    pub dataset: String,
+    pub dataset: LocalId,
     /// What the profile may do with the dataset. A profile that holds `read-live` or `publish` on a dataset with a publisher also holds `read-releases`.
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub operations: BTreeSet<DatasetOperation>,
@@ -3761,7 +3771,7 @@ struct RawAccessPermissionSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     action: Option<String>,
     #[serde(default)]
-    dataset: Option<String>,
+    dataset: Option<LocalId>,
     operations: UniqueSet<PermissionOperation>,
     #[serde(default)]
     readable_fields: UniqueSet<String>,
@@ -3919,6 +3929,13 @@ impl RawAccessPermissionSource {
             )
             .into_error());
         }
+        if self.entity.is_empty() && self.row_boundaries.is_some() {
+            return Err(Invalid::expected(
+                "an action permission without rowBoundaries",
+                "Remove rowBoundaries here; an action has no rows, and the row reach of its targets is written on each target.",
+            )
+            .into_error());
+        }
         if !self.entity.is_empty() && self.row_boundaries.is_none() {
             return Err(Invalid::expected(
                 "an entity permission with rowBoundaries",
@@ -4002,8 +4019,15 @@ impl RawAccessPermissionSource {
             )
             .into_error());
         }
+        let Some(dataset) = self.dataset else {
+            return Err(Invalid::expected(
+                "a permission that names a dataset",
+                "Name the statistical dataset in dataset.",
+            )
+            .into_error());
+        };
         Ok(DatasetPermissionSource {
-            dataset: self.dataset.unwrap_or_default(),
+            dataset,
             operations,
         })
     }
@@ -4161,7 +4185,7 @@ pub struct ReadPathPermissionSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ApplyTargetPermissionSource {
     pub entity: String,
-    /// Explicit row reach; an empty array intentionally permits all rows.
+    /// Compiled row reach; an empty array permits every row, as the authored `unrestricted` does.
     pub row_boundaries: Vec<RowBoundarySource>,
 }
 
@@ -4170,7 +4194,7 @@ pub struct ApplyTargetPermissionSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RequestPresencePermissionSource {
     pub request_type: String,
-    /// Explicit row reach; an empty array intentionally permits all rows.
+    /// Compiled row reach; an empty array permits every row, as the authored `unrestricted` does.
     pub row_boundaries: Vec<RowBoundarySource>,
 }
 

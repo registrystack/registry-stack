@@ -1923,6 +1923,16 @@ To migrate a registry project, for each entry under `statisticalDatasets`:
 5. Run `bregctl check`, then `bregctl explain access` and compare
    `statisticalDatasets` with the grants you removed.
 
+### BREAKING: an action permission takes no `rowBoundaries`
+
+An access-profile permission that names an `action` is refused when it also
+writes `rowBoundaries`, with `config.invalid-value` at the permission and the
+fix named. The project schema never listed the member for an action, and the
+compiled project is now written without it.
+
+Migrate by deleting `rowBoundaries` from every permission that has `action:`;
+the row reach of an action is written on each of its `targets`.
+
 ## BReg citizen services
 
 This section covers the runtime files of the two citizen services beside the

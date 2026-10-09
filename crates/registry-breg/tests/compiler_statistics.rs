@@ -394,6 +394,15 @@ fn read_releases_is_refused_on_a_dataset_no_profile_publishes() {
 }
 
 #[test]
+fn a_dataset_permission_names_its_dataset_as_a_local_identifier() {
+    let mut value = source();
+    value["accessProfiles"][OTHER_READER]["permissions"] =
+        json!([{"dataset":"Records By Region","operations":["read-live"]}]);
+    let bytes = serde_json::to_vec(&value).expect("fixture serializes");
+    parse_project_json(&bytes).expect_err("a dataset permission names a local identifier");
+}
+
+#[test]
 fn a_dataset_permission_names_a_declared_dataset() {
     let mut value = source();
     value["accessProfiles"][OTHER_READER]["permissions"] =
@@ -408,7 +417,7 @@ fn a_dataset_permission_names_a_declared_dataset() {
     );
     assert_eq!(
         diagnostic.path,
-        "project.accessProfiles[].permissions[].dataset"
+        "project.accessProfiles[id=other-reader].permissions[dataset=records-by-region].dataset"
     );
     for named in [
         "`other-reader`",

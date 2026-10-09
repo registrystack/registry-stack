@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: an action permission in an access profile no longer accepts
+  `rowBoundaries` (an action has no rows; the row reach of its targets is
+  written on each target), and a statistical dataset permission must name its
+  `dataset` as an identifier. Migration steps are in
+  `release/notes/config-conventions/breg.md`.
 - `bregctl check --format json` reports `status` (`complete`, `domain-refusal`,
   or `operational-failure`) beside `ok` and `command`, and `bregctl dev grant`
   JSON carries an empty `diagnostics` list. Both are additive.

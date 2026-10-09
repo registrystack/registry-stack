@@ -1715,8 +1715,8 @@
       "description": "What a profile may do with one statistical dataset.",
       "properties": {
         "dataset": {
-          "description": "The statistical dataset the permission names.",
-          "type": "string"
+          "$ref": "#/$defs/LocalId",
+          "description": "The statistical dataset the permission names."
         },
         "operations": {
           "description": "What the profile may do with the dataset. A profile that holds `read-live` or `publish` on a dataset with a publisher also holds `read-releases`.",

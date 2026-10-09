@@ -701,8 +701,8 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
         };
     AccessExplanation {
         scope_matching: "all required scopes must be present",
-        purpose_matching: "one allowed purpose must match; empty means unrestricted",
-        row_matching: "all claim-bound and current membership row predicates must hold; explicit empty rowBoundaries mean no claim-bound row restriction; requestVisibility owner additionally limits request reads",
+        purpose_matching: "one allowed purpose must match; a profile that names none accepts every purpose",
+        row_matching: "all claim-bound and current membership row predicates must hold; rowBoundaries written as unrestricted mean no claim-bound row restriction; requestVisibility owner additionally limits request reads",
         profile_selection: "one profile per request; selecting its name never grants authority and profiles are not merged",
         relationship_matching: "relationship paths use the root profile row boundaries and the path's target field permissions; target direct profiles do not apply",
         missing_claims: "missing required direct claims cannot satisfy their row boundary or verified-claim lookup; types and scalar/set shape are listed in claimContract",
