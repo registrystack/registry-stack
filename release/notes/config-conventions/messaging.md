@@ -327,3 +327,11 @@ Human output is unchanged.
   `maximum_concurrent_requests`.
 - `registry-messaging` no longer depends on `serde_norway` outside its tests,
   or on `serde_path_to_error`.
+
+## A template or provider file may be 1 MiB
+
+`template.yaml` and `provider.yaml` are read up to the shared YAML document
+bound of 1 MiB. The package applied a 64 KiB bound to them before, which
+refused a file the convention accepts. Locale text, `schema.json`, and
+`sample.json` keep their 64 KiB bound. No migration step: a file that loaded
+still loads.

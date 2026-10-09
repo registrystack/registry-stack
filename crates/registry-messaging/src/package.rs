@@ -73,7 +73,10 @@ pub const PROVIDER_FILE: &str = "provider.yaml";
 
 /// The largest `messaging.yaml` the runtime reads.
 pub const MAXIMUM_MANIFEST_BYTES: u64 = 1024 * 1024;
-/// The largest file under `templates/`, and the largest `provider.yaml`.
+/// The largest `template.yaml` and `provider.yaml`: the shared reader's bound
+/// (CFG-YAML-6), with no lower bound of the package's own.
+pub const MAXIMUM_YAML_FILE_BYTES: u64 = MAXIMUM_DOCUMENT_BYTES as u64;
+/// The largest locale text, `schema.json` and `sample.json` under `templates/`.
 pub const MAXIMUM_TEMPLATE_FILE_BYTES: u64 = MAXIMUM_TEMPLATE_SOURCE_BYTES as u64;
 // An authored YAML file's bound may lower the shared reader's, never raise it.
 const _: () = assert!(MAXIMUM_MANIFEST_BYTES <= MAXIMUM_DOCUMENT_BYTES as u64);
@@ -675,7 +678,7 @@ impl PackageReader<'_> {
                         self.read_document(
                             &path,
                             MESSAGING_TEMPLATE_KIND,
-                            MAXIMUM_TEMPLATE_FILE_BYTES,
+                            MAXIMUM_YAML_FILE_BYTES,
                         )?
                         .and_then(|bytes| self.decode(&path, &bytes, TemplateDocument::decode)),
                     );
@@ -811,7 +814,7 @@ impl PackageReader<'_> {
         let Some(bytes) = self.read_document(
             &manifest_path,
             MESSAGING_PROVIDER_KIND,
-            MAXIMUM_TEMPLATE_FILE_BYTES,
+            MAXIMUM_YAML_FILE_BYTES,
         )?
         else {
             return Ok(None);
@@ -1340,6 +1343,27 @@ pub(crate) mod tests {
         assert_eq!(error.path(), format!("package.root/{REMINDER}/en/text.j2"));
     }
 
+    /// A template or provider file of exactly the shared document bound,
+    /// padded with comment lines, is read (CFG-YAML-6): the package adds no
+    /// lower bound of its own for either YAML file.
+    #[test]
+    fn a_yaml_file_of_exactly_the_document_bound_is_read() {
+        let root = starter_copy();
+        for file in [
+            format!("{REMINDER}/{TEMPLATE_FILE}"),
+            format!("{GATEWAY}/{PROVIDER_FILE}"),
+        ] {
+            let path = root.path().join(&file);
+            let mut bytes = std::fs::read(&path).unwrap();
+            let padding = MAXIMUM_DOCUMENT_BYTES - bytes.len();
+            bytes.extend(std::iter::repeat(b'#').take(padding - 1));
+            bytes.push(b'\n');
+            assert_eq!(bytes.len(), MAXIMUM_DOCUMENT_BYTES);
+            std::fs::write(&path, bytes).unwrap();
+        }
+        load_project(root.path()).unwrap();
+    }
+
     /// The code, the file relative to `root`, and whether a line is named,
     /// of every diagnostic a refused load reports.
     fn located(root: &Path) -> Vec<(String, String, bool)> {
@@ -1367,7 +1391,7 @@ pub(crate) mod tests {
         let provider = format!("{GATEWAY}/{PROVIDER_FILE}");
         std::fs::write(
             root.path().join(&template),
-            "#".repeat(usize::try_from(MAXIMUM_TEMPLATE_FILE_BYTES).unwrap() + 1),
+            "#".repeat(MAXIMUM_DOCUMENT_BYTES + 1),
         )
         .unwrap();
         let mut bytes = std::fs::read(root.path().join(&provider)).unwrap();
@@ -1384,7 +1408,7 @@ pub(crate) mod tests {
         let too_large = &error.report().unwrap().diagnostics()[0];
         assert!(too_large
             .message
-            .contains(&MAXIMUM_TEMPLATE_FILE_BYTES.to_string()));
+            .contains(&MAXIMUM_DOCUMENT_BYTES.to_string()));
         assert_eq!(too_large.artifact.as_deref(), Some(MESSAGING_TEMPLATE_KIND));
 
         let root = starter_copy();

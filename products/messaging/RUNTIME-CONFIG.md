@@ -439,7 +439,7 @@ send, and one past its expiry is not sent again: it expires, or stays
 `unknown` when an earlier attempt may have reached the provider and its
 policy retries.
 
-`provider.yaml` is closed and at most 64 KiB; each script is at most 64 KiB
+`provider.yaml` is closed and at most 1 MiB; each script is at most 64 KiB
 and must compile with exactly its entry point when the package loads. A
 directory for an `smtp` provider or an undeclared id, a file the provider does
 not name, a hidden entry, or a symbolic link under `providers/` is refused

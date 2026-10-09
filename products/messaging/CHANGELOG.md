@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A `template.yaml` or `provider.yaml` of up to 1 MiB, the shared YAML
+  document bound, is read. The package no longer applies a 64 KiB bound to
+  these two files; locale text, `schema.json`, and `sample.json` keep it.
 - BREAKING: a client listed twice in `authentication.oidc.allowedClients` is
   refused with `config.duplicate-item` at the second item. Migration: list
   each client once.
