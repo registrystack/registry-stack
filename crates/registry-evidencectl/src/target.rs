@@ -551,6 +551,20 @@ impl std::fmt::Display for SettingsDiagnostic {
 
 impl std::error::Error for SettingsDiagnostic {}
 
+/// The refusal for a settings member that is not the closed shape. The serde
+/// error follows only when it names a key (an unknown or missing field);
+/// every other serde message quotes the offending value, which a refusal never
+/// repeats.
+fn shape_refusal(error: serde_json::Error, pointer: &str, message: &str) -> anyhow::Error {
+    let text = error.to_string();
+    let diagnostic = SettingsDiagnostic::at(pointer, message);
+    if text.starts_with("unknown field ") || text.starts_with("missing field ") {
+        anyhow::Error::new(error).context(diagnostic)
+    } else {
+        anyhow::Error::new(diagnostic)
+    }
+}
+
 /// Hold settings governance and runtime to the closed shapes a deployment
 /// target needs. A refusal is, or carries as its outermost context, the
 /// [`SettingsDiagnostic`] naming the member at fault.
@@ -571,10 +585,7 @@ pub(crate) fn validate_settings_documents(governance: &Value, runtime: &Value) -
     // `target explain`, `build --target`, and `fixtures run --target` refuse and
     // never leaves behind a create-only directory those commands cannot open.
     serde_json::from_value::<build::TargetGovernance>(Value::Object(governance.clone()))
-        .map_err(|error| {
-            anyhow::Error::new(error)
-                .context(SettingsDiagnostic::at("/governance", GOVERNANCE_SHAPE))
-        })?
+        .map_err(|error| shape_refusal(error, "/governance", GOVERNANCE_SHAPE))?
         .into_bundle()
         .context(SettingsDiagnostic::at("/governance", GOVERNANCE_SHAPE))?;
     if runtime.get("apiVersion").and_then(Value::as_str) != Some(EVIDENCE_RUNTIME_API_VERSION) {
@@ -628,10 +639,11 @@ pub(crate) fn validate_settings_documents(governance: &Value, runtime: &Value) -
     // runtime loads, so `target new` refuses an unknown or misspelled key here
     // rather than writing a runtime.yaml the deployment refuses at startup.
     serde_json::from_value::<TargetRuntime>(Value::Object(runtime.clone())).map_err(|error| {
-        anyhow::Error::new(error).context(SettingsDiagnostic::at(
+        shape_refusal(
+            error,
             "/runtime",
             "target settings runtime is not the closed Version 1 runtime shape",
-        ))
+        )
     })?;
     let mut secret_references = BTreeSet::new();
     collect_secret_references_at(
@@ -1132,6 +1144,26 @@ runtime:
     systemRoots: true
 {public_keys}"#
         )
+    }
+
+    /// CFG-SEC-3: a refusal names the location and the expected type, never the
+    /// value. `lib.rs` prints the whole error chain, so no layer may carry it.
+    #[test]
+    fn a_wrong_typed_settings_value_is_never_echoed_in_the_refusal() {
+        const MARKER: u64 = 7_654_321_987;
+        let marker = MARKER.to_string();
+        let governance = serde_json::json!({"assuranceProfile": MARKER});
+        let error = validate_settings_documents(&governance, &serde_json::json!({}))
+            .expect_err("a numeric assuranceProfile is refused");
+        let rendered = format!("{error:#}");
+        let diagnostic = error
+            .downcast_ref::<SettingsDiagnostic>()
+            .expect("the refusal is a settings diagnostic");
+        assert_eq!(diagnostic.pointer, "/governance");
+        assert!(
+            !rendered.contains(&marker),
+            "the refusal echoed the value: {rendered}"
+        );
     }
 
     #[test]
