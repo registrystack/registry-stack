@@ -1,0 +1,11 @@
+id: nested-unknown-key
+rules: [CFG-SCHEMA-8, CFG-SEC-3]
+summary: An unknown key in a mapping below the root that the format's schema closes is refused at its key, without repeating its value; one cell per such mapping of the example.
+mutation:
+  unknownKey: {key: conformanceUnknown, value: '"{marker}"'}
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.unknown-key
+      path: "{pointer}"
+      at: {line: 1, column: 1}

@@ -58,6 +58,14 @@ A case file (`cases/<id>.yaml`) has these members:
                                           `schema.path`) bounds it on both
                                           sides: its maximum plus one, then
                                           its minimum minus one
+                unknownKey: {key, value}  `key: value` added as the last
+                                          member of a mapping below the
+                                          example's root that its schema (the
+                                          registry's `schema.path`) closes.
+                                          The case is one cell per such
+                                          mapping, named `<case>#<pointer of
+                                          the mapping>`; the root is left to
+                                          a case that appends to the file
   run         optional, `init`: run the harness's `init` command for the
               format instead of its check, and assert that the file it writes
               starts with a `# yaml-language-server: $schema=` modeline naming
@@ -79,7 +87,8 @@ A case file (`cases/<id>.yaml`) has these members:
 
 Text in a case expands `{marker}` (the planted value that must never be
 printed), `{repeat:N:text}`, and the values of the mutated site: `{pointer}`,
-`{key}`, `{numberOfUnit}`, and for `duplicateItem` the copy's `{index}`.
+`{key}`, `{numberOfUnit}`, for `duplicateItem` the copy's `{index}`, and for
+`unknownKey` the `{mapping}` the key went into.
 
 A role pointer that does not resolve in the example is a harness error that
 names the registry entry to update, so a moved example member fails loudly
@@ -102,7 +111,9 @@ reached.
 `expected-failures.yaml` lists the cells that fail because a product has not
 yet converged on the conventions, each with a digest of its sorted problem
 list, the formats with a check command that are not reached, and the cases
-that apply to no format. A failing cell outside it fails the run, and so does
+that apply to no format. A cell of an `unknownKey` case is listed under its own
+name, so one mapping a reader leaves open does not cover the others. A failing
+cell outside it fails the run, and so does
 a listed cell whose problems no longer match the digest, or whose problems
 include a marker leak, a signal, an exit status above 3, a timeout, or a
 failure of the harness itself (a program that is not in the binary directory,
@@ -174,7 +185,10 @@ OPERATIONS = (
     "duplicateItem",
     "pathOutside",
     "boundaries",
+    "unknownKey",
 )
+# The operation whose case is one cell per mapping it plants a key in.
+SWEEP = "unknownKey"
 DEFAULT_FROM = {
     None: "start",
     "append": "start",
@@ -187,6 +201,7 @@ DEFAULT_FROM = {
     "duplicateItem": "item",
     "pathOutside": "value",
     "boundaries": "value",
+    "unknownKey": "key",
 }
 ENVELOPE = ("apiVersion", "kind")
 STATUSES = ("pass", "expected failure", "fail", "stale", "blocked", "not applicable")
@@ -352,10 +367,16 @@ class Case:
     expect: dict[str, Any]
     human: bool
     run: str | None = None
+    # The corpus case a sweep cell belongs to; None for a corpus case itself.
+    of: str | None = None
 
     @property
     def operation(self) -> str | None:
         return next(iter(self.mutation)) if self.mutation else None
+
+    @property
+    def corpus_id(self) -> str:
+        return self.of or self.id
 
     @classmethod
     def from_document(cls, doc: Any, stem: str) -> "Case":
@@ -871,6 +892,115 @@ def mutate_boundaries(text: str, spec: dict[str, Any], fmt: Format) -> list[Vari
     return variants
 
 
+def mappings(node: yaml.Node | None, pointer: str = "") -> list[str]:
+    """The pointer of each mapping of a composed document, in document order."""
+    found = []
+    if isinstance(node, yaml.MappingNode):
+        found.append(pointer)
+        for key, value in node.value:
+            if isinstance(key, yaml.ScalarNode):
+                found += mappings(value, f"{pointer}/{key.value.replace('~', '~0').replace('/', '~1')}")
+    elif isinstance(node, yaml.SequenceNode):
+        for index, value in enumerate(node.value):
+            found += mappings(value, f"{pointer}/{index}")
+    return found
+
+
+def names_member(part: dict, key: str) -> bool:
+    """Whether a schema node itself names a member: a property, or a pattern the key matches."""
+    if key in (part.get("properties") or {}):
+        return True
+    return any(re.search(pattern, key) for pattern in part.get("patternProperties") or {})
+
+
+def in_place(schema: Any, node: Any, depth: int = 0) -> list[dict]:
+    """A schema node and every subschema it applies to the same value."""
+    if not isinstance(node, dict) or depth > 12:
+        return []
+    found = [node]
+    if isinstance(node.get("$ref"), str):
+        found += in_place(schema, lint_module().resolve_ref(schema, node["$ref"]), depth + 1)
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        for branch in node.get(keyword) or []:
+            found += in_place(schema, branch, depth + 1)
+    for keyword in ("if", "then", "else"):
+        found += in_place(schema, node.get(keyword), depth + 1)
+    return found
+
+
+def refuses(schema: Any, node: Any, key: str, depth: int = 0) -> bool:
+    """Whether a schema node closes its mapping against `key`.
+
+    It does when it states `additionalProperties: false` and does not name the
+    key, when it states `unevaluatedProperties: false` and no subschema applied
+    to the same value names the key or admits other members, when the schema it
+    refers to or one it requires with `allOf` does, or when every mapping
+    branch of an `anyOf` or `oneOf` does. A node that states none of these
+    leaves the mapping open, and so does a union with one open mapping branch.
+    """
+    if not isinstance(node, dict) or depth > 12:
+        return False
+    lint = lint_module()
+    if node.get("additionalProperties") is False and not names_member(node, key):
+        return True
+    if node.get("unevaluatedProperties") is False and not any(
+        names_member(part, key) or part.get("additionalProperties") not in (None, False)
+        for part in in_place(schema, node)
+    ):
+        return True
+    if isinstance(node.get("$ref"), str) and refuses(schema, lint.resolve_ref(schema, node["$ref"]), key, depth + 1):
+        return True
+    if any(refuses(schema, branch, key, depth + 1) for branch in node.get("allOf") or []):
+        return True
+    for keyword in ("anyOf", "oneOf"):
+        branches = []
+        for branch in node.get(keyword) or []:
+            types = set().union(*(lint.types_of(part) for part in lint.expand(schema, branch)))
+            if not types or "object" in types:
+                branches.append(branch)
+        if branches and all(refuses(schema, branch, key, depth + 1) for branch in branches):
+            return True
+    return False
+
+
+def closed_mappings(schema: Any, root: yaml.Node | None, key: str) -> list[str]:
+    """The pointer of each mapping below the root that every schema node describing it closes against `key`."""
+    found = []
+    for pointer in mappings(root):
+        candidates = lint_module().resolve_member(schema, pointer) if pointer else None
+        if candidates and all(refuses(schema, node, key) for node, _ in candidates):
+            found.append(pointer)
+    return found
+
+
+def mutate_unknown_key(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
+    key = spec.get("key")
+    if not isinstance(key, str) or not key:
+        raise HarnessError("`unknownKey` needs a `key`")
+    value = expand(str(spec.get("value", "")), {})
+    root = compose(text)
+    if "in" in spec:
+        # A cell of the sweep: the planner named the one mapping it covers.
+        pointers = [str(spec["in"])]
+    elif not fmt.schema:
+        raise NotApplicable("the format registers no schema to read closed mappings from")
+    else:
+        pointers = closed_mappings(load_schema(fmt.schema), root, key)
+        if not pointers:
+            raise NotApplicable("the example has no mapping below its root that its schema closes")
+    variants = []
+    for pointer in pointers:
+        _, parent = find(root, pointer)
+        if not isinstance(parent, yaml.MappingNode) or child(parent, key)[1] is not None:
+            raise HarnessError(f"{fmt.id}: the example has no mapping at {pointer} that lacks `{key}`")
+        changed = insert_member(text, parent, key, value)
+        planted = f"{pointer}/{key.replace('~', '~0').replace('/', '~1')}"
+        key_node, node = find_inserted(compose(changed), planted)
+        anchors = {"start": (1, 1), "key": mark(key_node.start_mark), "value": mark(node.start_mark)}
+        variants.append(Variant(changed, [Site(anchors, dict(site_values(planted), mapping=pointer))]))
+    return variants
+
+
 def mutate(text: str, mutation: dict[str, Any] | None, fmt: Format) -> list[Variant]:
     """The texts one mutation produces from an example, with their anchors."""
     if not mutation:
@@ -897,6 +1027,7 @@ def mutate(text: str, mutation: dict[str, Any] | None, fmt: Format) -> list[Vari
         "duplicateItem": mutate_duplicate_item,
         "pathOutside": mutate_path_outside,
         "boundaries": mutate_boundaries,
+        "unknownKey": mutate_unknown_key,
     }
     if operation not in handlers:
         raise HarnessError(f"unknown mutation `{operation}`")
@@ -1815,6 +1946,18 @@ class Plan:
     init_only: list[Format] = field(default_factory=list)
 
 
+def sweep_cell(case: Case, mapping: str) -> Case:
+    """The cell of a sweep case that covers one mapping."""
+    mutation = {SWEEP: dict(case.mutation[SWEEP], **{"in": mapping})}
+    return dataclasses.replace(case, id=f"{case.id}#{mapping}", of=case.id, mutation=mutation)
+
+
+def names_case(case_id: str, cases: list[Case]) -> bool:
+    """Whether an id names a corpus case, or one mapping of a sweep case (`<case>#<pointer>`)."""
+    base, separator, _ = case_id.partition("#")
+    return any(case.id == base and (not separator or case.operation == SWEEP) for case in cases)
+
+
 def plan(root: Path, formats: list[Format], cases: list[Case], harness: dict[str, dict[str, Any]]) -> Plan:
     reached, skipped = partition_formats(formats)
     reached = [fmt.with_harness(harness.get(fmt.id, {})) for fmt in reached]
@@ -1822,19 +1965,29 @@ def plan(root: Path, formats: list[Format], cases: list[Case], harness: dict[str
         fmt.with_harness(harness[fmt.id]) for fmt in formats if fmt.id in skipped and harness.get(fmt.id, {}).get("init")
     ]
     cells, inapplicable = [], {}
+    # The cells of each sweep case, by the mapping each covers, in the order
+    # the reached formats first show them.
+    swept: dict[str, dict[str, Case]] = {case.id: {} for case in cases}
     for fmt in reached:
         text = prepare_example((root / str(fmt.example)).read_text(encoding="utf-8"), fmt, {})
         for case in cases:
             why = not_applicable(case, fmt)
+            variants = []
             if why is None and case.run is None:
                 try:
-                    mutate(text, case.mutation, fmt)
+                    variants = mutate(text, case.mutation, fmt)
                 except NotApplicable as error:
                     why = str(error)
-            if why is None:
-                cells.append((fmt, case))
-            else:
+            if why is not None:
                 inapplicable[(fmt.id, case.id)] = why
+            elif case.operation == SWEEP:
+                for variant in variants:
+                    mapping = variant.sites[0].values["mapping"]
+                    if mapping not in swept[case.id]:
+                        swept[case.id][mapping] = sweep_cell(case, mapping)
+                    cells.append((fmt, swept[case.id][mapping]))
+            else:
+                cells.append((fmt, case))
     for fmt in init_only:
         for case in cases:
             if case.run is not None:
@@ -1843,7 +1996,8 @@ def plan(root: Path, formats: list[Format], cases: list[Case], harness: dict[str
                     cells.append((fmt, case))
                 else:
                     inapplicable[(fmt.id, case.id)] = why
-    return Plan(reached, skipped, cases, cells, inapplicable, init_only)
+    listed = [item for case in cases for item in (case, *swept[case.id].values())]
+    return Plan(reached, skipped, listed, cells, inapplicable, init_only)
 
 
 def validate_ids(expected: ExpectedFailures, formats: list[Format], cases: list[Case], harness: dict[str, Any]) -> None:
@@ -1855,7 +2009,7 @@ def validate_ids(expected: ExpectedFailures, formats: list[Format], cases: list[
     for format_id, case_id in expected.failures:
         if format_id not in format_ids:
             raise HarnessError(f"expected-failures.yaml names format {format_id}, which the registry does not")
-        if case_id not in case_ids:
+        if not names_case(case_id, cases):
             raise HarnessError(f"expected-failures.yaml names case {case_id}, which the corpus does not")
     for format_id in expected.unreached:
         if format_id not in format_ids:
@@ -1942,10 +2096,10 @@ def report(
     for format_id, why in work.skipped.items():
         print(f"skipped {format_id}: {why}")
     unreached = {f: why for f, why in work.skipped.items() if why != "no check command"}
-    applies = Counter(case.id for _, case in work.cells)
+    applies = Counter(case.corpus_id for _, case in work.cells)
     inapplicable = {}
     for case in work.cases:
-        if not applies[case.id]:
+        if not applies[case.corpus_id]:
             reasons = [why for (_, case_id), why in work.inapplicable.items() if case_id == case.id]
             inapplicable[case.id] = inapplicable_reason(case, reasons)
 

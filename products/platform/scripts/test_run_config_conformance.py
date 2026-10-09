@@ -436,6 +436,105 @@ class MutationTest(unittest.TestCase):
             with self.assertRaises(runner.NotApplicable):
                 runner.mutate("b: 3\n", {"boundaries": {}}, fmt)
 
+    UNKNOWN_KEY = {"unknownKey": {"key": "conformanceUnknown", "value": '"{marker}"'}}
+    CLOSED = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "project": {"$ref": "#/$defs/project"},
+            "listener": {"type": "object", "additionalProperties": False, "properties": {"bind": {"type": "string"}}},
+            "items": {"type": "array", "items": {"oneOf": [{"$ref": "#/$defs/item"}, {"type": "string"}]}},
+            "labels": {"type": "object", "additionalProperties": {"type": "string"}},
+            "spread": {
+                "allOf": [{"properties": {"a": {"type": "string"}}}, {"$ref": "#/$defs/more"}],
+                "unevaluatedProperties": False,
+            },
+            "either": {"anyOf": [{"$ref": "#/$defs/item"}, {"type": "object"}]},
+            "named": {"type": "object", "additionalProperties": {"$ref": "#/$defs/item"}},
+            "prefixed": {"type": "object", "additionalProperties": False, "patternProperties": {"^conformance": {}}},
+            "free": {"type": "object", "unevaluatedProperties": False, "additionalProperties": {"type": "string"}},
+        },
+        "$defs": {
+            "project": {"type": "object", "additionalProperties": False, "properties": {"id": {"type": "string"}}},
+            "item": {"type": "object", "additionalProperties": False, "properties": {"id": {"type": "string"}}},
+            "more": {"properties": {"b": {"type": "string"}}},
+        },
+    }
+    NESTED = """\
+project:
+  id: demo
+listener: {bind: local}
+items:
+  - id: first
+  - plain
+labels: {owner: team}
+spread:
+  a: one
+  b: two
+either:
+  id: third
+named:
+  entry:
+    id: fourth
+prefixed: {}
+free: {}
+undescribed:
+  id: fifth
+"""
+
+    def test_cfg_schema_8_unknown_key_goes_into_each_closed_mapping_below_the_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fmt = self.schema_format(temporary, self.CLOSED)
+            variants = runner.mutate(self.NESTED, self.UNKNOWN_KEY, fmt)
+        planted = f'conformanceUnknown: "{runner.MARKER}"'
+        self.assertEqual(
+            [
+                (variant.sites[0].values["mapping"], variant.sites[0].values["pointer"], variant.sites[0].anchors["key"])
+                for variant in variants
+            ],
+            [
+                ("/project", "/project/conformanceUnknown", (3, 3)),
+                ("/listener", "/listener/conformanceUnknown", (3, 25)),
+                ("/items/0", "/items/0/conformanceUnknown", (6, 5)),
+                ("/spread", "/spread/conformanceUnknown", (11, 3)),
+                ("/named/entry", "/named/entry/conformanceUnknown", (16, 5)),
+            ],
+        )
+        self.assertEqual(
+            variants[0].text, self.NESTED.replace("  id: demo\n", f"  id: demo\n  {planted}\n")
+        )
+        self.assertEqual(
+            variants[1].text, self.NESTED.replace("{bind: local}", "{bind: local, " + planted + "}")
+        )
+        self.assertEqual(
+            variants[2].text, self.NESTED.replace("  - id: first\n", f"  - id: first\n    {planted}\n")
+        )
+        for variant in variants:
+            self.assertEqual(len(variant.sites), 1)
+            self.assertEqual(variant.text.count("conformanceUnknown"), 1)
+
+    def test_unknown_key_in_one_mapping_plants_there_only(self) -> None:
+        mutation = {"unknownKey": dict(self.UNKNOWN_KEY["unknownKey"], **{"in": "/spread"})}
+        # The mapping is named, so the schema is not read again.
+        variant = one(runner.mutate(self.NESTED, mutation, demo_format()))
+        self.assertEqual(variant.sites[0].values["pointer"], "/spread/conformanceUnknown")
+        self.assertEqual(variant.sites[0].anchors["key"], (11, 3))
+        for missing in ("/gone", "/items", "/project/id"):
+            mutation = {"unknownKey": dict(self.UNKNOWN_KEY["unknownKey"], **{"in": missing})}
+            with self.assertRaises(runner.HarnessError, msg=missing):
+                runner.mutate(self.NESTED, mutation, demo_format())
+
+    def test_unknown_key_without_a_schema_a_closed_mapping_or_a_key_does_not_apply(self) -> None:
+        with self.assertRaises(runner.NotApplicable):
+            runner.mutate(self.NESTED, self.UNKNOWN_KEY, demo_format())
+        with tempfile.TemporaryDirectory() as temporary:
+            fmt = self.schema_format(temporary, self.CLOSED)
+            with self.assertRaises(runner.NotApplicable):
+                # The root is the `unknown-keys` case's; the sweep starts below it.
+                runner.mutate("labels: {owner: team}\n", self.UNKNOWN_KEY, fmt)
+            with self.assertRaises(runner.HarnessError):
+                runner.mutate(self.NESTED, {"unknownKey": {"value": "x"}}, fmt)
+
 
 class EncodingTest(unittest.TestCase):
     def test_cfg_yaml_6_byte_order_mark_and_crlf(self) -> None:
@@ -929,9 +1028,11 @@ class ExpectedFailuresTest(unittest.TestCase):
 
 
 FAKECTL = r'''#!/usr/bin/env python3
-"""A check command implementing two reader rules: duplicate top-level keys
-and a top-level `script` path that must stay inside the project. `init`
-writes a project whose first line is the schema modeline."""
+"""A check command implementing three reader rules: duplicate top-level keys,
+a top-level `script` path that must stay inside the project, and a
+`conformanceUnknown` member of a top-level mapping, which is refused unless
+FAKECTL_OPEN names that mapping. `init` writes a project whose first line is
+the schema modeline."""
 import json
 import os
 import sys
@@ -962,11 +1063,21 @@ if os.path.exists(os.path.join(project, "needs-prepare")) and not os.path.exists
 target = os.path.join(project, "project.yaml")
 seen = {}
 diagnostics = []
+current = None
 with open(target, encoding="utf-8") as handle:
     for number, line in enumerate(handle, start=1):
+        if line.startswith("  conformanceUnknown:") and current not in os.environ.get("FAKECTL_OPEN", "").split(","):
+            diagnostics.append({
+                "severity": "error",
+                "code": "config.unknown-key",
+                "path": "/" + current + "/conformanceUnknown",
+                "message": "the key is not a member of this mapping",
+                "suggestedAction": "Remove the key.",
+                "source": {"file": target, "line": number, "column": 3},
+            })
         if line[:1] in " #-" or ":" not in line:
             continue
-        key = line.split(":", 1)[0]
+        key = current = line.split(":", 1)[0]
         if key in seen:
             diagnostics.append({
                 "severity": "error",
@@ -1474,6 +1585,131 @@ class EndToEndTest(unittest.TestCase):
             stdout,
         )
 
+    SWEEP_CASE = """\
+        id: nested-unknown-key
+        rules: [CFG-SCHEMA-8]
+        summary: An unknown key in a mapping below the root is refused at its key.
+        mutation:
+          unknownKey: {key: conformanceUnknown, value: '"{marker}"'}
+        expect:
+          exit: 1
+          diagnostics:
+            - code: config.unknown-key
+              path: "{pointer}"
+              at: {line: 1, column: 1}
+        """
+    SWEEP_SCHEMA = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "apiVersion": {"type": "string"},
+            "kind": {"type": "string"},
+            "project": {"type": "object", "additionalProperties": False, "properties": {"id": {}, "version": {}}},
+            "listener": {"type": "object", "additionalProperties": False, "properties": {"bind": {}, "timeoutSeconds": {}}},
+            "items": {"type": "array", "items": {"type": "object"}},
+            "labels": {"type": "object", "additionalProperties": {"type": "string"}},
+        },
+    }
+
+    def write_sweep(self) -> None:
+        """The sweep case, and a schema that closes the example's `project` and `listener`."""
+        self.write_case("nested-unknown-key", self.SWEEP_CASE)
+        schema = self.root / "products/demo/schema/project.schema.json"
+        schema.parent.mkdir(parents=True)
+        schema.write_text(json.dumps(self.SWEEP_SCHEMA), encoding="utf-8")
+        registered = "schema: {id: https://example.test/demo.schema.json}\n    check: fakectl check {project}"
+        self.assertEqual(REGISTRY_TEXT.count(registered), 1)
+        (self.root / "products/platform/config-formats.yaml").write_text(
+            REGISTRY_TEXT.replace(
+                registered,
+                registered.replace("schema: {", "schema: {path: products/demo/schema/project.schema.json, "),
+            ),
+            encoding="utf-8",
+        )
+
+    def test_cfg_schema_8_the_unknown_key_sweep_is_one_cell_per_closed_mapping(self) -> None:
+        self.write_sweep()
+        self.record()
+        code, stdout, stderr = self.run_runner("--matrix", "--strict")
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        project = "demo/project\tnested-unknown-key#/project\tpass"
+        listener = "demo/project\tnested-unknown-key#/listener\tpass"
+        self.assertIn(project, stdout)
+        self.assertIn(listener, stdout)
+        self.assertLess(stdout.index(project), stdout.index(listener))
+        # One cell per mapping the schema closes: not the root, not the open
+        # list item or the open `labels`, and no cell for the case as a whole.
+        self.assertEqual(stdout.count("\tnested-unknown-key"), 2)
+        self.assertIn("7 cells: 5 pass, 1 expected failure, 0 fail, 0 stale, 0 blocked, 1 not applicable", stdout)
+        self.assertNotIn(runner.MARKER, stdout)
+
+    def test_cfg_schema_8_a_reader_that_accepts_a_nested_unknown_key_fails_that_cell(self) -> None:
+        self.write_sweep()
+        self.record()
+        code, stdout, _ = self.run_runner("--matrix", env={"FAKECTL_OPEN": "listener"})
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("demo/project\tnested-unknown-key#/project\tpass", stdout)
+        self.assertIn("demo/project\tnested-unknown-key#/listener\tfail", stdout)
+        self.assertIn("FAIL demo/project nested-unknown-key#/listener", stdout)
+        self.assertIn("  exit status 0, expected 1", stdout)
+        self.assertIn("  missing config.unknown-key at /listener/conformanceUnknown 10:3", stdout)
+
+    def test_an_unknown_key_sweep_cell_is_recorded_and_goes_stale_by_its_own_id(self) -> None:
+        self.write_sweep()
+        document = self.record(env={"FAKECTL_OPEN": "listener"})
+        self.assertEqual(
+            [(entry["format"], entry["case"]) for entry in document["expectedFailures"]],
+            [("demo/project", "anchor"), ("demo/project", "nested-unknown-key#/listener")],
+        )
+        self.assertEqual([entry["case"] for entry in document["inapplicableCases"]], ["operator-only"])
+        code, stdout, _ = self.run_runner("--strict", env={"FAKECTL_OPEN": "listener"})
+        self.assertEqual(code, 0, stdout)
+        self.assertIn("2 expected failures", stdout)
+        code, stdout, _ = self.run_runner("--strict")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("stale: demo/project nested-unknown-key#/listener now passes", stdout)
+        document["expectedFailures"][1]["case"] = "nested-unknown-key#/gone"
+        self.write_expected(document)
+        code, stdout, _ = self.run_runner("--strict")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("stale: demo/project nested-unknown-key#/gone no longer runs", stdout)
+
+    def test_an_expected_failure_names_a_sweep_cell_only_under_a_sweep_case(self) -> None:
+        self.write_sweep()
+        for case_id in ("anchor#/listener", "nested-unknown-keys#/listener"):
+            self.write_expected(
+                {"expectedFailures": [
+                    {"format": "demo/project", "case": case_id, "reason": "r", "digest": runner.digest(["x"])}
+                ]}
+            )
+            code, _, stderr = self.run_runner()
+            self.assertEqual(code, 1, case_id)
+            self.assertIn(f"expected-failures.yaml names case {case_id}, which the corpus does not", stderr)
+
+    def test_an_unknown_key_sweep_does_not_apply_without_a_schema(self) -> None:
+        self.write_case("nested-unknown-key", self.SWEEP_CASE)
+        code, stdout, _ = self.run_runner("--matrix", "--verbose")
+        self.assertIn("demo/project\tnested-unknown-key\tnot applicable", stdout)
+        self.assertIn(
+            "not applicable demo/project nested-unknown-key: the format registers no schema to read closed mappings from",
+            stdout,
+        )
+        self.assertEqual(
+            self.record()["inapplicableCases"],
+            [
+                {"case": "nested-unknown-key", "reason": "the format registers no schema to read closed mappings from"},
+                {"case": "operator-only", "reason": "no reached format is an operator file"},
+            ],
+        )
+
+    def test_a_selector_names_an_unknown_key_sweep_by_its_case(self) -> None:
+        self.write_sweep()
+        code, stdout, stderr = self.run_runner("--matrix", "--only-case", "nested-unknown-key")
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertIn("demo/project\tnested-unknown-key#/project\tpass", stdout)
+        self.assertIn("demo/project\tnested-unknown-key#/listener\tpass", stdout)
+        self.assertIn("3 cells: 3 pass", stdout)
+
 
 class CommittedCorpusTest(unittest.TestCase):
     """The committed corpus, harness, and expected failures load and agree."""
@@ -1501,7 +1737,7 @@ class CommittedCorpusTest(unittest.TestCase):
             "wrong-api-version", "missing-envelope", "empty-file",
             "substitution-in-authored-file", "substitution-in-reference", "tab-indentation",
             "planted-marker", "bom-accepted", "crlf-accepted", "document-start-accepted",
-            "document-end-accepted",
+            "document-end-accepted", "nested-unknown-key",
         ):
             self.assertIn(required, ids)
 
@@ -1513,7 +1749,7 @@ class CommittedCorpusTest(unittest.TestCase):
         ids = {case.id for case in self.cases}
         for format_id, case_id in expected.failures:
             self.assertIn(format_id, formats)
-            self.assertIn(case_id, ids)
+            self.assertTrue(runner.names_case(case_id, self.cases), case_id)
         self.assertLessEqual(set(expected.unreached), formats)
         self.assertLessEqual(set(expected.inapplicable), ids)
 
@@ -1578,6 +1814,33 @@ class CommittedCorpusTest(unittest.TestCase):
                 for variant in variants:
                     runner.resolve_expected(case.expect, case.operation, variant, "/w/file.yaml")
                     runner.encode(variant.text, case.encoding)
+
+    def test_cfg_schema_8_the_unknown_key_sweep_changes_nothing_but_the_planted_key(self) -> None:
+        case = next(case for case in self.cases if case.id == "nested-unknown-key")
+        key = case.mutation["unknownKey"]["key"]
+        reached, _ = runner.partition_formats(self.registry)
+        harness = runner.load_harness(self.corpus / "formats.yaml")
+        swept = 0
+        for fmt in reached:
+            fmt = fmt.with_harness(harness.get(fmt.id, {}))
+            text = runner.prepare_example((ROOT / fmt.example).read_text(encoding="utf-8"), fmt, {})
+            try:
+                variants = runner.mutate(text, case.mutation, fmt)
+            except runner.NotApplicable:
+                continue
+            swept += 1
+            mappings = [variant.sites[0].values["mapping"] for variant in variants]
+            self.assertEqual(len(mappings), len(set(mappings)), fmt.id)
+            self.assertNotIn("", mappings, fmt.id)
+            for variant in variants:
+                document = yaml.safe_load(variant.text)
+                parent = document
+                for segment in runner.segments(variant.sites[0].values["mapping"]):
+                    parent = parent[int(segment)] if isinstance(parent, list) else parent[segment]
+                with self.subTest(format=fmt.id, mapping=variant.sites[0].values["mapping"]):
+                    self.assertEqual(parent.pop(key), runner.MARKER)
+                    self.assertEqual(document, yaml.safe_load(text))
+        self.assertGreater(swept, 0)
 
 
 if __name__ == "__main__":
