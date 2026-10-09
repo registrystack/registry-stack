@@ -1662,6 +1662,17 @@ test` or `bregctl package` reads it through `--baseline-package`, because a
 successor planned over it would keep row policies that admit a caller
 without a principal.
 
+A predecessor package is also read with the access spellings the earlier
+release wrote. When `bregctl test` or `bregctl package` compiles its packaged
+sources for a rehearsal, `rowBoundaries: []` reads as `unrestricted`, an
+omitted or empty `requiredScopes` reads as `unrestricted`, an empty
+`requiredPurposes`, `requesterClients`, or access-requirement list reads as
+omitted, an action permission's empty `rowBoundaries` is dropped, `anonymous:
+false` is dropped, and a `null` optional member reads as absent. Each keeps the
+meaning the earlier release gave it. This applies to the predecessor only: a
+project or module you check, build, package as the successor, or start still
+refuses the empty list.
+
 These configuration diagnostics are no longer reported, because nothing can
 reach them. The second column is the name the code table above gave them:
 

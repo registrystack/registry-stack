@@ -731,3 +731,38 @@ fn write_frozen_fixture() {
         .expect("the frozen fixture is written");
     inspect_package_integrity(&destination).expect("the written fixture verifies");
 }
+
+#[cfg(feature = "tooling")]
+#[test]
+fn a_predecessor_written_with_retired_row_reach_compiles_as_unrestricted_rows() {
+    // The fixture's registry.yaml writes `rowBoundaries: []` for "every row",
+    // the spelling an earlier release gave that meaning. A predecessor read
+    // gives it that meaning, so a rehearsal can compile the packaged sources.
+    let package = legacy_frozen_copy();
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    let (predecessor, registry) =
+        registry_breg::package::load_predecessor_rehearsal_baseline(package.path(), &context)
+            .expect("a retired row reach reads as a predecessor");
+    assert_eq!(registry.registry_id(), "person-registration-rhai");
+    assert_eq!(
+        predecessor.migration_baseline().registry_id,
+        registry.registry_id()
+    );
+}
+
+#[test]
+fn a_current_project_still_refuses_the_retired_row_reach() {
+    let source = fs::read(legacy_frozen_root().join("source/registry.yaml"))
+        .expect("the frozen predecessor carries its project source");
+    let refused = parse_project_yaml(&source).expect_err("an empty row reach is refused");
+    assert!(
+        refused
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code.starts_with("config.")),
+        "{:?}",
+        refused.diagnostics()
+    );
+}

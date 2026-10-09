@@ -16,8 +16,9 @@ use registry_platform_config::package::{
     VerifiedPackage as SharedVerifiedPackage, REVISION_FILE, SUM_FILE,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use thiserror::Error;
 
 use crate::artifacts::{restore_effective_model_planner_origins, REGISTRY_METADATA_ARTIFACT_PATH};
@@ -3890,7 +3891,8 @@ pub fn load_predecessor_rehearsal_baseline_with_verified_envelope(
     shared: &SharedVerifiedPackage,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry)> {
     let (package, loaded) = load_predecessor_closure(root, context, shared)?;
-    let registry = compile_package_sources(&package.manifest, &loaded)?;
+    let registry =
+        compile_package_sources(&package.manifest, &loaded, SourceSpelling::Predecessor)?;
     Ok((package, registry))
 }
 
@@ -4412,11 +4414,172 @@ fn load_closure(
     Ok(loaded)
 }
 
+/// How packaged authored sources are read.
+#[derive(Clone, Copy)]
+enum SourceSpelling {
+    /// The spellings this release writes. Anything else is refused.
+    Current,
+    /// A predecessor's sources, which an earlier release wrote. Access members
+    /// it spelled as an empty list read with the meaning that release gave
+    /// them, so a rehearsal can compile the predecessor it replaces.
+    Predecessor,
+}
+
+/// Rewrite the access spellings an earlier release wrote into the ones this
+/// release reads, keeping their meaning: an empty `rowBoundaries` reached
+/// every row, and an omitted or empty `requiredScopes` demanded no scope, so
+/// both become `unrestricted`; an empty narrowing list narrowed nothing, so it
+/// is omitted. Only a predecessor read calls this; a current source keeps
+/// refusing the empty list.
+fn retired_access_spellings_read(bytes: &[u8]) -> Result<Vec<u8>> {
+    fn unrestricted_rows(owner: &mut Value) {
+        let Some(owner) = owner.as_object_mut() else {
+            return;
+        };
+        if owner.get("rowBoundaries").is_some_and(is_empty_list) {
+            owner.insert("rowBoundaries".into(), json!("unrestricted"));
+        }
+    }
+    // An earlier release wrote an absent optional member as `null`.
+    fn without_nulls(value: &mut Value) {
+        match value {
+            Value::Object(members) => {
+                members.retain(|_, member| !member.is_null());
+                members.values_mut().for_each(without_nulls);
+            }
+            Value::Array(items) => items.iter_mut().for_each(without_nulls),
+            _ => {}
+        }
+    }
+    fn is_empty_list(value: &Value) -> bool {
+        value.as_array().is_some_and(Vec::is_empty)
+    }
+    // `anonymous: false` said nothing; `anonymous: true` stays, and the reader
+    // refuses it.
+    fn retire_unauthenticated_false(members: &mut serde_json::Map<String, Value>) {
+        if members.get("anonymous") == Some(&Value::Bool(false)) {
+            members.remove("anonymous");
+        }
+    }
+    fn profile(profile: &mut Value) {
+        let Some(members) = profile.as_object_mut() else {
+            return;
+        };
+        retire_unauthenticated_false(members);
+        if members.get("requiredScopes").is_none_or(is_empty_list) {
+            members.insert("requiredScopes".into(), json!("unrestricted"));
+        }
+        for narrowing in ["requiredPurposes", "requesterClients"] {
+            if members.get(narrowing).is_some_and(is_empty_list) {
+                members.remove(narrowing);
+            }
+        }
+        unrestricted_rows(profile);
+        for list in ["applyTargets", "requestPresence"] {
+            for item in profile
+                .get_mut(list)
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+            {
+                unrestricted_rows(item);
+            }
+        }
+        for permission in profile
+            .get_mut("permissions")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(members) = permission.as_object_mut() {
+                retire_unauthenticated_false(members);
+            }
+            // An action has no rows of its own; its targets carry the reach.
+            if permission.get("action").is_some() {
+                if let Some(members) = permission.as_object_mut() {
+                    if members.get("rowBoundaries").is_some_and(is_empty_list) {
+                        members.remove("rowBoundaries");
+                    }
+                }
+            } else {
+                unrestricted_rows(permission);
+            }
+            for list in ["applyTargets", "targets"] {
+                for item in permission
+                    .get_mut(list)
+                    .and_then(Value::as_array_mut)
+                    .into_iter()
+                    .flatten()
+                {
+                    unrestricted_rows(item);
+                }
+            }
+        }
+    }
+    fn requirements(owner: &mut Value) {
+        let Some(requirements) = owner
+            .get_mut("accessRequirements")
+            .and_then(Value::as_object_mut)
+        else {
+            return;
+        };
+        for narrowing in ["requiredScopes", "allowedPurposes", "rowBoundaries"] {
+            if requirements.get(narrowing).is_some_and(is_empty_list) {
+                requirements.remove(narrowing);
+            }
+        }
+    }
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the bytes are a sealed predecessor package the earlier release wrote, not operator configuration; the shared reader reads the rewritten bytes (CFG-YAML-1)"
+    )]
+    let parsed = serde_norway::from_slice(bytes);
+    let mut value: Value = parsed.map_err(|_| PackageError::Derivation)?;
+    without_nulls(&mut value);
+    for item in value
+        .get_mut("accessProfiles")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        profile(item);
+    }
+    for list in ["entities", "extendEntities"] {
+        for entity in value
+            .get_mut(list)
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            requirements(entity);
+            for item in entity
+                .get_mut("accessProfiles")
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+            {
+                profile(item);
+            }
+        }
+    }
+    serde_norway::to_string(&value)
+        .map(String::into_bytes)
+        .map_err(|_| PackageError::Derivation)
+}
+
+fn authored_source(bytes: &[u8], spelling: SourceSpelling) -> Result<Cow<'_, [u8]>> {
+    match spelling {
+        SourceSpelling::Current => Ok(Cow::Borrowed(bytes)),
+        SourceSpelling::Predecessor => retired_access_spellings_read(bytes).map(Cow::Owned),
+    }
+}
+
 /// Compile the sources of one verified package closure. The caller
 /// decides whether generated artifacts must also match byte for byte.
 fn compile_package_sources(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
+    spelling: SourceSpelling,
 ) -> Result<CompiledRegistry> {
     validate_source_inventory(manifest)?;
     let fixture_journeys = loaded
@@ -4429,7 +4592,8 @@ fn compile_package_sources(
     let project_bytes = loaded
         .get(&manifest.sources.project)
         .ok_or(PackageError::Derivation)?;
-    let project = parse_project_yaml(project_bytes).map_err(|_| PackageError::Derivation)?;
+    let project = parse_project_yaml(&authored_source(project_bytes, spelling)?)
+        .map_err(|_| PackageError::Derivation)?;
     let modules = manifest
         .sources
         .modules
@@ -4438,7 +4602,10 @@ fn compile_package_sources(
             loaded
                 .get(&source.path)
                 .ok_or(PackageError::Derivation)
-                .and_then(|bytes| parse_module_yaml(bytes).map_err(|_| PackageError::Derivation))
+                .and_then(|bytes| {
+                    parse_module_yaml(&authored_source(bytes, spelling)?)
+                        .map_err(|_| PackageError::Derivation)
+                })
         })
         .collect::<Result<Vec<RegistryModule>>>()?;
     let module_assets = captured_compiler_assets(manifest, loaded)?;
@@ -4490,7 +4657,7 @@ fn rederive(
     if manifest.engine_features != current_engine_features() {
         return Err(PackageError::Derivation);
     }
-    let compiled = compile_package_sources(manifest, loaded)?;
+    let compiled = compile_package_sources(manifest, loaded, SourceSpelling::Current)?;
     let expected_artifacts = expected_artifact_bytes(manifest, &compiled)?;
     let packaged_artifacts = manifest
         .files
