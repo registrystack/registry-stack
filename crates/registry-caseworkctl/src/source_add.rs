@@ -75,7 +75,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     if bytes.len() > MAX_PROVIDER_OUTPUT {
         bail!("BReg registry.yaml exceeds the source-add byte limit");
     }
-    let mut authored: Value = serde_norway::from_slice(&bytes)
+    let mut authored = authored_yaml("registry.yaml", &bytes)
         .context("parsing BReg registry.yaml without duplicate or custom YAML values")?;
     let registry_id = authored
         .pointer("/registry/id")
@@ -1153,7 +1153,7 @@ fn render_candidate_preserving_authored_text(
         rendered.push('\n');
         return Ok(rendered);
     }
-    let parsed: Value = serde_norway::from_str(text)?;
+    let parsed = authored_yaml("registry.yaml", text.as_bytes())?;
     let has_hook = parsed["entities"]
         .as_array()
         .and_then(|entities| entities.iter().find(|entity| entity["id"] == entity_id))
@@ -1184,8 +1184,8 @@ fn render_candidate_preserving_authored_text(
     } else if !has_permission {
         rendered = insert_reader_permission(&rendered, entity_id, reader)?;
     }
-    let round_trip: Value =
-        serde_norway::from_str(&rendered).context("parsing narrow BReg YAML patch")?;
+    let round_trip =
+        authored_yaml("registry.yaml", rendered.as_bytes()).context("parsing narrow BReg YAML patch")?;
     if &round_trip != expected {
         bail!("narrow BReg YAML patch changed unexpected authored content; no files were written");
     }
@@ -1979,8 +1979,8 @@ fn plan_breg_dev_clients(
 
     match fs::read(&dev_clients_path) {
         Ok(original) => {
-            let mut authored_dev_clients: Value =
-                serde_norway::from_slice(&original).context("parsing BReg dev-clients.yaml")?;
+            let mut authored_dev_clients =
+                authored_yaml("dev-clients.yaml", &original).context("parsing BReg dev-clients.yaml")?;
             let mut changes = apply_dev_clients_candidate(&mut authored_dev_clients, &clients)?;
             for (authority_id, authority) in &local_review_authorities {
                 apply_local_review_authority_candidate(
@@ -2295,7 +2295,7 @@ fn render_dev_clients_preserving_authored_text(
         rendered.push('\n');
         return Ok(rendered);
     }
-    let parsed: Value = serde_norway::from_str(text)?;
+    let parsed = authored_yaml("dev-clients.yaml", text.as_bytes())?;
     let present = parsed["clients"].as_array().cloned().unwrap_or_default();
     let missing: Vec<&Value> = clients
         .iter()
@@ -2306,7 +2306,7 @@ fn render_dev_clients_preserving_authored_text(
         rendered = insert_dev_clients(&rendered, &missing)?;
     }
     for (authority_id, authority) in authorities {
-        let parsed_so_far: Value = serde_norway::from_str(&rendered)?;
+        let parsed_so_far = authored_yaml("dev-clients.yaml", rendered.as_bytes())?;
         if parsed_so_far["reviewAuthorities"]
             .get(authority_id)
             .is_none()
@@ -2325,7 +2325,7 @@ fn render_dev_clients_preserving_authored_text(
         }
     }
     for (executor_id, executor) in executors {
-        let parsed_so_far: Value = serde_norway::from_str(&rendered)?;
+        let parsed_so_far = authored_yaml("dev-clients.yaml", rendered.as_bytes())?;
         if parsed_so_far["reviewExecutors"].get(executor_id).is_none() {
             if parsed_so_far.get("reviewExecutors").is_some() {
                 rendered = insert_local_review_executor(&rendered, executor_id, executor)?;
@@ -2337,8 +2337,8 @@ fn render_dev_clients_preserving_authored_text(
             }
         }
     }
-    let round_trip: Value =
-        serde_norway::from_str(&rendered).context("parsing narrow BReg dev-clients YAML patch")?;
+    let round_trip = authored_yaml("dev-clients.yaml", rendered.as_bytes())
+        .context("parsing narrow BReg dev-clients YAML patch")?;
     if &round_trip != expected {
         bail!("narrow BReg dev-clients YAML patch changed unexpected authored content; no files were written");
     }
@@ -2613,6 +2613,17 @@ fn runtime_binding(
     }
     read_runtime_binding(&format!("sources/{source_id}.breg-runtime.yaml"), &binding)?;
     Ok(binding)
+}
+
+/// A BReg authored document, such as `registry.yaml` or `dev-clients.yaml`, as
+/// JSON, read through the shared reader. `bregctl check` has already read the
+/// same file, so a refusal here names a file changed since.
+fn authored_yaml(file: &str, bytes: &[u8]) -> Result<Value> {
+    Reader::new(file)
+        .scan(bytes)
+        .map_err(|report| anyhow::anyhow!("{report}"))?
+        .map(|root| root.to_json_value())
+        .with_context(|| format!("{file} is empty"))
 }
 
 /// Read a runtime binding `runtime_binding` rendered back through the shared

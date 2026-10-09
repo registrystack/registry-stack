@@ -469,7 +469,11 @@ pub(crate) fn to_indented_yaml<T: serde::Serialize>(value: &T) -> Result<String>
         rendered.push_str(line);
         rendered.push('\n');
     }
-    let reread = |text: &str| serde_norway::from_str::<serde_norway::Value>(text);
+    let reread = |text: &str| {
+        registry_platform_yaml::Reader::new("rendered YAML")
+            .scan(text.as_bytes())
+            .map(|root| root.map(|node| node.to_json_value()))
+    };
     if reread(&compact).ok() != reread(&rendered).ok() {
         bail!("indenting the rendered YAML changed its content");
     }

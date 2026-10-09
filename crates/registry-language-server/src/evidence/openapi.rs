@@ -342,7 +342,7 @@ fn reuse_or_parse(
 impl Analysis {
     #[allow(
         clippy::disallowed_methods,
-        reason = "an OpenAPI description is an external grammar Registry Stack does not own; \
+        reason = "evidence/source-openapi is registered as an external format: an OpenAPI description is a grammar Registry Stack does not own; \
                   it may use anchors, aliases, and tags the shared configuration reader refuses"
     )]
     fn parse(path: &Path, text: &str, index_positions: bool) -> Result<Option<Self>, String> {

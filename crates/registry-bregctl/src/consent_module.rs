@@ -27,6 +27,7 @@ use std::path::Path;
 use registry_breg::compiler::module_digest_with_assets;
 use registry_breg::contract::{FieldTypeSource, ModuleLockSource};
 use registry_breg::{parse_module_yaml, parse_project_yaml, Diagnostic};
+use registry_platform_yaml::Reader;
 use serde_json::{json, Value};
 
 use crate::safe_path::{SafeDir, SafePathError};
@@ -472,6 +473,16 @@ fn render_registry(source: &CapturedProjectSource, plan: &Plan) -> Result<Vec<u8
     Ok(rendered)
 }
 
+/// A YAML document read through the shared reader, as JSON, or `None` when it
+/// is empty or the reader refuses it.
+fn yaml_value(file: &str, bytes: &[u8]) -> Option<Value> {
+    Reader::new(file)
+        .scan(bytes)
+        .ok()
+        .flatten()
+        .map(|node| node.to_json_value())
+}
+
 /// Whether `rendered` parses to the authored document with the planned items
 /// appended and the module locks replaced, and to nothing else.
 fn renders_exactly(
@@ -480,9 +491,9 @@ fn renders_exactly(
     plan: &Plan,
     locks: &[ModuleLockSource],
 ) -> bool {
-    let (Ok(mut expected), Ok(actual)) = (
-        serde_norway::from_slice::<Value>(original),
-        serde_norway::from_slice::<Value>(rendered),
+    let (Some(mut expected), Some(actual)) = (
+        yaml_value("registry.yaml", original),
+        yaml_value("rendered registry.yaml", rendered),
     ) else {
         return false;
     };
@@ -496,7 +507,7 @@ fn renders_exactly(
         if items.is_empty() {
             continue;
         }
-        let Ok(Value::Array(items)) = serde_norway::from_str::<Value>(items) else {
+        let Some(Value::Array(items)) = yaml_value("planned items", items.as_bytes()) else {
             return false;
         };
         let slot = document
@@ -511,7 +522,7 @@ fn renders_exactly(
         list.extend(items);
     }
     if let Some(items) = &plan.dataset_addition {
-        let Ok(Value::Array(items)) = serde_norway::from_str::<Value>(items) else {
+        let Some(Value::Array(items)) = yaml_value("planned items", items.as_bytes()) else {
             return false;
         };
         let Some(projection) = document

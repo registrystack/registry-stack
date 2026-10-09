@@ -5143,8 +5143,12 @@ fn validate_companion_rejection(
         })
         .ok_or(CliError("fixture companion-bundle label is invalid"))?;
     require_expected(case, "bundle-rejection")?;
-    let matrix: Value = serde_norway::from_slice(ANTI_RECONSTRUCTION_FIXTURE)
-        .map_err(|_| CliError("anti-reconstruction fixture is invalid"))?;
+    let matrix: Value = registry_platform_yaml::Reader::new("anti-reconstruction.yaml")
+        .scan(ANTI_RECONSTRUCTION_FIXTURE)
+        .ok()
+        .flatten()
+        .map(|root| root.to_json_value())
+        .ok_or(CliError("anti-reconstruction fixture is invalid"))?;
     let rejected = matrix
         .get("rejected_bundles")
         .and_then(Value::as_array)

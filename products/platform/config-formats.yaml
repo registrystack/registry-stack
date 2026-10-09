@@ -3961,7 +3961,11 @@ formats:
       checkedBy: none
     target: none
     schema: none
-    reader: none
+    reader:
+      crate: registry-thunderid-tooling
+      file: crates/registry-thunderid-tooling/src/render.rs
+      function: serde_yaml_parse
+      type: untyped
     check: none
     example: none
     conformance: none

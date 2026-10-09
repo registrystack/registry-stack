@@ -1033,6 +1033,11 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
                 MAX_OPENAPI_BYTES,
                 "retained OpenAPI document",
             )?;
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "evidence/source-openapi is registered as an external format: an OpenAPI description is a grammar Registry Stack does not own; \
+                          it may use anchors, aliases, and tags the shared configuration reader refuses"
+            )]
             let openapi: Value = serde_norway::from_slice(&openapi_text)
                 .context("parsing retained OpenAPI document as YAML or JSON")?;
             validate_openapi_version(&openapi)?;

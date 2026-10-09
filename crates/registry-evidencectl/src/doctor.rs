@@ -708,7 +708,8 @@ fn check_acquisition(
         .map(Vec::as_slice)
         .unwrap_or_default()
     {
-        let Ok(projected) = serde_norway::from_value::<RequirementProjection>(requirement.clone())
+        let Ok(projected) = serde_json::to_value(requirement)
+            .and_then(serde_json::from_value::<RequirementProjection>)
         else {
             // Not passed over in silence: an acquisition this projection does
             // not recognize is one whose calls it cannot render and whose gate

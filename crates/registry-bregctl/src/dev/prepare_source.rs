@@ -787,8 +787,11 @@ fn finish(original: &State, transition: &Transition) -> Result<()> {
         fs::rename(root.join("build"), baseline.join("build"))?;
     }
     if !baseline.join("runtime.yaml").exists() {
-        let mut runtime: Value =
-            serde_norway::from_slice(&private::read(&root.join("runtime.yaml"), MAX_BYTES)?)?;
+        let mut runtime: Value = Reader::new("runtime.yaml")
+            .scan(&private::read(&root.join("runtime.yaml"), MAX_BYTES)?)
+            .map_err(|report| anyhow::anyhow!("{report}"))?
+            .context("runtime.yaml is empty")?
+            .to_json_value();
         runtime["package"]["root"] = json!(baseline.join("build/package"));
         private::replace(
             &baseline.join("runtime.yaml"),

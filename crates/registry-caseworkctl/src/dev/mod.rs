@@ -1263,9 +1263,11 @@ fn export_client(
 /// authored registry.yaml. A package names no deployment, so `bregctl dev`
 /// serves it with its registry id as the runtime `identity.instanceId`.
 fn event_source(registry: &Path) -> Result<String> {
-    let authored: Value =
-        serde_norway::from_slice(&bounded(&registry.join("registry.yaml"), "registry.yaml")?)
-            .context("registry.yaml must parse")?;
+    let authored = Reader::new("registry.yaml")
+        .scan(&bounded(&registry.join("registry.yaml"), "registry.yaml")?)
+        .map_err(|report| anyhow::anyhow!("registry.yaml must parse: {report}"))?
+        .context("registry.yaml is empty")?
+        .to_json_value();
     let id = authored["registry"]["id"]
         .as_str()
         .context("registry.yaml declares no registry.id")?;
