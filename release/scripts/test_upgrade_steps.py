@@ -493,9 +493,6 @@ class FragmentTest(unittest.TestCase):
 
 
 
-FRAGMENT_NAMES = ("breg", "casework", "evidence", "messaging")
-
-
 def write(root: Path, name: str, text: str) -> Path:
     path = root / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -509,10 +506,20 @@ class ReleaseCatalogTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.catalog = upgrade_steps.load_catalog()
-        cls.items = {
-            name: upgrade_steps.check_fragment(upgrade_steps.FRAGMENTS / f"{name}.md",
-                                               cls.catalog)
-            for name in FRAGMENT_NAMES}
+        cls.fragments = sorted(upgrade_steps.FRAGMENTS.glob("*.md"))
+        cls.items = {}
+        cls.refused = {}
+        for fragment in cls.fragments:
+            try:
+                cls.items[fragment.stem] = upgrade_steps.check_fragment(fragment, cls.catalog)
+            except Error as error:
+                # The error names the fragment and the heading line.
+                cls.refused[fragment.stem] = str(error)
+
+    def test_every_fragment_marks_every_breaking_heading(self) -> None:
+        self.assertEqual(self.refused, {})
+        self.assertEqual(sorted(self.items),
+                         sorted(path.stem for path in self.fragments))
 
     def test_every_breaking_item_names_a_step_or_a_reserved_word(self) -> None:
         for name, items in self.items.items():
@@ -794,6 +801,153 @@ accessProfiles:
         self.assertIn("bregctl test", manual[0])
         self.assertIn(".casework/dev", manual[1])
         self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["runtime", "target"])
+
+
+class ProductStepsApplyTest(unittest.TestCase):
+    """The Scheduling, Render, and Platform edit steps on the previous release's shapes."""
+
+    def setUp(self) -> None:
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.root = Path(self._directory.name)
+        self.runtime = self.root / "runtime"
+        self.runtime.mkdir()
+
+    def apply(self, *ids: str) -> list[str]:
+        return upgrade_steps.apply_steps(
+            list(ids), {"project": self.root, "runtime": self.runtime})
+
+    def load(self, name: str, root: Path | None = None) -> Any:
+        return upgrade_steps.load_document((root or self.root) / name)
+
+    def test_scheduling_project_keys(self) -> None:
+        write(self.root, "scheduling.yaml", """\
+apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
+kind: SchedulingPolicyPackage
+scheduling: {id: registry-updates, version: 3}
+holdPolicy: {maxPerCaller: 2, ttlMinutes: 10}
+offerings:
+  - id: a
+    exactTime: {maxRecipients: 4, durationMinutes: 30}
+    reminders: [{minutesBefore: 1440}, {minutesBefore: 120}]
+  - id: b
+hooks:
+  - {id: h, handler: {kind: url, destination: d}}
+""")
+        self.apply("scheduling-project-keys")
+        project = self.load("scheduling.yaml")
+        self.assertEqual(list(project)[:3], ["apiVersion", "kind", "project"])
+        self.assertEqual(project["apiVersion"],
+                         "id.registrystack.org/formats/scheduling/project/v1alpha1")
+        self.assertEqual(project["kind"], "SchedulingProject")
+        self.assertEqual(project["project"], {"id": "registry-updates", "version": 3})
+        self.assertEqual(project["holdPolicy"], {"maximumPerCaller": 2, "ttlMinutes": 10})
+        self.assertEqual(project["offerings"][0]["exactTime"],
+                         {"maximumRecipients": 4, "durationMinutes": 30})
+        self.assertEqual(project["offerings"][0]["reminders"],
+                         [{"offsetMinutes": 1440}, {"offsetMinutes": 120}])
+        self.assertEqual(project["hooks"][0]["handler"], {"type": "url", "destination": "d"})
+
+    def test_scheduling_records_and_fixture_units_policy(self) -> None:
+        write(self.root, "records.yaml", """\
+windows:
+  - id: w
+    unitsPolicy: {kind: perRecipient, perRecipient: 1}
+  - id: x
+    unitsPolicy:
+      kind: bandedTable
+      input: serviceRecipientCount
+      aboveHighestBand: {policy: refuse}
+  - id: y
+    unitsPolicy: {kind: fixed, units: 1}
+""")
+        write(self.root, "fixtures/a.yml", """\
+apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+kind: SchedulingFixture
+now: 2026-10-05T00:00:00Z
+facts:
+  windows:
+    - {id: w, unitsPolicy: {kind: bandedTable, input: serviceRecipientCount}}
+cases:
+  - {id: c, request: {policyRevision: 1}, expect: {outcome: admitted}}
+""")
+        self.apply("scheduling-records-envelope", "scheduling-fixture-keys")
+        records = self.load("records.yaml")
+        self.assertEqual(records["apiVersion"],
+                         "id.registrystack.org/formats/scheduling/records/v1alpha1")
+        self.assertEqual(records["kind"], "SchedulingRecords")
+        self.assertEqual([window["unitsPolicy"] for window in records["windows"]], [
+            {"type": "per-recipient", "perRecipient": 1},
+            {"type": "banded-table", "input": "service-recipient-count",
+             "aboveHighestBand": {"type": "refuse"}},
+            {"type": "fixed", "units": 1}])
+        fixture = (self.root / "fixtures/a.yml").read_text(encoding="utf-8")
+        self.assertIn("now: 2026-10-05T00:00:00Z\n", fixture)
+        fixture = self.load("fixtures/a.yml")
+        self.assertEqual(fixture["apiVersion"],
+                         "id.registrystack.org/formats/scheduling/fixture/v1alpha1")
+        self.assertEqual(fixture["facts"]["windows"][0]["unitsPolicy"],
+                         {"type": "banded-table", "input": "service-recipient-count"})
+        self.assertEqual(fixture["cases"][0]["expect"], {"type": "admitted"})
+
+    def test_scheduling_runtime_keys(self) -> None:
+        write(self.runtime, "runtime.yaml", """\
+apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1
+kind: SchedulingRuntime
+audit: {retainDays: 90}
+retention: {attemptReceiptDays: 30, hookPayloadDays: 7}
+""")
+        self.apply("scheduling-runtime-keys")
+        runtime = self.load("runtime.yaml", self.runtime)
+        self.assertEqual(runtime["apiVersion"],
+                         "id.registrystack.org/formats/scheduling/runtime/v1alpha1")
+        self.assertEqual(runtime["audit"], {"retentionDays": 90})
+        self.assertEqual(runtime["retention"], {"attemptReceiptRetentionDays": 30,
+                                                 "hookPayloadRetentionDays": 7})
+
+    def test_render_manifest_keys(self) -> None:
+        write(self.root, "manifest.yaml", """\
+apiVersion: render.registrystack.org/v1alpha1
+kind: RenderBundle
+bundleVersion: 1
+documents:
+  - {id: card, version: 1, entry: templates/card.typ, schema: schemas/card.schema.json}
+  - {id: slip, version: 1, entry: templates/slip.typ, schema: schemas/slip.schema.json}
+""")
+        self.apply("render-manifest-keys")
+        manifest = self.load("manifest.yaml")
+        self.assertEqual(manifest["apiVersion"],
+                         "id.registrystack.org/formats/render/bundle/v1alpha1")
+        self.assertEqual(manifest["documents"][1],
+                         {"id": "slip", "version": 1, "entryFile": "templates/slip.typ",
+                          "schemaFile": "schemas/slip.schema.json"})
+
+    def test_render_runtime_keys_scale_the_grace_to_milliseconds(self) -> None:
+        write(self.runtime, "runtime.yaml", """\
+apiVersion: registry.registrystack.org/render-runtime/v1alpha1
+kind: RenderRuntimeConfig
+listener: {bind: "127.0.0.1:8080", shutdownGraceSeconds: 30}
+limits: {maxOutputBytes: 100, maxRequestBodyBytes: 200, maxConcurrency: 3, renderTimeoutSeconds: 20}
+audit: {retainDays: 14}
+""")
+        self.apply("render-runtime-keys")
+        runtime = self.load("runtime.yaml", self.runtime)
+        self.assertEqual(runtime["apiVersion"],
+                         "id.registrystack.org/formats/render/runtime/v1alpha1")
+        self.assertEqual(runtime["listener"], {"bind": "127.0.0.1:8080",
+                                               "shutdownGraceMilliseconds": 30000})
+        self.assertEqual(runtime["limits"], {"maximumOutputBytes": 100,
+                                             "maximumRequestBytes": 200,
+                                             "maximumConcurrentRenders": 3,
+                                             "renderTimeoutSeconds": 20})
+        self.assertEqual(runtime["audit"], {"retentionDays": 14})
+
+    def test_platform_task_connection_envelope(self) -> None:
+        write(self.root, "task-connection.yaml", "version: 1\ncaseworkUrl: http://127.0.0.1:8090\n")
+        self.apply("platform-task-connection-envelope")
+        self.assertEqual(self.load("task-connection.yaml"), {
+            "apiVersion": "id.registrystack.org/formats/platform/task-connection/v1alpha1",
+            "kind": "PlatformTaskConnection", "caseworkUrl": "http://127.0.0.1:8090"})
 
 
 class RehearsalEnvelopeTieTest(unittest.TestCase):

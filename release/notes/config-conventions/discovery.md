@@ -3,6 +3,7 @@
 Track: small products (Discovery, Render, Manifest, platform tooling files).
 
 ## BREAKING changes
+<!-- upgrade: 1=discovery-reader-refusals; 2=discovery-reader-refusals; 3=discovery-reader-refusals; 4=discovery-reader-refusals; 5=discovery-index-rebuild; 6=no-file -->
 
 Each change below refuses a file that was already wrong, or normalizes the
 unpromised index. Promised spellings are unchanged in this release; the

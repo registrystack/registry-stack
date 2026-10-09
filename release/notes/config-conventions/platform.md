@@ -10,6 +10,7 @@ writes and reads back. Both are read by the shared Registry Stack reader and
 open with `apiVersion` and `kind`.
 
 ## BREAKING changes
+<!-- upgrade: 1=platform-task-connection-envelope; 2=platform-assertion-key-ref; 3=no-file; 4=platform-task-connection-reader-refusals; 5=no-file; 6=platform-task-connection-bounds; 7=platform-session-state -->
 
 1. **A task connection file opens with `apiVersion` and `kind`.** It begins
    with

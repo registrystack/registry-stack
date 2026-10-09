@@ -10,6 +10,7 @@ and hold documents, and the Rust, Node.js, and Python clients keep
 `maxRecipients`, `minutesBefore`, and `schedulingId`.
 
 ## BREAKING: the authored files are read by the shared configuration reader
+<!-- upgrade: scheduling-reader-refusals -->
 
 `scheduling.yaml`, `records.yaml`, and every fixture are read through the
 reader every Registry Stack product shares, wherever Scheduling reads them:
@@ -53,6 +54,7 @@ runtime file was already read by the shared reader.
   `*.yaml`.
 
 ## BREAKING: `scheduling.yaml` is a `SchedulingProject`
+<!-- upgrade: scheduling-project-keys, scheduling-project-version-and-channels -->
 
 Each old spelling is refused at its position as `config.removed-key`, and
 the message names its replacement; the old `apiVersion` is refused as
@@ -92,6 +94,7 @@ first line of every file it creates, and
 fixture, and runtime schemas for an editor.
 
 ## BREAKING: `records.yaml` and fixtures carry their own envelopes
+<!-- upgrade: scheduling-records-envelope, scheduling-fixture-keys, scheduling-fixture-policy-revision -->
 
 | Old spelling | New spelling | Migration |
 |---|---|---|
@@ -116,6 +119,7 @@ fixture names that is not a Scheduling problem code is refused at
 `/cases/N/expect/code`.
 
 ## BREAKING: the runtime file's keys and apiVersion are renamed
+<!-- upgrade: scheduling-runtime-keys, scheduling-runtime-null-members -->
 
 The `scheduling` runtime and every `schedulingctl` command that reads a
 runtime file (`check --runtime-config`, `plan`, `apply`, `status`, `records
@@ -141,6 +145,7 @@ The editor schema for the runtime file is published at
 `https://id.registrystack.org/schemas/scheduling/runtime/runtime.v1alpha1.schema.json`.
 
 ## BREAKING: runtime refusals carry their own codes and JSON Pointers
+<!-- upgrade: no-file -->
 
 `scheduling serve` prints `scheduling: the Scheduling runtime configuration
 was refused` and then every rule the runtime file breaks, in the shared
@@ -190,12 +195,14 @@ and pointer from the error:
 | the static OIDC signing keys could not be read | `scheduling.runtime.unreadable-jwks-secret` | `/authentication/oidc/jwksSource/documentRef` |
 
 ## BREAKING: `authentication.oidc.assertionIssuers: {}` is refused
+<!-- upgrade: scheduling-empty-assertion-issuers -->
 
 | Before | Now | Migration |
 |---|---|---|
 | `authentication.oidc.assertionIssuers: {}`, which applied no assertion-issuer rule | `config.invalid-value` at `/authentication/oidc/assertionIssuers` | Delete the member: omitting it applies no assertion-issuer rule. |
 
 ## BREAKING: Rust API
+<!-- upgrade: no-file -->
 
 `registry-scheduling`:
 
@@ -234,6 +241,7 @@ and pointer from the error:
   by `SchedulingPolicy::hook_declarations`.
 
 ## BREAKING: `schedulingctl check`, `test`, and their reports
+<!-- upgrade: no-file -->
 
 - A finding is an error: `check` exits 1 when it reports one, where a
   finding that was not a malformed value exited 0 with `status: incomplete`.
@@ -280,6 +288,7 @@ and pointer from the error:
   clean, 1 refused, 2 usage, 3 a file it needs could not be read.
 
 ## BREAKING: a database an earlier release wrote is not read
+<!-- upgrade: scheduling-database-restart -->
 
 The active policy, published windows, and environment records are retained
 in the database in the shape of the authored files, so a database an

@@ -6,6 +6,7 @@ Render is experimental, so its spellings are normalized in this release
 rather than held for the stable release.
 
 ## BREAKING changes
+<!-- upgrade: 1=render-manifest-keys; 2=render-labels-envelope; 3=render-local-identifiers; 4=render-reader-refusals; 5=no-file; 6=render-package-digest; 7=render-runtime-keys; 8=render-runtime-limit-bounds; 9=no-file; 10=render-versions-from-one; 11=render-bundle-foreign-kind -->
 
 1. **The bundle manifest moves to id.registrystack.org and names its
    files.** `manifest.yaml` opens with

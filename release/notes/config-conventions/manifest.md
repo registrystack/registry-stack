@@ -10,6 +10,7 @@ file moves to `apiVersion` and `kind`. What changes is how the command line read
 them and how it reports what it finds.
 
 ## BREAKING changes
+<!-- upgrade: 1=no-file; 2=no-file; 3=manifest-reader-refusals; 4=manifest-profile-closed-model; 5=no-file -->
 
 1. **Both files are read by the shared reader, and every finding is
    reported in the shared shape.** `registry-manifest` reads a metadata
