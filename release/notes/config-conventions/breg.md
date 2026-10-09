@@ -1673,6 +1673,10 @@ false` is dropped, and a `null` optional member reads as absent. Each keeps the
 meaning the earlier release gave it. This applies to the predecessor only: a
 project or module you check, build, package as the successor, or start still
 refuses the empty list.
+The predecessor's sealed sources are read through the shared reader's
+structural pass, so a sealed source outside the YAML subset (an anchor, an
+alias, a tag, a merge key, or a duplicate key) is no longer a readable upgrade
+baseline and the read refuses it.
 
 These configuration diagnostics are no longer reported, because nothing can
 reach them. The second column is the name the code table above gave them:
