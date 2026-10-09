@@ -4,11 +4,12 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use registry_platform_yaml::{
-    tagged_union, ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey,
+    escape_pointer_segment, tagged_union, ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader,
+    RemovedKey, Report, Severity,
 };
 use serde::Deserialize;
 
-use super::DocumentRefused;
+use super::{files::artifact_path, DocumentRefused};
 
 /// The `apiVersion` of a source resolution file.
 pub(crate) const RESOLUTION_API_VERSION: &str =
@@ -76,18 +77,47 @@ fn artifacts_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Sche
 }
 
 /// Decode `bytes`, the resolution file at `file`, refusing it with the
-/// reader's diagnostics.
+/// reader's diagnostics. The file's documented bounds are enforced here, so
+/// the check and the import read it alike: at most [`MAX_ARTIFACTS`]
+/// artifacts, each keyed by a safe artifact path.
 pub(crate) fn decode_resolution_file(
     file: &str,
     bytes: &[u8],
 ) -> Result<ResolutionFile, DocumentRefused> {
-    Reader::new(file)
+    let refused = |report| DocumentRefused {
+        document: "source resolution file",
+        report,
+    };
+    let decoded = Reader::new(file)
         .decode::<ResolutionFile>(bytes, &Expect::one(&RESOLUTION_FORMAT))
-        .map(|decoded| decoded.value)
-        .map_err(|report| DocumentRefused {
-            document: "source resolution file",
-            report,
-        })
+        .map_err(refused)?;
+    let artifacts = &decoded.value.artifacts;
+    let mut found = Vec::new();
+    if artifacts.len() > MAX_ARTIFACTS {
+        found.push(decoded.document.diagnostic_at_value(
+            Severity::Error,
+            "evidence.source-resolution.too-many-artifacts",
+            "/artifacts",
+            &format!("a source resolution file decides at most {MAX_ARTIFACTS} artifacts"),
+            "Split the decisions across several resolution files.",
+        ));
+    }
+    for artifact in artifacts.keys() {
+        if let Err(error) = artifact_path(artifact) {
+            found.push(decoded.document.diagnostic_at_key(
+                Severity::Error,
+                "evidence.source-resolution.invalid-artifact",
+                &format!("/artifacts/{}", escape_pointer_segment(artifact)),
+                &error.to_string(),
+                "Key each decision by the artifact path the import reports.",
+            ));
+        }
+    }
+    if found.is_empty() {
+        Ok(decoded.value)
+    } else {
+        Err(refused(Report::new(found)))
+    }
 }
 
 /// The derived JSON Schema of one resolution file.

@@ -1276,6 +1276,58 @@ fn resolution_refusal(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+fn resolution_text(keys: &[String]) -> String {
+    let artifacts = keys
+        .iter()
+        .map(|key| format!("\"{key}\": {{\"type\": \"keep\"}}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"apiVersion\": \"{RESOLUTION_API_VERSION}\", \"kind\": \"{RESOLUTION_KIND}\", \"artifacts\": {{{artifacts}}}}}"
+    )
+}
+
+#[test]
+fn a_resolution_file_over_the_artifact_count_is_refused() {
+    let keys = |count: usize| {
+        (0..count)
+            .map(|index| format!("sources/s{index}.yaml"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        resolution_refusal(&resolution_text(&keys(257))),
+        [(
+            "evidence.source-resolution.too-many-artifacts".to_owned(),
+            "/artifacts".to_owned()
+        )]
+    );
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("resolutions.json");
+    fs::write(&path, resolution_text(&keys(256))).unwrap();
+    assert_eq!(read_resolutions(Some(&path)).unwrap().len(), 256);
+}
+
+#[test]
+fn a_resolution_file_keyed_by_an_unsafe_artifact_is_refused_by_the_check() {
+    for key in ["../escape.yaml", "sources/Upper.yaml", "other/a.yaml"] {
+        let text = resolution_text(&[key.to_owned()]);
+        let refused = check_resolution_file("resolutions.json", text.as_bytes())
+            .expect_err("the unsafe key is refused");
+        let diagnostics = refused.report.diagnostics();
+        assert_eq!(diagnostics.len(), 1, "{key}");
+        assert_eq!(
+            diagnostics[0].code, "evidence.source-resolution.invalid-artifact",
+            "{key}"
+        );
+        assert!(diagnostics[0].path.starts_with("/artifacts/"), "{key}");
+        assert!(
+            diagnostics[0].source.as_ref().unwrap().line.is_some(),
+            "{key}"
+        );
+        assert_eq!(resolution_refusal(&text).len(), 1, "{key}");
+    }
+}
+
 #[test]
 fn the_registered_resolution_example_is_readable() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(RESOLUTION_EXAMPLE);

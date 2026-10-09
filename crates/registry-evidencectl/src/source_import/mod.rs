@@ -177,11 +177,7 @@ pub(crate) fn read_resolutions(path: Option<&Path>) -> Result<BTreeMap<String, R
         read(&parent, name, MAX_FILE_BYTES)?.ok_or_else(|| anyhow!("resolution file is absent"))?;
     let mut resolutions =
         decode_resolution_file(&path.display().to_string(), content.text.as_bytes())?;
-    if resolutions.artifacts.len() > MAX_ARTIFACTS {
-        bail!("source resolution file allows at most {MAX_ARTIFACTS} artifacts");
-    }
-    for (artifact, resolution) in &mut resolutions.artifacts {
-        artifact_path(artifact)?;
+    for resolution in resolutions.artifacts.values_mut() {
         if let Resolution::File { path } = resolution {
             if !path.is_absolute() {
                 *path = parent.join(&*path);

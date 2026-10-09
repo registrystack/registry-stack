@@ -217,19 +217,52 @@ mod tests {
     #[test]
     fn a_resolution_file_the_schema_turns_away_is_turned_away_by_the_reader() {
         let schema = compile(SOURCE_RESOLUTION_SCHEMA_FILE);
-        let file = |artifact: serde_json::Value| {
+        let file = |artifacts: serde_json::Value| {
             serde_json::json!({
                 "apiVersion": "id.registrystack.org/formats/evidence/source-resolution/v1alpha1",
                 "kind": "EvidenceSourceResolution",
-                "artifacts": {"sources/lookup.yaml": artifact},
+                "artifacts": artifacts,
             })
         };
-        assert!(schema.is_valid(&file(serde_json::json!({"type": "keep"}))));
-        assert!(schema.is_valid(&file(serde_json::json!({"type": "adopt"}))));
-        assert!(schema.is_valid(&file(serde_json::json!({"type": "file", "path": "a"}))));
-        assert!(!schema.is_valid(&file(serde_json::json!({"type": "merge"}))));
-        assert!(!schema.is_valid(&file(serde_json::json!({"type": "keep", "path": "a"}))));
-        assert!(!schema.is_valid(&file(serde_json::json!({"type": "file"}))));
+        let one = |artifact: serde_json::Value| {
+            file(serde_json::json!({"sources/lookup.yaml": artifact}))
+        };
+        let many = |count: usize| {
+            file(serde_json::Value::Object(
+                (0..count)
+                    .map(|index| {
+                        (
+                            format!("sources/s{index}.yaml"),
+                            serde_json::json!({"type": "keep"}),
+                        )
+                    })
+                    .collect(),
+            ))
+        };
+        let reads = |document: &serde_json::Value| {
+            crate::source_import::check_resolution_file(
+                "resolutions.json",
+                document.to_string().as_bytes(),
+            )
+            .is_ok()
+        };
+        for (document, accepted) in [
+            (one(serde_json::json!({"type": "keep"})), true),
+            (one(serde_json::json!({"type": "adopt"})), true),
+            (one(serde_json::json!({"type": "file", "path": "a"})), true),
+            (one(serde_json::json!({"type": "merge"})), false),
+            (one(serde_json::json!({"type": "keep", "path": "a"})), false),
+            (one(serde_json::json!({"type": "file"})), false),
+            (many(256), true),
+            (many(257), false),
+        ] {
+            assert_eq!(
+                (schema.is_valid(&document), reads(&document)),
+                (accepted, accepted),
+                "{}",
+                document.to_string().chars().take(120).collect::<String>()
+            );
+        }
     }
 
     #[test]
