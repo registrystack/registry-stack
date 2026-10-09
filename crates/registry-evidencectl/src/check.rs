@@ -150,6 +150,13 @@ fn check_and_capture_target(
             .map_err(|error| refusal(error, captured_project, project))?;
     }
     found.extend(declared_asset_findings(captured_project, &inventory)?);
+    for plan in yaml_files_under(
+        captured_project,
+        Path::new(MOCKS_DIRECTORY),
+        &mut Gathered::default(),
+    )? {
+        found.extend(source_mock::check_plan_dependencies(project, &plan));
+    }
     let mut found = in_project(found, captured_project, project);
     if found.has_errors() {
         found.set_files_checked(project_snapshot.files);
@@ -3070,6 +3077,66 @@ factSchema: schemas/record-status-facts.schema.yaml
             .find(|diagnostic| diagnostic.code == "evidence.project.misplaced-file")
             .unwrap();
         assert_eq!(misplaced.source.as_ref().unwrap().line, Some(2));
+    }
+
+    /// A copy of the reference authoring project, the one project whose mock
+    /// plan and response body are complete.
+    fn reference_project() -> tempfile::TempDir {
+        fn copy(source: &Path, destination: &Path) {
+            fs::create_dir_all(destination).unwrap();
+            for entry in fs::read_dir(source).unwrap() {
+                let entry = entry.unwrap();
+                let target = destination.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy(&entry.path(), &target);
+                } else {
+                    fs::copy(entry.path(), target).unwrap();
+                }
+            }
+        }
+        let project = temporary();
+        copy(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../products/evidence/reference/authoring-projects/example"),
+            project.path(),
+        );
+        project
+    }
+
+    #[test]
+    fn the_check_reads_what_a_mock_plan_names() {
+        const BODY: &str = "mocks/cases/get-places-61c06ed8/default-37a8eec1.json";
+        let project = reference_project();
+
+        fs::write(project.path().join(BODY), br#"{"planted-value":"x"}"#).unwrap();
+        let report = refused(check(project.path(), None, false, false).unwrap_err());
+        assert!(
+            reports(
+                &report,
+                project.path(),
+                "evidence.mock-plan.invalid",
+                "mocks/source.yaml",
+                "/operations/0/cases/0/body"
+            ),
+            "{:?}",
+            sites(&report, project.path())
+        );
+        assert!(!printed(&report).contains("planted-value"));
+
+        fs::remove_file(project.path().join(BODY)).unwrap();
+        let report = refused(check(project.path(), None, false, false).unwrap_err());
+        assert!(
+            report
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "evidence.mock-plan.invalid"),
+            "{:?}",
+            sites(&report, project.path())
+        );
+
+        fs::remove_file(project.path().join("source.openapi.yaml")).unwrap();
+        let report = refused(check(project.path(), None, false, false).unwrap_err());
+        assert!(!report.diagnostics().is_empty());
     }
 
     #[test]

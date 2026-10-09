@@ -826,6 +826,31 @@ fn plan_refusal(error: anyhow::Error, config: &Path, base: &Path) -> anyhow::Err
     authored::rebase(found, base).into()
 }
 
+/// Check what the mock plan at `file`, named from `project`, depends on: the
+/// OpenAPI description it names and each response body it lists, as
+/// `evidencectl source mock check` reads them. The plan's own structure is
+/// checked by [`check_plan_document`]; its reader warnings are reported there.
+pub(crate) fn check_plan_dependencies(project: &Path, file: &str) -> Report {
+    let config = Path::new(file);
+    let Err(error) = load_checked_plan(project, config, false) else {
+        return Report::default();
+    };
+    let message = error.to_string();
+    let refusal = plan_refusal(error, config, Path::new(""));
+    if let Some(report) = authored::report_in(&refusal) {
+        return report.clone();
+    }
+    Report::new(vec![authored::file_diagnostic(
+        Severity::Error,
+        "evidence.mock-plan.invalid",
+        None,
+        file,
+        "",
+        &message,
+        PLAN_ACTION,
+    )])
+}
+
 /// Check one mock plan read from a project: the reader's diagnostics, then
 /// the plan's own structure. The OpenAPI description and the response bodies
 /// the plan names are read by `source mock check`, not here.
