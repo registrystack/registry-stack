@@ -98,9 +98,9 @@ struct EditorSchema {
 //
 // The catalogue holds only the document kinds a schema generated from a Rust
 // type stands behind. The other authored parts of a project (derivations,
-// answer schemas, fixtures) get no mapping, because a schema written by hand
-// for one of them would drift from the checks the moment either moved.
-const EDITOR_SCHEMA_CATALOG: [EditorSchema; 8] = [
+// answer schemas) get no mapping, because a schema written by hand for one of
+// them would drift from the checks the moment either moved.
+const EDITOR_SCHEMA_CATALOG: [EditorSchema; 9] = [
     EditorSchema {
         name: "access-client",
         filename: "access-client.schema.json",
@@ -112,6 +112,12 @@ const EDITOR_SCHEMA_CATALOG: [EditorSchema; 8] = [
         filename: "access-policy.schema.json",
         file_glob: "access/policies/*.yaml",
         document: include_str!("../schemas/authoring/access-policy.schema.json"),
+    },
+    EditorSchema {
+        name: "fixture",
+        filename: "fixture.schema.json",
+        file_glob: "fixtures/*.yaml",
+        document: include_str!("../../../products/evidence/generated/fixture/fixture.schema.json"),
     },
     EditorSchema {
         name: "mock-plan",
@@ -1197,10 +1203,11 @@ mod tests {
     use registry_evidence_authoring::default_project_marker_document;
 
     /// The complete set of files one run owns, as an author would list them.
-    const MANAGED_FILES: [&str; 12] = [
+    const MANAGED_FILES: [&str; 13] = [
         ".evidence-editor/manifest.json",
         ".evidence-editor/schemas/access-client.schema.json",
         ".evidence-editor/schemas/access-policy.schema.json",
+        ".evidence-editor/schemas/fixture.schema.json",
         ".evidence-editor/schemas/mock-plan.schema.json",
         ".evidence-editor/schemas/project-marker.schema.json",
         ".evidence-editor/schemas/question.schema.json",
@@ -1266,6 +1273,10 @@ mod tests {
         assert_eq!(
             mappings["./.evidence-editor/schemas/question.schema.json"],
             "authoring-project/questions/*.yaml"
+        );
+        assert_eq!(
+            mappings["./.evidence-editor/schemas/fixture.schema.json"],
+            "authoring-project/fixtures/*.yaml"
         );
         assert_eq!(
             mappings["./.evidence-editor/schemas/project-marker.schema.json"],
@@ -1481,6 +1492,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(globs.contains(&PROJECT_MARKER_FILE));
         assert!(globs.contains(&format!("{QUESTIONS_DIRECTORY}/*.yaml").as_str()));
+        assert!(globs.contains(&"fixtures/*.yaml"));
     }
 
     #[test]
