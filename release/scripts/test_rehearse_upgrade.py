@@ -491,59 +491,134 @@ class CaseworkPackageTest(unittest.TestCase):
 
 
 class MessagingUpgradeTest(unittest.TestCase):
-    DIGEST = "sha256:" + "b" * 64
+    ACTIVATED = "sha256:" + "a" * 64
+    PACKAGE = "sha256:" + "b" * 64
+    OTHER = "sha256:" + "c" * 64
 
     def messaging(self, root: Path) -> object:
         messaging = MODULE.Messaging.__new__(MODULE.Messaging)
         messaging.runtime = root / "runtime.yaml"
         return messaging
 
-    def plan(self, change: str, pending: list[int], active: str | None = DIGEST
-             ) -> dict[str, Any]:
-        return {"packageDigest": self.DIGEST, "activeDigest": active, "change": change,
+    def plan(self, change: str, pending: list[int], active: str | None = ACTIVATED,
+             package: str | None = PACKAGE) -> dict[str, Any]:
+        return {"packageDigest": package, "activeDigest": active, "change": change,
                 "pendingSchemaVersions": pending}
 
-    def test_schema_versions_pending_for_the_active_package_are_applied(self) -> None:
+    def status(self, package: str | None = PACKAGE, predecessor: str | None = ACTIVATED
+               ) -> dict[str, Any]:
+        return {"active": {"packageDigest": package, "predecessorPackageDigest": predecessor}}
+
+    def test_the_package_built_again_is_applied_over_the_previous_activation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             messaging = self.messaging(Path(directory))
             side = unittest.mock.Mock()
-            settled = self.plan("none", [])
-            side.run_json.side_effect = [self.plan("activate", [3]), settled]
-            self.assertEqual(messaging.upgrade(side),
-                             (settled, {"public.messaging_idempotency"}))
+            side.run_json.side_effect = [self.plan("activate", [3]),
+                                         self.plan("none", [], self.PACKAGE), self.status()]
+            self.assertEqual(messaging.upgrade(side, self.ACTIVATED),
+                             ([], {"public.messaging_idempotency"}))
             runtime = ["--runtime-config", str(messaging.runtime)]
             plan = unittest.mock.call("messagingctl", "--format", "json", "plan", *runtime)
-            self.assertEqual(side.run_json.call_args_list, [plan, plan])
+            status = unittest.mock.call("messagingctl", "--format", "json", "status", *runtime)
+            self.assertEqual(side.run_json.call_args_list, [plan, plan, status])
             side.run.assert_called_once_with("messagingctl", "apply", *runtime)
 
-    def test_a_plan_with_nothing_pending_is_answered_without_apply(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            messaging = self.messaging(Path(directory))
-            side = unittest.mock.Mock()
-            settled = self.plan("none", [])
-            side.run_json.return_value = settled
-            self.assertEqual(messaging.upgrade(side), (settled, set()))
-            side.run_json.assert_called_once()
-            side.run.assert_not_called()
-
     def test_a_lost_activation_is_never_applied_over(self) -> None:
-        for planned in (self.plan("activate", [3], None),
-                        self.plan("activate", [3], "sha256:" + "c" * 64)):
-            with self.subTest(planned=planned), tempfile.TemporaryDirectory() as directory:
+        cases = (
+            (self.ACTIVATED, self.plan("activate", [3], None)),
+            (self.ACTIVATED, self.plan("activate", [3], self.OTHER)),
+            (self.ACTIVATED, self.plan("none", [3], package=self.ACTIVATED)),
+            (self.ACTIVATED, self.plan("activate", [3], package=None)),
+            (None, self.plan("activate", [3], None)),
+        )
+        for activated, planned in cases:
+            with self.subTest(activated=activated, planned=planned), \
+                    tempfile.TemporaryDirectory() as directory:
                 messaging = self.messaging(Path(directory))
                 side = unittest.mock.Mock()
                 side.run_json.return_value = planned
-                self.assertEqual(messaging.upgrade(side), (planned, set()))
+                with self.assertRaisesRegex(MODULE.RehearsalError, "messagingctl plan"):
+                    messaging.upgrade(side, activated)
+                side.run_json.assert_called_once()
                 side.run.assert_not_called()
 
     def test_an_applied_version_that_empties_nothing_names_no_table(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             messaging = self.messaging(Path(directory))
             side = unittest.mock.Mock()
-            settled = self.plan("none", [])
-            side.run_json.side_effect = [self.plan("activate", [4]), settled]
-            self.assertEqual(messaging.upgrade(side), (settled, set()))
+            side.run_json.side_effect = [self.plan("activate", [4]),
+                                         self.plan("none", [], self.PACKAGE), self.status()]
+            self.assertEqual(messaging.upgrade(side, self.ACTIVATED), ([], set()))
             side.run.assert_called_once()
+
+    def test_the_ledger_after_the_apply_is_compared_with_the_plan_before_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            messaging = self.messaging(Path(directory))
+            side = unittest.mock.Mock()
+            side.run_json.side_effect = [self.plan("activate", []),
+                                         self.plan("none", [], self.PACKAGE),
+                                         self.status(predecessor=self.OTHER)]
+            differences, emptied = messaging.upgrade(side, self.ACTIVATED)
+            self.assertEqual(len(differences), 1)
+            self.assertIn("predecessor", differences[0])
+            self.assertEqual(emptied, set())
+
+
+# JSON is YAML, so the runtime document round-trips without PyYAML, which the
+# release-tool CI step does not install.
+@unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
+@unittest.mock.patch.object(MODULE, "load_yaml", load_json)
+class MessagingRepackageTest(unittest.TestCase):
+    def test_the_operator_path_runs_in_the_documented_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            messaging = MODULE.Messaging.__new__(MODULE.Messaging)
+            messaging.work = root
+            messaging.project = root / "project"
+            messaging.package = root / "package"
+            messaging.upgraded_package = root / "package-upgraded"
+            messaging.runtime = root / "runtime.yaml"
+            dump_json(messaging.runtime, {"kind": "MessagingRuntimeConfig",
+                                          "package": {"root": str(messaging.package)}})
+            events: list[Any] = []
+
+            def steps(ids, roots, catalog=None):
+                events.append(("steps", tuple(ids), roots))
+                return []
+
+            def command(binary, *arguments, **_):
+                self.assertEqual(binary, "messagingctl")
+                root_now = load_json(messaging.runtime)["package"]["root"]
+                events.append((*arguments, root_now) if "--runtime-config" in arguments
+                              else arguments)
+
+            side = unittest.mock.Mock()
+            side.run.side_effect = command
+            with unittest.mock.patch.object(MODULE.upgrade_steps, "apply_steps",
+                                            side_effect=steps), \
+                    unittest.mock.patch.object(
+                        MODULE, "write_messaging_project_envelope",
+                        side_effect=lambda project: events.append(("envelope", project))):
+                messaging.repackage(side)
+            project, upgraded = str(messaging.project), str(messaging.upgraded_package)
+            self.assertEqual(events, [
+                ("steps", MODULE.MESSAGING_RUNTIME_UPGRADE_STEPS, {"runtime": root}),
+                ("steps", MODULE.MESSAGING_UPGRADE_STEPS, {"project": messaging.project}),
+                ("envelope", messaging.project),
+                ("check", "--project", project),
+                ("package", project, "--output", upgraded),
+                ("check", "--package", upgraded),
+                ("check", "--runtime-config", str(messaging.runtime), upgraded),
+            ])
+            self.assertEqual(load_json(messaging.runtime),
+                             {"kind": "MessagingRuntimeConfig", "package": {"root": upgraded}})
+
+    def test_the_package_built_again_never_overwrites_the_previous_release_s(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            messaging = MODULE.Messaging(Path(directory) / "messaging", unittest.mock.Mock(),
+                                         unittest.mock.Mock())
+            self.assertNotEqual(messaging.upgraded_package, messaging.package)
+            self.assertEqual(messaging.upgraded_package.parent, messaging.package.parent)
 
 
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
@@ -1258,19 +1333,51 @@ class MessagingAssertionsTest(unittest.TestCase):
     def plan(self, **members: str) -> dict[str, str]:
         return {"activeDigest": self.ACTIVE, "packageDigest": self.PACKAGE, **members}
 
-    def test_ledger_digests_must_be_the_ones_the_previous_release_recorded(self) -> None:
-        self.assertEqual(MODULE.ledger_digest_differences(self.plan(), self.plan()), [])
-        for member in ("activeDigest", "packageDigest"):
-            with self.subTest(member=member):
-                changed = self.plan(**{member: "sha256:" + "c" * 64})
-                (difference,) = MODULE.ledger_digest_differences(self.plan(), changed)
-                self.assertIn(member, difference)
-        (difference,) = MODULE.ledger_digest_differences(self.plan(), {"packageDigest": self.PACKAGE})
-        self.assertIn("activeDigest", difference)
+    def test_the_plan_must_name_the_previous_activation_and_another_package(self) -> None:
+        self.assertEqual(MODULE.ledger_plan_differences(self.ACTIVE, self.plan()), [])
+        for planned, named in (
+                (self.plan(activeDigest="sha256:" + "c" * 64), "activeDigest"),
+                (self.plan(activeDigest=None), "activeDigest"),
+                (self.plan(packageDigest=self.ACTIVE), "packageDigest"),
+                (self.plan(packageDigest=None), "packageDigest"),
+                ({}, "activeDigest")):
+            with self.subTest(planned=planned):
+                differences = MODULE.ledger_plan_differences(self.ACTIVE, planned)
+                self.assertTrue(differences)
+                self.assertIn(named, differences[0])
 
     def test_a_ledger_that_named_no_package_before_the_upgrade_is_a_difference(self) -> None:
-        before = {"activeDigest": None, "packageDigest": self.PACKAGE}
-        self.assertEqual(len(MODULE.ledger_digest_differences(before, before)), 1)
+        for activated in (None, ""):
+            with self.subTest(activated=activated):
+                (difference,) = MODULE.ledger_plan_differences(activated, self.plan())
+                self.assertIn("previous release", difference)
+
+    def activation(self, **members: str | None) -> dict[str, str | None]:
+        return {"packageDigest": self.PACKAGE, "predecessorPackageDigest": self.ACTIVE,
+                **members}
+
+    def settled(self, **members: str | None) -> dict[str, str | None]:
+        return {"activeDigest": self.PACKAGE, "packageDigest": self.PACKAGE, "change": "none",
+                **members}
+
+    def test_the_applied_ledger_names_the_planned_package_and_its_predecessor(self) -> None:
+        differences = MODULE.ledger_activation_differences
+        self.assertEqual(differences(self.ACTIVE, self.plan(), self.settled(),
+                                     self.activation()), [])
+        other = "sha256:" + "c" * 64
+        for settled, active, named in (
+                (self.settled(change="activate"), self.activation(), "applied package"),
+                (self.settled(activeDigest=self.ACTIVE), self.activation(), "applied package"),
+                (self.settled(activeDigest=other, packageDigest=other), self.activation(),
+                 "packageDigest changed"),
+                (self.settled(), self.activation(packageDigest=other), "active activation"),
+                (self.settled(), self.activation(predecessorPackageDigest=other), "predecessor"),
+                (self.settled(), self.activation(predecessorPackageDigest=None), "predecessor"),
+                (self.settled(), {}, "active activation")):
+            with self.subTest(settled=settled, active=active):
+                found = differences(self.ACTIVE, self.plan(), settled, active)
+                self.assertTrue(found)
+                self.assertIn(named, found[0])
 
     def test_counts_one_event_across_every_segment_of_the_stream(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1301,24 +1408,30 @@ class MessagingAssertionsTest(unittest.TestCase):
         self.assertEqual(len(MODULE.retention_audit_losses(0, 0, 0, 1)), 1)
         self.assertEqual(len(MODULE.retention_audit_losses(2, 2, 2, 2)), 2)
 
-    def rehearse(self, *, erase_events: int, ledger_after: str | None = None) -> tuple[dict, Any]:
+    def rehearse(self, *, erase_events: int = 1, activation_records: int = 2,
+                 ledger_differences: tuple[str, ...] = ()) -> tuple[dict, Any, Any]:
         """Run rehearse_messaging with every process and database faked. The
-        erase command writes `erase_events` requested and erased records."""
-        plan = {"activeDigest": self.ACTIVE, "packageDigest": self.ACTIVE, "change": "none",
-                "pendingSchemaVersions": []}
+        upgrade writes `activation_records` records to the operator stream and
+        the erase command `erase_events` requested and erased records."""
         old, new = unittest.mock.Mock(), unittest.mock.Mock()
-        new.run_json.return_value = plan
+        old.run_json.return_value = {"active": {"packageDigest": self.ACTIVE}}
         messaging = unittest.mock.Mock()
         messaging.submit.return_value = {"id": "m"}
         messaging.views.return_value = {}
-        messaging.upgrade.return_value = (
-            {**plan, "activeDigest": ledger_after or self.ACTIVE}, set())
-        written = {"events": 0, "records": 4}
+        runtime_stream, operator_stream = MODULE.MESSAGING_AUDIT, MODULE.MESSAGING_OPERATOR_AUDIT
+        written = {"events": 0, runtime_stream: 9, operator_stream: 2}
+
+        def upgrade(*_arguments):
+            written[operator_stream] += activation_records
+            written[runtime_stream] += MODULE.MESSAGING_UPGRADED_AUDIT_RECORDS[runtime_stream]
+            return list(ledger_differences), set()
+
+        messaging.upgrade.side_effect = upgrade
 
         def erase(*arguments, **_):
             if "erase-expired" in arguments:
                 written["events"] += erase_events
-                written["records"] += 2 * erase_events
+                written[operator_stream] += 2 * erase_events
 
         new.run.side_effect = erase
         postgres = unittest.mock.Mock()
@@ -1329,20 +1442,21 @@ class MessagingAssertionsTest(unittest.TestCase):
                 unittest.mock.patch.object(MODULE, "Service"), \
                 unittest.mock.patch.object(
                     MODULE, "audit_record_count",
-                    side_effect=lambda *_a, **_k: written["records"]), \
+                    side_effect=lambda _directory, name, **_k: written[name]), \
                 unittest.mock.patch.object(
                     MODULE, "audit_event_count",
-                    side_effect=lambda *_a, **_k: written["events"]):
+                    side_effect=lambda *_a, **_k: written["events"]) as events:
             try:
                 MODULE.rehearse_messaging(Path(directory), unittest.mock.Mock(), postgres,
                                           old, new, report)
             finally:
                 self.report = report
-        return report, new
+                self.event_streams = {call.args[1] for call in events.call_args_list}
+        return report, new, messaging
 
     def test_the_leg_erases_expired_data_with_the_new_release_and_expects_its_records(
             self) -> None:
-        report, new = self.rehearse(erase_events=1)
+        report, new, _messaging = self.rehearse()
         self.assertEqual(report["messaging"]["viewDifferences"], [])
         self.assertEqual(report["messaging"]["rowLosses"], [])
         erase = [call.args for call in new.run.call_args_list
@@ -1350,14 +1464,37 @@ class MessagingAssertionsTest(unittest.TestCase):
         self.assertEqual(len(erase), 1)
         self.assertIn("--apply", erase[0])
         self.assertEqual(erase[0][:3], ("messagingctl", "retention", "erase-expired"))
+        # `messagingctl` writes the erase records, so the operator stream holds them.
+        self.assertEqual(self.event_streams, {MODULE.MESSAGING_OPERATOR_AUDIT})
 
     def test_the_leg_fails_when_the_erase_leaves_no_audit_record(self) -> None:
         with self.assertRaisesRegex(MODULE.RehearsalError, "retention.erased"):
             self.rehearse(erase_events=0)
 
-    def test_the_leg_fails_when_the_ledger_digest_changes(self) -> None:
-        with self.assertRaisesRegex(MODULE.RehearsalError, "activeDigest changed"):
-            self.rehearse(erase_events=1, ledger_after="sha256:" + "c" * 64)
+    def test_the_leg_repackages_then_upgrades_from_the_digest_the_old_release_activated(
+            self) -> None:
+        _report, new, messaging = self.rehearse()
+        self.assertEqual(
+            [call for call in messaging.mock_calls if call[0] in ("repackage", "upgrade")],
+            [unittest.mock.call.repackage(new), unittest.mock.call.upgrade(new, self.ACTIVE)])
+
+    def test_the_leg_fails_on_a_ledger_difference_the_upgrade_names(self) -> None:
+        with self.assertRaisesRegex(MODULE.RehearsalError, "names another predecessor"):
+            self.rehearse(ledger_differences=("the ledger names another predecessor",))
+
+    def test_the_leg_fails_when_the_activation_leaves_no_operator_audit_record(self) -> None:
+        with self.assertRaisesRegex(MODULE.RehearsalError,
+                                    "Messaging operator audit stream held 2 records"):
+            self.rehearse(activation_records=0)
+
+    def test_each_stream_is_held_to_the_records_the_upgrade_writes_to_it(self) -> None:
+        self.assertEqual(MODULE.MESSAGING_UPGRADED_AUDIT_RECORDS,
+                         {"messaging.ndjson": 7, "messaging.messagingctl.ndjson": 4})
+        report, _new, _messaging = self.rehearse()
+        self.assertEqual(report["messaging"]["auditRecordsBefore"],
+                         {"messaging.ndjson": 9, "messaging.messagingctl.ndjson": 2})
+        self.assertEqual(report["messaging"]["auditRecordsAfter"],
+                         {"messaging.ndjson": 16, "messaging.messagingctl.ndjson": 6})
 
 
 class GateWiringTest(unittest.TestCase):

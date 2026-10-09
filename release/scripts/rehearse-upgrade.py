@@ -112,8 +112,7 @@ class RehearsalError(RuntimeError):
 
 # Documented operator steps (release/notes/config-conventions/upgrade-steps.yaml)
 # the rehearsal applies on disk after the previous release wrote state and
-# before the new binaries run. Each id must name an `edit` step. Messaging is
-# not listed: its stored package ledger names a digest an applied step changes.
+# before the new binaries run. Each id must name an `edit` step.
 BREG_UPGRADE_STEPS = (
     "breg-journeys",
     "breg-access-unrestricted",
@@ -131,6 +130,17 @@ EVIDENCE_UPGRADE_STEPS = (
     "evidence-fixture-envelope",
     "evidence-target-governance-envelope",
 )
+# The project steps change the package digest, so the Messaging leg builds the
+# package again and applies it as the successor of the one the previous
+# release activated. The manual step `messaging-project-envelope` goes with
+# them: `write_messaging_project_envelope` performs it.
+MESSAGING_UPGRADE_STEPS = (
+    "messaging-template-envelope",
+    "messaging-provider-envelope",
+    "messaging-project-renames",
+    "messaging-provider-capabilities",
+)
+MESSAGING_RUNTIME_UPGRADE_STEPS = ("messaging-runtime-keys",)
 
 
 # Catalog `edit` steps no rehearsal leg applies, each with the reason. A unit
@@ -144,12 +154,7 @@ UNIT_TESTED_ONLY_STEPS = {
     "evidence-target-settings-envelope": "the Evidence starter writes no target settings file",
     "evidence-source-resolution-envelope": "the Evidence starter writes no source resolution file",
     "evidence-mock-plan-envelope": "the Evidence starter writes no mock plan",
-    "messaging-runtime-keys": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
-    "messaging-template-envelope": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
-    "messaging-provider-envelope": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
-    "messaging-project-renames": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
-    "messaging-provider-capabilities": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
-    "messaging-required-scopes": "no Messaging leg runs yet; no macOS Messaging asset exists for the previous release",
+    "messaging-required-scopes": "the Messaging starter gives every access profile a non-empty requiredScopes list",
     "breg-example-inputs": "the BReg starter writes no example input file",
     "breg-schema-test-credentials": "the BReg starter writes no schema test credentials file",
     "breg-model-selection": "the BReg starter writes no model selection file",
@@ -466,11 +471,11 @@ def audit_record_count(directory: Path, name: str, *, schema: str | None = None)
 
 def audit_stream_losses(product: str, before: int, after: int, written: int) -> list[str]:
     """Name an audit stream that lost the previous release's records, or that
-    the upgraded runtime did not continue with at least `written` records."""
+    the upgraded binaries did not continue with at least `written` records."""
 
     if before == 0 or after < before + written:
         return [f"the {product} audit stream held {before} records before the upgrade and "
-                f"{after} after it, where the upgraded runtime writes at least {written}"]
+                f"{after} after it, where the upgraded binaries write at least {written}"]
     return []
 
 
@@ -490,16 +495,47 @@ def audit_event_count(directory: Path, name: str, event: str) -> int:
     return count
 
 
-def ledger_digest_differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
-    """Name each ledger digest the upgrade changed, or that the previous
-    release never recorded. `before` and `after` are `messagingctl plan` reports."""
+def ledger_plan_differences(activated: str | None, planned: dict[str, Any]) -> list[str]:
+    """Name what keeps a `messagingctl plan` report from describing the upgrade
+    of the previous release's activation. `activated` is the package digest
+    the previous release's `messagingctl status` reported active: the plan
+    must name it as active, and must name another package on disk, the one
+    built again from the upgraded project."""
+
+    if not activated:
+        return ["the previous release's ledger recorded no active package"]
+    differences = []
+    if planned.get("activeDigest") != activated:
+        differences.append("the ledger activeDigest is not the package the previous "
+                           "release activated")
+    if not planned.get("packageDigest"):
+        differences.append("the plan names no packageDigest")
+    elif planned["packageDigest"] == activated:
+        differences.append("the plan's packageDigest is the package the previous release "
+                           "activated, not one built again from the upgraded project")
+    return differences
+
+
+def ledger_activation_differences(activated: str, planned: dict[str, Any],
+                                  settled: dict[str, Any],
+                                  active: dict[str, Any]) -> list[str]:
+    """Name what keeps the ledger from recording the planned package as the
+    successor of the one the previous release activated. `planned` and
+    `settled` are the `messagingctl plan` reports before and after the apply,
+    and `active` is the activation `messagingctl status` reports after it."""
 
     differences = []
-    for member in ("activeDigest", "packageDigest"):
-        if not before.get(member):
-            differences.append(f"the previous release's ledger recorded no {member}")
-        elif before.get(member) != after.get(member):
-            differences.append(f"the ledger {member} changed across the upgrade")
+    package = planned.get("packageDigest")
+    if settled.get("packageDigest") != package:
+        differences.append("the ledger packageDigest changed across the apply")
+    if settled.get("change") != "none" or settled.get("activeDigest") != settled.get(
+            "packageDigest"):
+        differences.append("the package ledger does not name the applied package")
+    if active.get("packageDigest") != package:
+        differences.append("the ledger's active activation is not the planned package")
+    if active.get("predecessorPackageDigest") != activated:
+        differences.append("the ledger's active activation does not name the package the "
+                           "previous release activated as its predecessor")
     return differences
 
 
@@ -1699,15 +1735,46 @@ MESSAGING_RECIPIENTS = {"email": {"email": "upgrade-rehearsal@example.invalid"},
 MESSAGING_SENDER_PROFILES = {"email": "transactional", "sms": "reminders-sms"}
 MESSAGING_IDEMPOTENCY = "public.messaging_idempotency"
 MESSAGING_AUDIT = "messaging.ndjson"
+# `messagingctl` writes its audit records to a companion stream beside the
+# runtime's: the configured file name with `messagingctl` before its extension.
+MESSAGING_OPERATOR_AUDIT = "messaging.messagingctl.ndjson"
 MESSAGING_RETENTION_REQUESTED = "messaging.retention.requested"
 MESSAGING_RETENTION_ERASED = "messaging.retention.erased"
-# The records the upgraded runtime must add: the retention erase run's request
-# and its outcome, beyond the submissions the rehearsal sends.
-MESSAGING_UPGRADED_AUDIT_RECORDS = 2
+# The records the upgraded binaries append to each audit stream in
+# `rehearse_messaging`, at the least. The runtime writes its start record, and
+# a request record and an outcome record each for the idempotent resubmission,
+# the cancellation, and the new submission; a key the upgrade freed sends once
+# more and adds two. `messagingctl` writes the successor activation's requested
+# and finished records and the retention erase run's requested and erased
+# records.
+MESSAGING_UPGRADED_AUDIT_RECORDS = {MESSAGING_AUDIT: 7, MESSAGING_OPERATOR_AUDIT: 4}
+# The manual catalog step `messaging-project-envelope` leaves the project id
+# and its version label to the operator. These are the rehearsal's choice.
+MESSAGING_PROJECT_API_VERSION = "id.registrystack.org/formats/messaging/project/v1alpha1"
+MESSAGING_PROJECT_KIND = "MessagingProject"
+MESSAGING_PROJECT_ID = "upgrade-rehearsal"
+MESSAGING_PROJECT_VERSION = "1"
 # The table each Messaging schema version empties by design. Version 3
 # discards the idempotency records keyed by the caller's audit pseudonym, so
 # every key spent before it can be used again.
 MESSAGING_EMPTYING_SCHEMA_VERSIONS = {3: MESSAGING_IDEMPOTENCY}
+
+
+def write_messaging_project_envelope(project: Path) -> None:
+    """Perform the manual catalog step `messaging-project-envelope` on a
+    project directory: replace the apiVersion and kind of messaging.yaml and
+    add the project id and version label. No `edit` step can, because the
+    operator chooses both."""
+
+    path = project / "messaging.yaml"
+    document = load_yaml(path)
+    if not isinstance(document, dict):
+        raise RehearsalError(f"Messaging upgrade step messaging-project-envelope failed: "
+                             f"{path} is not a mapping")
+    envelope = {"apiVersion": MESSAGING_PROJECT_API_VERSION, "kind": MESSAGING_PROJECT_KIND,
+                "project": {"id": MESSAGING_PROJECT_ID, "version": MESSAGING_PROJECT_VERSION}}
+    dump_yaml(path, {**envelope, **{key: value for key, value in document.items()
+                                    if key not in envelope}})
 
 
 class Messaging:
@@ -1719,6 +1786,10 @@ class Messaging:
         self.audit = private_directory(work / "audit")
         self.project = work / "project"
         self.package = work / "package"
+        # `messagingctl package` writes into a new directory, so the package
+        # built again from the upgraded project sits beside the one the
+        # previous release built.
+        self.upgraded_package = work / "package-upgraded"
         self.runtime = work / "runtime.yaml"
         self.port = free_port()
         # Every message is scheduled a day out, so no dispatch attempt can
@@ -1814,23 +1885,46 @@ class Messaging:
             views[f"message/{message_id}"] = body
         return views
 
-    def upgrade(self, side: Side) -> tuple[dict[str, Any], set[str]]:
-        """Plan with `side` and, when the package already active only has
-        schema versions pending, apply them with the migration credential, the
-        upgrade step the Messaging changelog names. Returns the plan after any
-        apply, which names the package on disk with nothing left to change
-        when the upgrade kept the activation, and the tables the applied
-        versions empty by design."""
+    def repackage(self, side: Side) -> None:
+        """Carry the files the previous release wrote to a package `side`
+        reads, the way the release notes tell an operator to: apply the
+        documented steps to the runtime file and the project, check the
+        project, build the package into a new directory, check it, and point
+        the runtime file at it."""
+        apply_upgrade_steps("Messaging", MESSAGING_RUNTIME_UPGRADE_STEPS, runtime=self.work)
+        apply_upgrade_steps("Messaging", MESSAGING_UPGRADE_STEPS, project=self.project)
+        write_messaging_project_envelope(self.project)
+        side.run("messagingctl", "check", "--project", str(self.project))
+        side.run("messagingctl", "package", str(self.project),
+                 "--output", str(self.upgraded_package))
+        side.run("messagingctl", "check", "--package", str(self.upgraded_package))
+        runtime = load_yaml(self.runtime)
+        runtime["package"]["root"] = str(self.upgraded_package)
+        dump_yaml(self.runtime, runtime)
+        side.run("messagingctl", "check", "--runtime-config", str(self.runtime))
+
+    def upgrade(self, side: Side, activated: str | None) -> tuple[list[str], set[str]]:
+        """Plan with `side` and apply the package on disk with the migration
+        credential, the upgrade step the Messaging changelog names. `activated`
+        is the package digest the previous release reported active. A plan
+        that does not name that activation as active and another package on
+        disk is never applied over. Returns every difference between the
+        ledger after the apply and the plan before it, and the tables the
+        applied schema versions empty by design."""
         config = ["--runtime-config", str(self.runtime)]
         planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        emptied: set[str] = set()
-        pending = planned.get("pendingSchemaVersions")
-        if pending and planned.get("activeDigest") == planned.get("packageDigest"):
-            side.run("messagingctl", "apply", *config)
-            emptied = {MESSAGING_EMPTYING_SCHEMA_VERSIONS[version] for version in pending
-                       if version in MESSAGING_EMPTYING_SCHEMA_VERSIONS}
-            planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        return planned, emptied
+        differences = ledger_plan_differences(activated, planned)
+        if differences:
+            raise RehearsalError("messagingctl plan does not describe the upgrade of the "
+                                 "previous release's activation: " + "; ".join(differences))
+        side.run("messagingctl", "apply", *config)
+        emptied = {MESSAGING_EMPTYING_SCHEMA_VERSIONS[version]
+                   for version in planned.get("pendingSchemaVersions") or []
+                   if version in MESSAGING_EMPTYING_SCHEMA_VERSIONS}
+        settled = side.run_json("messagingctl", "--format", "json", "plan", *config)
+        status = side.run_json("messagingctl", "--format", "json", "status", *config)
+        return ledger_activation_differences(activated, planned, settled,
+                                             status.get("active") or {}), emptied
 
 
 def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
@@ -1839,9 +1933,10 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     messaging.provision()
     messaging.author(old)
     runtime = ["--runtime-config", str(messaging.runtime)]
-    old.run("messagingctl", "plan", "--runtime-config", str(messaging.runtime))
-    old.run("messagingctl", "apply", "--runtime-config", str(messaging.runtime))
-    old.run("messagingctl", "status", "--runtime-config", str(messaging.runtime))
+    old.run("messagingctl", "plan", *runtime)
+    old.run("messagingctl", "apply", *runtime)
+    status = old.run_json("messagingctl", "--format", "json", "status", *runtime)
+    activated = (status.get("active") or {}).get("packageDigest")
     ready = f"http://127.0.0.1:{messaging.port}/ready"
     service = Service(old, "messaging", [*runtime, "serve"], work / "messaging-old.log", ready)
     try:
@@ -1856,18 +1951,15 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     finally:
         service.stop()
     before_counts = postgres.row_counts("messaging")
-    records_before = audit_record_count(messaging.audit, MESSAGING_AUDIT)
+    records_before = {stream: audit_record_count(messaging.audit, stream)
+                      for stream in MESSAGING_UPGRADED_AUDIT_RECORDS}
 
-    new.run("messagingctl", "check", "--runtime-config", str(messaging.runtime))
-    ledger_before = new.run_json("messagingctl", "--format", "json", "plan", *runtime)
-    # The ledger must still name the package on disk: a plan that reports a
-    # change once any new schema versions are applied means the upgrade lost
-    # the activation.
-    ledger, emptied = messaging.upgrade(new)
-    differences = ledger_digest_differences(ledger_before, ledger)
-    if ledger.get("change") != "none" or ledger.get("activeDigest") != ledger.get(
-            "packageDigest"):
-        differences.append("the package ledger no longer names the applied package")
+    # The new binaries read neither the runtime file nor the package the
+    # previous release wrote, so the operator steps and a package built again
+    # come before the plan. The ledger must then record that package as the
+    # successor of the one the previous release activated.
+    messaging.repackage(new)
+    differences, emptied = messaging.upgrade(new, activated)
     losses = row_count_losses(before_counts, postgres.row_counts("messaging"),
                               emptied=emptied)
     service = Service(new, "messaging", [*runtime, "serve"], work / "messaging-new.log", ready)
@@ -1889,19 +1981,22 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     finally:
         service.stop()
     # The operator erase run is audited even when nothing has expired, so the
-    # upgraded stream must gain its requested and erased records.
+    # operator stream must gain its requested and erased records.
     events = (MESSAGING_RETENTION_REQUESTED, MESSAGING_RETENTION_ERASED)
-    counts_before = [audit_event_count(messaging.audit, MESSAGING_AUDIT, event)
+    counts_before = [audit_event_count(messaging.audit, MESSAGING_OPERATOR_AUDIT, event)
                      for event in events]
     new.run("messagingctl", "retention", "erase-expired", *runtime,
             "--before", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60)),
             "--apply")
-    counts_after = [audit_event_count(messaging.audit, MESSAGING_AUDIT, event)
+    counts_after = [audit_event_count(messaging.audit, MESSAGING_OPERATOR_AUDIT, event)
                     for event in events]
     losses += retention_audit_losses(counts_before[0], counts_before[1], *counts_after)
-    records_after = audit_record_count(messaging.audit, MESSAGING_AUDIT)
-    losses += audit_stream_losses("Messaging", records_before, records_after,
-                                  MESSAGING_UPGRADED_AUDIT_RECORDS)
+    records_after = {stream: audit_record_count(messaging.audit, stream)
+                     for stream in MESSAGING_UPGRADED_AUDIT_RECORDS}
+    for stream, written in MESSAGING_UPGRADED_AUDIT_RECORDS.items():
+        product = "Messaging operator" if stream == MESSAGING_OPERATOR_AUDIT else "Messaging"
+        losses += audit_stream_losses(product, records_before[stream], records_after[stream],
+                                      written)
     losses += row_count_losses(before_counts, postgres.row_counts("messaging"),
                                emptied=emptied)
 

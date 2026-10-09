@@ -1113,7 +1113,44 @@ class RehearsalEnvelopeTieTest(unittest.TestCase):
         return module
 
     LEG_LISTS = ("BREG_UPGRADE_STEPS", "BREG_RUNTIME_UPGRADE_STEPS", "CASEWORK_UPGRADE_STEPS",
-                 "EVIDENCE_UPGRADE_STEPS")
+                 "EVIDENCE_UPGRADE_STEPS", "MESSAGING_UPGRADE_STEPS",
+                 "MESSAGING_RUNTIME_UPGRADE_STEPS")
+
+    def test_the_rehearsal_performs_the_manual_messaging_project_envelope_step(self) -> None:
+        module = self.rehearsal()
+        step = upgrade_steps.load_catalog()["messaging-project-envelope"]
+        self.assertEqual(step["kind"], "manual")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = write(root, "messaging.yaml", """\
+apiVersion: registry.registrystack.org/messaging-package/v1alpha1
+kind: MessagingPackage
+providers:
+  - id: mail-relay
+    type: smtp
+""")
+            module.write_messaging_project_envelope(root)
+            text = path.read_text(encoding="utf-8")
+            project = upgrade_steps.load_document(path)
+        self.assertEqual(list(project), ["apiVersion", "kind", "project", "providers"])
+        self.assertEqual(project["providers"], [{"id": "mail-relay", "type": "smtp"}])
+        # The envelope written is the one the step's instruction spells out.
+        self.assertIn(f"apiVersion: {project['apiVersion']} ", step["instruction"])
+        self.assertIn(f"kind: {project['kind']},", step["instruction"])
+        self.assertEqual(project["project"], {"id": module.MESSAGING_PROJECT_ID,
+                                              "version": module.MESSAGING_PROJECT_VERSION})
+        # The version is a label: it stays text on disk, never a YAML number.
+        self.assertIsInstance(project["project"]["version"], str)
+        self.assertIn(f"version: '{module.MESSAGING_PROJECT_VERSION}'", text)
+
+    def test_the_messaging_project_envelope_step_refuses_a_file_that_is_not_a_mapping(
+            self) -> None:
+        module = self.rehearsal()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write(root, "messaging.yaml", "- not\n- a mapping\n")
+            with self.assertRaisesRegex(module.RehearsalError, "messaging-project-envelope"):
+                module.write_messaging_project_envelope(root)
 
     def test_every_step_the_rehearsal_applies_is_a_documented_edit(self) -> None:
         module = self.rehearsal()
