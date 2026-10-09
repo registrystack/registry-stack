@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use registry_platform_config::package::{plan_package, write_package};
-use registry_platform_config::{sha256_uri, RuntimeConfigErrorKind};
+use registry_platform_config::{sha256_uri, UNAVAILABLE_CODE};
 use registry_platform_yaml::{Decoded, Diagnostic, Report, Source};
 use registry_scheduling::config::{
     check_runtime, package_limits, startup_report, RuntimeConfig, RuntimeConfigError,
@@ -663,7 +663,8 @@ pub(crate) fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
 pub(crate) fn runtime_refusal(path: &Path, error: RuntimeConfigError) -> anyhow::Error {
     let unavailable = matches!(
         &error,
-        RuntimeConfigError::Load(load) if load.kind() == RuntimeConfigErrorKind::Unavailable
+        RuntimeConfigError::Load(load)
+            if load.diagnostics().iter().any(|diagnostic| diagnostic.code == UNAVAILABLE_CODE)
     );
     match startup_report(path, &error) {
         Some(report) => RuntimeConfigRefusal {
