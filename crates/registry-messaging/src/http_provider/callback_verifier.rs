@@ -28,7 +28,7 @@ const HEADER_NAME_PATTERN: &str = "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$";
 /// closed and tagged by `type` in kebab-case.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Deserialize, Eq, PartialEq)]
 #[serde(
     remote = "Self",
     rename_all = "kebab-case",
@@ -105,6 +105,32 @@ pub enum CallbackVerifierConfig {
     },
 }
 registry_platform_yaml::tagged_union!(CallbackVerifierConfig);
+
+/// The secret references are left out, so the verifier is safe to log.
+impl std::fmt::Debug for CallbackVerifierConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HmacSha1UrlForm { url, header, .. } => formatter
+                .debug_struct("HmacSha1UrlForm")
+                .field("url", url)
+                .field("header", header)
+                .field("secret_ref", &"<redacted>")
+                .finish(),
+            Self::HmacSha256Body {
+                header, encoding, ..
+            } => formatter
+                .debug_struct("HmacSha256Body")
+                .field("header", header)
+                .field("encoding", encoding)
+                .field("secret_ref", &"<redacted>")
+                .finish(),
+            Self::PathToken { .. } => formatter
+                .debug_struct("PathToken")
+                .field("token_ref", &"<redacted>")
+                .finish(),
+        }
+    }
+}
 
 // The refusals below state these bounds in static text.
 const _: () = assert!(MAXIMUM_CALLBACK_HEADER_BYTES == 128);

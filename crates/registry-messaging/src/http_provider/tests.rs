@@ -2083,6 +2083,30 @@ fn receipt(request) {
 "#;
 
 #[test]
+fn a_callback_verifier_debug_output_names_no_secret_reference() {
+    let verifiers = [
+        CallbackVerifierConfig::HmacSha256Body {
+            header: "x-signature".to_owned(),
+            encoding: CallbackBodyEncoding::Hex,
+            secret_ref: "secret:file/gateway-callback-key".to_owned(),
+        },
+        CallbackVerifierConfig::HmacSha1UrlForm {
+            url: "https://messaging.example.org/v1/provider-callbacks/gateway".to_owned(),
+            header: "x-signature".to_owned(),
+            secret_ref: "secret:file/gateway-callback-key".to_owned(),
+        },
+        CallbackVerifierConfig::PathToken {
+            token_ref: "secret:file/gateway-callback-key".to_owned(),
+        },
+    ];
+    for verifier in verifiers {
+        let rendered = format!("{verifier:?}");
+        assert!(!rendered.contains("gateway-callback-key"), "{rendered}");
+        assert!(!rendered.contains("secret:"), "{rendered}");
+    }
+}
+
+#[test]
 fn a_receipt_script_reads_only_what_the_callback_verifier_authenticated() {
     let secrets = secrets(&[("callback-key", b"callback-key-value")]);
     let mut package = plain_package(false);
