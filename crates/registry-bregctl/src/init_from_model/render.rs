@@ -633,6 +633,10 @@ fn runtime_example(plan: &Plan) -> String {
 
 fn dev_clients(plan: &Plan) -> String {
     let mut yaml = Yaml::default();
+    yaml.line(
+        0,
+        "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json",
+    );
     yaml.comment(
         0,
         "Local callers for `bregctl dev`. The stock local identity provider that `dev` \
@@ -733,6 +737,10 @@ fn open_journey(yaml: &mut Yaml, index: usize) {
 
 fn journeys(plan: &Plan) -> String {
     let mut yaml = Yaml::default();
+    yaml.line(
+        0,
+        "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json",
+    );
     yaml.comment(
         0,
         "Project journeys: the requests `bregctl test` replays over real HTTP, with real \
@@ -1983,6 +1991,22 @@ mod tests {
             .as_array()
             .expect("readable");
         assert!(!readable.iter().any(|field| field == "marital-status"));
+    }
+
+    #[test]
+    fn the_dev_clients_and_journeys_open_with_their_schema_modeline() {
+        let (plan, selection) = starter_plan("household");
+        let files = render(&plan, &selection);
+        for (path, schema) in [
+            ("dev-clients.yaml", "dev-clients/dev-clients.v1alpha1"),
+            ("tests/journeys.yaml", "journeys/journeys.v1"),
+        ] {
+            let text = String::from_utf8(files[path].clone()).expect("UTF-8");
+            let expected = format!(
+                "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/{schema}.schema.json"
+            );
+            assert_eq!(text.lines().next(), Some(expected.as_str()), "{path}");
+        }
     }
 
     #[test]

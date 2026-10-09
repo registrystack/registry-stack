@@ -9107,7 +9107,8 @@ eventDestinations: {}
 "#;
 
 const INIT_DEV_CLIENTS: &[u8] =
-    br#"# Local callers for `bregctl dev`. The owned ThunderID issuer that
+    br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json
+# Local callers for `bregctl dev`. The owned ThunderID issuer that
 # `dev` starts beside the registry, registers each client below and issues it
 # short-lived tokens carrying these claims. One client binds each access profile
 # that `tests/journeys.yaml` uses, with the claims those journeys expect, so a
@@ -9141,7 +9142,8 @@ clients:
       registry_purpose: evidence-source-read
 "#;
 
-const INIT_JOURNEYS: &[u8] = br#"# Project journeys: the requests `bregctl test` replays over real
+const INIT_JOURNEYS: &[u8] = br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+# Project journeys: the requests `bregctl test` replays over real
 # HTTP, with real credentials, against a throwaway database before a package is
 # built. Every entity, profile, field, and claim below is resolved against the
 # compiled project first, so a journey can never reach past what a profile
@@ -13470,6 +13472,21 @@ fn write_failure(
 mod tests {
     use super::*;
     use registry_breg::postgres::RoleMode;
+
+    #[test]
+    fn the_initialized_dev_clients_and_journeys_open_with_their_schema_modeline() {
+        let files = init_files();
+        for (path, schema) in [
+            ("dev-clients.yaml", "dev-clients/dev-clients.v1alpha1"),
+            (FIXTURE_JOURNEYS_PATH, "journeys/journeys.v1"),
+        ] {
+            let text = String::from_utf8(files[path].clone()).expect("UTF-8");
+            let expected = format!(
+                "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/{schema}.schema.json"
+            );
+            assert_eq!(text.lines().next(), Some(expected.as_str()), "{path}");
+        }
+    }
 
     #[test]
     fn a_validator_reason_that_repeats_the_value_is_not_the_usage_message() {
