@@ -90,8 +90,11 @@ them before it decodes any other member. Neither may come from `${...}`
 substitution. A document missing either is refused at its root node, with
 the empty path (`config.missing-envelope`); a document of another format, or
 at a version the reader does not read, is refused with a message that names
-the expected `apiVersion` and `kind`. When both are wrong, only `kind` is
-reported (`config.wrong-kind`).
+the expected `apiVersion` and `kind`. When both are wrong, `kind` is reported
+(`config.wrong-kind`). The `apiVersion` is reported beside it only when it is
+a version the reader lists as retired (`config.retired-api-version`), so the
+author learns of both in one run; any other wrong `apiVersion` is not
+reported until `kind` is right.
 *Why:* a reader can refuse the wrong file with a precise message ("this is a
 `CaseworkFixture`, `casework check` reads a `CaseworkProject`"), editors can
 pick a schema, and a format can be versioned on its own.
