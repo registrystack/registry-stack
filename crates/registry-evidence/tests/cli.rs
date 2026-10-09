@@ -2279,11 +2279,11 @@ fn failure_cases() -> Vec<FailureCase> {
                 );
             },
             prefix: "evidence: the configuration reader refused the configuration\nerror[config.unknown-variant] ",
-            suffix: " /signing/format\n  expected one of `flattened-jws-json`\n  next: Use one of `flattened-jws-json`.\n1 error, 0 warnings in 1 file\n",
+            suffix: " /signing/format\n  expected `flattened-jws-json`\n  next: Write `flattened-jws-json`.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
                 "config.unknown-variant",
-                "expected one of `flattened-jws-json`",
+                "expected `flattened-jws-json`",
             ),
         },
         FailureCase {
@@ -2414,7 +2414,7 @@ fn failure_cases() -> Vec<FailureCase> {
                 );
             },
             prefix: "evidence: the configuration reader refused the configuration\nerror[config.invalid-type] ",
-            suffix: "codelists/residence-region-map.yaml:3:10 /entries\n  expected a mapping, not unquoted text\n  next: Write the members as a mapping (`{}` when there are none).\n1 error, 0 warnings in 1 file\n",
+            suffix: "codelists/residence-region-map.yaml:3:10 /entries\n  expected a mapping, not unquoted text\n  next: Write the members as a mapping.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
                 "config.invalid-type",
