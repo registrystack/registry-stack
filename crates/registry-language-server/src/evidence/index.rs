@@ -510,11 +510,8 @@ impl IndexBuilder<'_> {
                 path,
                 written.range,
                 "evidence.question.subject-selector",
-                format!(
-                    "Subject selector '{}' is not a required string path parameter of operation '{}'",
-                    bounded_value(&written.value),
-                    bounded_value(operation_id)
-                ),
+                "This subject selector is not a required string path parameter of the question's operation"
+                    .to_owned(),
             );
         }
         if reported {
@@ -559,11 +556,8 @@ impl IndexBuilder<'_> {
                 path,
                 written.range,
                 "evidence.question.unselectable-fact-path",
-                format!(
-                    "Fact path '{}' is not a selectable leaf of the 200 application/json response of operation '{}'",
-                    bounded_value(&written.value),
-                    bounded_value(operation_id)
-                ),
+                "This fact path is not a selectable leaf of the 200 application/json response of the question's operation"
+                    .to_owned(),
             );
         }
         if reported {
@@ -615,10 +609,8 @@ impl IndexBuilder<'_> {
                 path,
                 *range,
                 "evidence.question.undeclared-collection",
-                format!(
-                    "This path visits the collection '{}', which source.collectionBounds does not bound",
-                    bounded_value(pointer)
-                ),
+                "This path visits a collection that source.collectionBounds does not bound"
+                    .to_owned(),
             );
         }
         // The other direction is the reference machinery's: a bound naming a collection no fact

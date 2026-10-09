@@ -3175,9 +3175,8 @@ fn compile_facts(
     for fact in &source.facts {
         if !offered.contains(fact.path.as_str()) {
             bail!(
-                "source fact `{}` path `{}` is not a selectable scalar leaf in the 200 application/json response",
-                fact.name,
-                fact.path
+                "source fact `{}` path is not a selectable scalar leaf in the 200 application/json response",
+                fact.name
             );
         }
     }

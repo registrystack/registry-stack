@@ -261,7 +261,7 @@ fn a_subject_selector_the_operation_has_no_path_parameter_for_is_reported() {
     );
     assert_eq!(
         diagnostic.message,
-        "Subject selector 'person_ref' is not a required string path parameter of operation 'readPerson'"
+        "This subject selector is not a required string path parameter of the question's operation"
     );
     assert_eq!(
         diagnostic.code.as_deref(),
@@ -311,7 +311,7 @@ fn a_selector_of_an_operation_whose_parameters_cannot_be_read_is_left_alone() {
 /// Edge 3: each `source.facts[].path` selects a leaf the operation's response offers. Paired with
 /// `compile_facts` in `crates/registry-evidencectl/src/authoring.rs`, which asks
 /// `registry_evidence_authoring::openapi::selectable_leaves` for the same set at :1661 and refuses
-/// the project with "source fact `<name>` path `<path>` is not a selectable scalar leaf in the 200
+/// the project with "source fact `<name>` path is not a selectable scalar leaf in the 200
 /// application/json response".
 #[test]
 fn a_fact_path_the_response_does_not_offer_is_reported() {
@@ -332,11 +332,37 @@ fn a_fact_path_the_response_does_not_offer_is_reported() {
     );
     assert_eq!(
         diagnostic.message,
-        "Fact path '/records/*/name' is not a selectable leaf of the 200 application/json response of operation 'readPerson'"
+        "This fact path is not a selectable leaf of the 200 application/json response of the question's operation"
     );
     assert_eq!(
         diagnostic.code.as_deref(),
         Some("evidence.question.unselectable-fact-path")
+    );
+}
+
+/// A fact path is a scalar read from the document, so the diagnostic locates it and never repeats it.
+#[test]
+fn an_unselectable_fact_path_is_reported_without_repeating_it() {
+    let project = EvidenceProject::new(&replacing(
+        &operation_question_project(),
+        QUESTION_PATH,
+        &OPERATION_QUESTION.replace(
+            "path: <|fact-path|>/records/*/date_of_birth",
+            "path: <|fact-path|>/records/*/PRIVATE_CANARY",
+        ),
+    ));
+    let index = project.index();
+
+    let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
+    assert_eq!(
+        diagnostic.range.start,
+        project.cursor(QUESTION_PATH, "fact-path")
+    );
+    assert!(
+        !diagnostic.message.contains("PRIVATE_CANARY")
+            && !diagnostic.message.contains("readPerson"),
+        "{}",
+        diagnostic.message
     );
 }
 
@@ -360,7 +386,7 @@ fn a_fact_path_at_something_that_is_not_a_scalar_leaf_is_reported() {
     let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
     assert_eq!(
         diagnostic.message,
-        "Fact path '/records/*' is not a selectable leaf of the 200 application/json response of operation 'readPerson'"
+        "This fact path is not a selectable leaf of the 200 application/json response of the question's operation"
     );
     assert_eq!(
         diagnostic.code.as_deref(),
@@ -454,7 +480,7 @@ fn a_collection_no_bound_names_is_reported() {
     );
     assert_eq!(
         diagnostic.message,
-        "This path visits the collection '/records', which source.collectionBounds does not bound"
+        "This path visits a collection that source.collectionBounds does not bound"
     );
     assert_eq!(
         diagnostic.code.as_deref(),
