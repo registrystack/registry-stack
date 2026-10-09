@@ -503,7 +503,9 @@ in its schema, and the reader enforces the same bounds through the shared
 bounded integer types in `registry-platform-yaml` (`BoundedU32<MIN, MAX>`,
 `BoundedU64<MIN, MAX>`). They emit both bounds into the schema and refuse a
 value outside them with `config.out-of-range`, naming the bounds. An implicit
-`minimum: 0` for an unsigned type does not state a bound.
+`minimum: 0` for an unsigned type does not state a bound: a `minimum: 0` beside
+a maximum below the unsigned format's own ceiling, as the bounded types emit
+it, does.
 *Enforced by:* the convention lint (every `integer` property declares
 `minimum` and `maximum`); the conformance corpus boundary sweep (each integer
 in each format's example whose registered schema states both bounds, set one
