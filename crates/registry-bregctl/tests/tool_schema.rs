@@ -108,15 +108,8 @@ fn committed(root: &str, name: &str) -> Vec<String> {
     found
 }
 
-/// Committed journeys files `bregctl test` refuses, which the schema refuses
-/// as well: the record conformance project carries an empty suite, and a
-/// suite holds 1 to 128 journeys.
-const REFUSED: &[&str] =
-    &["products/breg/acceptance/registry-record-conformance/tests/journeys.yaml"];
-
 /// An editor mapped to a generated schema must not mark a file the reader
-/// accepts, so every committed journeys file and example catalogue passes,
-/// apart from the files the reader refuses.
+/// accepts, so every committed journeys file and example catalogue passes.
 #[test]
 fn every_committed_journeys_file_and_example_catalogue_satisfies_its_schema() {
     let documents = documents().expect("the tool schemas generate");
@@ -145,10 +138,6 @@ fn every_committed_journeys_file_and_example_catalogue_satisfies_its_schema() {
         assert!(paths.len() >= least, "{name}: found {}", paths.len());
         for path in paths {
             let instance = example(&path);
-            if REFUSED.contains(&path.as_str()) {
-                assert!(!schema.is_valid(&instance), "{path} was accepted");
-                continue;
-            }
             let problems: Vec<String> = match schema.validate(&instance) {
                 Ok(()) => Vec::new(),
                 Err(errors) => errors
@@ -158,6 +147,18 @@ fn every_committed_journeys_file_and_example_catalogue_satisfies_its_schema() {
             assert!(problems.is_empty(), "{path} under {file}: {problems:?}");
         }
     }
+}
+
+/// A suite holds at least one journey: the reader refuses an empty one, so
+/// the schema refuses it as well.
+#[test]
+fn the_journeys_schema_refuses_an_empty_suite() {
+    let documents = documents().expect("the tool schemas generate");
+    let schema = compile(&documents["journeys.v1.schema.json"]);
+    let mut suite = example("products/breg/acceptance/asset-site-placement/tests/journeys.yaml");
+    assert!(schema.is_valid(&suite));
+    suite["journeys"] = Value::Array(Vec::new());
+    assert!(!schema.is_valid(&suite), "an empty suite was accepted");
 }
 
 #[test]
