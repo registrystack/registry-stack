@@ -997,6 +997,13 @@ class ExpectedFailuresTest(unittest.TestCase):
         self.assertEqual(runner.reason(["a", "b"]), "a; b")
         self.assertEqual(runner.reason(["a"]), "a")
 
+    def test_the_written_header_names_every_problem_that_is_never_listed(self) -> None:
+        # The file's own account of what it never lists is the runner's refusal.
+        self.assertTrue(runner.NEVER_EXPECTED.endswith(" is never an expected failure"))
+        never = runner.NEVER_EXPECTED.removesuffix(" is never an expected failure") + " is never listed."
+        header = " ".join(line.removeprefix("#").strip() for line in runner.EXPECTED_HEADER.splitlines())
+        self.assertIn(never, header)
+
     def test_expected_failures_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "expected-failures.yaml"
@@ -1752,6 +1759,10 @@ class CommittedCorpusTest(unittest.TestCase):
             self.assertTrue(runner.names_case(case_id, self.cases), case_id)
         self.assertLessEqual(set(expected.unreached), formats)
         self.assertLessEqual(set(expected.inapplicable), ids)
+
+    def test_the_committed_expected_failures_carry_the_header_the_runner_writes(self) -> None:
+        committed = (self.corpus / "expected-failures.yaml").read_text(encoding="utf-8")
+        self.assertTrue(committed.startswith(runner.EXPECTED_HEADER + "\n"))
 
     def text_member_cases(self) -> list[Any]:
         cases = [case for case in self.cases if case.id.startswith("text-member-")]

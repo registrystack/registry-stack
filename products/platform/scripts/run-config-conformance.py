@@ -1467,10 +1467,10 @@ EXPECTED_HEADER = """\
 # products/platform/CONFIG-CONVENTIONS.md, not a reason to weaken a case:
 # remove the entry when the product conforms. Each entry's digest covers the
 # cell's sorted problems, so a listed cell whose problems change fails the run;
-# a leak, a crash, or a timeout is never listed. A format whose baseline fails
-# has only its baseline entry: its other cells do not run. The runner fails on
-# a failing cell missing here, and with --strict on an entry that no longer
-# holds.
+# a leak, a crash, a timeout, or a failure of the harness is never listed. A
+# format whose baseline fails has only its baseline entry: its other cells do
+# not run. The runner fails on a failing cell missing here, and with --strict
+# on an entry that no longer holds.
 """
 
 
