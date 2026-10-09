@@ -1348,6 +1348,22 @@ class SourceLintTests(ConventionsTestCase):
         )
         self.assertFinding(self.repo.run(), "CFG-ID-6", P, at(CONFIG_RS, "Extra/names"))
 
+    def test_cfg_id_6_reports_a_set_type_behind_a_type_alias(self) -> None:
+        self.plant(
+            "\n#[derive(Deserialize)]\npub struct Extra {\n    names: Names,\n    groups: Groups,\n    plain: Plain,\n}\n"
+            "type Names = std::collections::BTreeSet<String>;\n"
+            "pub(crate) type Groups = Vec<Inner>;\n"
+            "type Inner = HashSet<String>;\n"
+            "type Plain = Vec<String>;\n"
+        )
+        report = self.repo.run()
+        self.assertFinding(report, "CFG-ID-6", P, at(CONFIG_RS, "Names"))
+        self.assertFinding(report, "CFG-ID-6", P, at(CONFIG_RS, "Inner"))
+        self.assertEqual(
+            sorted(key[2] for key in keys(report.findings) if key[0] == "CFG-ID-6"),
+            [at(CONFIG_RS, "Inner"), at(CONFIG_RS, "Names")],
+        )
+
     def build_artifact(self) -> dict:
         entry = self.repo.fmt()
         entry.update(audience="generated", stability="unpromised")

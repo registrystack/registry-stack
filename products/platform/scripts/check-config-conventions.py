@@ -1955,6 +1955,9 @@ class Lint:
         fid = entry["id"]
         file = item.path.relative_to(self.root).as_posix()
         if item.kind == "type":
+            if SET_TYPES.search(item.body) and self.applies(entry, "CFG-ID-6"):
+                self.find("CFG-ID-6", fid, file, item.name, f"{item.name} is an alias of a set type that collapses duplicates",
+                          "Use UniqueList<T> from registry-platform-yaml")
             return self.follow(entry, item, item.body)
         following: list[RustItem] = []
         for match in re.finditer(r"\b(?:try_from|from)\s*=\s*\"([^\"]+)\"", item.raw_attributes):
