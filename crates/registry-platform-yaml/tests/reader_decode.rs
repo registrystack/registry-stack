@@ -740,6 +740,19 @@ fn cfg_empty_1_a_null_block_names_the_empty_mapping() {
 }
 
 #[test]
+fn a_scalar_where_a_mapping_is_wanted_is_not_told_to_write_an_empty_one() {
+    let report = refusal::<Settings>("listener: text\n");
+    assert_diagnostic(
+        only(&report),
+        "config.invalid-type",
+        "/listener",
+        (3, 11),
+        "expected a mapping, not unquoted text",
+        "Write the members as a mapping.",
+    );
+}
+
+#[test]
 fn cfg_empty_1_an_optional_data_literal_keeps_null_apart_from_absence() {
     #[derive(Debug, Deserialize)]
     struct Fixture {

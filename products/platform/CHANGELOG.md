@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `config.invalid-type` for a mapping no longer suggests writing `{}`; the reader
+  cannot know whether an empty mapping is valid there.
 - `yaml.ambiguous-number` no longer offers quoting everywhere: its `next` says to
   write the number in decimal digits and to quote it only where the key takes text.
 - A removed key's `next` sentence now opens with a capital letter, whatever case

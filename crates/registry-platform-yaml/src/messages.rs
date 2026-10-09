@@ -843,7 +843,7 @@ pub(crate) fn expected_collection(list_wanted: bool, found: Found) -> Text {
     } else {
         text(
             format!("expected a mapping, not {}", found.phrase()),
-            "Write the members as a mapping (`{}` when there are none).",
+            "Write the members as a mapping.",
         )
     }
 }
