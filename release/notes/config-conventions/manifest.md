@@ -51,6 +51,7 @@ them and how it reports what it finds.
    Migration: none.
 
 ## BREAKING: a repeated relationship name or `identifiers` item is `config.duplicate-id`
+<!-- upgrade: manifest-duplicate-id -->
 
 Two relationships with the same `name` in one entity, and an `identifiers`
 item listed twice in one entity, are refused with `config.duplicate-id` at the

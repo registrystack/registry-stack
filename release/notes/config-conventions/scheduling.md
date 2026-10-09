@@ -288,6 +288,7 @@ and pointer from the error:
   clean, 1 refused, 2 usage, 3 a file it needs could not be read.
 
 ## BREAKING: a repeated `id` is `config.duplicate-id`
+<!-- upgrade: scheduling-duplicate-id -->
 
 A repeated `id` in `services`, `offerings`, `holidaySets`, `openings`, or
 `hooks` of `scheduling.yaml`, or in `locations`, `pools`, `windows`, or
@@ -307,6 +308,7 @@ Migration: a script that matched the old code on an `id` path matches
 `id`.
 
 ## BREAKING: `authentication.oidc.allowedClients` is required in every file
+<!-- upgrade: scheduling-allowed-clients-required -->
 
 An omitted `allowedClients` and `allowedClients: []` are refused with
 `scheduling.runtime.allowed-clients-required` at

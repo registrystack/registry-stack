@@ -686,3 +686,54 @@ steps:
     .evidence/source-imports and run evidencectl source import again, then resolve each reported conflict;
     for a journal left by an interrupted import, run evidencectl source import with the evidencectl that
     started it to finish or roll back, then rerun.'}
+- id: scheduling-duplicate-id
+  product: scheduling
+  kind: manual
+  file: scheduling.yaml
+  instruction: >-
+    Give each item its own id in services, offerings, holidaySets, openings and hooks of scheduling.yaml, and
+    in locations, pools, windows and exceptions of records.yaml and fixture facts; schedulingctl check names
+    the second item and the first.
+- id: scheduling-allowed-clients-required
+  product: scheduling
+  kind: manual
+  root: runtime
+  file: runtime.yaml
+  instruction: >-
+    Add authentication.oidc.allowedClients with the client ids the deployment admits, for example
+    [scheduling-booking-agent]; an omitted member and an empty list are refused in every mode.
+- id: messaging-duplicate-allowed-client
+  product: messaging
+  kind: manual
+  root: runtime
+  file: runtime.yaml
+  instruction: >-
+    List each client once in authentication.oidc.allowedClients.
+- id: messaging-template-duplicate-key
+  product: messaging
+  kind: manual
+  file: templates/*/schema.json
+  instruction: >-
+    Keep one value for each object key in a template's schema.json and sample.json; messagingctl check
+    --project names the line where the repeat is read.
+- id: manifest-duplicate-id
+  product: manifest
+  kind: manual
+  file: metadata.yaml
+  instruction: >-
+    Rename the second relationship, or remove the repeated identifiers item, in the entity that
+    registry-manifest validate names.
+- id: platform-substituted-control-character
+  product: platform
+  kind: manual
+  file: '*.yaml'
+  instruction: >-
+    Remove the control character (other than tab, line feed and carriage return) from the environment
+    variable a ${VAR} names; the diagnostic names the variable.
+- id: platform-mapping-key-control-character
+  product: platform
+  kind: manual
+  file: '*.yaml'
+  instruction: >-
+    Remove the control character (other than tab, line feed and carriage return) from the mapping key the
+    diagnostic points at.
