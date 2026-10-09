@@ -769,6 +769,23 @@ fn check(args: CheckArgs, format: OutputFormat) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// A refusal located at one member of the mock plan. Its message is a fixed
+/// sentence plus schema-derived pointers, never a value or path the plan
+/// holds.
+#[derive(Debug)]
+struct PlanMemberFault {
+    pointer: String,
+    message: String,
+}
+
+impl std::fmt::Display for PlanMemberFault {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.pointer, self.message)
+    }
+}
+
+impl std::error::Error for PlanMemberFault {}
+
 /// The refusal a mock plan check raised, as the report of every problem it
 /// found, each file named from `base`, the project path as given. The
 /// reader's own report is kept; any other refusal is one diagnostic naming
@@ -776,6 +793,18 @@ fn check(args: CheckArgs, format: OutputFormat) -> Result<ExitCode> {
 fn plan_refusal(error: anyhow::Error, config: &Path, base: &Path) -> anyhow::Error {
     let found = if let Some(found) = authored::report_in(&error) {
         found.clone()
+    } else if let Some(fault) = error.downcast_ref::<PlanMemberFault>() {
+        let mut found = Report::new(vec![authored::file_diagnostic(
+            Severity::Error,
+            "evidence.mock-plan.invalid",
+            None,
+            &config.to_string_lossy(),
+            &fault.pointer,
+            &fault.message,
+            PLAN_ACTION,
+        )]);
+        found.set_files_checked(1);
+        found
     } else if error
         .chain()
         .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
@@ -884,16 +913,17 @@ fn load_checked_plan(root: &Path, config: &Path, allow_missing: bool) -> Result<
                             &failure.schema_pointer
                         })
                         .expect("string serialization cannot fail");
-                        bail!(
-                            "body `{}` case `{}` for {} {} failed {} at instance {} schema {}",
-                            case.body,
-                            case.name,
-                            plan_operation.method,
-                            plan_operation.path,
-                            failure.rule,
-                            instance,
-                            schema,
-                        );
+                        return Err(PlanMemberFault {
+                            pointer: format!(
+                                "/operations/{operation_index}/cases/{case_index}/body"
+                            ),
+                            message: format!(
+                                "the response body failed the operation's response schema \
+                                 (rule {} at instance {instance}, schema {schema})",
+                                failure.rule,
+                            ),
+                        }
+                        .into());
                     }
                     let expanded =
                         plan::expand_path(&plan_operation.path, &case.request.path_parameters)

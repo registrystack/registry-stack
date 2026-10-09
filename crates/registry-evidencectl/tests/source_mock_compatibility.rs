@@ -778,7 +778,11 @@ fn invalid_manual_edits_report_no_authored_value() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("planted-secret-value"), "{stderr}");
     assert!(!stderr.contains("must-not-leak"), "{stderr}");
-    assert!(stderr.contains("body `cases/"), "{stderr}");
+    // The configured body path and operation path are plan scalars: the
+    // refusal names the member that holds them instead.
+    assert!(!stderr.contains(".json"), "{stderr}");
+    assert!(!stderr.contains("/people/{person_id}"), "{stderr}");
+    assert!(stderr.contains("/operations/0/cases/0/body"), "{stderr}");
     assert!(
         stderr.contains("instance") && stderr.contains("schema"),
         "{stderr}"
