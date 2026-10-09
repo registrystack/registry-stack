@@ -360,6 +360,14 @@ class TypingContractTests(unittest.TestCase):
             if isinstance(node, ast.AnnAssign) and node.target.id == "status"
         )
         self.assertEqual(ast.unparse(task_page_status), "PageStatus")
+        self.assertEqual(
+            {
+                node.target.id: ast.unparse(node.annotation)
+                for node in classes["SupervisoryReviewTaskQuery"].body
+                if isinstance(node, ast.AnnAssign)
+            },
+            {"queue": "str", "requestId": "Uuid"},
+        )
         supervisory_fields = {
             node.target.id: ast.unparse(node.annotation)
             for node in classes["SupervisoryReviewTask"].body

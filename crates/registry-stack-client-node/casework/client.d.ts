@@ -432,7 +432,7 @@ export type ReviewCancelResponse =
 export interface ReviewPageQuery { cursor?: Uuid; limit?: SafeInteger }
 export type ReviewTaskOwnership = 'assigned_to_me' | 'unclaimed'
 export interface ReviewTaskQuery extends ReviewPageQuery { queue?: string; ownership?: ReviewTaskOwnership }
-export interface SupervisoryReviewTaskQuery extends ReviewPageQuery { queue?: string }
+export interface SupervisoryReviewTaskQuery extends ReviewPageQuery { queue?: string; requestId?: Uuid }
 export interface WorkItemHistoryQuery { cursor?: string; limit?: SafeInteger }
 export type ReviewerTaskState = 'open' | { held: { holder: IssuerPrincipal } } | 'decided'
 export type ReviewDecisionType = 'approve' | 'reject' | 'changes_requested' | 'answer'

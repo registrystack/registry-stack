@@ -5958,6 +5958,184 @@ async fn a_display_schema_the_source_disclosure_fails_is_logged_for_the_operator
 }
 
 #[tokio::test]
+async fn supervisory_request_lookup_binds_scan_checkpoints_and_conceals_bounded_source_candidates()
+{
+    let fixture = fixture().await;
+    let mut policy = project("2");
+    policy.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    policy.review_kinds[0].stages[0].required_approvals = 3;
+    policy.inbox = InboxPolicy {
+        default_page_size: 1,
+        maximum_candidate_scan: 2,
+        maximum_source_reads: 1,
+        maximum_concurrent_source_reads: 1,
+        page_deadline_milliseconds: 5_000,
+    };
+    policy.check().expect("bounded exact lookup policy");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        policy,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::clone(&fixture.source_read_blocked),
+            read_started: Arc::clone(&fixture.source_read_started),
+            read_continue: Arc::clone(&fixture.source_read_continue),
+            advanced: Arc::clone(&fixture.source_advanced),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("bounded exact lookup service");
+    let mut requests = Vec::new();
+    for index in 0..2 {
+        let subject = format!("record-exact-checkpoint-{index}");
+        let mut input = request(&subject, &format!("exact-checkpoint-{index}"));
+        input.context = ReviewContext::Source {
+            binding: SourceContextBinding {
+                reference: format!("registry:record:{subject}"),
+            },
+        };
+        let created = service
+            .create_review_request(
+                &fixture.producer,
+                input,
+                &format!("create-exact-checkpoint-{index}"),
+            )
+            .await
+            .unwrap();
+        requests.push(created.accepted.request_id);
+    }
+    let read = |request_id, cursor, source_profile: Option<&'static str>| {
+        let service = service.clone();
+        let actor = fixture.supervisor.clone();
+        async move {
+            service
+                .supervisory_review_tasks(
+                    &actor,
+                    source_profile,
+                    "human-bearer",
+                    Some("review"),
+                    request_id,
+                    cursor,
+                    1,
+                )
+                .await
+        }
+    };
+    // Missing source profiles retain the existing bounded list semantics; any
+    // undisclosed scan position must be opaque and bind the exact lookup scope.
+    let first = read(Some(requests[0]), None, None).await.unwrap();
+    assert!(first.items.is_empty());
+    assert_eq!(
+        first.status,
+        registry_casework_core::PageStatus::BudgetExhausted
+    );
+    let checkpoint = first.next_cursor.expect("scoped opaque checkpoint");
+    let rows = fixture.database.query("SELECT task_id FROM casework_review_tasks WHERE request_id=$1 ORDER BY created_at,task_id", &[&requests[0]]).await.unwrap();
+    let tasks = rows
+        .iter()
+        .map(|row| row.get::<_, Uuid>(0))
+        .collect::<Vec<_>>();
+    assert!(!tasks.contains(&checkpoint));
+    let context: String = fixture
+        .database
+        .query_one(
+            "SELECT context FROM casework_cursors WHERE cursor_id=$1",
+            &[&checkpoint],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&context).unwrap()["requestId"],
+        json!(requests[0])
+    );
+    for changed_scope in [None, Some(requests[1]), Some(Uuid::new_v4())] {
+        assert!(matches!(
+            read(changed_scope, Some(checkpoint), None).await,
+            Err(ReviewRuntimeError::ResultExpired)
+        ));
+    }
+    assert!(matches!(
+        read(Some(requests[0]), Some(checkpoint), Some("staff")).await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    let resumed = read(Some(requests[0]), Some(checkpoint), None)
+        .await
+        .unwrap();
+    assert!(resumed.items.is_empty());
+    assert_ne!(resumed.next_cursor, Some(checkpoint));
+    let unfiltered = read(None, None, None).await.unwrap().next_cursor.unwrap();
+    assert!(matches!(
+        read(Some(requests[0]), Some(unfiltered), None).await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    let outside = task_id(&fixture, requests[1], 0).await;
+    assert!(matches!(
+        read(Some(requests[0]), Some(outside), Some("staff")).await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    let mut cursor = None;
+    let mut found = Vec::new();
+    for _ in 0..4 {
+        let page = read(Some(requests[0]), cursor, Some("staff"))
+            .await
+            .unwrap();
+        assert!(page.items.iter().all(|task| task.request_id == requests[0]));
+        found.extend(page.items.iter().map(|task| task.task_id));
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(found, tasks);
+    assert_eq!(cursor, None);
+    fixture.source_revoked.store(true, Ordering::SeqCst);
+    let concealed = read(Some(requests[0]), None, Some("staff")).await.unwrap();
+    let unknown = read(Some(Uuid::new_v4()), None, Some("staff"))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(concealed).unwrap(),
+        serde_json::to_value(unknown).unwrap()
+    );
+    fixture.source_revoked.store(false, Ordering::SeqCst);
+    fixture.source_read_blocked.store(true, Ordering::SeqCst);
+    let pending_service = service.clone();
+    let actor = fixture.supervisor.clone();
+    let request_id = requests[0];
+    let pending = tokio::spawn(async move {
+        pending_service
+            .supervisory_review_tasks(
+                &actor,
+                Some("staff"),
+                "human-bearer",
+                Some("review"),
+                Some(request_id),
+                None,
+                1,
+            )
+            .await
+    });
+    fixture.source_read_started.notified().await;
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_memberships WHERE subject='supervisor'",
+            &[],
+        )
+        .await
+        .unwrap();
+    fixture.source_read_continue.notify_one();
+    let revoked_during_read = pending.await.unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(revoked_during_read).unwrap(),
+        json!({
+            "items": [], "status": "complete"
+        })
+    );
+}
+
+#[tokio::test]
 async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_progress() {
     for supervisory in [false, true] {
         for source_profile in [None, Some("staff")] {
@@ -6038,6 +6216,7 @@ async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_p
                                 source_profile,
                                 "human-bearer",
                                 queue,
+                                None,
                                 cursor,
                                 10,
                             )
@@ -6439,10 +6618,11 @@ async fn review_task_lists_recheck_queue_after_source_io() {
                         "human-bearer",
                         Some("review"),
                         None,
+                        None,
                         10,
                     )
                     .await
-                    .map(|page| page.items.len())
+                    .map(|page| serde_json::to_value(page).unwrap())
             } else {
                 service
                     .review_tasks_with_ownership(
@@ -6455,7 +6635,7 @@ async fn review_task_lists_recheck_queue_after_source_io() {
                         10,
                     )
                     .await
-                    .map(|page| page.items.len())
+                    .map(|page| serde_json::to_value(page).unwrap())
             }
         });
         fixture.source_read_started.notified().await;
@@ -6470,7 +6650,7 @@ async fn review_task_lists_recheck_queue_after_source_io() {
         fixture.source_read_continue.notify_one();
         assert_eq!(
             list.await.expect("list task joins").expect("current list"),
-            0,
+            json!({"items": [], "status": "complete"}),
             "membership in both queues does not release a moved row from the old queue"
         );
     }
@@ -6482,12 +6662,279 @@ async fn review_task_lists_recheck_queue_after_source_io() {
             "human-bearer",
             Some("intake"),
             None,
+            None,
             10,
         )
         .await
         .expect("discover work in its current queue");
     assert_eq!(destination.items.len(), 1);
     assert_eq!(destination.items[0].queue, "intake");
+
+    let mut policy = project("2");
+    policy.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+    policy.review_kinds[0].stages[0].required_approvals = 3;
+    policy.inbox = InboxPolicy {
+        default_page_size: 1,
+        maximum_candidate_scan: 2,
+        maximum_source_reads: 1,
+        maximum_concurrent_source_reads: 1,
+        page_deadline_milliseconds: 5_000,
+    };
+    policy.check().expect("bounded queue race policy");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        policy.clone(),
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::clone(&fixture.source_read_blocked),
+            read_started: Arc::clone(&fixture.source_read_started),
+            read_continue: Arc::clone(&fixture.source_read_continue),
+            advanced: Arc::clone(&fixture.source_advanced),
+        }) as Arc<dyn SourceAdapter>],
+    )
+    .expect("bounded queue race service");
+    let mut input = request("record-bounded-queue-race", "bounded-queue-race");
+    input.context = ReviewContext::Source {
+        binding: SourceContextBinding {
+            reference: "registry:record:record-bounded-queue-race".to_owned(),
+        },
+    };
+    let request_id = service
+        .create_review_request(&fixture.producer, input, "create-bounded-queue-race")
+        .await
+        .unwrap()
+        .accepted
+        .request_id;
+    let tasks = fixture
+        .database
+        .query(
+            "SELECT task_id FROM casework_review_tasks WHERE request_id=$1 ORDER BY created_at,task_id",
+            &[&request_id],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<_, Uuid>(0))
+        .collect::<Vec<_>>();
+    assert_eq!(tasks.len(), 3);
+
+    for queue in [Some("review"), None] {
+        fixture
+            .database
+            .execute(
+                "UPDATE casework_review_tasks SET queue_id='review' WHERE request_id=$1",
+                &[&request_id],
+            )
+            .await
+            .unwrap();
+        fixture.source_read_blocked.store(true, Ordering::SeqCst);
+        let pending_service = service.clone();
+        let actor = fixture.supervisor.clone();
+        let pending = tokio::spawn(async move {
+            pending_service
+                .supervisory_review_tasks(
+                    &actor,
+                    Some("staff"),
+                    "human-bearer",
+                    queue,
+                    Some(request_id),
+                    None,
+                    1,
+                )
+                .await
+        });
+        fixture.source_read_started.notified().await;
+        fixture
+            .database
+            .execute(
+                "UPDATE casework_review_tasks SET queue_id='intake' WHERE request_id=$1",
+                &[&request_id],
+            )
+            .await
+            .expect("move every candidate during the first source read");
+        fixture.source_read_continue.notify_one();
+        let mut page = pending.await.unwrap().unwrap();
+        if queue.is_some() {
+            assert_eq!(
+                serde_json::to_value(page).unwrap(),
+                json!({"items": [], "status": "complete"}),
+                "an exact lookup outside its selected queue has no unusable checkpoint"
+            );
+            continue;
+        }
+
+        // Without a queue filter, the destination remains in scope. Every
+        // moved task must still be discoverable through valid continuations.
+        for (index, task_id) in tasks.iter().enumerate() {
+            let mut expected = json!({
+                "items": [{
+                    "taskId": task_id,
+                    "requestId": request_id,
+                    "queue": "intake",
+                    "revision": 1,
+                    "state": "open"
+                }],
+                "status": "complete"
+            });
+            if index + 1 < tasks.len() {
+                expected["nextCursor"] = json!(task_id);
+                expected["status"] = json!("budget_exhausted");
+            }
+            assert_eq!(serde_json::to_value(&page).unwrap(), expected);
+            if let Some(cursor) = page.next_cursor {
+                page = service
+                    .supervisory_review_tasks(
+                        &fixture.supervisor,
+                        Some("staff"),
+                        "human-bearer",
+                        None,
+                        Some(request_id),
+                        Some(cursor),
+                        1,
+                    )
+                    .await
+                    .expect("the request-wide continuation remains usable");
+            }
+        }
+    }
+
+    for source_read_budget in [1, 2] {
+        policy.inbox.maximum_source_reads = source_read_budget;
+        let service = CaseworkService::new(
+            fixture.store.clone(),
+            policy.clone(),
+            [Arc::new(ReviewSource {
+                revoked: Arc::clone(&fixture.source_revoked),
+                state: Arc::clone(&fixture.source_state),
+                read_blocked: Arc::clone(&fixture.source_read_blocked),
+                read_started: Arc::clone(&fixture.source_read_started),
+                read_continue: Arc::clone(&fixture.source_read_continue),
+                advanced: Arc::clone(&fixture.source_advanced),
+            }) as Arc<dyn SourceAdapter>],
+        )
+        .expect("bounded partial queue race service");
+        let moved = tasks[source_read_budget - 1];
+        for (queue, destination_served) in [(Some("review"), true), (None, true), (None, false)] {
+            if destination_served {
+                fixture
+                    .database
+                    .batch_execute(
+                        "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+                         VALUES('intake','review-team',1) ON CONFLICT DO NOTHING",
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                fixture
+                    .database
+                    .batch_execute("DELETE FROM casework_queue_service WHERE queue_id='intake'")
+                    .await
+                    .unwrap();
+            }
+            fixture
+                .database
+                .execute(
+                    "UPDATE casework_review_tasks SET queue_id='review' WHERE request_id=$1",
+                    &[&request_id],
+                )
+                .await
+                .unwrap();
+            fixture.source_read_blocked.store(true, Ordering::SeqCst);
+            let pending_service = service.clone();
+            let actor = fixture.supervisor.clone();
+            let pending = tokio::spawn(async move {
+                pending_service
+                    .supervisory_review_tasks(
+                        &actor,
+                        Some("staff"),
+                        "human-bearer",
+                        queue,
+                        Some(request_id),
+                        None,
+                        1,
+                    )
+                    .await
+            });
+            fixture.source_read_started.notified().await;
+            if source_read_budget == 2 {
+                // Rearm before releasing A. With concurrency one, B blocks
+                // only after A has passed its current-scope check and is added.
+                fixture.source_read_blocked.store(true, Ordering::SeqCst);
+                fixture.source_read_continue.notify_one();
+                fixture.source_read_started.notified().await;
+            }
+            fixture
+                .database
+                .execute(
+                    "UPDATE casework_review_tasks SET queue_id='intake' WHERE task_id=$1",
+                    &[&moved],
+                )
+                .await
+                .expect("move only the last budgeted candidate during its source read");
+            fixture.source_read_continue.notify_one();
+            let result = pending.await.unwrap();
+            let mut page = if (queue.is_some() || !destination_served) && source_read_budget == 1 {
+                assert!(matches!(result, Err(ReviewRuntimeError::ResultExpired)));
+                service
+                    .supervisory_review_tasks(
+                        &fixture.supervisor,
+                        Some("staff"),
+                        "human-bearer",
+                        queue,
+                        Some(request_id),
+                        None,
+                        1,
+                    )
+                    .await
+                    .expect("a refetch finds candidates after the moved first task")
+            } else {
+                result.expect("retain matching work with a usable continuation")
+            };
+            let expected_tasks = tasks
+                .iter()
+                .copied()
+                .filter(|task_id| (queue.is_none() && destination_served) || *task_id != moved)
+                .collect::<Vec<_>>();
+            for (index, task_id) in expected_tasks.iter().enumerate() {
+                let mut expected = json!({
+                    "items": [{
+                        "taskId": task_id,
+                        "requestId": request_id,
+                        "queue": if *task_id == moved { "intake" } else { "review" },
+                        "revision": 1,
+                        "state": "open"
+                    }],
+                    "status": "complete"
+                });
+                if index + 1 < expected_tasks.len() {
+                    expected["nextCursor"] = json!(task_id);
+                    if source_read_budget == 1 || queue.is_some() || !destination_served {
+                        expected["status"] = json!("budget_exhausted");
+                    }
+                }
+                assert_eq!(
+                    serde_json::to_value(&page).unwrap(),
+                    expected,
+                    "partial move with read budget {source_read_budget}, queue {queue:?}, destination served {destination_served}"
+                );
+                if let Some(cursor) = page.next_cursor {
+                    page = service
+                        .supervisory_review_tasks(
+                            &fixture.supervisor,
+                            Some("staff"),
+                            "human-bearer",
+                            queue,
+                            Some(request_id),
+                            Some(cursor),
+                            1,
+                        )
+                        .await
+                        .expect("matching work beyond the source budget remains reachable");
+                }
+            }
+        }
+    }
 }
 
 #[tokio::test]
@@ -6561,6 +7008,7 @@ async fn review_task_cursor_rechecks_scope_after_source_io() {
                             Some("staff"),
                             "human-bearer",
                             Some("review"),
+                            None,
                             Some(anchor),
                             10,
                         )

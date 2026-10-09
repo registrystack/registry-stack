@@ -511,3 +511,36 @@ its activation ledger, and its own audit guards are unchanged.
   and the removed-key refusals stay as they are. Removing them needs a
   decision on a schema floor, because without one an unsupported upgrade
   from before the audit writer would drop unpublished audit rows silently.
+
+
+## Exact supervisory request selection
+
+The optional `requestId` query names the existing canonical request UUID. It
+narrows the operational supervision list before pagination and does not change
+its holder-free projection or grant reviewer, content, producer-result, or
+accountability authority. No new route, store, index, or configuration is added.
+The existing unique task index beginning with `request_id` supports selection.
+
+The threat is disclosure of a shared request outside the caller's current
+supervised queues, source visibility, pinned occurrence, or retention, or use
+of a cursor from another selection to recover such a position. SQL membership,
+served-queue, retention and exact request predicates precede the page limit.
+Raw anchors must satisfy that same scope before source I/O. Existing expiring
+scan checkpoints include the optional exact request selection in their caller
+and profile context; omitting the selection keeps the existing context bytes.
+An unknown, out-of-team, revoked, concealed or expired exact lookup returns the
+neutral empty list. In particular, source concealment returns no checkpoint
+even when that request has more tasks than the source-read budget. Missing
+source profiles and unavailable sources keep the existing list refusals.
+Accountability resolution retains its separate authorization and audit checks.
+
+The maintained proof obligations are
+`supervisory_request_lookup_precedes_pagination_and_conceals_inaccessible_requests_over_http`
+in `crates/registry-casework/tests/review_http.rs` and
+`supervisory_request_lookup_binds_scan_checkpoints_and_conceals_bounded_source_candidates`
+in `crates/registry-casework/tests/review_postgres.rs`. They cover lookup beyond
+the first page, multiple tasks, queue composition, neutral unauthorized and
+source-concealed results, pinned source changes, retention, raw anchor scope,
+and checkpoint selection binding. Client and binding regressions cover UUID
+validation before I/O, exact query forwarding, and refusal of a response for
+another request. These references are proof obligations, not execution claims.

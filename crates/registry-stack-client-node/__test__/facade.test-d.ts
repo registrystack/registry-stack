@@ -22,6 +22,10 @@ breg.verifyWebhookDelivery({
 }).deliveryTime.toUpperCase()
 void discoveryClient
 void caseworkClient.description('header.payload.signature', 'staff')
+const supervisoryLookup: casework.SupervisoryReviewTaskQuery = {
+  requestId: '00000000-0000-0000-0000-000000000009', queue: 'review', limit: 25,
+}
+void caseworkClient.supervisoryReviewTasks('header.payload.signature', 'supervisor', supervisoryLookup)
 const reviewer = { issuer: 'https://idp.example.invalid/', subject: 'reviewer' }
 void caseworkClient.assignReviewTask(
   'header.payload.signature', 'supervisor', 'task-1', 1, 'assign-1',

@@ -148,9 +148,26 @@ caller's current source visibility. Resolving an event id through
 `GET /v1/review-accountability/{eventId}` performs that endpoint's independent
 Supervisor authority and audit checks.
 
+To find a request another reviewer shares, pass its canonical request UUID as
+`requestId`. Casework selects that exact request before pagination and combines
+it with the optional queue filter, bounded limit, and continuation. A request
+can have several tasks, so follow its `nextCursor` with the same selection.
+
+```text
+GET /v1/review-tasks/supervision?requestId=00000000-0000-4000-8000-000000000042&queue=decisions&limit=25
+```
+
+The reference grants no authority. Unknown, other-team, revoked, concealed, and
+expired requests return the same neutral empty page under the existing list
+semantics. Current Supervisor membership, queue service, source visibility and
+the pinned source occurrence still control disclosure. The lookup exposes no
+deciding eligibility, submitted context, private reason, producer result, or
+accountability record.
+
 Reviewer and Supervisor task cursors resume an immutable task creation and id
 position in a live walk. Pass `nextCursor` unchanged with the same caller,
-Casework profile, source profile, queue and ownership filters. A disclosed task
+Casework profile, source profile, queue, ownership and supervisory `requestId`
+filters. A disclosed task
 anchor uses its task UUID and requires current source visibility before its
 position is accepted. Each page rechecks current membership, queue service,
 retention and task existence; reviewer pages also recheck the pinned deciding
@@ -167,6 +184,9 @@ review result. It saves only a scan position. Every returned row still requires
 current Casework and source authority. Unknown, erased, expired or
 no-longer-authorized anchors and mismatched checkpoints all return
 `410 review.result-expired`; restart without a cursor after this refusal.
+An exact supervisory lookup also refuses a task anchor from another request
+with that same problem. Its opaque checkpoints bind the exact `requestId`
+selection, including the distinction between an exact and an unfiltered list.
 
 The configured source-read budget bounds candidate preflights. A supplied
 source-backed task anchor adds at most one preflight under the same page

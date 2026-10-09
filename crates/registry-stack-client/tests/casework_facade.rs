@@ -125,7 +125,10 @@ async fn every_casework_method_names_its_types(
     let _: CaseworkComplete<SupervisoryReviewTaskPage> = client
         .supervisory_review_tasks(
             CaseworkAuth::new(token, profile),
-            supervisory_review_task_query,
+            &SupervisoryReviewTaskQuery {
+                request_id: Some(item_id),
+                ..supervisory_review_task_query.clone()
+            },
         )
         .await?;
     let _: CaseworkComplete<ReviewerTask> = client

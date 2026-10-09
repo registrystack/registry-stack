@@ -13,6 +13,13 @@ supervisors with bounded task and accountability references for served queues.
 Its `state` is a holder-free string. A single decided-task read carries `decisionReceipt` only for the principal
 whose decision it records.
 
+Pass `{ requestId: canonicalRequestUuid, queue: 'review', limit: 25 }` to
+`supervisoryReviewTasks` to select a shared request before pagination. Keep
+`requestId` unchanged when following `nextCursor`. The UUID is validated before
+I/O, and every response row must match it. Unknown or inaccessible requests
+produce a neutral empty page under current list semantics. The reference
+grants no decision, content, or accountability authority.
+
 Task delegation uses the current human profile for template previews, grant
 approval, listing, and revocation. Approval accepts only the template ID and
 version, with the item revision and a caller-owned idempotency key. The preview

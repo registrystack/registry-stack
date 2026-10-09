@@ -151,7 +151,7 @@ const reviewDecision: ReviewTaskDecisionRequest = { decision: { type: 'approve' 
 void client.decideReviewTask(token, profile, item.itemId, item.revision, 'decide-43', reviewDecision, sourceProfile)
 const assignedReviewTasks: ReviewTaskQuery = { queue: 'review', ownership: 'assigned_to_me', limit: 25 }
 void client.reviewTasks(token, profile, assignedReviewTasks, sourceProfile)
-void client.supervisoryReviewTasks(token, 'supervisor', { queue: 'review', limit: 25 }, sourceProfile)
+void client.supervisoryReviewTasks(token, 'supervisor', { queue: 'review', requestId: item.itemId, limit: 25 }, sourceProfile)
 
 function taskHolder(task: ReviewerTask): string | undefined {
   if (task.state === 'open' || task.state === 'decided') return undefined

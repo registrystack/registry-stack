@@ -78,9 +78,10 @@ class _Handler(BaseHTTPRequestHandler):
                 "state": "open",
             })
             return
-        if self.path == (
-            "/tenant/v1/review-tasks/supervision?queue=reviews"
+        if self.path in (
+            f"/tenant/v1/review-tasks/supervision?queue=reviews&requestId={request_id}"
             f"&cursor={SUPERVISORY_CURSOR}&limit=10"
+            for request_id in (OTHER_ITEM_ID, ITEM_ID)
         ):
             self.respond({
                 "items": [{
@@ -478,7 +479,7 @@ class NativeRequestTests(unittest.TestCase):
         page = self.client.supervisory_review_tasks(
             "supervisor-token",
             "supervisor",
-            {"queue": "reviews", "cursor": SUPERVISORY_CURSOR, "limit": 10},
+            {"queue": "reviews", "requestId": OTHER_ITEM_ID, "cursor": SUPERVISORY_CURSOR, "limit": 10},
             "source-one",
         )
 
@@ -489,11 +490,22 @@ class NativeRequestTests(unittest.TestCase):
         observation = _Handler.observations[0]
         self.assertEqual(
             observation["path"],
-            "/tenant/v1/review-tasks/supervision?queue=reviews"
+            f"/tenant/v1/review-tasks/supervision?queue=reviews&requestId={OTHER_ITEM_ID}"
             f"&cursor={SUPERVISORY_CURSOR}&limit=10",
         )
         self.assertEqual(observation["profile"], "supervisor")
         self.assertEqual(observation["source_profile"], "source-one")
+
+    def test_supervisory_review_tasks_refuse_rows_for_another_request(self) -> None:
+        with self.assertRaises(CaseworkClientError) as raised:
+            self.client.supervisory_review_tasks(
+                "supervisor-token", "supervisor",
+                {"queue": "reviews", "requestId": ITEM_ID,
+                 "cursor": SUPERVISORY_CURSOR, "limit": 10},
+                "source-one",
+            )
+        self.assertEqual(raised.exception.kind, "protocol")
+        self.assertEqual(raised.exception.protocol_failure, "body")
 
     def test_review_optional_arguments_may_be_omitted(self) -> None:
         calls = (

@@ -299,6 +299,14 @@ class GeneratedOpenApiTests(unittest.TestCase):
             "ownership",
             {parameter["name"] for parameter in supervision_operation["parameters"]},
         )
+        request_id_parameter = next(
+            parameter for parameter in supervision_operation["parameters"]
+            if parameter["name"] == "requestId"
+        )
+        self.assertEqual({"type": "string", "format": "uuid"}, request_id_parameter["schema"])
+        self.assertFalse(request_id_parameter["required"])
+        self.assertIn("before pagination", request_id_parameter["description"])
+        self.assertIn("neutral empty page", request_id_parameter["description"])
         self.assertIn("Supervisor-only", supervision_operation["description"])
         self.assertIn("releases no context", supervision_operation["description"])
         self.assertIn("holder identity", supervision_operation["description"])

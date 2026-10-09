@@ -34,13 +34,15 @@ test('a configuration value the sanitizer refuses is a configuration error', () 
   }
 });
 
-test('review task discovery keeps ownership closed and off the supervisory query', async () => {
+test('review task discovery validates selectors before I/O', async () => {
   const { CaseworkClient, CaseworkClientError } = require('../client');
   const client = new CaseworkClient({ baseUrl: 'https://casework.example.test/' });
   assert.equal(typeof client.supervisoryReviewTasks, 'function');
   for (const call of [
-    client.reviewTasks('one-call-secret', 'staff', { ownership: 'someone_elses' }),
-    client.supervisoryReviewTasks('one-call-secret', 'supervisor', { ownership: 'unclaimed' }),
+    () => client.reviewTasks('one-call-secret', 'staff', { ownership: 'someone_elses' }),
+    () => client.supervisoryReviewTasks('one-call-secret', 'supervisor', { ownership: 'unclaimed' }),
+    ...['', 'not-a-uuid', 42, {}, []].map((requestId) => () =>
+      client.supervisoryReviewTasks('one-call-secret', 'supervisor', { requestId })),
   ]) {
     await assert.rejects(call, (error) => {
       assert.ok(error instanceof CaseworkClientError);
@@ -149,6 +151,7 @@ test('supervisory review task discovery preserves the bounded row and query', as
     'supervisor',
     {
       queue: 'reviews',
+      requestId: '00000000-0000-0000-0000-000000000009',
       cursor: '00000000-0000-0000-0000-000000000008',
       limit: 10,
     },
@@ -156,9 +159,14 @@ test('supervisory review task discovery preserves the bounded row and query', as
   );
 
   assert.equal(result.value.items[0].accountabilityEventId, '00000000-0000-0000-0000-000000000011');
-  assert.equal(observed.path, '/v1/review-tasks/supervision?queue=reviews&cursor=00000000-0000-0000-0000-000000000008&limit=10');
+  assert.equal(observed.path, '/v1/review-tasks/supervision?queue=reviews&requestId=00000000-0000-0000-0000-000000000009&cursor=00000000-0000-0000-0000-000000000008&limit=10');
   assert.equal(observed.headers['registry-casework-profile'], 'supervisor');
   assert.equal(observed.headers['registry-source-profile'], 'reviewer');
+  await assert.rejects(client.supervisoryReviewTasks(
+    'one-call-secret', 'supervisor',
+    { requestId: '00000000-0000-0000-0000-000000000010' },
+    'reviewer',
+  ), (error) => error.kind === 'protocol' && error.protocolFailure === 'body');
 });
 
 test('review note forwards the optional source profile and idempotency key', async (context) => {

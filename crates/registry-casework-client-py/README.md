@@ -31,6 +31,12 @@ accept an optional source profile when resolving source context. Accountability
 and kind discovery remain Casework-owned authorization paths.
 Supervisory discovery returns only bounded task and accountability references,
 with a holder-free string state.
+Its query accepts `{"requestId": canonical_request_uuid, "limit": 25}` to find
+a shared request before pagination, optionally combined with `queue`. Keep that
+selection unchanged when following `nextCursor`. Invalid UUIDs fail before I/O,
+and response rows must match the selection. Unknown or inaccessible requests
+produce a neutral empty page under current list semantics. A reference grants
+no decision, content, or accountability authority.
 A single decided-task read includes `decisionReceipt` only when
 `decidedByCaller` is true.
 
