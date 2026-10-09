@@ -474,6 +474,47 @@ def audit_stream_losses(product: str, before: int, after: int, written: int) -> 
     return []
 
 
+def audit_event_count(directory: Path, name: str, event: str) -> int:
+    """Count the records of one stream whose `record.event` is `event`."""
+
+    count = 0
+    for path in audit_paths(directory, name):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise RehearsalError("audit stream contains an invalid JSON line") from error
+            record = entry.get("record") if isinstance(entry, dict) else None
+            if isinstance(record, dict) and record.get("event") == event:
+                count += 1
+    return count
+
+
+def ledger_digest_differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """Name each ledger digest the upgrade changed, or that the previous
+    release never recorded. `before` and `after` are `messagingctl plan` reports."""
+
+    differences = []
+    for member in ("activeDigest", "packageDigest"):
+        if not before.get(member):
+            differences.append(f"the previous release's ledger recorded no {member}")
+        elif before.get(member) != after.get(member):
+            differences.append(f"the ledger {member} changed across the upgrade")
+    return differences
+
+
+def retention_audit_losses(requested_before: int, erased_before: int,
+                           requested_after: int, erased_after: int) -> list[str]:
+    """Name each retention event an operator erase run did not add to the stream."""
+
+    losses = []
+    if requested_after <= requested_before:
+        losses.append("the retention erase wrote no messaging.retention.requested record")
+    if erased_after <= erased_before:
+        losses.append("the retention erase wrote no messaging.retention.erased record")
+    return losses
+
+
 def breg_view_differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
     # An ETag binds the active package revision, which changes on rebuild.
     # Record identifiers, domain data, and stored revisions must still match.
@@ -1657,6 +1698,12 @@ MESSAGING_RECIPIENTS = {"email": {"email": "upgrade-rehearsal@example.invalid"},
                         "sms": {"phone": "+15555550100"}}
 MESSAGING_SENDER_PROFILES = {"email": "transactional", "sms": "reminders-sms"}
 MESSAGING_IDEMPOTENCY = "public.messaging_idempotency"
+MESSAGING_AUDIT = "messaging.ndjson"
+MESSAGING_RETENTION_REQUESTED = "messaging.retention.requested"
+MESSAGING_RETENTION_ERASED = "messaging.retention.erased"
+# The records the upgraded runtime must add: the retention erase run's request
+# and its outcome, beyond the submissions the rehearsal sends.
+MESSAGING_UPGRADED_AUDIT_RECORDS = 2
 # The table each Messaging schema version empties by design. Version 3
 # discards the idempotency records keyed by the caller's audit pseudonym, so
 # every key spent before it can be used again.
@@ -1726,7 +1773,7 @@ class Messaging:
                 "issuer": MESSAGING_ISSUER, "audience": MESSAGING_AUDIENCE,
                 "allowedClients": ["case-system", "operations-console"],
                 "jwksSource": {"kind": "static", "documentRef": "secret:file/jwks.json"}}},
-            "audit": {"path": str(self.audit / "messaging.ndjson"),
+            "audit": {"path": str(self.audit / MESSAGING_AUDIT),
                       "hashKeyRef": "secret:file/messaging-audit-key"},
         })
 
@@ -1809,13 +1856,15 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     finally:
         service.stop()
     before_counts = postgres.row_counts("messaging")
+    records_before = audit_record_count(messaging.audit, MESSAGING_AUDIT)
 
     new.run("messagingctl", "check", "--runtime-config", str(messaging.runtime))
+    ledger_before = new.run_json("messagingctl", "--format", "json", "plan", *runtime)
     # The ledger must still name the package on disk: a plan that reports a
     # change once any new schema versions are applied means the upgrade lost
     # the activation.
     ledger, emptied = messaging.upgrade(new)
-    differences = []
+    differences = ledger_digest_differences(ledger_before, ledger)
     if ledger.get("change") != "none" or ledger.get("activeDigest") != ledger.get(
             "packageDigest"):
         differences.append("the package ledger no longer names the applied package")
@@ -1839,12 +1888,28 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
         messaging.submit(str(uuid.uuid4()), messaging.submission("sms", "after-upgrade"))
     finally:
         service.stop()
+    # The operator erase run is audited even when nothing has expired, so the
+    # upgraded stream must gain its requested and erased records.
+    events = (MESSAGING_RETENTION_REQUESTED, MESSAGING_RETENTION_ERASED)
+    counts_before = [audit_event_count(messaging.audit, MESSAGING_AUDIT, event)
+                     for event in events]
+    new.run("messagingctl", "retention", "erase-expired", *runtime,
+            "--before", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60)),
+            "--apply")
+    counts_after = [audit_event_count(messaging.audit, MESSAGING_AUDIT, event)
+                    for event in events]
+    losses += retention_audit_losses(counts_before[0], counts_before[1], *counts_after)
+    records_after = audit_record_count(messaging.audit, MESSAGING_AUDIT)
+    losses += audit_stream_losses("Messaging", records_before, records_after,
+                                  MESSAGING_UPGRADED_AUDIT_RECORDS)
     losses += row_count_losses(before_counts, postgres.row_counts("messaging"),
                                emptied=emptied)
 
     report["messaging"] = {
         "messages": len(message_ids),
         "tables": len(before_counts),
+        "auditRecordsBefore": records_before,
+        "auditRecordsAfter": records_after,
         "viewDifferences": differences,
         "rowLosses": losses,
     }

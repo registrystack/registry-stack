@@ -1251,6 +1251,115 @@ class AuditUpgradeTest(unittest.TestCase):
             self.assertEqual(MODULE.audit_record_count(root, "evidence.jsonl", schema=schema), 1)
 
 
+class MessagingAssertionsTest(unittest.TestCase):
+    ACTIVE = "sha256:" + "a" * 64
+    PACKAGE = "sha256:" + "b" * 64
+
+    def plan(self, **members: str) -> dict[str, str]:
+        return {"activeDigest": self.ACTIVE, "packageDigest": self.PACKAGE, **members}
+
+    def test_ledger_digests_must_be_the_ones_the_previous_release_recorded(self) -> None:
+        self.assertEqual(MODULE.ledger_digest_differences(self.plan(), self.plan()), [])
+        for member in ("activeDigest", "packageDigest"):
+            with self.subTest(member=member):
+                changed = self.plan(**{member: "sha256:" + "c" * 64})
+                (difference,) = MODULE.ledger_digest_differences(self.plan(), changed)
+                self.assertIn(member, difference)
+        (difference,) = MODULE.ledger_digest_differences(self.plan(), {"packageDigest": self.PACKAGE})
+        self.assertIn("activeDigest", difference)
+
+    def test_a_ledger_that_named_no_package_before_the_upgrade_is_a_difference(self) -> None:
+        before = {"activeDigest": None, "packageDigest": self.PACKAGE}
+        self.assertEqual(len(MODULE.ledger_digest_differences(before, before)), 1)
+
+    def test_counts_one_event_across_every_segment_of_the_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            audit = Path(temporary)
+            erased = json.dumps({"record": {"event": "messaging.retention.erased"}})
+            other = json.dumps({"record": {"event": "messaging.retention.requested"}})
+            (audit / "messaging.ndjson").write_text(erased + "\n" + other + "\n")
+            (audit / "messaging.ndjson.1").write_text(erased + "\n")
+            (audit / "elsewhere.ndjson").write_text(erased + "\n")
+            self.assertEqual(MODULE.audit_event_count(
+                audit, "messaging.ndjson", "messaging.retention.erased"), 2)
+            self.assertEqual(MODULE.audit_event_count(
+                audit, "messaging.ndjson", "messaging.retention.requested"), 1)
+            self.assertEqual(MODULE.audit_event_count(audit, "messaging.ndjson", "absent"), 0)
+
+    def test_an_entry_without_a_record_event_is_not_counted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            audit = Path(temporary)
+            (audit / "messaging.ndjson").write_text(
+                '{"record": {}}\n{"event": "messaging.retention.erased"}\n')
+            self.assertEqual(MODULE.audit_event_count(
+                audit, "messaging.ndjson", "messaging.retention.erased"), 0)
+
+    def test_the_erase_must_add_its_requested_and_erased_records(self) -> None:
+        self.assertEqual(MODULE.retention_audit_losses(0, 0, 1, 1), [])
+        self.assertEqual(MODULE.retention_audit_losses(2, 2, 3, 3), [])
+        self.assertEqual(len(MODULE.retention_audit_losses(0, 0, 1, 0)), 1)
+        self.assertEqual(len(MODULE.retention_audit_losses(0, 0, 0, 1)), 1)
+        self.assertEqual(len(MODULE.retention_audit_losses(2, 2, 2, 2)), 2)
+
+    def rehearse(self, *, erase_events: int, ledger_after: str | None = None) -> tuple[dict, Any]:
+        """Run rehearse_messaging with every process and database faked. The
+        erase command writes `erase_events` requested and erased records."""
+        plan = {"activeDigest": self.ACTIVE, "packageDigest": self.ACTIVE, "change": "none",
+                "pendingSchemaVersions": []}
+        old, new = unittest.mock.Mock(), unittest.mock.Mock()
+        new.run_json.return_value = plan
+        messaging = unittest.mock.Mock()
+        messaging.submit.return_value = {"id": "m"}
+        messaging.views.return_value = {}
+        messaging.upgrade.return_value = (
+            {**plan, "activeDigest": ledger_after or self.ACTIVE}, set())
+        written = {"events": 0, "records": 4}
+
+        def erase(*arguments, **_):
+            if "erase-expired" in arguments:
+                written["events"] += erase_events
+                written["records"] += 2 * erase_events
+
+        new.run.side_effect = erase
+        postgres = unittest.mock.Mock()
+        postgres.row_counts.return_value = {"public.messages": 3}
+        report: dict[str, Any] = {}
+        with tempfile.TemporaryDirectory() as directory, \
+                unittest.mock.patch.object(MODULE, "Messaging", return_value=messaging), \
+                unittest.mock.patch.object(MODULE, "Service"), \
+                unittest.mock.patch.object(
+                    MODULE, "audit_record_count",
+                    side_effect=lambda *_a, **_k: written["records"]), \
+                unittest.mock.patch.object(
+                    MODULE, "audit_event_count",
+                    side_effect=lambda *_a, **_k: written["events"]):
+            try:
+                MODULE.rehearse_messaging(Path(directory), unittest.mock.Mock(), postgres,
+                                          old, new, report)
+            finally:
+                self.report = report
+        return report, new
+
+    def test_the_leg_erases_expired_data_with_the_new_release_and_expects_its_records(
+            self) -> None:
+        report, new = self.rehearse(erase_events=1)
+        self.assertEqual(report["messaging"]["viewDifferences"], [])
+        self.assertEqual(report["messaging"]["rowLosses"], [])
+        erase = [call.args for call in new.run.call_args_list
+                 if "erase-expired" in call.args]
+        self.assertEqual(len(erase), 1)
+        self.assertIn("--apply", erase[0])
+        self.assertEqual(erase[0][:3], ("messagingctl", "retention", "erase-expired"))
+
+    def test_the_leg_fails_when_the_erase_leaves_no_audit_record(self) -> None:
+        with self.assertRaisesRegex(MODULE.RehearsalError, "retention.erased"):
+            self.rehearse(erase_events=0)
+
+    def test_the_leg_fails_when_the_ledger_digest_changes(self) -> None:
+        with self.assertRaisesRegex(MODULE.RehearsalError, "activeDigest changed"):
+            self.rehearse(erase_events=1, ledger_after="sha256:" + "c" * 64)
+
+
 class GateWiringTest(unittest.TestCase):
     def test_workflow_rehearses_from_verified_release_assets(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")

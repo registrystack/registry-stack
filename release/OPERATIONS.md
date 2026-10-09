@@ -757,13 +757,17 @@ email and SMS messages whose delivery window starts a day later, so no provider
 is contacted, and cancel one of them. After the upgrade the new binaries must
 report the same active package, serve every captured message view unchanged,
 answer an idempotent resubmission with its original receipt, and accept a new
-submission and a cancellation. A default run from a release that did not ship
+submission and a cancellation. The ledger's active and package digests must be
+the ones the previous release recorded. An operator retention erase
+(`messagingctl retention erase-expired --apply`) run with the new binaries must
+add a `messaging.retention.requested` and a `messaging.retention.erased` record
+to the audit stream, which must also keep every earlier record. A default run from a release that did not ship
 Messaging omits it and records the reason under `omitted` in the report;
 naming it with `--product messaging` from such a release is refused. Messaging
 publishes Linux amd64 binaries only, so a macOS rehearsal that downloads the
 previous release omits it the same way.
 
-The upgraded Casework and Evidence runtimes continue the audit files the
+The upgraded Casework, Evidence, and Messaging runtimes continue the audit files the
 previous release wrote, as the upgrade runbook has an operator do. The
 rehearsal counts the records in each stream before and after the upgrade. It
 fails when the stream was empty before the upgrade, or holds fewer records
