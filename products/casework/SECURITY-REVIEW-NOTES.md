@@ -544,3 +544,51 @@ source-concealed results, pinned source changes, retention, raw anchor scope,
 and checkpoint selection binding. Client and binding regressions cover UUID
 validation before I/O, exact query forwarding, and refusal of a response for
 another request. These references are proof obligations, not execution claims.
+
+## Retained selected outcomes and reviewer-owned discovery
+
+The audited accountability read now returns the exact configured outcome and
+its decision-time label through `decisionReceipt`. The decision transaction
+stores the outcome code in the existing accountability row. The label and
+policy identity come only from the request's retained immutable policy
+snapshot, so a policy replacement cannot reinterpret an earlier selection.
+No submitted context or structured result is read to resolve it. Approval has
+no selected outcome. Migration backfills a legacy outcome only from an
+existing unexpired decision row. A legacy non-approval selection already
+erased at upgrade omits the receipt rather than imply approval.
+
+This remains the explicit audited Supervisor read, with current Supervisor
+membership and service of the recorded queue. Both audit acceptance gates and
+the independent accountability retention remain authoritative. It has no
+source-profile input and survives result erasure as before. The new fields
+grant no reviewer content access. Own receipts and own history still end at
+result expiry or erasure.
+
+The new bounded own-decisions list addresses a different threat: a previous
+holder, colleague, administrator or caller using another profile must not
+learn someone else's receipt, reason or submitted payload. SQL selects the
+exact issuer-qualified retained decision author before the page limit, with
+current membership, served queue, pinned deciding profile and retention. Each
+candidate uses the existing caller-scoped source preflight, including the
+pinned occurrence, and current scope is rechecked after source I/O. The only
+display reference is the already retained producer correlation reference.
+
+The existing bounded candidate, source-read, concurrency and deadline budgets
+apply. Opaque scan checkpoints reuse the existing store and bind the caller,
+selected profiles, queue and own-decisions view. Raw task anchors additionally
+require current author scope before any source read. The author/time/task index
+on existing decisions supports newest-first bounded queries; no service, store
+or configuration is added. These are live walks, so scope changes may require
+a refetch with the existing `410 review.result-expired` refusal.
+
+Proof obligations are
+`accountability_receipts_pin_selected_outcomes_through_independent_retention`
+and `own_decisions_filter_authors_scope_and_continue_past_hidden_source_candidates`
+in `crates/registry-casework/tests/review_postgres.rs`, and
+`own_decision_discovery_and_audited_outcomes_are_minimal_over_http` in
+`crates/registry-casework/tests/review_http.rs`. They cover the two selected
+outcomes, pinned labels after policy changes, independent retention and legacy
+absence, author versus prior holder, current scope, source concealment, bounded
+continuation and minimal disclosure. Client regressions cover response scope,
+order, receipt interpretation and native query validation. These references do
+not assert that a live database or listener test has executed.

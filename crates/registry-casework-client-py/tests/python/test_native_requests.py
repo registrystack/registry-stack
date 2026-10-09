@@ -78,6 +78,19 @@ class _Handler(BaseHTTPRequestHandler):
                 "state": "open",
             })
             return
+        if self.path.startswith("/tenant/v1/review-tasks/own-decisions?"):
+            self.respond({
+                "items": [{
+                    "taskId": ITEM_ID, "requestId": OTHER_ITEM_ID,
+                    "queue": "reviews", "requesterReference": "BATCH-0042",
+                    "decisionReceipt": {
+                        "policy": {"id": "registry-correction", "version": "1", "digest": POLICY_DIGEST},
+                        "decision": "answer", "outcome": "confirm", "outcomeLabel": "Confirm",
+                        "decidedAt": "2026-10-10T01:00:00Z",
+                    },
+                }], "status": "complete",
+            })
+            return
         if self.path in (
             f"/tenant/v1/review-tasks/supervision?queue=reviews&requestId={request_id}"
             f"&cursor={SUPERVISORY_CURSOR}&limit=10"
@@ -496,6 +509,24 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(observation["profile"], "supervisor")
         self.assertEqual(observation["source_profile"], "source-one")
 
+    def test_own_decisions_preserve_reference_and_pinned_receipt(self) -> None:
+        page = self.client.own_review_decisions(
+            "staff-token", "staff", {"queue": "reviews", "cursor": SUPERVISORY_CURSOR, "limit": 10}, "source-one",
+        )
+        row = page["value"]["items"][0]
+        self.assertEqual(set(row), {"taskId", "requestId", "queue", "requesterReference", "decisionReceipt"})
+        self.assertEqual(row["requesterReference"], "BATCH-0042")
+        self.assertEqual(row["decisionReceipt"]["outcome"], "confirm")
+        self.assertEqual(row["decisionReceipt"]["outcomeLabel"], "Confirm")
+        observation = _Handler.observations[0]
+        self.assertEqual(observation["path"], f"/tenant/v1/review-tasks/own-decisions?queue=reviews&cursor={SUPERVISORY_CURSOR}&limit=10")
+        self.assertEqual(observation["profile"], "staff")
+        self.assertEqual(observation["source_profile"], "source-one")
+        with self.assertRaises(CaseworkClientError) as raised:
+            self.client.own_review_decisions("staff-token", "staff", {"queue": "another"})
+        self.assertEqual(raised.exception.kind, "protocol")
+        self.assertEqual(raised.exception.protocol_failure, "body")
+
     def test_supervisory_review_tasks_refuse_rows_for_another_request(self) -> None:
         with self.assertRaises(CaseworkClientError) as raised:
             self.client.supervisory_review_tasks(
@@ -512,6 +543,7 @@ class NativeRequestTests(unittest.TestCase):
             lambda: self.client.review_results("", "requester"),
             lambda: self.client.review_tasks("", "staff"),
             lambda: self.client.supervisory_review_tasks("", "supervisor"),
+            lambda: self.client.own_review_decisions("", "staff"),
             lambda: self.client.review_task("", "staff", ITEM_ID),
             lambda: self.client.review_task_context("", "staff", ITEM_ID),
             lambda: self.client.claim_review_task("", "staff", ITEM_ID, 1, "claim-key"),

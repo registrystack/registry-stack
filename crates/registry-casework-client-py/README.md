@@ -40,6 +40,22 @@ no decision, content, or accountability authority.
 A single decided-task read includes `decisionReceipt` only when
 `decidedByCaller` is true.
 
+`own_review_decisions(token, profile, {"queue": "review", "limit": 25}, source_profile)`
+discovers the caller's retained decisions, newest first, without a saved task
+link. Each row has only task/request ids, queue, producer `requesterReference`
+and the same own `decisionReceipt` returned by `review_task`. Current deciding
+profile, membership, served queue, source visibility and result retention
+remain required. Prior holding is not authorship. Keep the caller, profiles,
+queue and own-decisions view unchanged when following `nextCursor`; refetch
+without a cursor after `410 review.result-expired`.
+
+Receipts carry the optional decision-time pinned `outcomeLabel`, which cannot
+follow current policy edits. Approval has no outcome or label. The explicit
+audited Supervisor `review_accountability` read includes that receipt through
+its independent accountability retention, including after result erasure.
+Legacy non-approval selections already erased at upgrade omit the receipt.
+Own discovery and single-task receipts end at result expiry or erasure.
+
 `CaseworkClientError` preserves problem codes, status, trace context, validation
 details, and original attempt identifiers. Callers can therefore handle cursor
 or idempotency expiry explicitly; the binding never replaces a key.

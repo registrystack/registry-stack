@@ -448,7 +448,8 @@ pub enum ReviewDecisionType {
     Answer,
 }
 
-/// The caller's retained decision, interpreted under the task's pinned policy.
+/// A retained decision, interpreted under the task's pinned policy and released
+/// through an own receipt or the explicit audited accountability read.
 /// Private reasons and structured producer result data are never included.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -457,7 +458,30 @@ pub struct ReviewDecisionReceipt {
     pub decision: ReviewDecisionType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
+    /// The configured label from the decision's immutable pinned policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_label: Option<String>,
     pub decided_at: DateTime<Utc>,
+}
+
+/// A current caller's retained decision reference, without context or reason.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnReviewDecision {
+    pub task_id: Uuid,
+    pub request_id: Uuid,
+    pub queue: String,
+    pub requester_reference: String,
+    pub decision_receipt: ReviewDecisionReceipt,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnReviewDecisionPage {
+    pub items: Vec<OwnReviewDecision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Uuid>,
+    pub status: crate::PageStatus,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -649,6 +673,10 @@ pub struct ReviewAccountabilityRecord {
     pub actor: IssuerPrincipal,
     pub profile_id: String,
     pub decision: String,
+    /// Unavailable for legacy selections no longer retained when upgraded.
+    /// New selections are retained through the accountability window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_receipt: Option<ReviewDecisionReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -7,9 +7,9 @@ use registry_casework::problem::{
 };
 use registry_casework::ReviewTaskDecisionRequest;
 use registry_casework_core::{
-    ReviewCancelRequest, ReviewCancelResponse, ReviewClockCorrelation, ReviewCreateRequest,
-    ReviewRequestAccepted, ReviewRequestView, ReviewResult, ReviewResultFeedPage,
-    ReviewerTaskState,
+    OwnReviewDecisionPage, ReviewCancelRequest, ReviewCancelResponse, ReviewClockCorrelation,
+    ReviewCreateRequest, ReviewDecisionReceipt, ReviewRequestAccepted, ReviewRequestView,
+    ReviewResult, ReviewResultFeedPage, ReviewerTaskState,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -129,6 +129,7 @@ fn review_wire_examples() -> Result<BTreeMap<&'static str, Vec<Value>>, serde_js
         "version":"7", "digest":digest
     });
     let policy = json!({"id":"address-review", "version":"1", "digest":digest});
+    let receipt = json!({"policy":policy,"decision":"answer","outcome":"confirm","outcomeLabel":"Confirm","decidedAt":"2026-09-20T01:00:00Z"});
     let result = json!({
         "resultId":"00000000-0000-4000-8000-000000000003",
         "requestId":"00000000-0000-4000-8000-000000000002",
@@ -195,6 +196,20 @@ fn review_wire_examples() -> Result<BTreeMap<&'static str, Vec<Value>>, serde_js
                 json!({"held":{"holder":{"issuer":"https://issuer.example","subject":"person-1"}}}),
                 json!("decided"),
             ])?,
+        ),
+        (
+            "ReviewDecisionReceipt",
+            typed_examples::<ReviewDecisionReceipt>(vec![
+                receipt.clone(),
+                json!({"policy":policy,"decision":"approve","decidedAt":"2026-09-20T01:00:00Z"}),
+            ])?,
+        ),
+        (
+            "OwnReviewDecisionPage",
+            typed_examples::<OwnReviewDecisionPage>(vec![json!({
+                "items":[{"taskId":"00000000-0000-4000-8000-000000000005","requestId":"00000000-0000-4000-8000-000000000002","queue":"review","requesterReference":"BATCH-0042","decisionReceipt":receipt}],
+                "status":"complete"
+            })])?,
         ),
         (
             "ReviewTaskDecisionRequest",

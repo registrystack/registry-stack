@@ -1301,6 +1301,15 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
     },
     OperationContract {
         method: "GET",
+        path: "/v1/review-tasks/own-decisions",
+        success_statuses: &[200],
+        extracts_path: false,
+        extracts_query: true,
+        accepts_json: false,
+        problems: REVIEW_TASK_PAGE,
+    },
+    OperationContract {
+        method: "GET",
         path: "/v1/review-tasks/{task_id}",
         success_statuses: &[200],
         extracts_path: true,
@@ -1987,7 +1996,11 @@ mod tests {
     /// while malformed UUIDs are rejected during query extraction.
     #[test]
     fn review_task_pages_list_their_cursor_anchor_problem() {
-        for path in ["/v1/review-tasks", "/v1/review-tasks/supervision"] {
+        for path in [
+            "/v1/review-tasks",
+            "/v1/review-tasks/supervision",
+            "/v1/review-tasks/own-decisions",
+        ] {
             let operation = OPERATION_CONTRACTS
                 .iter()
                 .find(|operation| operation.method == "GET" && operation.path == path)

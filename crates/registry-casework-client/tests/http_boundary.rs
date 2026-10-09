@@ -1436,6 +1436,137 @@ async fn draft_save_refuses_a_response_without_a_valid_draft_revision() {
 }
 
 #[tokio::test]
+async fn own_decision_discovery_validates_scope_order_and_receipt_shape() {
+    let row = json!({
+        "taskId": Uuid::from_u128(7), "requestId": Uuid::from_u128(9),
+        "queue": "reviews", "requesterReference": "BATCH-0042",
+        "decisionReceipt": {
+            "policy": {"id": "registry-correction", "version": "1", "digest": ContentDigest::for_bytes(b"policy")},
+            "decision": "answer", "outcome": "confirm", "outcomeLabel": "Confirm",
+            "decidedAt": "2026-10-10T01:00:00Z",
+        },
+    });
+    let valid = json!({"items": [row.clone()], "status": "complete"});
+    let mut wrong_queue = valid.clone();
+    wrong_queue["items"][0]["queue"] = json!("another");
+    let mut too_many = valid.clone();
+    too_many["items"] = json!([row.clone(), row.clone()]);
+    let mut wrong_order = valid.clone();
+    let mut later = row.clone();
+    later["decisionReceipt"]["decidedAt"] = json!("2026-10-10T02:00:00Z");
+    wrong_order["items"] = json!([row, later]);
+    let mut empty_label = valid.clone();
+    empty_label["items"][0]["decisionReceipt"]["outcomeLabel"] = json!("");
+    let mut leaked_reason = valid.clone();
+    leaked_reason["items"][0]["privateReason"] = json!("PRIVATE_REASON_CANARY");
+    for (body, limit, permitted) in [
+        (valid, 1, true),
+        (wrong_queue, 1, false),
+        (too_many, 1, false),
+        (wrong_order, 2, false),
+        (empty_label, 1, false),
+        (leaked_reason, 1, false),
+    ] {
+        let app = Router::new()
+            .route(
+                "/v1/review-tasks/own-decisions",
+                get(review_task_fixture_response),
+            )
+            .with_state(body);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = CaseworkClient::new(CaseworkClientConfig::new(
+            Url::parse(&format!("http://{address}/")).unwrap(),
+        ))
+        .unwrap();
+        let token = BearerToken::new("staff-token").unwrap();
+        let result = client
+            .own_review_decisions(
+                CaseworkAuth::new(&token, "staff"),
+                &registry_casework_client::OwnReviewDecisionQuery {
+                    queue: Some("reviews".to_owned()),
+                    limit: Some(limit),
+                    ..Default::default()
+                },
+            )
+            .await;
+        if permitted {
+            assert_eq!(
+                result.unwrap().value.items[0].requester_reference,
+                "BATCH-0042"
+            );
+        } else {
+            assert!(matches!(
+                result,
+                Err(CaseworkClientError::Protocol {
+                    failure: CaseworkProtocolFailure::Body,
+                    ..
+                })
+            ));
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn accountability_receipts_must_match_the_retained_action_and_time() {
+    let event_id = Uuid::from_u128(11);
+    let receipt = json!({
+        "policy": {"id": "review", "version": "1", "digest": ContentDigest::for_bytes(b"review")},
+        "decision": "answer", "outcome": "return", "outcomeLabel": "Return for correction", "decidedAt": "2026-10-10T01:00:00Z",
+    });
+    let valid = json!({
+        "eventId": event_id, "requestId": Uuid::from_u128(9), "taskId": Uuid::from_u128(7),
+        "actorRef": "audit-ref", "actor": {"issuer": "https://issuer.example", "subject": "reviewer"},
+        "profileId": "staff", "decision": "answer", "decisionReceipt": receipt,
+        "occurredAt": "2026-10-10T01:00:00Z", "retainedUntil": "2026-11-10T01:00:00Z",
+    });
+    let mut legacy = valid.clone();
+    legacy.as_object_mut().unwrap().remove("decisionReceipt");
+    let mut wrong_action = valid.clone();
+    wrong_action["decision"] = json!("approve");
+    let mut wrong_time = valid.clone();
+    wrong_time["decisionReceipt"]["decidedAt"] = json!("2026-10-10T02:00:00Z");
+    for (body, permitted) in [
+        (valid, true),
+        (legacy, true),
+        (wrong_action, false),
+        (wrong_time, false),
+    ] {
+        let app = Router::new()
+            .route(
+                "/v1/review-accountability/{event_id}",
+                get(review_task_fixture_response),
+            )
+            .with_state(body);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = CaseworkClient::new(CaseworkClientConfig::new(
+            Url::parse(&format!("http://{address}/")).unwrap(),
+        ))
+        .unwrap();
+        let token = BearerToken::new("supervisor-token").unwrap();
+        let result = client
+            .review_accountability(CaseworkAuth::new(&token, "supervisor"), event_id)
+            .await;
+        if permitted {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(
+                result,
+                Err(CaseworkClientError::Protocol {
+                    failure: CaseworkProtocolFailure::Body,
+                    ..
+                })
+            ));
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
 async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
     let task_id = Uuid::from_u128(7);
     let task = |state: Value, decided_by_caller: Option<bool>| {
