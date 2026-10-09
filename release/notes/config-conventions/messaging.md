@@ -172,8 +172,8 @@ runtime refuse a file without it.
 | `provider.yaml` | none | `apiVersion: id.registrystack.org/formats/messaging/provider/v1alpha1`, `kind: MessagingProvider` | Add both lines at the top of every HTTP provider's file. |
 
 An old `messaging.yaml` is refused as `config.wrong-kind` at `/kind`, naming
-`MessagingProject`; once the kind is replaced, the old `apiVersion` is
-refused as `config.retired-api-version`, naming the new envelope. A template
+`MessagingProject`, and, in the same report, its old `apiVersion` is refused
+as `config.retired-api-version`, naming the new envelope. A template
 or provider file without an envelope is refused as `config.missing-envelope`,
 whose next step names both lines. `project.id` is a local identifier (below)
 and `project.version` a text label.
