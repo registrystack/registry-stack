@@ -100,10 +100,13 @@ CLI tasks can be used without installing the semantic extension.
 `evidence-deployment` configures an Evidence deployment project: the
 `runtime.yaml` the `evidence` runtime reads, beside its bundle in `bundle/`.
 Setup maps the runtime and bundle contracts to `runtime.yaml` and
-`bundle/evidence.yaml`, maps the code list schema to `bundle/codelists/*.yaml`,
-and adds an `evidence check --runtime-config runtime.yaml` task. The runtime
-and bundle contracts are JSON Schema documents written in YAML. Fixture files
-and verification policies are not mapped.
+`bundle/evidence.yaml`, the code list schema to `bundle/codelists/*.yaml`, the
+fixture schema to `bundle/fixtures/*.yaml`, and the target governance schema to
+`governance.yaml`. It maps the two verification policy contracts by file name:
+`verification*.policy.yaml` to the verification policy and
+`holder-bound*.policy.yaml` to the holder-bound verification policy. It adds an
+`evidence check --runtime-config runtime.yaml` task. The runtime, bundle, and
+policy contracts are JSON Schema documents written in YAML.
 
 ## Install
 

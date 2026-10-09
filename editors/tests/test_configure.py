@@ -425,6 +425,12 @@ class ConfigureTests(unittest.TestCase):
         self.assertTrue(schema.is_file())
         self.assertTrue(profile.is_file())
 
+    def test_the_readme_names_every_file_evidence_deployment_maps(self):
+        readme = (ROOT / "editors/README.md").read_text()
+        for _, pattern in configure.SCHEMAS["evidence-deployment"]:
+            with self.subTest(pattern=pattern):
+                self.assertIn(f"`{pattern}`", readme)
+
     def test_evidence_deployment_maps_runtime_bundle_and_codelists(self):
         source = ROOT / "products/evidence/reference/request-adapter/deployment-projects/protected-read-evidence"
         project = self.workspace / "Evidence deployment"
