@@ -337,8 +337,24 @@ impl RuntimeConfigLoader {
         path: &Path,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
-        let bytes = self.read(path).map_err(|error| error.in_file(path))?;
-        self.parse(&path.display().to_string(), &bytes, &lookup)
+        let bytes = self.read_file(path)?;
+        self.parse_file(path, &bytes, &lookup)
+    }
+
+    /// The bytes of the file at `path`, read under the file rules: the one
+    /// read every check of the file works from.
+    pub(crate) fn read_file(&self, path: &Path) -> Result<Vec<u8>, RuntimeConfigError> {
+        self.read(path).map_err(|error| error.in_file(path))
+    }
+
+    /// Apply every rule after the file read to the `bytes` read from `path`.
+    pub(crate) fn parse_file<T: DeserializeOwned>(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
+        self.parse(&path.display().to_string(), bytes, lookup)
             .map_err(|error| error.in_file(path))
     }
 

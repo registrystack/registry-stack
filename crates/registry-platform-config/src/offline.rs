@@ -4,13 +4,9 @@
 //! environment.
 
 use std::collections::BTreeMap;
-use std::fs;
-use std::io::Read as _;
 use std::path::Path;
 
-use registry_platform_yaml::{
-    escape_pointer_segment, Diagnostic, Node, NodeValue, Reader, Source, MAXIMUM_DOCUMENT_BYTES,
-};
+use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Node, NodeValue, Reader, Source};
 use serde::de::DeserializeOwned;
 
 use crate::{
@@ -97,16 +93,23 @@ impl RuntimeConfigLoader {
         stand_in_for: fn(&str) -> &'static str,
     ) -> RuntimeFileCheck<T> {
         let file = path.display().to_string();
-        let tree = scan(path);
+        // One read under the loader's file rules serves the scan and the
+        // decode, so nothing is opened before those rules have accepted it.
+        let bytes = self.read_file(path);
+        let tree = bytes.as_deref().ok().and_then(|bytes| scan(&file, bytes));
         let deferred = match (&tree, substitute) {
             (Some(root), false) => Deferred::collect(root, stand_in_for),
             _ => Deferred::default(),
         };
-        let loaded = if substitute {
-            self.load::<T>(path)
-        } else {
-            self.load_with::<T>(path, |name| Some(deferred.stand_in(name).to_owned()))
-        };
+        let loaded = bytes.and_then(|bytes| {
+            if substitute {
+                self.parse_file::<T>(path, &bytes, &|name| std::env::var(name).ok())
+            } else {
+                self.parse_file::<T>(path, &bytes, &|name| {
+                    Some(deferred.stand_in(name).to_owned())
+                })
+            }
+        });
         let (loaded, diagnostics, unavailable) = match loaded {
             Ok(loaded) => (Some(loaded), Vec::new(), false),
             Err(error) => (
@@ -134,18 +137,10 @@ impl RuntimeConfigLoader {
     }
 }
 
-/// The file's tree, for positions and expression sites. A file the reader
-/// cannot scan yields none; the loader then reports why.
-fn scan(path: &Path) -> Option<Node> {
-    let file = fs::File::open(path).ok()?;
-    let mut bytes = Vec::new();
-    file.take(MAXIMUM_DOCUMENT_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    Reader::new(path.display().to_string())
-        .scan(&bytes)
-        .ok()
-        .flatten()
+/// The file's tree, for positions and expression sites. Bytes the reader
+/// cannot scan yield none; the loader then reports why.
+fn scan(file: &str, bytes: &[u8]) -> Option<Node> {
+    Reader::new(file).scan(bytes).ok().flatten()
 }
 
 /// The members that hold a `${NAME}` expression, and a stand-in value for
@@ -257,6 +252,7 @@ mod tests {
     use super::*;
     use crate::RuntimeEnvelope;
     use serde::Deserialize;
+    use std::fs;
 
     const LOADER: RuntimeConfigLoader = RuntimeConfigLoader::new(RuntimeEnvelope {
         api_version: "registry.registrystack.org/example-runtime/v1alpha1",
@@ -352,6 +348,60 @@ mod tests {
         assert!(check.unavailable);
         assert!(check.loaded.is_none());
         assert_eq!(check.diagnostics.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cfg_check_1_a_named_pipe_is_refused_without_being_opened() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let path = temporary.path().join("runtime.yaml");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+
+        let (sender, receiver) = mpsc::channel();
+        let checked = path.clone();
+        std::thread::spawn(move || {
+            let check = LOADER.check_offline::<Example>(&checked, false, stand_in_for);
+            let _ = sender.send((check.unavailable, check.loaded.is_none(), check.diagnostics));
+        });
+        let Ok((unavailable, refused, diagnostics)) =
+            receiver.recv_timeout(Duration::from_secs(10))
+        else {
+            // Opening the other end releases the checker a pipe is holding.
+            let _ = fs::OpenOptions::new().write(true).open(&path);
+            panic!("the check opened the named pipe and waited for a writer");
+        };
+        assert!(!unavailable);
+        assert!(refused);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "platform.runtime-config.unsafe-file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cfg_check_1_a_symbolic_link_is_refused_without_being_followed() {
+        let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let real = temporary.path().join("real.yaml");
+        fs::write(&real, format!("{HEAD}bind: 127.0.0.1:8080\ncount: 3\n")).unwrap();
+        let link = temporary.path().join("runtime.yaml");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let check = LOADER.check_offline::<Example>(&link, false, stand_in_for);
+        assert!(check.loaded.is_none());
+        assert_eq!(check.diagnostics.len(), 1);
+        assert_eq!(
+            check.diagnostics[0].code,
+            "platform.runtime-config.unsafe-file"
+        );
+        // Nothing of the link's target was read, so no member has a position.
+        let positioned = check.error_at("ExampleRuntimeConfig", "example.code", "/bind", "m", "a");
+        assert_eq!(positioned.source.unwrap().line, None);
     }
 
     #[test]
