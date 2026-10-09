@@ -207,11 +207,19 @@ impl Url {
         let scheme_written = text
             .get(..parsed.scheme().len() + 3)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case(&format!("{}://", parsed.scheme())));
+        // The authority as written, up to the first `/`, `?`, or `#`, as the
+        // schema's pattern reads it: the parser reports no user information
+        // for an empty one, and the pattern refuses any `@` there.
+        let authority_has_at = text.get(parsed.scheme().len() + 3..).is_some_and(|rest| {
+            let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+            rest[..end].contains('@')
+        });
         let valid = matches!(parsed.scheme(), "http" | "https")
             && scheme_written
             && parsed.host_str().is_some_and(|host| !host.is_empty())
             && parsed.username().is_empty()
-            && parsed.password().is_none();
+            && parsed.password().is_none()
+            && !authority_has_at;
         if valid {
             Ok(Url(text))
         } else {
@@ -750,6 +758,7 @@ mod tests {
             "https://issuer.example",
             "http://127.0.0.1:8080/path?q=1",
             "HTTPS://Issuer.Example/",
+            "https://issuer.example/users/a@b?c=d@e#f@g",
         ] {
             assert_eq!(Url::new(good).unwrap().as_str(), good);
         }
@@ -759,6 +768,9 @@ mod tests {
             "ftp://issuer.example",
             "https://user:pass@issuer.example",
             "https://user@issuer.example",
+            "https://@issuer.example",
+            "https://:@issuer.example",
+            "https://@issuer.example/path",
             "file:///etc/passwd",
             "https:issuer.example",
         ] {
