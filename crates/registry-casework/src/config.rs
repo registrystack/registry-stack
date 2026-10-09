@@ -56,7 +56,7 @@ pub const CASEWORK_REMOVED_KEYS: &[RemovedKey] = &[
     },
     RemovedKey {
         path: "package.expectedPolicyDigest",
-        replacement: "package.expectedDigest, the digest `caseworkctl package` reports",
+        replacement: "Write package.expectedDigest, the digest `caseworkctl package` reports.",
     },
 ];
 /// The RFC 9068 access-token media type this runtime verifies. The pair of
@@ -2984,6 +2984,8 @@ reviewProducers:
             "{message}"
         );
         assert!(message.contains("package.expectedDigest"), "{message}");
+        // Keys are case-sensitive, so the suggested action never opens with one.
+        assert!(!message.contains("Package.expectedDigest"), "{message}");
     }
 
     #[test]
