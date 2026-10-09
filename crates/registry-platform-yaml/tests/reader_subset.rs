@@ -758,6 +758,19 @@ fn cfg_val_1_a_mapping_key_holding_a_control_character_is_refused_without_repeat
 }
 
 #[test]
+fn cfg_sec_3_debug_of_a_node_shows_no_value_and_no_key() {
+    let node = scan_ok(&format!(
+        "{MARKER}-key: 8443\nflag: true\nratio: 1.5\nname: {MARKER}\n"
+    ));
+    let printed = format!("{node:?}");
+    for leaked in [MARKER, "8443", "true", "1.5", "flag", "ratio", "name"] {
+        assert!(!printed.contains(leaked), "{leaked}: {printed}");
+    }
+    assert!(printed.contains("Integer(<redacted>)"), "{printed}");
+    assert!(printed.contains("<redacted>"), "{printed}");
+}
+
+#[test]
 fn cfg_val_1_text_around_the_c1_range_is_accepted() {
     let NodeValue::Mapping(entries) = scan_ok("a: \"~\\xa0\"\nb: \"\u{a0}\u{e9}\"\n") else {
         panic!("a mapping");

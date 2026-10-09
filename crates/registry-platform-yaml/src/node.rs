@@ -51,8 +51,9 @@ pub enum ScalarStyle {
 ///
 /// Its `Debug` output shows `<redacted>` for the text (CFG-SEC-3): a
 /// substituted value may be a secret from the environment, and a `Node` or
-/// `Document` holding one may reach a log. Keys, styles, and spans still
-/// show.
+/// `Document` holding one may reach a log. The `Debug` output of a node
+/// shows its kind and position and no value, and an entry's key is redacted
+/// the same way.
 #[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Text {
@@ -84,7 +85,7 @@ pub struct Node {
 }
 
 /// A mapping member: its key, where the key was written, and its value.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Entry {
     pub key: String,
@@ -92,9 +93,20 @@ pub struct Entry {
     pub value: Node,
 }
 
+impl fmt::Debug for Entry {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Entry")
+            .field("key", &format_args!("<redacted>"))
+            .field("key_span", &self.key_span)
+            .field("value", &self.value)
+            .finish()
+    }
+}
+
 /// What a node holds, after plain scalars are resolved by the one table
 /// (CFG-VAL-1).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub enum NodeValue {
     Null,
@@ -107,6 +119,20 @@ pub enum NodeValue {
     Sequence(Vec<Node>),
     /// Members in source order. Keys are unique.
     Mapping(Vec<Entry>),
+}
+
+impl fmt::Debug for NodeValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NodeValue::Null => formatter.write_str("Null"),
+            NodeValue::Bool(_) => formatter.write_str("Bool(<redacted>)"),
+            NodeValue::Integer(_) => formatter.write_str("Integer(<redacted>)"),
+            NodeValue::Float(_) => formatter.write_str("Float(<redacted>)"),
+            NodeValue::String(text) => formatter.debug_tuple("String").field(text).finish(),
+            NodeValue::Sequence(items) => formatter.debug_list().entries(items).finish(),
+            NodeValue::Mapping(entries) => formatter.debug_list().entries(entries).finish(),
+        }
+    }
 }
 
 impl Node {

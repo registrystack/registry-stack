@@ -42,6 +42,9 @@
   `yaml.control-character`, at the key's position and at the enclosing mapping's
   pointer, so the diagnostic never repeats the key. Migration: remove the
   control character from the key.
+- `registry-platform-yaml` `Debug` output for a node shows its kind and
+  position and no scalar value, and an entry's key is redacted, where integers,
+  floats, booleans, and keys printed.
 - `registry-platform-httputil` adds the bounded same-key resend the BReg,
   Casework, Messaging, and Scheduling clients share:
   `client::retry_keyed_mutation`,

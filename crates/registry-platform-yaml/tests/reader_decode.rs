@@ -995,8 +995,9 @@ fn cfg_sec_3_debug_output_of_a_document_leaves_text_values_out() {
     ] {
         assert!(!shown.contains("secret"), "{shown}");
         assert!(shown.contains("<redacted>"), "{shown}");
-        // Keys still show, so the tree can be read.
-        assert!(shown.contains("\"url\""), "{shown}");
+        // Keys are redacted too; positions still show.
+        assert!(!shown.contains("url"), "{shown}");
+        assert!(shown.contains("line: 2"), "{shown}");
     }
 }
 
