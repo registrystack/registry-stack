@@ -1865,6 +1865,18 @@ def validate_ids(expected: ExpectedFailures, formats: list[Format], cases: list[
             raise HarnessError(f"expected-failures.yaml names case {case_id}, which the corpus does not")
 
 
+def validate_selectors(args: argparse.Namespace, formats: list[Format], cases: list[Case]) -> None:
+    """A selector that names nothing would run no cell and report a clean run."""
+    format_ids = {fmt.id for fmt in formats}
+    case_ids = {case.id for case in cases}
+    for format_id in args.only_format:
+        if format_id not in format_ids:
+            raise HarnessError(f"--only-format names {format_id}, which the registry does not")
+    for case_id in args.only_case:
+        if case_id not in case_ids:
+            raise HarnessError(f"--only-case names {case_id}, which the corpus does not")
+
+
 def default_bin_dir(root: Path) -> Path:
     """Where cargo puts debug binaries: `CARGO_TARGET_DIR` when set, else `<root>/target`."""
     target = os.environ.get("CARGO_TARGET_DIR")
@@ -1887,6 +1899,7 @@ def main(argv: list[str] | None = None) -> int:
         harness = load_harness(corpus / "formats.yaml")
         expected = load_expected_failures(expected_path)
         validate_ids(expected, formats, cases, harness)
+        validate_selectors(args, formats, cases)
         if not any(case.id == BASELINE for case in cases):
             raise HarnessError(f"the corpus has no `{BASELINE}` case")
         selected = [f for f in formats if not args.only_format or f.id in args.only_format]

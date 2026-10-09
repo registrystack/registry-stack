@@ -1420,6 +1420,29 @@ class EndToEndTest(unittest.TestCase):
     def test_a_report_that_is_not_json_is_not_recorded_as_an_expected_failure(self) -> None:
         self.assertIn("the output is not one JSON document", self.refused_record(env={"FAKECTL_NOT_JSON": "1"}))
 
+    def test_a_selector_that_names_nothing_is_an_error(self) -> None:
+        for arguments, message in (
+            (("--only-format", "demo/projet"), "--only-format names demo/projet, which the registry does not"),
+            (("--only-case", "duplicate-keys"), "--only-case names duplicate-keys, which the corpus does not"),
+            (
+                ("--only-format", "demo/project", "--only-format", "demo/projet"),
+                "--only-format names demo/projet, which the registry does not",
+            ),
+        ):
+            code, stdout, stderr = self.run_runner("--matrix", *arguments)
+            self.assertEqual(code, 1, stdout)
+            self.assertIn(message, stderr)
+            self.assertNotIn("cells:", stdout)
+
+    def test_a_selector_runs_the_cells_it_names_and_the_baseline(self) -> None:
+        code, stdout, stderr = self.run_runner(
+            "--matrix", "--only-format", "demo/project", "--only-case", "duplicate-key"
+        )
+        self.assertEqual((code, stderr), (0, ""), stdout)
+        self.assertIn("demo/project\tbaseline\tpass", stdout)
+        self.assertIn("demo/project\tduplicate-key\tpass", stdout)
+        self.assertNotIn("demo/project\tanchor", stdout)
+
     def test_a_listed_cell_the_harness_could_not_run_still_fails(self) -> None:
         problem = "fakectl is not in the binary directory"
         self.write_expected(
