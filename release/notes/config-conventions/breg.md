@@ -7,7 +7,7 @@ Base Registry Engine: `registry.yaml`, `module.yaml`, `runtime.yaml`, and the
 package a `bregctl package` run seals around them.
 
 ### BREAKING: the shared reader reads `registry.yaml` and `module.yaml`
-<!-- upgrade: already-wrong -->
+<!-- upgrade: breg-project-reader-refusals -->
 
 `bregctl`, the package builder, and `breg` read a project and its modules
 through the shared Registry Stack reader. A file that was already outside the
@@ -82,7 +82,7 @@ types the reader decodes, and now say what it refuses:
   schema by its `$id` should name the new one.
 
 ### BREAKING: project URLs and module digests are typed by the shared reader
-<!-- upgrade: already-wrong -->
+<!-- upgrade: breg-project-reader-refusals -->
 
 The reader types the URL members of `registry.yaml` as `Url` (an absolute
 `http` or `https` URL with a host, no user information, and at most 2048
@@ -1975,7 +1975,7 @@ alone; once that is replaced, it reports each old key at its line and column
 with its replacement, and the file is clean when the command exits 0.
 
 ### BREAKING: the shared reader refuses values outside the documented grammar
-<!-- upgrade: already-wrong -->
+<!-- upgrade: breg-runtime-reader-refusals -->
 
 A file that was already outside the documented grammar is now refused when it
 is read, and every refusal carries a code, a JSON Pointer path, a line, a
@@ -1992,7 +1992,7 @@ column, and the edit that fixes it. No refusal repeats a configured value.
 | a file over the reader's size bound | `yaml.too-large` (was `platform.runtime-config.size`) | Shrinking the file below the bound the message names. |
 
 ### BREAKING: members are typed by the shared reader
-<!-- upgrade: already-wrong -->
+<!-- upgrade: breg-service-runtime-members -->
 
 Each member is read as the shared type its schema names, so a value outside
 that type is refused at the member, as `config.invalid-value`,

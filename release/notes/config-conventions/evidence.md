@@ -138,7 +138,7 @@ is either the word `unrestricted` or a nonempty list.
   that literal name. Write `unrestricted` in place of the list instead.
 
 ### BREAKING: values the reader now refuses
-<!-- upgrade: already-wrong -->
+<!-- upgrade: evidence-oid4vci-runtime-reader-refusals -->
 
 Each of these files was read before. The reader refuses them at their
 position.
@@ -290,7 +290,7 @@ member (`registry.evidence-client-profile/v1`,
   `products/evidence/examples/client-contracts/evidence.contracts.json`.
 
 ### BREAKING: client profile and contracts values the reader now refuses
-<!-- upgrade: already-wrong -->
+<!-- upgrade: evidence-client-reader-refusals -->
 
 - `null` as the value of an optional member is refused as
   `config.null-value`, where it read as absent. Migration: remove the member

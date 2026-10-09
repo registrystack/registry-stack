@@ -322,6 +322,25 @@ steps:
     the rebuild.'}
 - {id: breg-delete-repeated-items, product: breg, kind: manual, file: registry.yaml, instruction: Delete
     the repeated item in each list that is a set (config.duplicate-item names the first occurrence).}
+- {id: breg-project-reader-refusals, product: breg, kind: manual, file: registry.yaml, instruction: 'In registry.yaml
+    and every module.yaml, delete a key written as null, quote a version written as a bare number (version: "1"),
+    quote or rewrite a value with a leading zero, a bare point or a base prefix, write out in full any anchor, alias,
+    merge key or tag, remove user information from a manifestProjection URL, and write manifestProjection
+    distributions accessUrl and downloadUrl as absolute http or https URLs or delete them.'}
+- {id: breg-runtime-reader-refusals, product: breg, kind: manual, file: runtime.yaml, instruction: 'In runtime.yaml
+    write out in full any anchor, alias, merge key or tag. A null, a quoted integer, a number with a leading zero, an
+    out-of-range integer and a repeated key were refused before and still are.'}
+- {id: breg-service-runtime-members, product: breg, kind: manual, file: runtime.yaml, instruction: 'In the breg-mcp
+    and breg-review runtime files shorten a URL longer than 2048 characters, and write registry.accessProfile,
+    registry.entity, targetField, ownerField and service entity names exactly as the registry project declares them
+    (lowercase, at most 64 characters, no dot).'}
+- {id: evidence-oid4vci-runtime-reader-refusals, product: evidence, kind: manual, file: oid4vci-runtime.yaml, instruction: 'Shorten
+    tokenClient.resource to at most 512 bytes, delete a repeated audience, client, scope or algorithm, delete a key
+    written as null, write out in full any anchor, alias or tag, keep the file under 1 MiB, write a literal ${NAME} as
+    ${VARIABLE} with the text as that variable, and pass the real path of the file rather than a symbolic link.'}
+- {id: evidence-client-reader-refusals, product: evidence, kind: manual, file: client-profile.yaml, instruction: 'In a client
+    profile delete an optional member written as null, replace a surrogate-pair escape by the character itself, and
+    in a reviewed contracts file keep the size under 1 MiB by reviewing a snapshot scoped to the requested definitions.'}
 - {id: breg-runtime-refused-forms, product: breg, kind: manual, file: runtime.yaml, instruction: 'Delete
     authentication.oidc.assertionIssuers when it is an empty mapping, and write a task-grant status sourceIssuer
     as an http or https URL.'}
