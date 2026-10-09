@@ -548,7 +548,12 @@ impl Bundle {
                             match serde_json::from_slice::<Value>(bytes.as_slice()) {
                                 Ok(value) => Some(value),
                                 Err(error) => {
-                                    findings.manifest.push(invalid_schema(root, &key, &error));
+                                    findings.manifest.push(invalid_schema(
+                                        root,
+                                        &key,
+                                        bytes.as_slice(),
+                                        &error,
+                                    ));
                                     None
                                 }
                             }
@@ -702,7 +707,7 @@ fn bundle_key(path: &Path) -> Option<String> {
 }
 
 /// A schema file that is not JSON, placed where the JSON parser stopped.
-fn invalid_schema(root: &Path, key: &str, error: &serde_json::Error) -> Diagnostic {
+fn invalid_schema(root: &Path, key: &str, bytes: &[u8], error: &serde_json::Error) -> Diagnostic {
     let mut diagnostic = Diagnostic::error(
         "render.bundle.invalid-schema",
         "",
@@ -712,9 +717,25 @@ fn invalid_schema(root: &Path, key: &str, error: &serde_json::Error) -> Diagnost
     diagnostic.source = Some(Source {
         file: bundle_file_name(root, key),
         line: Some(error.line()),
-        column: Some(error.column()),
+        column: Some(character_column(bytes, error.line(), error.column())),
     });
     diagnostic
+}
+
+/// The 1-based character column for the position `serde_json` reports, which
+/// counts bytes on the line and is 0 when the parser stopped just after a
+/// newline.
+fn character_column(bytes: &[u8], line: usize, byte_column: usize) -> usize {
+    let text = bytes
+        .split(|byte| *byte == b'\n')
+        .nth(line.saturating_sub(1))
+        .unwrap_or_default();
+    let consumed = &text[..byte_column.min(text.len())];
+    consumed
+        .iter()
+        .filter(|byte| (**byte & 0xC0) != 0x80)
+        .count()
+        .max(1)
 }
 
 /// The binary's baseline set (`typst-assets` order) first, then bundle
@@ -834,6 +855,15 @@ mod tests {
     }
 
     #[test]
+    fn a_schema_error_is_placed_by_character_column_not_byte_column() {
+        let bytes = "{\"\u{e9}\" x".as_bytes();
+        let error = serde_json::from_slice::<Value>(bytes).unwrap_err();
+        assert_eq!(error.column(), 7, "serde_json counts bytes");
+        let diagnostic = invalid_schema(Path::new("/bundle"), "schemas/a.json", bytes, &error);
+        assert_eq!(diagnostic.source.unwrap().column, Some(6));
+    }
+
+    #[test]
     fn cfg_diag_5_every_missing_or_refused_file_is_reported_at_once() {
         let dir = tempfile::tempdir().unwrap();
         let root_path = dir.path().canonicalize().unwrap();
@@ -862,7 +892,7 @@ mod tests {
                     Some(9),
                     Some(22)
                 ),
-                ("render.bundle.invalid-schema", "", Some(3), Some(0)),
+                ("render.bundle.invalid-schema", "", Some(3), Some(1)),
                 (
                     "render.bundle.missing-entry-file",
                     "/documents/0/entryFile",
