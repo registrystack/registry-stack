@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.40.0 - 2026-10-10
+
 - `registry-platform-httputil` adds the bounded same-key resend the BReg,
   Casework, Messaging, and Scheduling clients share:
   `client::retry_keyed_mutation`,

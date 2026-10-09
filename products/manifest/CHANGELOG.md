@@ -7,6 +7,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-10-10
+
+- Registry Manifest has no user-visible format or rendering changes in this
+  release.
+
 ## [0.39.0] - 2026-10-06
 
 - `registry-manifest --version` prints the build version. Registry Manifest

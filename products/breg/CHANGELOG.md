@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.40.0 - 2026-10-10
+
 - BREAKING: governed read routes refuse `HEAD` (#1902). axum answered `HEAD`
   on every `GET` route by running the whole read, writing a subject access log
   row, and journaling a `GET` the caller did not send. A `HEAD` now receives
@@ -64,6 +66,14 @@
   `action.handler_failed` and `statistical_dataset.domain_violation` answers
   are rolled back before commit, so they are known outcomes and are not
   resent; neither is any answer with a 4xx status line.
+- Node.js and Python callers can prepare an immediate action as private,
+  persistable bytes before sending it, then restore and revalidate those bytes
+  against fresh metadata with the original inputs and idempotency key after a
+  lost response. Recovery reuses the saved target conditions and performs no
+  I/O until the caller explicitly executes it. The unified Rust facade now
+  re-exports the binding, request, condition, receipt, error, and prepared
+  evidence types needed to name the complete immediate-action flow (#1917,
+  #1918).
 
 ## v0.39.0 - 2026-10-06
 

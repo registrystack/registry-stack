@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+## v0.40.0 - 2026-10-10
+
+- Reviewer task lists accept `ownership=assigned_to_me` and
+  `ownership=unclaimed`, applied before pagination within the caller's current
+  role, membership, served queue, pinned deciding profile, and source
+  visibility. A decided single-task read carries `decisionReceipt` only for a
+  retained decision recorded by the current issuer-qualified principal. The
+  receipt identifies the pinned policy, decision type, optional configured
+  outcome, and decision time, without the private reason or structured
+  producer result; task lists and mutation responses omit it (#1957).
+- Supervisors can list operational work through
+  `GET /v1/review-tasks/supervision` across queues they currently supervise.
+  The view includes active tasks and retained decided or closed tasks within
+  the terminal result window without requiring a pinned deciding profile. Its
+  rows expose a holder-free `open`, `held`, or `decided` state and an optional
+  accountability event identifier. Staff and Administrator profiles cannot
+  use the route, and source-context rows still require current source
+  visibility (#1957).
+- Supervisory discovery accepts an exact canonical `requestId` before
+  pagination. Unknown, other-team, revoked, concealed, and expired requests
+  all produce the same neutral empty page. The reference grants no authority,
+  and the Rust, Node.js, and Python clients carry it in
+  `SupervisoryReviewTaskQuery` (#1959).
+- Reviewer and supervisor task cursors resume an immutable creation-time and
+  task-id position while rechecking current authority and visibility. A page
+  stopped after an undisclosed candidate uses an opaque scan checkpoint that
+  lasts at most 15 minutes and binds the caller, selected profiles, view, and
+  filters. An unknown, expired, unauthorized, or mismatched anchor answers
+  `410 review.result-expired`. Migration 20 adds the reviewer and supervisor
+  discovery indexes (#1957, #1959).
+- Human Staff and Supervisor reviewers can discover their own retained
+  decisions after a fresh sign-in through
+  `GET /v1/review-tasks/own-decisions`. The optional queue and exact
+  issuer-qualified decision author are applied before pagination; rows are
+  ordered by decision time newest first and contain only the task and request
+  identifiers, current queue, retained producer `requesterReference`, and the
+  caller's `decisionReceipt`. Current pinned deciding profile, membership,
+  queue service, source visibility, and terminal result retention still
+  apply. Administrator and Requester profiles are refused, and prior holding
+  or assignment is not authorship. The Rust, Node.js, and Python clients
+  expose the bounded own-decision query and page (#1963).
+- A decision receipt carries the decision-time `outcomeLabel` from the
+  request's pinned policy snapshot, so later policy edits cannot relabel the
+  selection. Approval carries neither an outcome nor a label. The separately
+  authorized Supervisor accountability record now carries the same receipt
+  through its longer accountability window, including after result erasure,
+  without adding submitted context or a structured producer result (#1963).
+- Migration 21 adds the retained outcome to accountability records and the
+  author-and-decision-position index used by own-decision discovery. It
+  backfills a legacy selection only while the original result remains
+  available. A legacy non-approval selection erased or expired before the
+  upgrade remains absent rather than being guessed; absence means unavailable,
+  never approval. Run `caseworkctl plan` and `caseworkctl apply` to apply
+  migrations 20 and 21 before starting the upgraded runtime (#1963).
+
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

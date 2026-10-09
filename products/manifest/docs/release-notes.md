@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.40.0
+
+- Registry Manifest has no user-visible format or rendering changes in this
+  release.
+
 ## 0.39.0
 
 - `registry-manifest --version` prints the build version. Registry Manifest

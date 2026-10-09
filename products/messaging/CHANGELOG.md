@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.40.0 - 2026-10-10
+
 - BREAKING: a spent idempotency key is scoped to the caller's issuer and
   subject, as in Scheduling and Casework, instead of the caller's keyed audit
   pseudonym, so rotating `audit.hashKeyRef` no longer frees spent keys: an

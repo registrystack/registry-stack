@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.40.0 - 2026-10-10
+
 - A hold or an appointment is owned by the verified token issuer and subject
   that booked it, stored on the claim, rather than by the audit-keyed
   pseudonym of that pair. Listing by external reference, reading,
