@@ -30,7 +30,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "161d98c694420bd801fbf611332a30a37b96296dcdd2909e0ac10bb04a8d70fd"
+        "sha256": "aae205bddf53866bccd372489c417491e94827ad810022b1a94b72cb99662b3b"
       }
     },
     {
@@ -3836,6 +3836,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/evidence/bundle/bundle.v1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Evidence governed package configuration Version 1",
+      "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
+      "source": {
+        "path": "products/evidence/contracts/bundle.schema.yaml",
+        "sha256": "3f5de643f5e02fd4303fd1826174020fb65e1fd9e0cca26403ef28d7e3a27de0"
+      },
+      "artifact": {
+        "path": "products/evidence/contracts/bundle.schema.yaml",
+        "sha256": "3f5de643f5e02fd4303fd1826174020fb65e1fd9e0cca26403ef28d7e3a27de0",
+        "mediaType": "application/yaml"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/evidence/client-contracts/client-contracts.v1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3908,6 +3926,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/evidence/holder-bound-verification-policy/holder-bound-verification-policy.v1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Evidence relying-procedure holder-bound presentation verification policy Version 1",
+      "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
+      "source": {
+        "path": "products/evidence/contracts/holder-bound-verification-policy.schema.yaml",
+        "sha256": "aadf149b7bf9edda8bcd650e50a27b6f46157ea17802580f336ffd3c356149ab"
+      },
+      "artifact": {
+        "path": "products/evidence/contracts/holder-bound-verification-policy.schema.yaml",
+        "sha256": "aadf149b7bf9edda8bcd650e50a27b6f46157ea17802580f336ffd3c356149ab",
+        "mediaType": "application/yaml"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/evidence/mock-plan/mock-plan.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3921,7 +3957,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/mock-plan.schema.json",
-        "sha256": "9b91414bec402bf9a2e29d3111a5bc0039017f5a6ec2d7b685a1910b1cdd4517",
+        "sha256": "761a6a1300c328344666ebacdb7c811deefd80ed293e9bc4c0adea3cd435b9c5",
         "mediaType": "application/schema+json"
       }
     },
@@ -3959,6 +3995,24 @@
         "path": "crates/registry-evidencectl/schemas/authoring/question.schema.json",
         "sha256": "d59335a31143f20db204f2cba708a33af0840760739bb6d70e3dc8048a499118",
         "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/evidence/runtime/runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Evidence closed operator runtime configuration Version 1",
+      "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
+      "source": {
+        "path": "products/evidence/contracts/runtime.schema.yaml",
+        "sha256": "c4564ca1803199d0ee8574e6a3543256d5edbe538dbe8117900e01db45b9603d"
+      },
+      "artifact": {
+        "path": "products/evidence/contracts/runtime.schema.yaml",
+        "sha256": "c4564ca1803199d0ee8574e6a3543256d5edbe538dbe8117900e01db45b9603d",
+        "mediaType": "application/yaml"
       }
     },
     {
@@ -4047,8 +4101,26 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/target-settings.schema.json",
-        "sha256": "57901b3860ce929c3b4727128d8ef4c627935d14dc58ac7950c6346d4af20467",
+        "sha256": "111aad59a4b453e45a618ffdf4c0313db5b1031765d0498d013aa3bcf0c9b059",
         "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/evidence/verification-policy/verification-policy.v1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Evidence relying-procedure verification policy Version 1",
+      "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
+      "source": {
+        "path": "products/evidence/contracts/verification-policy.schema.yaml",
+        "sha256": "0545d95aafe3960633f77e0b420531aa2dfc3aa62b17f09abaee94069302ee64"
+      },
+      "artifact": {
+        "path": "products/evidence/contracts/verification-policy.schema.yaml",
+        "sha256": "0545d95aafe3960633f77e0b420531aa2dfc3aa62b17f09abaee94069302ee64",
+        "mediaType": "application/yaml"
       }
     },
     {
@@ -4331,11 +4403,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "fe7d682a346c331b5675d2f0b0772091e298bdeb5f6f209e1ee48a6d6e907d51"
+        "sha256": "93f77be68d9783d234bf6f4a0a5ae7f1e8a0add35af6d5a773889d064225d458"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "f480ed949af7e1bd88ae421f9eb8e85b9343cd26a4f102f82ef35657d2a87d3c",
+        "sha256": "c79405bacd6f52d923e70649e7dc524092ad5dcdb7c2519d08a1268c8c6f0213",
         "mediaType": "application/schema+json"
       }
     },
