@@ -267,8 +267,8 @@ meaning `null` had.
   is not UTF-8 outside the YAML files) remains one `config.refused`, now with
   `source.file` naming the file.
 - A YAML file over its bound is refused as `yaml.too-large` at the file,
-  naming the bound: 1 MiB for `messaging.yaml`, 64 KiB for `template.yaml`
-  and `provider.yaml`. A YAML file that is not UTF-8 is refused as
+  naming the bound: 1 MiB for `messaging.yaml`, `template.yaml`, and
+  `provider.yaml`. A YAML file that is not UTF-8 is refused as
   `yaml.not-utf8` at its first invalid byte. Both were `config.refused`.
 - The JSON report of a successful check carries `filesChecked` and a
   `diagnostics` list holding any warning; a refusal carries `filesChecked`

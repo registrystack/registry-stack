@@ -362,7 +362,7 @@ past the message's `expiresAt`. An attempt whose slot does not open in time send
 retried under its dispatch policy; a message whose expiry passes first is not sent again, and expires,
 or stays `unknown` when an earlier attempt may have reached the provider and its policy retries.
 
-`provider.yaml` is closed and at most 64 KiB, and each script is at most 64 KiB and must compile
+`provider.yaml` is closed and at most 1 MiB, and each script is at most 64 KiB and must compile
 with exactly its entry point when the package loads. A file the provider does not name, a hidden
 entry, or a directory for an `smtp` provider is refused.
 
