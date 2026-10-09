@@ -5071,6 +5071,49 @@ mod tests {
     )]
     use super::*;
 
+    /// Every member the bundle schema gives a source or a selector profile is
+    /// one an authored file may write, so the reader's closed member sets
+    /// never refuse a shape the compiler accepts.
+    #[test]
+    fn the_readers_member_sets_cover_the_bundle_schema() {
+        let schema = authored::embedded_document("Evidence bundle schema", BUNDLE_SCHEMA).unwrap();
+        let mut cases = Vec::new();
+        let transports = schema
+            .pointer("/$defs/source/oneOf")
+            .and_then(Value::as_array)
+            .unwrap();
+        for branch in transports {
+            let name = branch["$ref"].as_str().unwrap().trim_start_matches('#');
+            cases.push((&SOURCE, schema.pointer(name).unwrap().clone()));
+        }
+        cases.push((
+            &SELECTOR,
+            schema.pointer("/$defs/selector-profile").unwrap().clone(),
+        ));
+        for (format, shape) in cases {
+            for member in shape["properties"].as_object().unwrap().keys() {
+                let text = format!(
+                    "apiVersion: {}\nkind: {}\n{member}: x\n",
+                    if format.kind == SOURCE.kind {
+                        registry_evidence_authoring::formats::SOURCE_API_VERSION
+                    } else {
+                        registry_evidence_authoring::formats::SELECTOR_API_VERSION
+                    },
+                    format.kind,
+                );
+                let refused = read_envelope_body("f.yaml", text.as_bytes(), format)
+                    .err()
+                    .map(|report| {
+                        report
+                            .diagnostics()
+                            .iter()
+                            .any(|diagnostic| diagnostic.code == "config.unknown-key")
+                    });
+                assert_ne!(refused, Some(true), "`{member}` is refused as unknown");
+            }
+        }
+    }
+
     #[test]
     fn generated_yaml_indents_sequences_beneath_their_keys() {
         let bytes = yaml_bytes(&json!({"required": ["a", "b"]})).unwrap();

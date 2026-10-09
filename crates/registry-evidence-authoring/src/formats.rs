@@ -18,7 +18,7 @@ use registry_platform_yaml::{
     ApiVersion, Decoded, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Node, Reader,
     Refusal, RemovedKey, Report, ScalarHook, ScalarSite, Severity,
 };
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, IgnoredAny};
 
 use crate::{
     finding::Finding,
@@ -346,7 +346,60 @@ pub fn decode_authored<T: DeserializeOwned>(
         .decode(bytes, &Expect::one(format))
 }
 
-/// Read one authored source or selector: the envelope is checked, then the
+/// The members an authored source may write, across both transports. Only
+/// the names matter here: the body is passed on as a value and checked
+/// against the bundle schema when it is compiled.
+#[derive(Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[allow(
+    dead_code,
+    reason = "the fields exist so the reader can name unknown members"
+)]
+struct SourceMembers {
+    authentication: IgnoredAny,
+    #[serde(rename = "baseUrl")]
+    base_url: IgnoredAny,
+    batch: IgnoredAny,
+    #[serde(rename = "behaviorRevision")]
+    behavior_revision: IgnoredAny,
+    connection: IgnoredAny,
+    evidence: IgnoredAny,
+    #[serde(rename = "extractProfile")]
+    extract_profile: IgnoredAny,
+    #[serde(rename = "extractScript")]
+    extract_script: IgnoredAny,
+    #[serde(rename = "factSchema")]
+    fact_schema: IgnoredAny,
+    #[serde(rename = "forwardAccessAttribution")]
+    forward_access_attribution: IgnoredAny,
+    #[serde(rename = "maximumExtractAgeSeconds")]
+    maximum_extract_age_seconds: IgnoredAny,
+    posture: IgnoredAny,
+    request: IgnoredAny,
+    #[serde(rename = "responseSchema")]
+    response_schema: IgnoredAny,
+    #[serde(rename = "tlsTrustProfile")]
+    tls_trust_profile: IgnoredAny,
+    transport: IgnoredAny,
+    #[serde(rename = "unresolvedProblem")]
+    unresolved_problem: IgnoredAny,
+}
+
+/// The members an authored selector profile may write.
+#[derive(Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[allow(
+    dead_code,
+    reason = "the fields exist so the reader can name unknown members"
+)]
+struct SelectorMembers {
+    fields: IgnoredAny,
+    #[serde(rename = "maximumAggregateBytes")]
+    maximum_aggregate_bytes: IgnoredAny,
+}
+
+/// Read one authored source or selector: the envelope is checked and every
+/// top-level member is held to the closed set the format writes, then the
 /// body is returned as the JSON value the compiler passes into the bundle,
 /// without `apiVersion` and `kind`.
 ///
@@ -359,6 +412,11 @@ pub fn read_envelope_body(
     format: &FormatSpec<'_>,
 ) -> Result<Decoded<serde_json::Value>, Report> {
     let mut decoded = decode_authored::<serde_json::Value>(file, bytes, format)?;
+    if format.kind == SOURCE_KIND {
+        decoded.document.decode::<SourceMembers>()?;
+    } else if format.kind == SELECTOR_KIND {
+        decoded.document.decode::<SelectorMembers>()?;
+    }
     if let serde_json::Value::Object(body) = &mut decoded.value {
         body.remove("apiVersion");
         body.remove("kind");
@@ -624,18 +682,64 @@ mod tests {
 
     #[test]
     fn a_source_or_selector_is_read_by_its_envelope_and_returned_without_it() {
-        for (format, kind, api_version) in [
-            (&SOURCE, SOURCE_KIND, SOURCE_API_VERSION),
-            (&SELECTOR, SELECTOR_KIND, SELECTOR_API_VERSION),
+        for (format, kind, api_version, member) in [
+            (&SOURCE, SOURCE_KIND, SOURCE_API_VERSION, "request"),
+            (&SELECTOR, SELECTOR_KIND, SELECTOR_API_VERSION, "fields"),
         ] {
-            let text = format!("apiVersion: {api_version}\nkind: {kind}\nfields: {{}}\n");
+            let text = format!("apiVersion: {api_version}\nkind: {kind}\n{member}: {{}}\n");
             let decoded = read_envelope_body("body.yaml", text.as_bytes(), format)
                 .expect("a file with its header is read");
-            assert_eq!(decoded.value, serde_json::json!({"fields": {}}));
+            assert_eq!(decoded.value, serde_json::json!({ member: {} }));
 
-            let report = read_envelope_body("body.yaml", b"fields: {}\n", format)
-                .expect_err("a file without its header is refused");
+            let report =
+                read_envelope_body("body.yaml", format!("{member}: {{}}\n").as_bytes(), format)
+                    .expect_err("a file without its header is refused");
             assert_eq!(codes(&report), ["config.missing-envelope"]);
+        }
+    }
+
+    #[test]
+    fn an_unknown_member_of_a_source_or_selector_is_reported_at_its_key() {
+        for (format, kind, api_version, known) in [
+            (
+                &SOURCE,
+                SOURCE_KIND,
+                SOURCE_API_VERSION,
+                "transport: sqlite-extract\n",
+            ),
+            (
+                &SELECTOR,
+                SELECTOR_KIND,
+                SELECTOR_API_VERSION,
+                "fields: {}\n",
+            ),
+        ] {
+            let header = format!("apiVersion: {api_version}\nkind: {kind}\n{known}");
+            let text = format!("{header}stray: \"MARKER\"\nx-note: \"MARKER\"\n");
+            let report = read_envelope_body("body.yaml", text.as_bytes(), format)
+                .expect_err("a member outside the closed shape is refused");
+            let found: Vec<_> = report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| {
+                    let source = diagnostic.source.as_ref().unwrap();
+                    (
+                        diagnostic.code.as_str(),
+                        diagnostic.path.as_str(),
+                        source.line,
+                        source.column,
+                    )
+                })
+                .collect();
+            let line = header.lines().count();
+            assert_eq!(
+                found,
+                [
+                    ("config.unknown-key", "/stray", Some(line + 1), Some(1)),
+                    ("config.unknown-key", "/x-note", Some(line + 2), Some(1)),
+                ]
+            );
+            assert!(!format!("{:?}", report.diagnostics()).contains("MARKER"));
         }
     }
 
