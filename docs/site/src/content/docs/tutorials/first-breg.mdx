@@ -128,8 +128,9 @@ type.
 
 A finding is advice the compiler attaches to a result that succeeded: an error stops a command, a
 finding does not.
-Both findings here are expected, as the second step under `Next:` says, and every later command
-repeats them.
+`init` prints each one as a `finding`; `bregctl check` and the commands after it print the same two
+as `warning[...]` lines and count them as warnings.
+Both are expected, as the second step under `Next:` says, and every later command repeats them.
 
 ### The local callers
 

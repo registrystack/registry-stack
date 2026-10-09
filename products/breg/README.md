@@ -109,7 +109,7 @@ rollback paths.
 For an offline permissions exercise, use [Review access configuration](examples/access-review/README.md).
 It includes a complete project, allowed and refused synthetic caller scenarios,
 and an omitted-row-restriction exercise. `explain access` shows effective field
-permissions; `check --deny-warnings` makes review findings blocking for automation.
+permissions; `check --deny-warnings` makes its access warnings blocking for automation.
 Entity `accessRequirements` are mandatory compiler checks, not additional grants.
 
 For configured atomic writes across records, see [Immediate actions](immediate-actions.md).
