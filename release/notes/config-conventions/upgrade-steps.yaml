@@ -332,7 +332,9 @@ steps:
 - {id: breg-rebuild-package, product: breg, kind: manual, file: package, instruction: 'Run bregctl test
     and bregctl package on the unchanged project with --baseline-package set to the deployed package,
     then bregctl plan and apply, and point package.root and package.expectedDigest in runtime.yaml at
-    the rebuild.'}
+    the rebuild. When the sealed sources of the deployed package use an anchor, alias, tag, merge key or duplicate
+    key, first write them out in full, then build and apply a successor package with the bregctl release that
+    built the deployed package.'}
 - {id: breg-delete-repeated-items, product: breg, kind: manual, file: registry.yaml, instruction: Delete
     the repeated item in each list that is a set (config.duplicate-item names the first occurrence).}
 - {id: breg-project-reader-refusals, product: breg, kind: manual, file: registry.yaml, instruction: 'In registry.yaml

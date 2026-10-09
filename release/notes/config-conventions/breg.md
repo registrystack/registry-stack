@@ -58,6 +58,16 @@ loads. Correct the source project, rebuild the package with `bregctl package
 --baseline-package <deployed package>`, and apply it before starting the
 upgraded runtime.
 
+The deployed package is also read as the upgrade baseline, and that read
+refuses a sealed source with an anchor, an alias, a tag, a merge key, a
+duplicate key, or an unquoted number such as `0123`, `.5`, or `0x1F`; it
+tolerates a `null` member and the access spellings the earlier release wrote.
+When the deployed package's sealed sources carry a refused shape, `bregctl
+test` reports `migration.rehearsal.baseline_unavailable` and `package` cannot
+run. Correct the project and build and apply a successor package with the
+`bregctl` release that built the deployed package, so the active package's
+sealed sources no longer carry the shape. Then upgrade with this release.
+
 ### The published schemas describe what the reader accepts
 
 The project, module, and runtime JSON Schemas are generated from the same
@@ -355,7 +365,10 @@ The same upgrade may carry a project change: the rebuild then follows the
 ordinary successor path, with `--reviewed-migrations` where the change needs
 review. `test` rebuilds the deployed registry from its packaged sources with
 this release's compiler; when the stricter reader refuses those sources, it
-reports `migration.rehearsal.baseline_unavailable`.
+reports `migration.rehearsal.baseline_unavailable`. If the refused sources are
+an anchor, an alias, a tag, a merge key, or a duplicate key in the deployed
+package, write them out in full with the release that built that package, and
+build and apply that successor before upgrading.
 
 ### BREAKING: a statistical dataset's period is tagged by `type`
 <!-- upgrade: breg-statistical-period -->
@@ -1741,7 +1754,9 @@ release refused it.
 The predecessor's sealed sources are read through the shared reader's
 structural pass, so a sealed source outside the YAML subset (an anchor, an
 alias, a tag, a merge key, or a duplicate key) is no longer a readable upgrade
-baseline and the read refuses it.
+baseline and the read refuses it. An operator whose deployed package carries
+one writes it out in full with the `bregctl` release that built that package,
+builds and applies that successor, and then upgrades with this release.
 
 These configuration diagnostics are no longer reported, because nothing can
 reach them. The second column is the name the code table above gave them:
