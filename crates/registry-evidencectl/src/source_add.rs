@@ -1221,12 +1221,12 @@ mod tests {
     }
 
     fn write_export(root: &Path, id: &str, connection: &str) -> Result<()> {
-        let source = format!("transport: http-json\nconnection: {connection}\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParametersSchema: schemas/{id}-parameters.yaml\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
+        let source = format!("apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nconnection: {connection}\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParametersSchema: schemas/{id}-parameters.yaml\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
         let artifacts = BTreeMap::from([
             (format!("sources/{id}.yaml"), source),
             (
                 "selectors/record-code.yaml".to_owned(),
-                "fields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n".to_owned(),
+                "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n".to_owned(),
             ),
             (
                 format!("schemas/{id}-parameters.yaml"),

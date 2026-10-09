@@ -114,6 +114,14 @@ SCHEMAS = {
             "source-resolutions.json",
         ),
         (
+            "crates/registry-evidencectl/schemas/authoring/selector.schema.json",
+            "selectors/*.yaml",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/source.schema.json",
+            "sources/*.yaml",
+        ),
+        (
             "crates/registry-evidencectl/schemas/authoring/target-settings.schema.json",
             "targets/*/settings.yaml",
         ),

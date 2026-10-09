@@ -49,7 +49,8 @@ Provenance is attribution and review context, never proof of provider authority.
 One export inventories exactly `sources/<sourceId>.yaml` and its auxiliary
 artifacts under `selectors/`, `schemas/`, and `adapters/`. Source, selector, and
 schema files use `.yaml`; adapter files use `.rhai`. YAML files must contain
-mapping objects. Names are bounded lowercase authoring names. Paths have
+mapping objects. A source and a selector carry the `apiVersion` and `kind`
+header of their format; a schema is a foreign JSON Schema file and carries none. Names are bounded lowercase authoring names. Paths have
 exactly two components and cannot be absolute, contain `.` or `..` components,
 backslashes, or symbolic links. Files must be regular files with one hard link.
 The ordinary authoring compiler remains the authority for usable document

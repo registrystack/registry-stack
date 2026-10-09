@@ -879,12 +879,16 @@ impl Fixture {
         let source_files = [
             (
                 "selectors/person-reference-v1.yaml",
-                "maximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n".to_owned(),
+                "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n".to_owned(),
             ),
             (
                 "sources/people.yaml",
                 format!(
-                    r#"transport: http-json
+                    r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: {source_origin}
 posture: field-projected
 authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}
@@ -1072,7 +1076,9 @@ privacy_expectation:
             fs::write(
                 self.project.join(format!("selectors/{profile}.yaml")),
                 format!(
-                    "maximumAggregateBytes: 200\nfields:\n  {field}: {{type: string, minimumBytes: 1, maximumBytes: 200}}\n"
+                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 200\nfields:\n  {field}: {{type: string, minimumBytes: 1, maximumBytes: 200}}\n"
                 ),
             )
             .expect("role-bound selector");
@@ -1082,7 +1088,9 @@ privacy_expectation:
         fs::write(
             self.project.join("sources/immunizations.yaml"),
             format!(
-                r#"transport: http-json
+                r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: {source_origin}
 posture: field-projected
 authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}
@@ -1113,7 +1121,9 @@ factSchema: schemas/immunizations-facts.schema.yaml
         fs::write(
             self.project.join("sources/relationships.yaml"),
             format!(
-                r#"transport: http-json
+                r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: {source_origin}
 posture: field-projected
 authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}

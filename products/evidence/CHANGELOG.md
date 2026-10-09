@@ -25,6 +25,15 @@
 
 ### Evidence authoring tools
 
+- BREAKING: a file under `sources/` opens with `apiVersion`
+  (`id.registrystack.org/formats/evidence/source/v1alpha1`) and `kind`
+  (`EvidenceSource`), and a file under `selectors/` with
+  `id.registrystack.org/formats/evidence/selector/v1alpha1` and
+  `EvidenceSelector`. Both are read by the shared configuration reader, have a
+  generated schema mapped for editors, and lose the two lines before the
+  compile. A BReg export writes them. Migration: add the two lines at the top
+  of every such file; see "Evidence tooling files" in
+  `release/notes/config-conventions/evidence.md`.
 - `evidencectl` writes the mock plan and the access policy and client
   documents with sequences indented beneath their keys, and reports a refused
   `source mock` argument combination (`--http-addr`, `--path-parameter`) as a
@@ -65,7 +74,7 @@
   accept the two new members. The release note "Evidence tooling files" has
   the migration step.
 
-- BREAKING: every authored YAML document except a source and a selector
+- BREAKING: every authored YAML document
   opens with `apiVersion` and `kind`, and is read by the shared configuration
   reader: `${...}`, anchors, aliases, tags, unknown, duplicate, and null keys
   are refused at their line and column. `evidencectl check --deny-findings`

@@ -24,6 +24,26 @@ pub const EVIDENCE_SOURCE_EXPORT_API_VERSION: &str =
     "id.registrystack.org/formats/breg/evidence-source-export/v1alpha1";
 pub const EVIDENCE_SOURCE_EXPORT_KIND: &str = "BRegEvidenceSourceExport";
 
+/// The header of an exported `sources/<id>.yaml`. `evidencectl` reads the same
+/// values under its source format.
+const SOURCE_HEADER: [(&str, &str); 2] = [
+    (
+        "apiVersion",
+        "id.registrystack.org/formats/evidence/source/v1alpha1",
+    ),
+    ("kind", "EvidenceSource"),
+];
+
+/// The header of an exported `selectors/<profile>.yaml`. `evidencectl` reads
+/// the same values under its selector format.
+const SELECTOR_HEADER: [(&str, &str); 2] = [
+    (
+        "apiVersion",
+        "id.registrystack.org/formats/evidence/selector/v1alpha1",
+    ),
+    ("kind", "EvidenceSelector"),
+];
+
 /// `source-export.json`, written with its header first. Every member has a
 /// fixed order, so the same inputs write the same bytes.
 #[derive(Serialize)]
@@ -93,6 +113,22 @@ fn artifact(path: String, media_type: &str, bytes: Vec<u8>) -> GeneratedArtifact
         sha256: format!("sha256:{}", digest(&bytes)),
         bytes,
     }
+}
+
+/// A source or selector document: the flat body under its envelope header.
+fn enveloped_document(
+    path: String,
+    header: [(&str, &str); 2],
+    body: &Value,
+) -> Result<GeneratedArtifact, Diagnostic> {
+    let mut value = body.clone();
+    let members = value
+        .as_object_mut()
+        .expect("an exported source or selector body is an object");
+    for (name, text) in header {
+        members.insert(name.to_owned(), Value::String(text.to_owned()));
+    }
+    document(path, &value)
 }
 
 fn document(path: String, value: &Value) -> Result<GeneratedArtifact, Diagnostic> {
@@ -364,8 +400,9 @@ pub fn export_evidence_source(
             checks
         ));
         alternatives.push(json!({"profile":profile,"fields":selector.fields}));
-        artifacts.push(document(
+        artifacts.push(enveloped_document(
             format!("selectors/{profile}.yaml"),
+            SELECTOR_HEADER,
             &json!({"maximumAggregateBytes":maximum,"fields":selector_fields}),
         )?);
         identity_fields.insert(
@@ -460,7 +497,7 @@ pub fn export_evidence_source(
         "text/plain",
         extract.into_bytes(),
     ));
-    artifacts.push(document(format!("sources/{prefix}.yaml"),&json!({
+    artifacts.push(enveloped_document(format!("sources/{prefix}.yaml"),SOURCE_HEADER,&json!({
         "transport":"http-json","connection":options.connection,"behaviorRevision":behavior_revision,"posture":"field-projected",
         "forwardAccessAttribution":entity.access_log.is_some(),
         "unresolvedProblem":{"status":404,"type":crate::problem::ProblemCode::LookupUnresolved.type_uri(),"code":"lookup.unresolved"},

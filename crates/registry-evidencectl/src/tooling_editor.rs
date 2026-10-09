@@ -96,11 +96,11 @@ struct EditorSchema {
 // worktree-root matching would need an editor extension, because neither the
 // VS Code nor the Zed settings surface exposes a project-root token.
 //
-// The catalogue holds only the document kinds a Rust type stands behind. The
-// other authored parts of a project (sources, selectors, derivations, answer
-// schemas, fixtures) get no mapping, because a schema written
-// by hand for one of them would drift from the checks the moment either moved.
-const EDITOR_SCHEMA_CATALOG: [EditorSchema; 6] = [
+// The catalogue holds only the document kinds a schema generated from a Rust
+// type stands behind. The other authored parts of a project (derivations,
+// answer schemas, fixtures) get no mapping, because a schema written by hand
+// for one of them would drift from the checks the moment either moved.
+const EDITOR_SCHEMA_CATALOG: [EditorSchema; 8] = [
     EditorSchema {
         name: "access-client",
         filename: "access-client.schema.json",
@@ -130,6 +130,18 @@ const EDITOR_SCHEMA_CATALOG: [EditorSchema; 6] = [
         filename: "question.schema.json",
         file_glob: "questions/*.yaml",
         document: include_str!("../schemas/authoring/question.schema.json"),
+    },
+    EditorSchema {
+        name: "selector",
+        filename: "selector.schema.json",
+        file_glob: "selectors/*.yaml",
+        document: include_str!("../schemas/authoring/selector.schema.json"),
+    },
+    EditorSchema {
+        name: "source",
+        filename: "source.schema.json",
+        file_glob: "sources/*.yaml",
+        document: include_str!("../schemas/authoring/source.schema.json"),
     },
     EditorSchema {
         name: "target-settings",
@@ -1196,13 +1208,15 @@ mod tests {
     use registry_evidence_authoring::default_project_marker_document;
 
     /// The complete set of files one run owns, as an author would list them.
-    const MANAGED_FILES: [&str; 10] = [
+    const MANAGED_FILES: [&str; 12] = [
         ".evidence-editor/manifest.json",
         ".evidence-editor/schemas/access-client.schema.json",
         ".evidence-editor/schemas/access-policy.schema.json",
         ".evidence-editor/schemas/mock-plan.schema.json",
         ".evidence-editor/schemas/project-marker.schema.json",
         ".evidence-editor/schemas/question.schema.json",
+        ".evidence-editor/schemas/selector.schema.json",
+        ".evidence-editor/schemas/source.schema.json",
         ".evidence-editor/schemas/target-settings.schema.json",
         ".vscode/extensions.json",
         ".vscode/settings.json",

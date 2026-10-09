@@ -738,3 +738,47 @@ positioned diagnostic. The member that names the resolution is `type` (it was
 1` with the two members above, and rename each `"choice"` member to `"type"`.
 The conventional names `source-resolutions.json` and `*.resolutions.json` have
 a generated schema, mapped by `editors/configure.py`.
+
+### BREAKING: a source file has an envelope and a schema
+
+Every file under `sources/` opens with `apiVersion` and `kind`, and is read by the
+shared configuration reader. A file without them is refused as
+`config.missing-envelope`, whose fix names both lines, and a `null` value is
+refused as `config.null-value`. `evidencectl` removes the two lines before the
+body enters the bundle, so the compiled bundle is unchanged. Migration: add
+these two lines at the top of every file under `sources/`:
+
+```yaml
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/source/source.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+```
+
+The first line is the optional editor modeline. The schema is generated at
+`crates/registry-evidencectl/schemas/authoring/source.schema.json`, mapped by
+`evidencectl tooling editor` and `editors/configure.py`; it requires the two
+members and leaves the body to the bundle grammar that `evidencectl check`
+applies after the compile. A BReg source export writes the
+two lines itself, so a source imported from an export needs no edit.
+
+### BREAKING: a selector file has an envelope and a schema
+
+Every file under `selectors/` opens with `apiVersion` and `kind`, and is read by the
+shared configuration reader. A file without them is refused as
+`config.missing-envelope`, whose fix names both lines, and a `null` value is
+refused as `config.null-value`. `evidencectl` removes the two lines before the
+body enters the bundle, so the compiled bundle is unchanged. Migration: add
+these two lines at the top of every file under `selectors/`:
+
+```yaml
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/selector/selector.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+```
+
+The first line is the optional editor modeline. The schema is generated at
+`crates/registry-evidencectl/schemas/authoring/selector.schema.json`, mapped by
+`evidencectl tooling editor` and `editors/configure.py`; it requires the two
+members and leaves the body to the bundle grammar that `evidencectl check`
+applies after the compile. A BReg source export writes the
+two lines itself, so a source imported from an export needs no edit.

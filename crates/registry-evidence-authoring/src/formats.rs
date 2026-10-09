@@ -57,6 +57,20 @@ pub const ACCESS_CLIENT_API_VERSION: &str =
     "id.registrystack.org/formats/evidence/access-client/v1alpha1";
 /// The `kind` of a local access client.
 pub const ACCESS_CLIENT_KIND: &str = "EvidenceAccessClient";
+/// The published `$id` of an authored source's JSON Schema.
+pub const SOURCE_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/evidence/source/source.v1alpha1.schema.json";
+/// The published `$id` of a selector profile's JSON Schema.
+pub const SELECTOR_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/evidence/selector/selector.v1alpha1.schema.json";
+/// The `apiVersion` of an authored source under `sources/`.
+pub const SOURCE_API_VERSION: &str = "id.registrystack.org/formats/evidence/source/v1alpha1";
+/// The `kind` of an authored source.
+pub const SOURCE_KIND: &str = "EvidenceSource";
+/// The `apiVersion` of an authored selector under `selectors/`.
+pub const SELECTOR_API_VERSION: &str = "id.registrystack.org/formats/evidence/selector/v1alpha1";
+/// The `kind` of an authored selector.
+pub const SELECTOR_KIND: &str = "EvidenceSelector";
 /// The `apiVersion` of a deployment target's `governance.yaml`.
 pub const TARGET_GOVERNANCE_API_VERSION: &str =
     "id.registrystack.org/formats/evidence/target-governance/v1alpha1";
@@ -186,23 +200,22 @@ pub const MOCK_PLAN: FormatSpec<'static> = FormatSpec {
     }],
 };
 
-/// One authored source under `sources/`. Sources carry no envelope yet: they
-/// are also written by `evidencectl source add` and the source import, which
-/// write the same shape.
+/// One authored source under `sources/`.
 pub const SOURCE: FormatSpec<'static> = FormatSpec {
-    kind: "EvidenceSource",
-    envelope: EnvelopeRule::Exempt {
-        reason: "sources written by the source import carry no envelope yet",
+    kind: SOURCE_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(SOURCE_API_VERSION)],
+        retired_api_versions: &[],
     },
     removed_keys: &[],
 };
 
-/// One authored selector under `selectors/`, exempt for the same reason as a
-/// source.
+/// One authored selector under `selectors/`.
 pub const SELECTOR: FormatSpec<'static> = FormatSpec {
-    kind: "EvidenceSelector",
-    envelope: EnvelopeRule::Exempt {
-        reason: "selectors written by the source import carry no envelope yet",
+    kind: SELECTOR_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(SELECTOR_API_VERSION)],
+        retired_api_versions: &[],
     },
     removed_keys: &[],
 };
@@ -217,6 +230,8 @@ pub const ENVELOPED_FORMATS: &[FormatSpec<'static>] = &[
     TARGET_GOVERNANCE,
     TARGET_SETTINGS,
     MOCK_PLAN,
+    SOURCE,
+    SELECTOR,
 ];
 
 /// The code a `${...}` expression in an authored file is refused with.
@@ -329,6 +344,26 @@ pub fn decode_authored<T: DeserializeOwned>(
     Reader::new(file)
         .with_hook(&mut hook)
         .decode(bytes, &Expect::one(format))
+}
+
+/// Read one authored source or selector: the envelope is checked, then the
+/// body is returned as the JSON value the compiler passes into the bundle,
+/// without `apiVersion` and `kind`.
+///
+/// # Errors
+///
+/// Returns every diagnostic the reader found.
+pub fn read_envelope_body(
+    file: &str,
+    bytes: &[u8],
+    format: &FormatSpec<'_>,
+) -> Result<Decoded<serde_json::Value>, Report> {
+    let mut decoded = decode_authored::<serde_json::Value>(file, bytes, format)?;
+    if let serde_json::Value::Object(body) = &mut decoded.value {
+        body.remove("apiVersion");
+        body.remove("kind");
+    }
+    Ok(decoded)
 }
 
 /// Read an authored file whose grammar Registry Stack does not own, such as
@@ -585,6 +620,23 @@ mod tests {
             removed[0].suggested_action.contains("answers[].uri"),
             "the refusal names the replacement"
         );
+    }
+
+    #[test]
+    fn a_source_or_selector_is_read_by_its_envelope_and_returned_without_it() {
+        for (format, kind, api_version) in [
+            (&SOURCE, SOURCE_KIND, SOURCE_API_VERSION),
+            (&SELECTOR, SELECTOR_KIND, SELECTOR_API_VERSION),
+        ] {
+            let text = format!("apiVersion: {api_version}\nkind: {kind}\nfields: {{}}\n");
+            let decoded = read_envelope_body("body.yaml", text.as_bytes(), format)
+                .expect("a file with its header is read");
+            assert_eq!(decoded.value, serde_json::json!({"fields": {}}));
+
+            let report = read_envelope_body("body.yaml", b"fields: {}\n", format)
+                .expect_err("a file without its header is refused");
+            assert_eq!(codes(&report), ["config.missing-envelope"]);
+        }
     }
 
     #[test]

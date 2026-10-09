@@ -162,6 +162,8 @@ until you supply the OpenCRVS-specific decisions.
 Create `selectors/opencrvs-national-id-v1.yaml`:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
 maximumAggregateBytes: 128
 fields:
   national_id:
@@ -178,6 +180,8 @@ distinct. A caller cannot omit a role or substitute another selector field.
 Replace `sources/opencrvs-birth-parents.yaml` with:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
 transport: http-json
 baseUrl: https://events.farajaland-integration.opencrvs.dev
 posture: record-transformed

@@ -3102,17 +3102,24 @@ formats:
     audience: authored
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+      kind: EvidenceSource
+      checkedBy:
+        file: crates/registry-evidence-authoring/src/formats.rs
+        symbol: SOURCE_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
       kind: EvidenceSource
-    schema: none
+    schema:
+      path: crates/registry-evidencectl/schemas/authoring/source.schema.json
+      id: https://id.registrystack.org/schemas/evidence/source/source.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-evidencectl --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
+      driftCheck: products/evidence/scripts/check-authoring-schema.sh
     reader:
-      crate: registry-evidencectl
-      file: crates/registry-evidencectl/src/authoring.rs
-      function: read_named_objects
+      crate: registry-evidence-authoring
+      file: crates/registry-evidence-authoring/src/formats.rs
+      function: read_envelope_body
       type: untyped
     check: evidencectl check {project}
     example: crates/registry-evidencectl/templates/sqlite-extract/sources/record-status.yaml
@@ -3121,7 +3128,6 @@ formats:
       optionalText: none
       integer: none
       boolean: none
-      set: /request/projection
     securityMembers: []
     restrictingMembers: []
   - id: evidence/selector
@@ -3132,17 +3138,24 @@ formats:
     audience: authored
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+      kind: EvidenceSelector
+      checkedBy:
+        file: crates/registry-evidence-authoring/src/formats.rs
+        symbol: SELECTOR_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
       kind: EvidenceSelector
-    schema: none
+    schema:
+      path: crates/registry-evidencectl/schemas/authoring/selector.schema.json
+      id: https://id.registrystack.org/schemas/evidence/selector/selector.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-evidencectl --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
+      driftCheck: products/evidence/scripts/check-authoring-schema.sh
     reader:
-      crate: registry-evidencectl
-      file: crates/registry-evidencectl/src/authoring.rs
-      function: read_named_objects
+      crate: registry-evidence-authoring
+      file: crates/registry-evidence-authoring/src/formats.rs
+      function: read_envelope_body
       type: untyped
     check: evidencectl check {project}
     example: crates/registry-evidencectl/templates/sqlite-extract/selectors/record-reference-v1.yaml

@@ -252,10 +252,10 @@ production candidate input.
 
 | Command | Inputs | Result | Does not do |
 | --- | --- | --- | --- |
-| `evidencectl tooling editor [<project>]` | Editable project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all ten managed files | Install an extension, change editor settings outside the project, or replace a file it did not write |
+| `evidencectl tooling editor [<project>]` | Editable project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all twelve managed files | Install an extension, change editor settings outside the project, or replace a file it did not write |
 | `evidencectl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Evidence Gateway authoring diagnostics for every document it indexes in the project, not only the open one | Open a socket, contact a source, read source values, or observe SQLite |
 
-`tooling editor` writes ten files into the project:
+`tooling editor` writes twelve files into the project:
 
 ```text
 .evidence-editor/manifest.json
@@ -264,13 +264,15 @@ production candidate input.
 .evidence-editor/schemas/mock-plan.schema.json
 .evidence-editor/schemas/project-marker.schema.json
 .evidence-editor/schemas/question.schema.json
+.evidence-editor/schemas/selector.schema.json
+.evidence-editor/schemas/source.schema.json
 .evidence-editor/schemas/target-settings.schema.json
 .vscode/extensions.json
 .vscode/settings.json
 .zed/settings.json
 ```
 
-Commit all ten with the rest of the project. They are generated, nonsecret configuration matched to
+Commit all twelve with the rest of the project. They are generated, nonsecret configuration matched to
 the schemas the checks apply, and the `.gitignore` that `evidencectl init` writes excludes `secrets/`
 and `.evidence/` only. A later run refreshes exactly what an earlier run recorded writing. A managed
 file someone has edited by hand stops the command, which names that file and changes nothing.

@@ -1,5 +1,8 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/source/source.v1alpha1.schema.json
 # A source: where a fact comes from and every bound the reading runs under.
 # The question names this file; it never reaches past what is declared here.
+apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
 
 # The transport decides the shape of the rest of this file. `sqlite-extract`
 # reads one published extract file through one fixed statement.

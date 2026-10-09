@@ -37,8 +37,8 @@ and the ceiling each is read under.
 | `evidence-project.yaml` | The project marker | 1 MiB |
 | `source.openapi.yaml` | OpenAPI description required by inline operations | 16 MiB |
 | `questions/` | Authored questions, one YAML document each | 1 MiB per document, 1 to 128 when compiled |
-| `sources/` | Source definitions a question may name instead of an inline operation | 1 MiB |
-| `selectors/` | Selector definitions | 1 MiB |
+| `sources/` | Source definitions a question may name instead of an inline operation, each under the header `apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1` and `kind: EvidenceSource` | 1 MiB |
+| `selectors/` | Selector definitions, each under the header `apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1` and `kind: EvidenceSelector` | 1 MiB |
 | `derivations/` | Authored derivation programs, one Rhai file each | 64 KiB |
 | `schemas/` | Schemas a structured answer may name | 1 MiB |
 | `fixtures/` | Recorded request and response pairs a project is replayed against | 1 MiB |

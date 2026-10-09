@@ -329,7 +329,9 @@ pub fn question_with_plural_subjects() -> String {
 
 pub const DERIVATION: &str = "fn answer(facts, selectors, context) {\n    #{is_adult: true}\n}\n";
 
-pub const SOURCE: &str = r#"transport: http-json
+pub const SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: https://source.invalid
 posture: field-projected
 authentication: {kind: static-bearer, tokenRef: 'secret:file/source-token'}
@@ -356,7 +358,7 @@ extractScript: <|extract-script|>adapters/people-extract.rhai
 factSchema: <|fact-schema|>schemas/people-facts.schema.yaml
 "#;
 
-pub const SELECTOR: &str = "maximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n";
+pub const SELECTOR: &str = "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nmaximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n";
 
 pub const SCHEMA: &str = "type: object\nadditionalProperties: false\n";
 

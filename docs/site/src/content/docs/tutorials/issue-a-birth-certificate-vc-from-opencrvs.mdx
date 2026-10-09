@@ -104,6 +104,8 @@ close the OpenCRVS-specific request and extraction decisions.
 Replace `sources/opencrvs-birth-certificate.yaml` with:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
 transport: http-json
 baseUrl: https://events.farajaland-integration.opencrvs.dev
 posture: record-transformed

@@ -931,7 +931,9 @@ impl Fixture {
         .expect("retained OpenAPI");
         fs::write(
             project.join("selectors/subject-reference-v1.yaml"),
-            "maximumAggregateBytes: 128\nfields:\n  reference: {type: string, minimumBytes: 1, maximumBytes: 128}\n",
+            "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 128\nfields:\n  reference: {type: string, minimumBytes: 1, maximumBytes: 128}\n",
         )
         .expect("selector profile");
         fs::write(project.join("sources/registry.yaml"), SOURCE).expect("source");
@@ -1380,7 +1382,9 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-const SOURCE: &str = r#"transport: http-json
+const SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: https://registry.invalid
 posture: field-projected
 authentication: {kind: static-authorization, tokenRef: 'secret:file/source-token'}
@@ -1406,7 +1410,9 @@ extractScript: adapters/source-extract.rhai
 factSchema: schemas/facts.schema.yaml
 "#;
 
-const SQLITE_SOURCE: &str = r#"transport: sqlite-extract
+const SQLITE_SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: sqlite-extract
 posture: source-derived
 extractProfile: registry-snapshot
 maximumExtractAgeSeconds: 86400

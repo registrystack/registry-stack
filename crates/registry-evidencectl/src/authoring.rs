@@ -23,9 +23,12 @@ use serde_json::{json, Map, Value};
 use url::{Host, Url};
 
 use registry_evidence_authoring::formats::{
-    check_access_policy, check_question, diagnostic_near, scan_authored,
+    check_access_policy, check_question, diagnostic_near, read_envelope_body, scan_authored,
+    SELECTOR, SOURCE,
 };
-use registry_platform_yaml::{Document, ExternalId, LocalId, Node, NodeValue, Severity};
+use registry_platform_yaml::{
+    Document, ExternalId, FormatSpec, LocalId, Node, NodeValue, Severity,
+};
 
 use crate::authored::{self, Gathered};
 use crate::evidence_binary::{EVIDENCE_RUNTIME_API_VERSION, EVIDENCE_RUNTIME_KIND};
@@ -1051,16 +1054,23 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
         project_root,
         SELECTORS_DIRECTORY,
         "selector profile",
+        Some(&SELECTOR),
         &mut gathered,
     )?);
     let sources = named_values(read_named_documents(
         project_root,
         SOURCES_DIRECTORY,
         "source",
+        Some(&SOURCE),
         &mut gathered,
     )?);
-    let schema_documents =
-        read_named_documents(project_root, SCHEMAS_DIRECTORY, "schema", &mut gathered)?;
+    let schema_documents = read_named_documents(
+        project_root,
+        SCHEMAS_DIRECTORY,
+        "schema",
+        None,
+        &mut gathered,
+    )?;
     let schemas = schema_documents
         .iter()
         .map(|(id, named)| (id.clone(), named.value.clone()))
@@ -1603,9 +1613,16 @@ fn read_named_objects(
     project_root: &Path,
     directory_name: &str,
     description: &str,
+    format: &FormatSpec<'_>,
 ) -> Result<BTreeMap<String, Value>> {
     let mut gathered = Gathered::default();
-    let documents = read_named_documents(project_root, directory_name, description, &mut gathered)?;
+    let documents = read_named_documents(
+        project_root,
+        directory_name,
+        description,
+        Some(format),
+        &mut gathered,
+    )?;
     gathered.checkpoint()?;
     Ok(named_values(documents))
 }
@@ -1618,12 +1635,15 @@ fn named_values(documents: BTreeMap<String, NamedDocument>) -> BTreeMap<String, 
 }
 
 /// Read every `<id>.yaml` under `directory_name` through the shared reader,
-/// gathering what each one departs from. A selector, source, or schema has no
-/// envelope, so each must be a YAML mapping and nothing more is checked here.
+/// gathering what each one departs from. A selector or source is read by its
+/// envelope `format` and returned without the header; a schema is a foreign
+/// JSON Schema file with no envelope, so `format` is `None` and it must only be
+/// a YAML mapping.
 fn read_named_documents(
     project_root: &Path,
     directory_name: &str,
     description: &str,
+    format: Option<&FormatSpec<'_>>,
     gathered: &mut Gathered,
 ) -> Result<BTreeMap<String, NamedDocument>> {
     let directory = project_root.join(directory_name);
@@ -1679,7 +1699,19 @@ fn read_named_documents(
                 continue;
             }
         };
-        let value = node.to_json_value();
+        let value = match format {
+            Some(format) => match read_envelope_body(&file, &bytes, format) {
+                Ok(decoded) => {
+                    gathered.extend(decoded.document.warnings());
+                    decoded.value
+                }
+                Err(report) => {
+                    gathered.extend(report);
+                    continue;
+                }
+            },
+            None => node.to_json_value(),
+        };
         objects.insert(id.to_owned(), NamedDocument { file, node, value });
     }
     Ok(objects)
@@ -2041,7 +2073,7 @@ pub(crate) fn source_connection_users(
     connection: &str,
 ) -> Result<Vec<String>> {
     Ok(
-        read_named_objects(project_root, SOURCES_DIRECTORY, "source")?
+        read_named_objects(project_root, SOURCES_DIRECTORY, "source", &SOURCE)?
             .into_iter()
             .filter_map(|(id, source)| {
                 (source.get("connection").and_then(Value::as_str) == Some(connection)).then_some(id)
@@ -2071,8 +2103,13 @@ pub(crate) fn target_bound_sources(project_root: &Path) -> Result<Vec<TargetBoun
 fn validate_source_artifact_graph_with_target_bindings(
     project_root: &Path,
 ) -> Result<Vec<TargetBoundSource>> {
-    let selectors = read_named_objects(project_root, SELECTORS_DIRECTORY, "selector profile")?;
-    let sources = read_named_objects(project_root, SOURCES_DIRECTORY, "source")?;
+    let selectors = read_named_objects(
+        project_root,
+        SELECTORS_DIRECTORY,
+        "selector profile",
+        &SELECTOR,
+    )?;
+    let sources = read_named_objects(project_root, SOURCES_DIRECTORY, "source", &SOURCE)?;
     let mut target_bound_sources = Vec::new();
     for (source_id, source) in &sources {
         if source.get("connection").is_none() {
@@ -5874,7 +5911,7 @@ properties:
         }
         fs::write(
             fixture.project.join("sources/people.yaml"),
-            "transport: http-json\nfactSchema: schemas/people-facts.yaml\n",
+            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nfactSchema: schemas/people-facts.yaml\n",
         )
         .expect("source");
         let facts = |closed: bool, name: &str| {
@@ -6322,14 +6359,18 @@ values: [under-18, adult]
             fs::write(
                 fixture.project.join(format!("selectors/{profile}.yaml")),
                 format!(
-                    "maximumAggregateBytes: 64\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 64\n"
+                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 64\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 64\n"
                 ),
             )
             .expect("selector profile");
         }
         fs::write(
             fixture.project.join("sources/people.yaml"),
-            r#"transport: http-json
+            r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: https://records.example.test
 posture: field-projected
 authentication: {kind: static-authorization, tokenRef: 'secret:file/records-token'}
@@ -6360,7 +6401,9 @@ factSchema: schemas/source-facts.schema.yaml
         .expect("people source");
         fs::write(
             fixture.project.join("sources/relationships.yaml"),
-            r#"transport: http-json
+            r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: https://relationships.example.test
 posture: field-projected
 authentication: {kind: static-authorization, tokenRef: 'secret:file/relationships-token'}
@@ -7009,7 +7052,7 @@ factSchema: schemas/source-facts.schema.yaml
         let referenced = QUESTION.replace(inline, "source:\n  ref: people\n");
         let question = parsed_question(&referenced);
         let source: Value = serde_norway::from_str(&format!(
-            "transport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\nauthentication: {{kind: none}}\n{REFERENCED_SOURCE_TAIL}"
+            "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\nauthentication: {{kind: none}}\n{REFERENCED_SOURCE_TAIL}"
         ))
         .unwrap();
         let sources = BTreeMap::from([("people".to_owned(), source)]);
@@ -7597,7 +7640,9 @@ fn prepare(selectors, context) {
             serde_norway::to_string(&question).unwrap(),
         )
         .unwrap();
-        fs::write(fixture.project.join("selectors/person-composite-v1.yaml"), "maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n  region: {type: integer, minimum: 1, maximum: 99}\n").unwrap();
+        fs::write(fixture.project.join("selectors/person-composite-v1.yaml"), "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 220\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n  region: {type: integer, minimum: 1, maximum: 99}\n").unwrap();
         let source_path = fixture.project.join("sources/people.yaml");
         let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
         source["baseUrl"] = json!("http://127.0.0.1:8082");
@@ -7875,13 +7920,15 @@ factSchema: schemas/people-facts.schema.yaml
         }
         fs::write(
             fixture.project.join("selectors/person-reference-v1.yaml"),
-            "maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n",
+            "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n",
         )
         .expect("selector");
         fs::write(
             fixture.project.join("sources/people.yaml"),
             format!(
-                "transport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\n{authentication}{REFERENCED_SOURCE_TAIL}"
+                "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\n{authentication}{REFERENCED_SOURCE_TAIL}"
             ),
         )
         .expect("source");
@@ -7968,7 +8015,7 @@ factSchema: schemas/people-facts.schema.yaml
 
     #[test]
     fn referenced_http_source_without_an_authentication_declaration_is_refused() {
-        for authentication in ["", "authentication:\n"] {
+        for authentication in [""] {
             let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
             write_referenced_people_project(&fixture, authentication);
 
@@ -7989,10 +8036,28 @@ mapping naming the `kind:` its channel uses, in sources/people.yaml",
     }
 
     #[test]
+    fn a_null_authentication_in_a_source_is_refused_by_the_shared_reader() {
+        for authentication in ["authentication:\n", "authentication: {kind: null}\n"] {
+            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+            write_referenced_people_project(&fixture, authentication);
+
+            let error =
+                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+                    .expect_err("a null is never a value")
+                    .to_string();
+
+            assert!(
+                error.starts_with("error[config.null-value] sources/people.yaml:"),
+                "{authentication:?}: {error}"
+            );
+            assert!(fixture.staging_is_empty());
+        }
+    }
+
+    #[test]
     fn referenced_http_source_with_an_unnamed_authentication_kind_is_refused() {
         for authentication in [
             "authentication: {}\n",
-            "authentication: {kind: null}\n",
             "authentication: {kind: 3}\n",
             "authentication: {kind: ' '}\n",
             "authentication: basic\n",
@@ -8113,14 +8178,18 @@ disclosure:
             fs::write(
                 fixture.project.join(format!("selectors/{name}.yaml")),
                 format!(
-                    "maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"
+                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"
                 ),
             )
             .expect("selector");
         }
         fs::write(
             fixture.project.join("sources/family-record.yaml"),
-            r#"transport: http-json
+            r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: https://records.example.test
 posture: field-projected
 authentication: {kind: static-authorization, tokenRef: 'secret:file/records-token'}
@@ -8629,7 +8698,9 @@ factSchema: schemas/family-facts.schema.yaml
                     let profile = format!("{role}-alt-{index:02}-v1");
                     fs::write(
                         fixture.project.join(format!("selectors/{profile}.yaml")),
-                        format!("maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"),
+                        format!("apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 200\nfields:\n  {field}:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n"),
                     )
                     .expect("selector profile");
                     profile

@@ -131,6 +131,11 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
     let source: Value =
         serde_norway::from_str(&std::fs::read_to_string(&source_path).expect("read source object"))
             .expect("source object parses");
+    assert_eq!(
+        source["apiVersion"],
+        "id.registrystack.org/formats/evidence/source/v1alpha1"
+    );
+    assert_eq!(source["kind"], "EvidenceSource");
     assert_eq!(source["transport"], "http-json");
     assert!(
         source.get("sources").is_none(),

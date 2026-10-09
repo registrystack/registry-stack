@@ -26,9 +26,10 @@ use anyhow::{Context as _, Result};
 use jsonschema::{Draft, JSONSchema};
 use registry_evidence_authoring::{
     formats::{
-        check_access_policy, check_question, decode_authored, scan_authored, ACCESS_CLIENT_KIND,
-        ACCESS_POLICY_KIND, AUTHORING_PROJECT_KIND, MOCK_PLAN_KIND, QUESTION_KIND,
-        TARGET_GOVERNANCE, TARGET_GOVERNANCE_KIND, TARGET_SETTINGS, TARGET_SETTINGS_KIND,
+        check_access_policy, check_question, decode_authored, read_envelope_body,
+        ACCESS_CLIENT_KIND, ACCESS_POLICY_KIND, AUTHORING_PROJECT_KIND, MOCK_PLAN_KIND,
+        QUESTION_KIND, SELECTOR, SOURCE, TARGET_GOVERNANCE, TARGET_GOVERNANCE_KIND,
+        TARGET_SETTINGS, TARGET_SETTINGS_KIND,
     },
     layout::{
         ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, DERIVATIONS_DIRECTORY, FIXTURES_DIRECTORY,
@@ -38,7 +39,8 @@ use registry_evidence_authoring::{
     parse_project_marker, PROJECT_MARKER_FILE,
 };
 use registry_platform_yaml::{
-    Diagnostic, Document, Node, NodeValue, Reader, Report, Severity, MAXIMUM_DOCUMENT_BYTES,
+    Diagnostic, Document, FormatSpec, Node, NodeValue, Reader, Report, Severity,
+    MAXIMUM_DOCUMENT_BYTES,
 };
 use serde_json::{json, Value};
 
@@ -1584,22 +1586,24 @@ fn inspect_project(project: &Path, gathered: &mut Gathered) -> Result<ProjectInv
         .iter()
         .map(|(file, value)| describe_question(&file_id(file), value))
         .collect();
-    let source_documents = authored_documents(project, SOURCES_DIRECTORY, gathered, scanned)?;
+    let source_documents =
+        authored_documents(project, SOURCES_DIRECTORY, gathered, enveloped(&SOURCE))?;
     let sources = source_documents
         .iter()
         .map(|(file, value)| describe_source(&file_id(file), value))
         .collect();
-    let selectors = authored_documents(project, SELECTORS_DIRECTORY, gathered, scanned)?
-        .iter()
-        .map(|(file, value)| {
-            let fields = value
-                .get("fields")
-                .and_then(Value::as_object)
-                .map(|fields| fields.keys().cloned().collect::<Vec<_>>())
-                .unwrap_or_default();
-            json!({"id": file_id(file), "fields": fields})
-        })
-        .collect();
+    let selectors =
+        authored_documents(project, SELECTORS_DIRECTORY, gathered, enveloped(&SELECTOR))?
+            .iter()
+            .map(|(file, value)| {
+                let fields = value
+                    .get("fields")
+                    .and_then(Value::as_object)
+                    .map(|fields| fields.keys().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                json!({"id": file_id(file), "fields": fields})
+            })
+            .collect();
     let derivations = regular_files(project, DERIVATIONS_DIRECTORY, "rhai", gathered)?
         .iter()
         .map(|file| json!({"id": file_id(file), "path": file}))
@@ -1987,10 +1991,12 @@ fn check_runtime_file(file: &str, bytes: &[u8]) -> Report {
 /// the reader found in it, or every problem that refused it.
 type Read = std::result::Result<(Value, Report), Report>;
 
-/// A file read through the shared YAML subset alone, for a format whose
-/// grammar the compiler holds.
-fn scanned(file: &str, bytes: &[u8]) -> Read {
-    scan_authored(file, bytes).map(|node| (authored::node_value(node), Report::default()))
+/// A selector or source read by its envelope, returned without the header.
+fn enveloped(format: &'static FormatSpec<'static>) -> impl Fn(&str, &[u8]) -> Read {
+    move |file, bytes| {
+        read_envelope_body(file, bytes, format)
+            .map(|decoded| (decoded.value, decoded.document.warnings()))
+    }
 }
 
 /// A file checked as one enveloped authored format, every member decoded.
@@ -2347,7 +2353,9 @@ mod tests {
         sqlite_template(temporary.path());
         fs::write(
             temporary.path().join("sources/record-status.yaml"),
-            r#"transport: http-json
+            r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 connection: records
 posture: field-projected
 request:
