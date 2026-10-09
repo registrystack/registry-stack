@@ -926,6 +926,18 @@ mod tests {
         assert_eq!(parsed.role, AccessRole::Operator);
     }
 
+    /// An explicit `actorKind: null` is refused, not read as the omitted
+    /// member: omit the member to accept any actor kind.
+    #[test]
+    fn a_null_actor_kind_is_refused() {
+        let mut value = document(json!({}));
+        value["actorKind"] = json!(null);
+        assert_eq!(
+            read(value).unwrap_err(),
+            vec![("config.null-value".to_owned(), "/actorKind".to_owned())]
+        );
+    }
+
     #[test]
     fn required_scopes_are_unrestricted_or_listed_never_empty() {
         let parsed = read(document(json!({"requiredScopes": "unrestricted"}))).unwrap();
