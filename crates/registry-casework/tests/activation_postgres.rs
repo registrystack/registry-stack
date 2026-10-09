@@ -1398,7 +1398,11 @@ async fn an_apply_waiting_for_a_runtime_directory_lock_holds_no_migration_lock()
     fixture
         .client
         .batch_execute(
-            "DROP TABLE casework_activations; DELETE FROM casework_schema_migrations WHERE version=19",
+            "DROP INDEX casework_review_task_queue_position_idx; \
+             DROP INDEX casework_review_task_assigned_position_idx; \
+             DROP INDEX casework_review_accountability_task_idx; \
+             DROP TABLE casework_activations; \
+             DELETE FROM casework_schema_migrations WHERE version>=19;",
         )
         .await
         .expect("return the schema to version 18");
@@ -1443,7 +1447,7 @@ async fn an_apply_waiting_for_a_runtime_directory_lock_holds_no_migration_lock()
     );
     let applied = applied.expect("the first apply adopts the migrated database");
     assert_eq!(applied.activation.plan_kind, PlanKind::Initial);
-    assert_eq!(applied.schema_versions_applied, [19]);
+    assert_eq!(applied.schema_versions_applied, [19, 20]);
 }
 
 /// A runtime role that owns a Casework table can attach a trigger that fires
