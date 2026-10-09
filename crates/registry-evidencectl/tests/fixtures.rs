@@ -240,6 +240,11 @@ fn fixture_selection_runs_only_one_exact_referenced_fixture() {
         serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
     assert_eq!(report["passed"], serde_json::Value::Bool(true));
     assert_eq!(report["evaluatedCases"], serde_json::json!(3));
+    assert_eq!(
+        report["diagnostics"],
+        serde_json::json!([]),
+        "a passing run states its empty diagnostics list"
+    );
     let fixtures = report["fixtures"].as_array().expect("fixtures array");
     assert_eq!(fixtures.len(), 1);
     assert_eq!(fixtures[0]["path"], "fixtures/a.yaml");

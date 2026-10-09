@@ -146,8 +146,8 @@ pub(crate) struct RunReport {
     /// coverage: a project with four fixture files reports the same `5 passed`
     /// whether those files hold four cases or forty.
     pub(crate) evaluated_cases: usize,
-    /// Why a run whose every step passed still failed, with the next step.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// Why a run whose every step passed still failed, with the next step;
+    /// empty when the run passed.
     diagnostics: Vec<JsonValue>,
 }
 
