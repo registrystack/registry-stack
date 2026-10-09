@@ -366,8 +366,10 @@ pub enum ReplayError {
     UnknownWindow { case: String, window: String },
     #[error("case name {case} is used more than once; case names identify claims")]
     DuplicateCaseName { case: String },
-    #[error("case {case} reschedules claim {claim}, which no claim in the ledger carries")]
-    UnknownRescheduleTarget { case: String, claim: String },
+    #[error(
+        "case {case} sets rescheduleOf to a claim identifier that no claim in the ledger carries"
+    )]
+    UnknownRescheduleTarget { case: String },
     #[error(
         "case {case} targets offering {offering}, whose mode block is absent; the policy does \
          not pass its check"
@@ -666,7 +668,6 @@ fn replay_case(
         if !snapshot.claims.iter().any(|claim| claim.id == target) {
             return Err(CaseStoppage::Replay(ReplayError::UnknownRescheduleTarget {
                 case: case.name.clone(),
-                claim: target.to_owned(),
             }));
         }
     }
@@ -1108,7 +1109,6 @@ cases:
             fixture.replay(&policy),
             Err(ReplayError::UnknownRescheduleTarget {
                 case: fixture.cases[0].name.clone(),
-                claim: "booking-404".to_owned(),
             })
         );
     }

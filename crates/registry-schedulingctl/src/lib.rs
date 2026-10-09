@@ -1482,6 +1482,25 @@ mod tests {
         assert_eq!(report["diagnostics"][0]["path"], "/openings/0/startTime");
     }
 
+    /// A reschedule target no claim carries is an authoring error the
+    /// report names by member, never by the configured value.
+    #[test]
+    fn an_unknown_reschedule_target_is_reported_without_its_value() {
+        let (_root, project) = initialized("standalone-exact-time");
+        let fixture_path = project.join("fixtures/counter-stations.yaml");
+        let edited = std::fs::read_to_string(&fixture_path).unwrap().replacen(
+            "      policyRevision: 1\n",
+            "      policyRevision: 1\n      rescheduleOf: private/secret-marker\n",
+            1,
+        );
+        std::fs::write(&fixture_path, edited).unwrap();
+        let (exit, report, stderr) = run_json(&["test", project.to_str().unwrap()]);
+        assert_ne!(exit, ExitCode::SUCCESS);
+        let output = format!("{report}{}", String::from_utf8_lossy(&stderr));
+        assert!(!output.contains("secret-marker"), "{output}");
+        assert!(output.contains("rescheduleOf"), "{output}");
+    }
+
     #[test]
     fn a_failing_fixture_case_is_reported_and_exits_nonzero() {
         let (_root, project) = initialized("standalone-exact-time");
