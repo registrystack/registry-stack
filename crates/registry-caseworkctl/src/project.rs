@@ -3733,15 +3733,46 @@ mod tests {
             "{error}"
         );
         assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
-        assert!(error.contains("licensedActivities"), "{error}");
-        assert!(
-            error.contains("\"example-general-nursing-care\""),
-            "{error}"
-        );
-        assert!(error.contains("\"example-health-education\""), "{error}");
+        assert!(!error.contains("licensedActivities"), "{error}");
+        assert!(!error.contains("example-general-nursing-care"), "{error}");
+        assert!(!error.contains("\"example-health-education\""), "{error}");
         // A value both sides admit is not an offending value.
         assert!(!error.contains("\"example-assessment\""), "{error}");
         assert!(error.contains("hide"), "{error}");
+    }
+
+    #[test]
+    fn a_display_mismatch_reports_positions_and_reasons_never_authored_text() {
+        let marker = "CANARY CONFIG VALUE";
+        let description = description_with_field_schema(
+            "licensedActivities",
+            licensed_activities_schema(&[marker, "example-assessment"]),
+        );
+        let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains("contextProjection position"), "{error}");
+        for authored in [marker, "licensedActivities", "licensed-activities"] {
+            assert!(!error.contains(authored), "{error}");
+        }
+
+        let mut described: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
+        for field in described["request"]["fields"].as_array_mut().unwrap() {
+            field["schema"]["description"] = json!(marker);
+        }
+        let undeclared = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "",
+        );
+        let (_root, project) = write_offline_project(&undeclared, &described.to_string());
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("additionalProperties"), "{error}");
+        for authored in [marker, "supportingReference", "supporting-reference"] {
+            assert!(!error.contains(authored), "{error}");
+        }
     }
 
     // registrystack/registry-stack#1341: a source schema whose items enum
@@ -3764,11 +3795,8 @@ mod tests {
             "{error}"
         );
         assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
-        assert!(error.contains("licensedActivities"), "{error}");
-        assert!(
-            error.contains("\"example-general-nursing-care\""),
-            "{error}"
-        );
+        assert!(!error.contains("licensedActivities"), "{error}");
+        assert!(!error.contains("example-general-nursing-care"), "{error}");
         assert!(error.contains("hide"), "{error}");
     }
 
@@ -3802,8 +3830,8 @@ mod tests {
             "{error}"
         );
         assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
-        assert!(error.contains("supportingReference"), "{error}");
-        assert!(error.contains("supporting-reference"), "{error}");
+        assert!(!error.contains("supportingReference"), "{error}");
+        assert!(!error.contains("supporting-reference"), "{error}");
         assert!(error.contains("additionalProperties"), "{error}");
     }
 
@@ -3822,7 +3850,7 @@ mod tests {
             "{error}"
         );
         assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
-        assert!(error.contains("record"), "{error}");
+        assert!(!error.contains("record"), "{error}");
         assert!(error.contains("object"), "{error}");
         assert!(error.contains("string"), "{error}");
     }
@@ -3915,8 +3943,8 @@ mod tests {
             "{error}"
         );
         assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
-        assert!(error.contains("supportingReference"), "{error}");
-        assert!(error.contains("supporting-reference"), "{error}");
+        assert!(!error.contains("supportingReference"), "{error}");
+        assert!(!error.contains("supporting-reference"), "{error}");
         assert!(error.contains("additionalProperties"), "{error}");
     }
 
@@ -3946,7 +3974,7 @@ mod tests {
         );
         assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("allOf branch 1"), "{error}");
-        assert!(error.contains("authorizationConditions"), "{error}");
+        assert!(!error.contains("authorizationConditions"), "{error}");
         assert!(error.contains("number"), "{error}");
         assert!(error.contains("string"), "{error}");
     }
@@ -3967,7 +3995,7 @@ mod tests {
         );
         assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("allOf branch 1"), "{error}");
-        assert!(error.contains("authorizationConditions"), "{error}");
+        assert!(!error.contains("authorizationConditions"), "{error}");
         assert!(error.contains("additionalProperties"), "{error}");
         // The branch's other declared properties are compatible, so they
         // must not also be reported.
@@ -4043,8 +4071,8 @@ mod tests {
             "{error}"
         );
         assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
-        assert!(error.contains("supportingReference"), "{error}");
-        assert!(error.contains("supporting-reference"), "{error}");
+        assert!(!error.contains("supportingReference"), "{error}");
+        assert!(!error.contains("supporting-reference"), "{error}");
         assert!(error.contains("additionalProperties"), "{error}");
     }
 
@@ -4066,9 +4094,9 @@ mod tests {
             "{error}"
         );
         assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
-        assert!(error.contains("supportingReference"), "{error}");
+        assert!(!error.contains("supportingReference"), "{error}");
         assert!(error.contains("patternProperties"), "{error}");
-        assert!(error.contains("^supporting"), "{error}");
+        assert!(!error.contains("^supporting"), "{error}");
         assert!(error.contains("number"), "{error}");
         assert!(error.contains("string"), "{error}");
     }

@@ -3090,9 +3090,9 @@ mod tests {
 
         let error = format!("{error:#}");
         assert!(error.contains("review kind scope-correction"), "{error}");
-        assert!(error.contains("licensedActivities"), "{error}");
-        assert!(error.contains("\"example-community-nursing\""), "{error}");
-        assert!(!error.contains("\"example-assessment\""), "{error}");
+        assert!(error.contains("contextProjection position"), "{error}");
+        assert!(!error.contains("licensedActivities"), "{error}");
+        assert!(!error.contains("example-community-nursing"), "{error}");
         assert!(!description_path.exists());
     }
 

@@ -161,7 +161,7 @@ fn schema_mismatches(
     let closed = schema.get("additionalProperties") == Some(&Value::Bool(false));
     let prefix = label_prefix.map_or_else(String::new, |prefix| format!("{prefix}: "));
     let mut mismatches = Vec::new();
-    for logical in projection {
+    for (position, logical) in projection.iter().enumerate() {
         let Some(field) = fields.iter().find(|field| field["field"] == *logical) else {
             continue;
         };
@@ -172,20 +172,19 @@ fn schema_mismatches(
         let patterns = pattern_matches(schema, api_name);
         if declared.is_none() && closed && !patterns.admits {
             mismatches.push(format!(
-                "{prefix}property {api_name} (source field {logical}) is not declared, and additionalProperties: false rejects every disclosure that carries it; the source describes it as {source}"
+                "{prefix}the projected field at contextProjection position {position} is not declared, and additionalProperties: false rejects every disclosure that carries it"
             ));
             continue;
         }
         if let Some(property) = declared {
-            let label = format!("{prefix}property {api_name}");
-            if let Some(mismatch) = property_mismatch(&label, logical, property, source) {
+            let label = format!("{prefix}the displaySchema property");
+            if let Some(mismatch) = property_mismatch(&label, position, property, source) {
                 mismatches.push(mismatch);
             }
         }
-        for (pattern, pattern_schema) in patterns.definite {
-            let label =
-                format!("{prefix}patternProperties pattern {pattern} matching property {api_name}");
-            if let Some(mismatch) = property_mismatch(&label, logical, pattern_schema, source) {
+        for (_, pattern_schema) in patterns.definite {
+            let label = format!("{prefix}a patternProperties entry matching the property");
+            if let Some(mismatch) = property_mismatch(&label, position, pattern_schema, source) {
                 mismatches.push(mismatch);
             }
         }
@@ -220,15 +219,15 @@ fn allof_branch_mismatches(
     {
         let label = format!("allOf branch {}", index + 1);
         if branch == &Value::Bool(false) {
-            for logical in projection {
+            for (position, logical) in projection.iter().enumerate() {
                 let Some(field) = fields.iter().find(|field| field["field"] == *logical) else {
                     continue;
                 };
-                let Some(api_name) = field["apiName"].as_str() else {
+                if field["apiName"].as_str().is_none() {
                     continue;
-                };
+                }
                 mismatches.push(format!(
-                    "{label}: property {api_name} (source field {logical}) admits no value"
+                    "{label}: the projected field at contextProjection position {position} admits no value"
                 ));
             }
             continue;
@@ -287,9 +286,13 @@ fn pattern_matches<'a>(display: &'a Value, api_name: &str) -> PatternMatches<'a>
     PatternMatches { admits, definite }
 }
 
+/// One mismatch between a displayed property and the projected field at
+/// `position` in the request's `contextProjection`. The text names the
+/// position and a fixed reason, never a name, schema, or value read from an
+/// authored file.
 fn property_mismatch(
     label: &str,
-    logical: &str,
+    position: usize,
     property: &Value,
     source: &Value,
 ) -> Option<String> {
@@ -299,7 +302,9 @@ fn property_mismatch(
     let displayed = compile(property)?;
     let admitted = compile(source)?;
     if property == &Value::Bool(false) {
-        return Some(format!("{label} (source field {logical}) admits no value"));
+        return Some(format!(
+            "{label} for the projected field at contextProjection position {position} admits no value"
+        ));
     }
     if let (Some(displayed_types), Some(source_types)) =
         (json_types(property), source_json_types(source, 0))
@@ -310,14 +315,14 @@ fn property_mismatch(
                 .any(|shown| types_overlap(source, shown))
         }) {
             return Some(format!(
-                "{label} accepts type {}, but source field {logical} is {}",
+                "{label} for the projected field at contextProjection position {position} accepts type {}, but the source field is {}",
                 render_types(&displayed_types),
                 render_types(&source_types),
             ));
         }
     }
     let maximum_bytes = source.get("x-registry-maxBytes").and_then(Value::as_u64);
-    let mut rejected = Vec::new();
+    let mut rejected: Vec<Value> = Vec::new();
     for (value, witness_label) in witnesses(source, 0) {
         if admitted.is_valid(&value)
             && maximum_bytes.is_none_or(|maximum| encoded_len(&value) <= maximum)
@@ -331,12 +336,8 @@ fn property_mismatch(
         return None;
     }
     Some(format!(
-        "{label} rejects {} that source field {logical} admits",
-        rejected
-            .iter()
-            .map(Value::to_string)
-            .collect::<Vec<_>>()
-            .join(", ")
+        "{label} for the projected field at contextProjection position {position} rejects {} value(s) that the source field admits",
+        rejected.len()
     ))
 }
 
