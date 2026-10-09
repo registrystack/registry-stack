@@ -651,7 +651,10 @@ pub(super) fn check_runtime_config(
             checked["diagnostics"].as_array_mut(),
             report.to_json_value(),
         ) {
-            diagnostics.extend(warnings);
+            // The project check reads its own runtime example, which may be
+            // the file given: a finding it already holds is not repeated.
+            let reported = diagnostics.clone();
+            diagnostics.extend(warnings.into_iter().filter(|w| !reported.contains(w)));
         }
         if let Some(files) = checked["filesChecked"].as_u64() {
             checked["filesChecked"] = json!(files + 1);
@@ -672,7 +675,7 @@ pub(super) fn check_runtime_config(
             {
                 project.set_files_checked(files);
             }
-            project.extend(report);
+            project.extend(unreported(report, project.diagnostics()));
             project
         }
         Err(error) => match crate::configuration_report(&error) {
@@ -681,7 +684,7 @@ pub(super) fn check_runtime_config(
                 if project.files_checked().is_none() {
                     project.set_files_checked(1);
                 }
-                project.extend(report);
+                project.extend(unreported(report, project.diagnostics()));
                 project
             }
             None => return Err(error),
@@ -692,6 +695,24 @@ pub(super) fn check_runtime_config(
         unavailable: runtime.unavailable,
     }
     .into())
+}
+
+/// `report` without the diagnostics the project check already reported, so a
+/// runtime file that is the project's own example is not reported twice. The
+/// file count is kept.
+fn unreported(report: Report, reported: &[Diagnostic]) -> Report {
+    let files = report.files_checked();
+    let mut kept = Report::new(
+        report
+            .into_diagnostics()
+            .into_iter()
+            .filter(|diagnostic| !reported.contains(diagnostic))
+            .collect(),
+    );
+    if let Some(files) = files {
+        kept.set_files_checked(files);
+    }
+    kept
 }
 
 /// Read the runtime file at `path` as `scheduling serve` does. A refusal of
@@ -1206,6 +1227,27 @@ mod tests {
         assert!(error
             .chain()
             .any(|cause| cause.downcast_ref::<std::io::Error>().is_some()));
+    }
+
+    /// A runtime file that is the project's own example is read by the
+    /// project check too, and its diagnostics are reported once.
+    #[test]
+    fn check_runtime_config_reports_the_project_example_once() {
+        // The loader refuses a path through a symbolic link, and the system
+        // temporary directory is one on some hosts.
+        let (_root, project) = initialized("standalone-exact-time");
+        let project = project.canonicalize().unwrap();
+        edit(
+            &project,
+            "runtime.example.yaml",
+            "retention:\n",
+            "retention:\n  stray: 1\n",
+        );
+        let example = project.join("runtime.example.yaml");
+        let error = check_runtime_config(&project, &example, false, false, check(&project, false))
+            .unwrap_err();
+        let refused = refusals(&project, &error);
+        assert_eq!(refused.len(), 1, "{refused:?}");
     }
 
     #[test]
