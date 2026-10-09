@@ -8109,11 +8109,14 @@ journeys:
         else {
             panic!("an old receipt is refused");
         };
-        let [diagnostic] = report.diagnostics() else {
-            panic!("one diagnostic: {report:?}");
-        };
-        assert_eq!(diagnostic.code, "config.wrong-kind");
-        assert!(diagnostic.message.contains(RECEIPT_KIND));
+        let codes: Vec<&str> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_ref())
+            .collect();
+        assert_eq!(codes, ["config.retired-api-version", "config.wrong-kind"]);
+        let wrong_kind = &report.diagnostics()[1];
+        assert!(wrong_kind.message.contains(RECEIPT_KIND));
 
         let current =
             read_schema_test_receipt(RECEIPT_FILE, &receipt(RECEIPT_API_VERSION, RECEIPT_KIND))
