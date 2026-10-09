@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `schedulingctl check --runtime-config` is package-free by design (the
+  runtime file is checked against the project, as the other products' offline
+  checks are); its help and `RUNTIME-CONFIG.md` now say that `package.root` is
+  not read and that `scheduling serve` verifies the package at startup.
 - A refused `schedulingctl check` opens with
   `schedulingctl check refused the input.` and closes with the summary line,
   as the other check commands print it.

@@ -34,7 +34,8 @@ is refused with a diagnostic naming this one. So are the renamed keys
 `schedulingctl check PROJECT --runtime-config FILE` reads a runtime file the
 way startup does, against the project's policy, with no package, database,
 network, or secret material, and reports every refusal at its file, line,
-column, and JSON pointer. `--environment` fills the file's `${NAME}`
+column, and JSON pointer. It does not read `package.root`; `scheduling serve`
+verifies the package at startup. `--environment` fills the file's `${NAME}`
 expressions from the current environment first.
 
 `package.root` selects one directory. The runtime always loads

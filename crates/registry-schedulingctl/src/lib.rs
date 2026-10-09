@@ -91,7 +91,9 @@ struct CheckArgs {
     #[arg(long)]
     deny_warnings: bool,
     /// Runtime configuration to check offline against PROJECT, as scheduling
-    /// serve reads it, with no package, database, network, or secret material.
+    /// serve reads it, with no package, database, network, or secret material
+    /// (package.root is not read; scheduling serve verifies the package at
+    /// startup).
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
     /// Substitute the runtime file's environment variable expressions from
@@ -1678,6 +1680,22 @@ mod tests {
         assert!(text.contains(" /openings/0/startTime\n"), "{text}");
         assert!(text.contains("\n  next: "), "{text}");
         assert!(text.ends_with("1 error, 0 warnings in 4 files\n"), "{text}");
+    }
+
+    #[test]
+    fn check_help_says_the_runtime_check_does_not_read_the_package() {
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let exit = main_entry_from(
+            ["schedulingctl", "check", "--help"],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let help = String::from_utf8(stdout).unwrap().replace("\n  ", " ");
+        assert!(
+            help.contains("package.root is not read; scheduling serve verifies the package"),
+            "{help}"
+        );
     }
 
     #[test]
