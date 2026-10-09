@@ -304,6 +304,12 @@ Human output is unchanged.
 |---|---|---|
 | A client listed twice in `authentication.oidc.allowedClients` was accepted | `config.duplicate-item` at the second item, naming the first as a related position | List each client once. |
 
+## BREAKING: a repeated key in `schema.json` or `sample.json` is refused
+
+| Before | Now | Migration |
+|---|---|---|
+| An object key repeated in a template's `schema.json` or `sample.json` was accepted and the last value won | `messaging.template.schema-syntax` or `messaging.template.sample-syntax` at the line where the repeat is read | Keep one value for each key. |
+
 ## BREAKING: Rust API
 <!-- upgrade: no-file -->
 

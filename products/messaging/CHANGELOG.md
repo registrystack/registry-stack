@@ -8,6 +8,10 @@
 - A `template.yaml` or `provider.yaml` of up to 1 MiB, the shared YAML
   document bound, is read. The package no longer applies a 64 KiB bound to
   these two files; locale text, `schema.json`, and `sample.json` keep it.
+- BREAKING: an object key repeated at any depth in a template's `schema.json`
+  or `sample.json` is refused with `messaging.template.schema-syntax` or
+  `messaging.template.sample-syntax` at its line. Migration: keep one value
+  for each key.
 - BREAKING: a client listed twice in `authentication.oidc.allowedClients` is
   refused with `config.duplicate-item` at the second item. Migration: list
   each client once.

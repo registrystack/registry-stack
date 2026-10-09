@@ -916,16 +916,17 @@ impl PackageReader<'_> {
     }
 
     /// Read one JSON file beside a template. JSON is not an authored YAML
-    /// format: a file that is not JSON is noted as `syntax`, at the line
-    /// where it stops parsing, and yields nothing.
+    /// format: a file that is not JSON, or that repeats an object key at any
+    /// depth, is noted as `syntax`, at the line where it stops parsing, and
+    /// yields nothing.
     fn read_json(
         &mut self,
         path: &str,
         syntax: FindingReason,
     ) -> Result<Option<Value>, PackageLoadError> {
         let text = self.read_file(path, MAXIMUM_TEMPLATE_FILE_BYTES)?;
-        match serde_json::from_str(&text) {
-            Ok(value) => Ok(Some(value)),
+        match serde_json::from_str::<StrictJson>(&text) {
+            Ok(StrictJson(value)) => Ok(Some(value)),
             Err(error) => {
                 let mut diagnostic = MessagingFinding::new(syntax, "").to_unplaced_diagnostic();
                 diagnostic.source = Some(Source {
@@ -1069,6 +1070,77 @@ fn expect_directory(path: &str, kind: EntryKind) -> Result<(), PackageLoadError>
         Ok(())
     } else {
         Err(PackageLoadError::new(path, PackageLoadReason::Unexpected))
+    }
+}
+
+/// A JSON value read with every object key required to be unique, so a
+/// reviewer and the runtime see the same constraint.
+struct StrictJson(Value);
+
+impl<'de> serde::Deserialize<'de> for StrictJson {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visit;
+        impl<'de> serde::de::Visitor<'de> for Visit {
+            type Value = Value;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+
+            fn visit_bool<E>(self, v: bool) -> Result<Value, E> {
+                Ok(Value::Bool(v))
+            }
+
+            fn visit_i64<E>(self, v: i64) -> Result<Value, E> {
+                Ok(v.into())
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Value, E> {
+                Ok(v.into())
+            }
+
+            fn visit_f64<E>(self, v: f64) -> Result<Value, E> {
+                Ok(serde_json::Number::from_f64(v).map_or(Value::Null, Value::Number))
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Value, E> {
+                Ok(Value::String(v.to_owned()))
+            }
+
+            fn visit_unit<E>(self) -> Result<Value, E> {
+                Ok(Value::Null)
+            }
+
+            fn visit_none<E>(self) -> Result<Value, E> {
+                Ok(Value::Null)
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Value, A::Error> {
+                let mut items = Vec::new();
+                while let Some(StrictJson(item)) = seq.next_element()? {
+                    items.push(item);
+                }
+                Ok(Value::Array(items))
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Value, A::Error> {
+                let mut object = serde_json::Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    let StrictJson(value) = map.next_value()?;
+                    if object.insert(key, value).is_some() {
+                        return Err(serde::de::Error::custom("repeated object key"));
+                    }
+                }
+                Ok(Value::Object(object))
+            }
+        }
+        deserializer.deserialize_any(Visit).map(StrictJson)
     }
 }
 
@@ -1522,6 +1594,39 @@ pub(crate) mod tests {
             .as_ref()
             .and_then(|source| source.line);
         assert_eq!(line, Some(2));
+    }
+
+    /// A repeated object key in `schema.json` or `sample.json` is refused at
+    /// its line, instead of the last value winning over the one a reviewer
+    /// read first, at any depth.
+    #[test]
+    fn a_repeated_key_in_a_template_json_file_is_refused() {
+        for (file, syntax, text) in [
+            (
+                SCHEMA_FILE,
+                "messaging.template.schema-syntax",
+                "{\n  \"type\": \"object\",\n  \"properties\": {\"name\": {\"type\": \"string\", \"maxLength\": 10,\n    \"maxLength\": 100000}}\n}",
+            ),
+            (
+                SAMPLE_FILE,
+                "messaging.template.sample-syntax",
+                "{\"name\": \"a\",\n \"name\": \"b\"}",
+            ),
+        ] {
+            let root = starter_copy();
+            std::fs::write(root.path().join(REMINDER).join(file), text).unwrap();
+            assert_eq!(
+                refused_codes(root.path()),
+                [(syntax.to_owned(), format!("{REMINDER}/{file}"), String::new())],
+                "{file}"
+            );
+            let error = refusal(root.path());
+            let line = error.report().unwrap().diagnostics()[0]
+                .source
+                .as_ref()
+                .and_then(|source| source.line);
+            assert!(line.is_some_and(|line| line >= 2), "{file}: {line:?}");
+        }
     }
 
     #[test]
