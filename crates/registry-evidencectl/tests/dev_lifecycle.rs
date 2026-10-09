@@ -39,7 +39,9 @@ paths:
                   date_of_birth: {type: string, format: date}
 "#;
 
-const QUESTION: &str = r#"id: adult-status
+const QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: adult-status
 question: Is the person at least 18 years old?
 purpose: age-check
 subject:
@@ -824,7 +826,7 @@ impl Project {
 
     fn dev_clean(&self) -> Output {
         evidencectl()
-            .args(["dev", "clean", "--project"])
+            .args(["dev", "clean"])
             .arg(&self.root)
             .output()
             .expect("dev clean")
