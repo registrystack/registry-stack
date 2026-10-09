@@ -1446,7 +1446,7 @@ pub(crate) mod tests {
             let path = root.path().join(&file);
             let mut bytes = std::fs::read(&path).unwrap();
             let padding = MAXIMUM_DOCUMENT_BYTES - bytes.len();
-            bytes.extend(std::iter::repeat(b'#').take(padding - 1));
+            bytes.extend(std::iter::repeat_n(b'#', padding - 1));
             bytes.push(b'\n');
             assert_eq!(bytes.len(), MAXIMUM_DOCUMENT_BYTES);
             std::fs::write(&path, bytes).unwrap();
