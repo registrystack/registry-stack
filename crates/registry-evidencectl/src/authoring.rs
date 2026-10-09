@@ -5019,7 +5019,7 @@ fn consume_string_sequence(characters: &mut Peekable<Chars<'_>>) -> bool {
 }
 
 fn yaml_bytes(value: &Value) -> Result<Vec<u8>> {
-    let mut text = serde_norway::to_string(value).context("serializing generated YAML")?;
+    let mut text = crate::authored::to_indented_yaml(value)?;
     if !text.ends_with('\n') {
         text.push('\n');
     }
@@ -5061,6 +5061,15 @@ fn escape_pointer_segment(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_yaml_indents_sequences_beneath_their_keys() {
+        let bytes = yaml_bytes(&json!({"required": ["a", "b"]})).unwrap();
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            "required:\n  - a\n  - b\n"
+        );
+    }
     use crate::evidence_binary::retry_busy_stub;
     use std::{
         io::Write as _,
