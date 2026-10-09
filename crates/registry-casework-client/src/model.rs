@@ -91,6 +91,18 @@ pub struct ReviewTaskQuery {
     pub limit: Option<usize>,
 }
 
+/// Bounded discovery of the current principal's retained authored decisions.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnReviewDecisionQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
 /// Bounded supervisory discovery over the queues the selected profile serves.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -122,7 +134,7 @@ pub enum ReviewResultResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{ReviewTaskQuery, SupervisoryReviewTaskQuery};
+    use super::{OwnReviewDecisionQuery, ReviewTaskQuery, SupervisoryReviewTaskQuery};
     use registry_casework_core::ReviewTaskOwnership;
     use serde_json::json;
 
@@ -148,6 +160,28 @@ mod tests {
             "ownership": "unclaimed"
         }))
         .is_err());
+    }
+
+    #[test]
+    fn own_decision_query_accepts_only_bounded_discovery_selectors() {
+        let query = OwnReviewDecisionQuery {
+            queue: Some("review".to_owned()),
+            cursor: Some(uuid::Uuid::from_u128(9)),
+            limit: Some(25),
+        };
+        let wire = serde_json::to_value(&query).unwrap();
+        assert_eq!(
+            serde_json::from_value::<OwnReviewDecisionQuery>(wire).unwrap(),
+            query
+        );
+        for wire in [
+            json!({"cursor": "not-a-uuid"}),
+            json!({"ownership": "assigned_to_me"}),
+            json!({"author": "colleague"}),
+            json!({"limit": -1}),
+        ] {
+            assert!(serde_json::from_value::<OwnReviewDecisionQuery>(wire).is_err());
+        }
     }
 
     #[test]

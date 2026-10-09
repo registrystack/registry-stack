@@ -433,6 +433,7 @@ export interface ReviewPageQuery { cursor?: Uuid; limit?: SafeInteger }
 export type ReviewTaskOwnership = 'assigned_to_me' | 'unclaimed'
 export interface ReviewTaskQuery extends ReviewPageQuery { queue?: string; ownership?: ReviewTaskOwnership }
 export interface SupervisoryReviewTaskQuery extends ReviewPageQuery { queue?: string; requestId?: Uuid }
+export interface OwnReviewDecisionQuery extends ReviewPageQuery { queue?: string }
 export interface WorkItemHistoryQuery { cursor?: string; limit?: SafeInteger }
 export type ReviewerTaskState = 'open' | { held: { holder: IssuerPrincipal } } | 'decided'
 export type ReviewDecisionType = 'approve' | 'reject' | 'changes_requested' | 'answer'
@@ -440,8 +441,17 @@ export interface ReviewDecisionReceipt {
   policy: ReviewPolicyBinding
   decision: ReviewDecisionType
   outcome?: string
+  outcomeLabel?: string
   decidedAt: string
 }
+export interface OwnReviewDecision {
+  taskId: Uuid
+  requestId: Uuid
+  queue: string
+  requesterReference: string
+  decisionReceipt: ReviewDecisionReceipt
+}
+export interface OwnReviewDecisionPage { items: ReadonlyArray<OwnReviewDecision>; nextCursor?: Uuid; status: PageStatus }
 export interface ReviewerTask {
   taskId: Uuid
   requestId: Uuid
@@ -509,6 +519,7 @@ export interface ReviewAccountabilityRecord {
   eventId: Uuid; requestId: Uuid; taskId: Uuid; actorRef: string; actor: IssuerPrincipal
   profileId: string; decision: string; privateReason?: string; resultDigest?: string
   occurredAt: string; retainedUntil: string
+  decisionReceipt?: ReviewDecisionReceipt
 }
 export interface ReviewStagePolicy { id: string; queue: string; decidingProfiles: ReadonlyArray<string>; requiredApprovals: SafeInteger; excludeInitiator?: boolean; excludePreviousStageReviewers?: boolean }
 export interface ReviewRetentionPolicy { terminalDays: SafeInteger; accountabilityDays: SafeInteger }
@@ -536,6 +547,7 @@ export class CaseworkClient {
   reviewKind(token: string, profile: string, kindId: string): Promise<CaseworkOutcome<ReviewKindPolicySnapshot>>
   reviewTasks(token: string, profile: string, query?: ReviewTaskQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskPage>>
   supervisoryReviewTasks(token: string, profile: string, query?: SupervisoryReviewTaskQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<SupervisoryReviewTaskPage>>
+  ownReviewDecisions(token: string, profile: string, query?: OwnReviewDecisionQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<OwnReviewDecisionPage>>
   reviewTask(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewerTask>>
   reviewTaskContext(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskContext>>
   previewReviewTaskTemplates(token: string, profile: string, sourceProfile: string, taskId: Uuid): Promise<CaseworkOutcome<TaskTemplatePreviews>>

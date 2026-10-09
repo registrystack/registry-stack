@@ -47,6 +47,8 @@ REVIEW_OPERATION_DTO_INVENTORY = {
         "200",
         "SupervisoryReviewTaskPage",
     ),
+    ("get", "/v1/review-tasks/own-decisions"): ("200", "OwnReviewDecisionPage"),
+    ("get", "/v1/review-accountability/{event_id}"): ("200", "ReviewAccountabilityRecord"),
     ("get", "/v1/review-tasks/{task_id}"): ("200", "ReviewerTask"),
     ("get", "/v1/review-tasks/{task_id}/context"): ("200", "ReviewTaskContext"),
 }
@@ -205,12 +207,22 @@ class GeneratedOpenApiTests(unittest.TestCase):
             ["policy", "decision", "decidedAt"], receipt["required"]
         )
         self.assertEqual(
-            {"not": {"required": ["outcome"]}},
+            {"not": {"anyOf": [{"required": ["outcome"]}, {"required": ["outcomeLabel"]}]}},
             receipt["allOf"][0]["then"],
         )
         self.assertEqual(
             {"required": ["outcome"]}, receipt["allOf"][1]["then"]
         )
+        self.assertEqual(120, receipt["properties"]["outcomeLabel"]["maxLength"])
+        own_decision = schemas["OwnReviewDecision"]
+        self.assertEqual(
+            {"taskId", "requestId", "queue", "requesterReference", "decisionReceipt"},
+            set(own_decision["properties"]),
+        )
+        self.assertEqual(set(own_decision["properties"]), set(own_decision["required"]))
+        accountability = schemas["ReviewAccountabilityRecord"]
+        self.assertEqual({"$ref": "#/components/schemas/ReviewDecisionReceipt"}, accountability["properties"]["decisionReceipt"])
+        self.assertNotIn("decisionReceipt", accountability["required"])
         self.assertEqual(
             (0, GENERATOR.MAXIMUM_PORTABLE_JSON_INTEGER),
             (
@@ -233,6 +245,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             "/v1/review-results",
             "/v1/review-tasks",
             "/v1/review-tasks/supervision",
+            "/v1/review-tasks/own-decisions",
             "/v1/review-requests/{request_id}/history",
         ):
             with self.subTest(cursor_path=path):

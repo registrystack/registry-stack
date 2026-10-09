@@ -57,6 +57,10 @@ class ConstructionTests(unittest.TestCase):
             lambda: client.supervisory_review_tasks(
                 "valid-token", "supervisor", {"ownership": "unclaimed"}
             ),
+            *(lambda query=query: client.own_review_decisions(
+                "valid-token", "staff", query
+            ) for query in ({"author": "colleague"}, {"ownership": "assigned_to_me"},
+                            {"cursor": "not-a-uuid"}, {"limit": 0}, {"limit": 101})),
             *(lambda request_id=request_id: client.supervisory_review_tasks(
                 "valid-token", "supervisor", {"requestId": request_id}
             ) for request_id in ("", "not-a-uuid", 42, {}, [])),

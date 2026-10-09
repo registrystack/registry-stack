@@ -19,13 +19,13 @@ use registry_casework_core::{
     DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
     DirectoryTargetsQuery, DraftResponse, EventRequest, HistoryPage, HoldingsQuery,
     HolidaySetDocument, HolidaySetRevisionInput, ListWorkItemsQuery, MutationResponse,
-    NextWorkItemQuery, QueueRecord, RecoverAttemptRequest, ReviewAccountabilityRecord,
-    ReviewCancelRequest, ReviewCreateRequest, ReviewHistoryEntry, ReviewHistoryPage,
-    ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewPageQuery, ReviewRequestView,
-    ReviewResultFeedPage, ReviewTaskContext, ReviewTaskDraft, ReviewTaskDraftInput,
-    ReviewTaskOwnership, ReviewTaskPage, ReviewValidationError, ReviewValidationReason,
-    ReviewerTask, SaveDraftRequest, SupervisoryReviewTaskPage, ATTEMPT_REFERENCE_HEADER,
-    CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER, IF_MATCH_HEADER,
+    NextWorkItemQuery, OwnReviewDecisionPage, QueueRecord, RecoverAttemptRequest,
+    ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCreateRequest, ReviewHistoryEntry,
+    ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewPageQuery,
+    ReviewRequestView, ReviewResultFeedPage, ReviewTaskContext, ReviewTaskDraft,
+    ReviewTaskDraftInput, ReviewTaskOwnership, ReviewTaskPage, ReviewValidationError,
+    ReviewValidationReason, ReviewerTask, SaveDraftRequest, SupervisoryReviewTaskPage,
+    ATTEMPT_REFERENCE_HEADER, CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER, IF_MATCH_HEADER,
     MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES, SOURCE_PROFILE_HEADER,
     VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
 };
@@ -81,6 +81,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/v1/review-kinds/{kind_id}", get(review_kind_description))
         .route("/v1/review-results", get(review_result_feed))
         .route("/v1/review-tasks", get(review_tasks))
+        .route("/v1/review-tasks/own-decisions", get(own_review_decisions))
         .route(
             "/v1/review-tasks/supervision",
             get(supervisory_review_tasks),
@@ -491,6 +492,36 @@ async fn review_tasks(
                 token,
                 query.queue.as_deref(),
                 query.ownership,
+                query.cursor,
+                page_limit(&state, query.limit)?,
+            )
+            .await?,
+    ))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OwnReviewDecisionQuery {
+    queue: Option<String>,
+    cursor: Option<Uuid>,
+    limit: Option<usize>,
+}
+
+async fn own_review_decisions(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<OwnReviewDecisionQuery>,
+) -> Result<Json<OwnReviewDecisionPage>, HttpError> {
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .own_review_decisions(
+                &actor,
+                source_profile_id,
+                token,
+                query.queue.as_deref(),
                 query.cursor,
                 page_limit(&state, query.limit)?,
             )

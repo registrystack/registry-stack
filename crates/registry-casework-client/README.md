@@ -14,6 +14,21 @@ accountability references, and its state is a holder-free string. A single decid
 recovery exposes the caller's own decision without private reasons or result
 data.
 
+`own_review_decisions(auth, &OwnReviewDecisionQuery)` discovers the caller's
+retained decisions after a fresh sign-in. Optional queue, limit and continuation
+select a bounded page ordered newest decision first. Each `OwnReviewDecision`
+contains task/request ids, current queue, the retained producer
+`requester_reference`, and the same own `decision_receipt` a single task read
+returns. Current deciding profile, team, queue, source and result retention
+checks apply; prior holding is not authorship.
+
+Receipts include the optional `outcome_label` from the decision's pinned policy,
+so later policy edits cannot relabel a selection. Approval has no outcome or
+label. The separately audited Supervisor `review_accountability` read also
+exposes that receipt through accountability retention, after result erasure.
+Legacy non-approval selections erased before upgrade omit the receipt rather
+than infer an outcome. No context or structured result is added to either read.
+
 Set `SupervisoryReviewTaskQuery::request_id` to the canonical request UUID to
 find a shared request before pagination. It composes with queue, limit and
 continuation, and the client rejects a response row for another request.

@@ -2,6 +2,9 @@
 
 use std::env;
 
+use chrono::{TimeDelta, Utc};
+use registry_casework::{DatabaseConfig, PostgresStore};
+use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Error, NoTls};
@@ -75,6 +78,7 @@ struct TestSchema {
     admin: Client,
     database: Client,
     schema: String,
+    scoped_url: String,
 }
 
 impl TestSchema {
@@ -111,6 +115,7 @@ impl TestSchema {
             admin,
             database,
             schema,
+            scoped_url: scoped,
         }
     }
 
@@ -136,7 +141,11 @@ async fn apply_full_migration_sequence(database: &mut Client) {
         .await
         .expect("create migration ledger");
 
-    for (version, migration) in MIGRATIONS {
+    apply_migrations(database, MIGRATIONS).await;
+}
+
+async fn apply_migrations(database: &mut Client, migrations: &[(i64, &str)]) {
+    for (version, migration) in migrations {
         let transaction = database.transaction().await.expect("begin migration");
         transaction
             .batch_execute(migration)
@@ -303,6 +312,231 @@ async fn insert_review_task(database: &Client, task_id: Uuid, request_id: Uuid) 
         )
         .await
         .expect("insert review task fixture");
+}
+
+#[tokio::test]
+async fn migration_21_backfills_only_retained_legacy_decision_outcomes() {
+    let mut fixture = TestSchema::create("review_outcome_backfill").await;
+    apply_full_migration_sequence(&mut fixture.database).await;
+    apply_migrations(
+        &mut fixture.database,
+        &[
+            (
+                16,
+                include_str!("../migrations/0016_occurrence_identity_excludes_superseded.sql"),
+            ),
+            (17, include_str!("../migrations/0017_audit_writer.sql")),
+            (
+                18,
+                include_str!("../migrations/0018_source_reconciliation_health.sql"),
+            ),
+            (19, include_str!("../migrations/0019_activations.sql")),
+            (
+                20,
+                include_str!("../migrations/0020_review_task_discovery_indexes.sql"),
+            ),
+        ],
+    )
+    .await;
+    assert_eq!(
+        fixture
+            .database
+            .query_one("SELECT max(version) FROM casework_schema_migrations", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        20
+    );
+    let outcome_column_exists: bool = fixture
+        .database
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM pg_attribute
+             WHERE attrelid='casework_review_accountability'::regclass
+               AND attname='outcome' AND NOT attisdropped)",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(!outcome_column_exists, "seed the actual pre-upgrade schema");
+
+    let now = Utc::now();
+    let mut cases = Vec::new();
+    for (name, decision, outcome, expired, erased) in [
+        ("retained-confirm", "answer", Some("confirm"), false, false),
+        ("retained-return", "answer", Some("return"), false, false),
+        ("expired-unerased", "answer", Some("confirm"), true, false),
+        ("erased", "answer", Some("return"), true, true),
+        ("approve", "approve", None, false, false),
+    ] {
+        let request_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let event_id = Uuid::new_v4();
+        insert_review_request(&fixture.database, request_id, false).await;
+        insert_review_task(&fixture.database, task_id, request_id).await;
+        let terminal_at = now - TimeDelta::days(if expired { 91 } else { 1 });
+        let available_until = terminal_at + TimeDelta::days(90);
+        let retained_until = terminal_at + TimeDelta::days(365);
+        let lifecycle = if decision == "approve" {
+            "approved"
+        } else {
+            "answered"
+        };
+        fixture
+            .database
+            .execute(
+                "UPDATE casework_review_requests
+                 SET lifecycle=$2,active_stage_index=NULL,created_at=$3::timestamptz-interval '1 hour',
+                     updated_at=$3,terminal_at=$3,result_available_until=$4,
+                     accountability_retained_until=$5
+                 WHERE request_id=$1",
+                &[
+                    &request_id,
+                    &lifecycle,
+                    &terminal_at,
+                    &available_until,
+                    &retained_until,
+                ],
+            )
+            .await
+            .expect("set consistent legacy result and accountability windows");
+        fixture
+            .database
+            .execute(
+                "UPDATE casework_review_tasks
+                 SET state='decided',holder_issuer='https://issuer.test',holder_subject='reviewer',
+                     assignment_kind='claim',created_at=$2::timestamptz-interval '1 hour',updated_at=$2,settled_at=$2
+                 WHERE task_id=$1",
+                &[&task_id, &terminal_at],
+            )
+            .await
+            .unwrap();
+        fixture
+            .database
+            .execute(
+                "INSERT INTO casework_review_decisions(
+                     decision_id,request_id,task_id,stage_index,actor_issuer,actor_subject,
+                     profile_id,decision,outcome,decided_at)
+                 VALUES($1,$2,$3,0,'https://issuer.test','reviewer','staff',$4,$5,$6)",
+                &[
+                    &Uuid::new_v4(),
+                    &request_id,
+                    &task_id,
+                    &decision,
+                    &outcome,
+                    &terminal_at,
+                ],
+            )
+            .await
+            .unwrap();
+        fixture
+            .database
+            .execute(
+                "INSERT INTO casework_review_accountability(
+                     event_id,request_id,task_id,queue_id,actor_ref,actor_issuer,actor_subject,
+                     profile_id,decision,occurred_at,retained_until)
+                 VALUES($1,$2,$3,'review','actor-reference','https://issuer.test','reviewer',
+                        'staff',$4,$5,$6)",
+                &[
+                    &event_id,
+                    &request_id,
+                    &task_id,
+                    &decision,
+                    &terminal_at,
+                    &retained_until,
+                ],
+            )
+            .await
+            .unwrap();
+        if erased {
+            // Schema 20 erasure removed task/decision data but retained the
+            // minimized accountability row through its independent window.
+            fixture
+                .database
+                .execute(
+                    "DELETE FROM casework_review_tasks WHERE task_id=$1",
+                    &[&task_id],
+                )
+                .await
+                .unwrap();
+            fixture
+                .database
+                .execute(
+                    "UPDATE casework_review_requests SET context='{}'::jsonb,result_erased_at=$2
+                     WHERE request_id=$1",
+                    &[&request_id, &now],
+                )
+                .await
+                .unwrap();
+        }
+        cases.push((name, event_id, task_id, outcome, expired, erased));
+    }
+
+    let secret_name =
+        format!("CASEWORK_REVIEW_MIGRATION_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    env::set_var(&secret_name, &fixture.scoped_url);
+    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp").unwrap();
+    let config = DatabaseConfig {
+        runtime_url_ref: format!("secret:env/{secret_name}"),
+        migration_url_ref: format!("secret:env/{secret_name}"),
+        trusted_root_certificate_ref: None,
+        test_only_plaintext: true,
+    };
+    let store = PostgresStore::connect_migration(&config, &secrets).unwrap();
+    env::remove_var(&secret_name);
+    store
+        .migrate()
+        .await
+        .expect("migrate actual schema 20 to 21");
+    store.ready().await.expect("the migrated ledger is current");
+
+    for (name, event_id, task_id, original_outcome, expired, erased) in cases {
+        let row = fixture
+            .database
+            .query_one(
+                "SELECT a.outcome,a.retained_until>now(),d.outcome,r.result_erased_at IS NOT NULL
+                 FROM casework_review_accountability a
+                 JOIN casework_review_requests r USING(request_id)
+                 LEFT JOIN casework_review_decisions d ON d.task_id=a.task_id
+                 WHERE a.event_id=$1 AND a.task_id=$2",
+                &[&event_id, &task_id],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            row.get::<_, Option<String>>(0).as_deref(),
+            if expired { None } else { original_outcome },
+            "legacy backfill for {name} must not recover an expired selection or guess an approval outcome"
+        );
+        assert!(
+            row.get::<_, bool>(1),
+            "accountability for {name} is still retained"
+        );
+        assert_eq!(
+            row.get::<_, Option<String>>(2).as_deref(),
+            if erased { None } else { original_outcome },
+            "{name} must distinguish expired-but-unerased data from erased data"
+        );
+        assert_eq!(row.get::<_, bool>(3), erased);
+    }
+    store
+        .migrate()
+        .await
+        .expect("a second migration is a no-op");
+    let versions: Vec<i64> = fixture
+        .database
+        .query(
+            "SELECT version FROM casework_schema_migrations ORDER BY version",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(versions, (1..=21).collect::<Vec<_>>());
+    drop(store);
+    fixture.cleanup().await;
 }
 
 #[tokio::test]

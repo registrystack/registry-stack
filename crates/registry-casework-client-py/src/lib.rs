@@ -15,10 +15,10 @@ use casework_client_sdk::{
     CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure, ClockRecomputeApplyRequest,
     ClockRecomputeRequest, DecideRequest, DelegateRequest, DirectoryTargetsQuery,
     DirectoryTeamUpdateRequest, HoldingsQuery, HolidaySetRevisionInput, ListWorkItemsQuery,
-    NextWorkItemQuery, RecoverAttemptRequest, ReviewCancelRequest, ReviewCreateRequest,
-    ReviewNoteRequest, ReviewPageQuery, ReviewRequestAccepted, ReviewResultResponse,
-    ReviewTaskDecisionRequest, ReviewTaskDraftInput, ReviewTaskQuery, SaveDraftRequest,
-    SubmissionDigest, SupervisoryReviewTaskQuery, WorkItemHistoryQuery,
+    NextWorkItemQuery, OwnReviewDecisionQuery, RecoverAttemptRequest, ReviewCancelRequest,
+    ReviewCreateRequest, ReviewNoteRequest, ReviewPageQuery, ReviewRequestAccepted,
+    ReviewResultResponse, ReviewTaskDecisionRequest, ReviewTaskDraftInput, ReviewTaskQuery,
+    SaveDraftRequest, SubmissionDigest, SupervisoryReviewTaskQuery, WorkItemHistoryQuery,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -596,6 +596,28 @@ impl CaseworkClient {
             py.detach(|| {
                 self.runtime
                     .block_on(self.inner.review_kind(auth(&token, profile, None), kind_id))
+            }),
+        )
+    }
+
+    #[pyo3(signature = (token, profile, query=None, source_profile=None))]
+    fn own_review_decisions<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        query: Option<&Bound<'py, PyAny>>,
+        source_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let query: OwnReviewDecisionQuery = optional_input(py, query)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .own_review_decisions(auth(&token, profile, source_profile), &query),
+                )
             }),
         )
     }

@@ -26,6 +26,16 @@ const supervisoryLookup: casework.SupervisoryReviewTaskQuery = {
   requestId: '00000000-0000-0000-0000-000000000009', queue: 'review', limit: 25,
 }
 void caseworkClient.supervisoryReviewTasks('header.payload.signature', 'supervisor', supervisoryLookup)
+const ownLookup: casework.OwnReviewDecisionQuery = { queue: 'review', limit: 25 }
+void caseworkClient.ownReviewDecisions('header.payload.signature', 'staff', ownLookup).then((page) => {
+  const row: casework.OwnReviewDecision | undefined = page.value.items[0]
+  const pinnedLabel: string | undefined = row?.decisionReceipt.outcomeLabel
+  void pinnedLabel
+})
+void caseworkClient.reviewAccountability('header.payload.signature', 'supervisor', '00000000-0000-0000-0000-000000000009').then((record) => {
+  const selected: casework.ReviewDecisionReceipt | undefined = record.value.decisionReceipt
+  void selected
+})
 const reviewer = { issuer: 'https://idp.example.invalid/', subject: 'reviewer' }
 void caseworkClient.assignReviewTask(
   'header.payload.signature', 'supervisor', 'task-1', 1, 'assign-1',

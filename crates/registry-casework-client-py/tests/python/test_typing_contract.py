@@ -115,6 +115,18 @@ class TypingContractTests(unittest.TestCase):
             receipt_fields,
             {"policy": "ReviewPolicyBinding", "decision": "ReviewDecisionType", "decidedAt": "str"},
         )
+        self.assertEqual(
+            {node.target.id for node in classes["_ReviewDecisionReceiptOptional"].body if isinstance(node, ast.AnnAssign)},
+            {"outcome", "outcomeLabel"},
+        )
+        self.assertEqual(
+            {node.target.id for node in classes["OwnReviewDecision"].body if isinstance(node, ast.AnnAssign)},
+            {"taskId", "requestId", "queue", "requesterReference", "decisionReceipt"},
+        )
+        self.assertEqual(
+            {node.target.id for node in classes["_ReviewAccountabilityRecordOptional"].body if isinstance(node, ast.AnnAssign)},
+            {"decisionReceipt", "privateReason", "resultDigest"},
+        )
         draft_fields = {
             node.target.id: ast.unparse(node.annotation)
             for node in classes["ReviewTaskDraft"].body
@@ -335,6 +347,7 @@ class TypingContractTests(unittest.TestCase):
         for page_name, optional_name, required in (
             ("ReviewResultFeedPage", "_ReviewResultFeedPageOptional", {"items"}),
             ("ReviewTaskPage", "_ReviewTaskPageOptional", {"items", "status"}),
+            ("OwnReviewDecisionPage", "_OwnReviewDecisionPageOptional", {"items", "status"}),
             (
                 "SupervisoryReviewTaskPage",
                 "_SupervisoryReviewTaskPageOptional",

@@ -3294,7 +3294,8 @@ async fn decision_receipts_disclose_only_the_callers_retained_pinned_outcome_ove
     );
     assert_eq!(receipt.outcome.as_deref(), Some("found"));
     let receipt_wire = serde_json::to_value(receipt).expect("receipt wire");
-    assert_eq!(receipt_wire.as_object().expect("receipt object").len(), 4);
+    assert_eq!(receipt_wire.as_object().expect("receipt object").len(), 5);
+    assert_eq!(receipt_wire["outcomeLabel"], "Found");
     assert!(receipt_wire.get("privateReason").is_none());
     assert!(receipt_wire.get("reason").is_none());
     assert!(receipt_wire.get("result").is_none());
@@ -3494,6 +3495,201 @@ async fn an_excluded_initiator_and_a_missing_initiator_get_their_own_problem_cod
     let (status, claimed) = send(claim(colleague_token(&idp), "claim-colleague")).await;
     assert_eq!(status, StatusCode::OK, "{claimed}");
 
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn own_decision_discovery_and_audited_outcomes_are_minimal_over_http() {
+    let idp = MockIdp::start().await;
+    let mut policy = project(&idp.issuer());
+    policy.review_kinds[1].outcomes = [("confirm", "Confirm"), ("return", "Return for correction")]
+        .into_iter()
+        .map(|(id, label)| ReviewOutcomePolicy {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            settlement: ReviewOutcomeSettlement::Answered,
+            reason_required: true,
+            result_required: true,
+        })
+        .collect();
+    policy
+        .access_profiles
+        .push(profile("other-staff", CaseworkRole::Staff));
+    let (app, service, _, _, _, _, database) = app_with_project(&idp, policy).await;
+    let (client, server) = native_review_client(app.clone()).await;
+    let reviewer = human_token(&idp, "reviewer", "staff");
+    let mut rows = Vec::new();
+    for (code, label) in [("confirm", "Confirm"), ("return", "Return for correction")] {
+        let (accepted, task) =
+            create_answer_task(&app, &database, &idp, &format!("BATCH-{code}")).await;
+        client
+            .claim_review_task(
+                CaseworkAuth::new(&reviewer, "staff"),
+                task,
+                1,
+                &format!("claim-{code}"),
+            )
+            .await
+            .unwrap();
+        client
+            .decide_review_task(
+                CaseworkAuth::new(&reviewer, "staff"),
+                task,
+                2,
+                &format!("decide-{code}"),
+                &registry_casework_client::ReviewTaskDecisionRequest {
+                    decision: ReviewerDecisionKind::Answer {
+                        outcome: code.to_owned(),
+                        reason: Some("OWN_REASON_CANARY".to_owned()),
+                        result: Some(json!({"answer": "PRODUCER_RESULT_CANARY"})),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        let event: Uuid = database
+            .query_one(
+                "SELECT event_id FROM casework_review_accountability WHERE task_id=$1",
+                &[&task],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        rows.push((accepted, task, event, code, label));
+    }
+    let fresh = human_token(&idp, "reviewer", "staff");
+    let first = client
+        .own_review_decisions(
+            CaseworkAuth::new(&fresh, "staff"),
+            &registry_casework_client::OwnReviewDecisionQuery {
+                queue: Some("review".to_owned()),
+                limit: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(first.items.len(), 1);
+    assert_eq!(first.items[0].task_id, rows[1].1);
+    assert_eq!(first.items[0].requester_reference, "BATCH-return");
+    let wire = serde_json::to_value(&first.items[0]).unwrap();
+    assert_eq!(wire.as_object().unwrap().len(), 5);
+    assert!(!wire.to_string().contains("CANARY"));
+    assert_eq!(
+        wire["decisionReceipt"]["outcomeLabel"],
+        "Return for correction"
+    );
+    let second = client
+        .own_review_decisions(
+            CaseworkAuth::new(&fresh, "staff"),
+            &registry_casework_client::OwnReviewDecisionQuery {
+                queue: Some("review".to_owned()),
+                limit: Some(1),
+                cursor: first.next_cursor,
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(second.items[0].task_id, rows[0].1);
+    assert_eq!(second.next_cursor, None);
+    let own = client
+        .review_task(CaseworkAuth::new(&fresh, "staff"), rows[0].1)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        own.decision_receipt,
+        Some(second.items[0].decision_receipt.clone())
+    );
+    let colleague = human_token(&idp, "colleague", "staff");
+    let wrong = human_token(&idp, "reviewer", "other-staff");
+    for auth in [
+        CaseworkAuth::new(&colleague, "staff"),
+        CaseworkAuth::new(&wrong, "other-staff"),
+    ] {
+        assert!(client
+            .own_review_decisions(auth, &Default::default())
+            .await
+            .unwrap()
+            .value
+            .items
+            .is_empty());
+    }
+    let administrator = human_token(&idp, "reviewer", "administrator");
+    assert_client_status(
+        client
+            .own_review_decisions(
+                CaseworkAuth::new(&administrator, "administrator"),
+                &Default::default(),
+            )
+            .await
+            .unwrap_err(),
+        403,
+    );
+    let supervisor = human_token(&idp, "supervisor", "supervisor");
+    for (accepted, task, event, code, label) in &rows {
+        let record = client
+            .review_accountability(CaseworkAuth::new(&supervisor, "supervisor"), *event)
+            .await
+            .unwrap()
+            .value;
+        let receipt = record.decision_receipt.unwrap();
+        assert_eq!(receipt.policy, accepted.policy);
+        assert_eq!(receipt.outcome.as_deref(), Some(*code));
+        assert_eq!(receipt.outcome_label.as_deref(), Some(*label));
+        assert_eq!(receipt.decided_at, record.occurred_at);
+        assert_eq!(
+            receipt,
+            client
+                .review_task(CaseworkAuth::new(&fresh, "staff"), *task)
+                .await
+                .unwrap()
+                .value
+                .decision_receipt
+                .unwrap()
+        );
+    }
+    assert_client_status(
+        client
+            .own_review_decisions(
+                CaseworkAuth::new(&colleague, "staff"),
+                &registry_casework_client::OwnReviewDecisionQuery {
+                    cursor: first.next_cursor,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+        410,
+    );
+    let ids = rows.iter().map(|row| row.0.request_id).collect::<Vec<_>>();
+    database.execute("UPDATE casework_review_requests SET terminal_at=now()-interval '91 days',result_available_until=now()-interval '1 day' WHERE request_id=ANY($1)", &[&ids]).await.unwrap();
+    assert!(client
+        .own_review_decisions(CaseworkAuth::new(&fresh, "staff"), &Default::default())
+        .await
+        .unwrap()
+        .value
+        .items
+        .is_empty());
+    service.erase_expired_reviews().await.unwrap();
+    assert!(client
+        .own_review_decisions(CaseworkAuth::new(&fresh, "staff"), &Default::default())
+        .await
+        .unwrap()
+        .value
+        .items
+        .is_empty());
+    assert!(client
+        .review_accountability(CaseworkAuth::new(&supervisor, "supervisor"), rows[0].2)
+        .await
+        .unwrap()
+        .value
+        .decision_receipt
+        .is_some());
+    server.abort();
     idp.stop().await;
 }
 

@@ -5,16 +5,16 @@ use registry_casework_core::{
     check_task_holder, evaluate_activity_clock, record_review_decision, resolve_absence_cover,
     submission_digest, AbsenceRecord, ActorContext, AssignmentRequest, CalendarPolicy,
     CaseworkRole, ClockPolicy, ContentDigest, DelegateRequest, EphemeralCredential,
-    HolidaySetDocument, IssuerPrincipal, PageStatus, PolicyBinding, ReminderOccurrence,
-    ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse, ReviewClockCorrelation,
-    ReviewClockOccurrence, ReviewClockState, ReviewCreateRequest, ReviewDecisionError,
-    ReviewDecisionReceipt, ReviewDecisionType, ReviewDecisionValidationError,
-    ReviewHistoryAudience, ReviewHistoryEntry, ReviewHistoryPage, ReviewKindPolicySnapshot,
-    ReviewNoteRequest, ReviewProgress, ReviewRequestAccepted, ReviewRequestLifecycle,
-    ReviewRequestView, ReviewResult, ReviewResultFeedEntry, ReviewResultFeedPage,
-    ReviewResultStatus, ReviewSettlement, ReviewSourceBindingStatus, ReviewSourceProjection,
-    ReviewStagePolicy, ReviewTaskContext, ReviewTaskContextData, ReviewTaskDraft,
-    ReviewTaskDraftInput, ReviewTaskOwnership, ReviewTaskPage, ReviewTransition,
+    HolidaySetDocument, IssuerPrincipal, OwnReviewDecision, OwnReviewDecisionPage, PageStatus,
+    PolicyBinding, ReminderOccurrence, ReviewAccountabilityRecord, ReviewCancelRequest,
+    ReviewCancelResponse, ReviewClockCorrelation, ReviewClockOccurrence, ReviewClockState,
+    ReviewCreateRequest, ReviewDecisionError, ReviewDecisionReceipt, ReviewDecisionType,
+    ReviewDecisionValidationError, ReviewHistoryAudience, ReviewHistoryEntry, ReviewHistoryPage,
+    ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewProgress, ReviewRequestAccepted,
+    ReviewRequestLifecycle, ReviewRequestView, ReviewResult, ReviewResultFeedEntry,
+    ReviewResultFeedPage, ReviewResultStatus, ReviewSettlement, ReviewSourceBindingStatus,
+    ReviewSourceProjection, ReviewStagePolicy, ReviewTaskContext, ReviewTaskContextData,
+    ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskOwnership, ReviewTaskPage, ReviewTransition,
     ReviewValidationError, ReviewerDecision, ReviewerDecisionKind, ReviewerTask, ReviewerTaskState,
     SourceAdapterError, SourceContextBinding, StepOccurrence, SubjectBinding, SubjectRef,
     SupervisoryReviewTask, SupervisoryReviewTaskPage, SupervisoryReviewTaskState,
@@ -37,6 +37,7 @@ const REVIEW_RETENTION_BATCH_SIZE: i64 = 100;
 enum ReviewTaskListView {
     Reviewer(Option<ReviewTaskOwnership>),
     Supervision(Option<Uuid>),
+    OwnDecisions,
 }
 
 impl ReviewTaskListView {
@@ -47,15 +48,23 @@ impl ReviewTaskListView {
     fn ownership(self) -> Option<ReviewTaskOwnership> {
         match self {
             Self::Reviewer(ownership) => ownership,
-            Self::Supervision(_) => None,
+            Self::Supervision(_) | Self::OwnDecisions => None,
         }
     }
 
     fn request_id(self) -> Option<Uuid> {
         match self {
-            Self::Reviewer(_) => None,
+            Self::Reviewer(_) | Self::OwnDecisions => None,
             Self::Supervision(request_id) => request_id,
         }
+    }
+
+    fn is_own_decisions(self) -> bool {
+        matches!(self, Self::OwnDecisions)
+    }
+
+    fn needs_current_scan_scope(self) -> bool {
+        self.request_id().is_some() || self.is_own_decisions()
     }
 }
 
@@ -66,6 +75,8 @@ struct ReviewTaskScanContext<'a> {
     role: CaseworkRole,
     supervisory: bool,
     ownership: Option<ReviewTaskOwnership>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    own_decisions: Option<bool>,
     queue: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     request_id: Option<Uuid>,
@@ -502,6 +513,42 @@ impl CaseworkService {
         })
     }
 
+    pub async fn own_review_decisions(
+        &self,
+        actor: &ActorContext,
+        source_profile_id: Option<&str>,
+        token: &str,
+        queue: Option<&str>,
+        cursor: Option<Uuid>,
+        limit: usize,
+    ) -> Result<OwnReviewDecisionPage, ReviewRuntimeError> {
+        let page = self
+            .review_task_page(
+                actor,
+                source_profile_id,
+                token,
+                queue,
+                ReviewTaskListView::OwnDecisions,
+                cursor,
+                limit,
+            )
+            .await?;
+        let ids = page
+            .items
+            .iter()
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>();
+        let items = self
+            .store
+            .own_review_decision_rows(actor, queue, &ids)
+            .await?;
+        Ok(OwnReviewDecisionPage {
+            items,
+            next_cursor: page.next_cursor,
+            status: page.status,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn review_task_page(
         &self,
@@ -526,6 +573,7 @@ impl CaseworkService {
             role: actor.role,
             supervisory: view.is_supervisory(),
             ownership: view.ownership(),
+            own_decisions: view.is_own_decisions().then_some(true),
             queue,
             request_id: view.request_id(),
             source_profile: source_profile_id,
@@ -627,7 +675,7 @@ impl CaseworkService {
                         .review_task_by_activity(
                             actor,
                             task.task_id,
-                            !view.is_supervisory(),
+                            matches!(view, ReviewTaskListView::Reviewer(_)),
                             view.is_supervisory(),
                         )
                         .await
@@ -636,6 +684,8 @@ impl CaseworkService {
                         // Recheck both before releasing the current row.
                         Ok(current)
                             if queue.is_none_or(|queue| current.queue == queue)
+                                && (!view.is_own_decisions()
+                                    || current.decision_receipt.is_some())
                                 && review_task_matches_ownership(
                                     &current,
                                     actor,
@@ -653,7 +703,7 @@ impl CaseworkService {
                         ) => {
                             // Losing one task does not conceal its siblings.
                             // Complete neutrally only if current scope is empty.
-                            if view.request_id().is_some()
+                            if view.needs_current_scan_scope()
                                 && self
                                     .store
                                     .review_tasks(actor, queue, view, None, 1)
@@ -739,7 +789,7 @@ impl CaseworkService {
                 // A task can leave scope during source I/O without the whole
                 // request disappearing. Do not checkpoint an invalid anchor or
                 // infer an empty lookup from that task alone.
-                let anchor_in_scope = if view.request_id().is_some() {
+                let anchor_in_scope = if view.needs_current_scan_scope() {
                     match self
                         .store
                         .review_task_cursor_position(actor, queue, view, anchor)
@@ -1910,6 +1960,13 @@ impl PostgresStore {
         if queue.is_some_and(str::is_empty) {
             return Err(ReviewRuntimeError::Invalid);
         }
+        if view.is_own_decisions() {
+            let rows = self
+                .own_review_decision_rows(actor, queue, &[task_id])
+                .await?;
+            let row = rows.first().ok_or(ReviewRuntimeError::ResultExpired)?;
+            return Ok((row.decision_receipt.decided_at, task_id));
+        }
         let membership = match actor.role {
             CaseworkRole::Staff => "staff",
             CaseworkRole::Supervisor => "supervisor",
@@ -1960,6 +2017,9 @@ impl PostgresStore {
     ) -> Result<ReviewTaskPage, ReviewRuntimeError> {
         if limit == 0 || limit > 100 || queue.is_some_and(str::is_empty) {
             return Err(ReviewRuntimeError::Invalid);
+        }
+        if view.is_own_decisions() {
+            return self.own_review_tasks(actor, queue, cursor, limit).await;
         }
         let membership = match actor.role {
             CaseworkRole::Staff => "staff",
@@ -2035,6 +2095,135 @@ impl PostgresStore {
             next_cursor,
             status: PageStatus::Complete,
         })
+    }
+
+    async fn own_review_tasks(
+        &self,
+        actor: &ActorContext,
+        queue: Option<&str>,
+        cursor: Option<Uuid>,
+        limit: usize,
+    ) -> Result<ReviewTaskPage, ReviewRuntimeError> {
+        let membership = match actor.role {
+            CaseworkRole::Staff => "staff",
+            CaseworkRole::Supervisor => "supervisor",
+            _ => return Err(ReviewRuntimeError::Forbidden),
+        };
+        let position = match cursor {
+            Some(id) => Some(
+                self.review_task_cursor_position(
+                    actor,
+                    queue,
+                    ReviewTaskListView::OwnDecisions,
+                    id,
+                )
+                .await?,
+            ),
+            None => None,
+        };
+        let client = self.client().await?;
+        let rows = client
+            .query(
+                "SELECT t.task_id,t.request_id,t.stage_index,t.stage_id,t.queue_id,t.state,
+                    t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot
+             FROM casework_review_decisions d
+             JOIN casework_review_tasks t ON t.task_id=d.task_id
+             JOIN casework_review_requests r ON r.request_id=t.request_id
+             WHERE d.actor_issuer=$1 AND d.actor_subject=$2 AND t.state='decided'
+               AND r.result_erased_at IS NULL
+               AND (r.lifecycle='reviewing' OR r.result_available_until>now())
+               AND EXISTS (SELECT 1 FROM casework_queue_service q
+                   JOIN casework_memberships m ON m.team_id=q.team_id
+                   WHERE q.queue_id=t.queue_id AND m.issuer=$1 AND m.subject=$2
+                     AND m.membership_kind=$3)
+               AND ($4::text IS NULL OR t.queue_id=$4)
+               AND ($5::timestamptz IS NULL OR (d.decided_at,t.task_id)<($5,$6))
+               AND ((r.policy_snapshot->'stages'->t.stage_index->'decidingProfiles') ? $8)
+             ORDER BY d.decided_at DESC,t.task_id DESC LIMIT $7",
+                &[
+                    &actor.principal.issuer,
+                    &actor.principal.subject,
+                    &membership,
+                    &queue,
+                    &position.map(|p| p.0),
+                    &position.map(|p| p.1),
+                    &i64::try_from(limit + 1).map_err(|_| ReviewRuntimeError::Invalid)?,
+                    &actor.profile_id,
+                ],
+            )
+            .await?;
+        let mut items = rows
+            .into_iter()
+            .map(|row| {
+                let policy = serde_json::from_value::<ReviewKindPolicySnapshot>(row.get(9))?;
+                reviewer_task_from_row(&row, &policy)
+            })
+            .collect::<Result<Vec<_>, ReviewRuntimeError>>()?;
+        let next_cursor = (items.len() > limit).then(|| items[limit - 1].task_id);
+        items.truncate(limit);
+        Ok(ReviewTaskPage {
+            items,
+            next_cursor,
+            status: PageStatus::Complete,
+        })
+    }
+
+    async fn own_review_decision_rows(
+        &self,
+        actor: &ActorContext,
+        queue: Option<&str>,
+        ids: &[Uuid],
+    ) -> Result<Vec<OwnReviewDecision>, ReviewRuntimeError> {
+        let membership = match actor.role {
+            CaseworkRole::Staff => "staff",
+            CaseworkRole::Supervisor => "supervisor",
+            _ => return Err(ReviewRuntimeError::Forbidden),
+        };
+        let client = self.client().await?;
+        client
+            .query(
+                "SELECT t.task_id,t.request_id,t.queue_id,r.requester_reference,
+                    d.decision,d.outcome,d.decided_at,r.policy_snapshot
+             FROM casework_review_decisions d
+             JOIN casework_review_tasks t ON t.task_id=d.task_id
+             JOIN casework_review_requests r ON r.request_id=t.request_id
+             WHERE t.task_id=ANY($1) AND d.actor_issuer=$2 AND d.actor_subject=$3
+               AND t.state='decided' AND r.result_erased_at IS NULL
+               AND (r.lifecycle='reviewing' OR r.result_available_until>now())
+               AND EXISTS (SELECT 1 FROM casework_queue_service q
+                   JOIN casework_memberships m ON m.team_id=q.team_id
+                   WHERE q.queue_id=t.queue_id AND m.issuer=$2 AND m.subject=$3
+                     AND m.membership_kind=$4)
+               AND ($5::text IS NULL OR t.queue_id=$5)
+               AND ((r.policy_snapshot->'stages'->t.stage_index->'decidingProfiles') ? $6)
+             ORDER BY array_position($1::uuid[],t.task_id)",
+                &[
+                    &ids,
+                    &actor.principal.issuer,
+                    &actor.principal.subject,
+                    &membership,
+                    &queue,
+                    &actor.profile_id,
+                ],
+            )
+            .await?
+            .into_iter()
+            .map(|row| {
+                let policy: ReviewKindPolicySnapshot = serde_json::from_value(row.get(7))?;
+                Ok(OwnReviewDecision {
+                    task_id: row.get(0),
+                    request_id: row.get(1),
+                    queue: row.get(2),
+                    requester_reference: row.get(3),
+                    decision_receipt: review_decision_receipt(
+                        &policy,
+                        &row.get::<_, String>(4),
+                        row.get(5),
+                        row.get(6),
+                    )?,
+                })
+            })
+            .collect()
     }
 
     async fn supervisory_review_task_rows(
@@ -2162,21 +2351,13 @@ impl PostgresStore {
             let decision = row.get::<_, Option<String>>(13);
             task.decided_by_caller = Some(decision.is_some());
             if let Some(decision) = decision {
-                let decision = match decision.as_str() {
-                    "approve" => ReviewDecisionType::Approve,
-                    "reject" => ReviewDecisionType::Reject,
-                    "changes_requested" => ReviewDecisionType::ChangesRequested,
-                    "answer" => ReviewDecisionType::Answer,
-                    _ => return Err(ReviewRuntimeError::Corrupt),
-                };
-                task.decision_receipt = Some(ReviewDecisionReceipt {
-                    policy: policy_binding(&policy),
-                    decision,
-                    outcome: row.get(14),
-                    decided_at: row
-                        .get::<_, Option<DateTime<Utc>>>(15)
+                task.decision_receipt = Some(review_decision_receipt(
+                    &policy,
+                    &decision,
+                    row.get(14),
+                    row.get::<_, Option<DateTime<Utc>>>(15)
                         .ok_or(ReviewRuntimeError::Corrupt)?,
-                });
+                )?);
             }
         }
         Ok(task)
@@ -4200,7 +4381,7 @@ impl PostgresStore {
             .query_opt(
                 "SELECT a.event_id,a.request_id,a.task_id,a.actor_ref,a.actor_issuer,
                         a.actor_subject,a.profile_id,a.decision,a.private_reason,a.result_digest,
-                        a.occurred_at,a.retained_until
+                        a.occurred_at,a.retained_until,a.outcome,r.policy_snapshot
                  FROM casework_review_accountability a
                  JOIN casework_queue_service q ON q.queue_id=a.queue_id
                  JOIN casework_memberships m ON m.team_id=q.team_id
@@ -4213,6 +4394,19 @@ impl PostgresStore {
             )
             .await?
             .ok_or(ReviewRuntimeError::NotFound)?;
+        let decision: String = row.get(7);
+        let outcome: Option<String> = row.get(12);
+        let policy: ReviewKindPolicySnapshot = serde_json::from_value(row.get(13))?;
+        let decision_receipt = if decision == "approve" || outcome.is_some() {
+            Some(review_decision_receipt(
+                &policy,
+                &decision,
+                outcome,
+                row.get(10),
+            )?)
+        } else {
+            None
+        };
         let record = ReviewAccountabilityRecord {
             event_id: row.get(0),
             request_id: row.get(1),
@@ -4223,7 +4417,8 @@ impl PostgresStore {
                 subject: row.get(5),
             },
             profile_id: row.get(6),
-            decision: row.get(7),
+            decision,
+            decision_receipt,
             private_reason: row.get(8),
             result_digest: row.get(9),
             occurred_at: row.get(10),
@@ -4660,8 +4855,8 @@ impl PostgresStore {
             .execute(
                 "INSERT INTO casework_review_accountability(
                     event_id,request_id,task_id,queue_id,actor_ref,actor_issuer,actor_subject,
-                    profile_id,decision,private_reason,result_digest,occurred_at,retained_until)
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+                    profile_id,decision,private_reason,result_digest,occurred_at,retained_until,outcome)
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
                 &[
                     &accountability_event_id,
                     &request_id,
@@ -4676,6 +4871,7 @@ impl PostgresStore {
                     &result_digest,
                     &now,
                     &accountability_until,
+                    &outcome,
                 ],
             )
             .await?;
@@ -5890,6 +6086,39 @@ fn request_view(record: &ReviewRequestRecord) -> ReviewRequestView {
         created_at: record.created_at,
         updated_at: record.updated_at,
     }
+}
+
+fn review_decision_receipt(
+    policy: &ReviewKindPolicySnapshot,
+    decision: &str,
+    outcome: Option<String>,
+    decided_at: DateTime<Utc>,
+) -> Result<ReviewDecisionReceipt, ReviewRuntimeError> {
+    let decision = match decision {
+        "approve" if outcome.is_none() => ReviewDecisionType::Approve,
+        "reject" if outcome.is_some() => ReviewDecisionType::Reject,
+        "changes_requested" if outcome.is_some() => ReviewDecisionType::ChangesRequested,
+        "answer" if outcome.is_some() => ReviewDecisionType::Answer,
+        _ => return Err(ReviewRuntimeError::Corrupt),
+    };
+    let outcome_label = outcome
+        .as_ref()
+        .map(|id| {
+            policy
+                .outcomes
+                .iter()
+                .find(|configured| &configured.id == id)
+                .map(|configured| configured.label.clone())
+                .ok_or(ReviewRuntimeError::Corrupt)
+        })
+        .transpose()?;
+    Ok(ReviewDecisionReceipt {
+        policy: policy_binding(policy),
+        decision,
+        outcome,
+        outcome_label,
+        decided_at,
+    })
 }
 
 fn policy_binding(policy: &ReviewKindPolicySnapshot) -> PolicyBinding {
