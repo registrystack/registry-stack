@@ -7,6 +7,18 @@ fragments in this directory hold each change with its exact migration step;
 this section counts them, says where each diagnostic code table is, and lists
 the breaking changes of the same release that sit outside the program.
 
+## Upgrade steps
+
+`release/notes/config-conventions/upgrade-steps.yaml` is the catalog of the
+edits an operator makes by hand to carry authored files and runtime
+configuration forward from the previous release; each `BREAKING` item in the
+fragments cites the steps that cover it. No released binary applies them: an
+`edit` step lists the exact change to make in the files it names, and a
+`manual` step (regenerate a file, stop a service, recompute a value) is an
+instruction you carry out yourself. "Upgrade steps in the release note" in
+`release/OPERATIONS.md` describes the three step kinds and the checks on the
+catalog, and is the place to read before you upgrade.
+
 ## Breaking changes by product
 
 Each count is the number of `BREAKING` items in the product's fragment (a
