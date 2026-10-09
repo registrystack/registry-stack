@@ -51,10 +51,24 @@ pub(crate) const DEV_CLIENTS_FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(DEV_CLIENTS_API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[RemovedKey {
-        pointer: "/version",
-        replacement: "Remove version; apiVersion and kind identify the file.",
-    }],
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/version",
+            replacement: "Remove version; apiVersion and kind identify the file.",
+        },
+        RemovedKey {
+            pointer: "/integrations/sources/*/requestTimeoutMilliseconds",
+            replacement: "Remove it; the session uses the runtime default, and a deployed runtime configuration sets it.",
+        },
+        RemovedKey {
+            pointer: "/integrations/sources/*/connectTimeoutMilliseconds",
+            replacement: "Remove it; the session uses the runtime default, and a deployed runtime configuration sets it.",
+        },
+        RemovedKey {
+            pointer: "/integrations/sources/*/reconciliationIntervalMilliseconds",
+            replacement: "Remove it; the session uses the runtime default, and a deployed runtime configuration sets it.",
+        },
+    ],
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

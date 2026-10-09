@@ -330,20 +330,28 @@ fn integrations_read_identifiers_and_urls_through_shared_types() {
         structured[0].1,
         "/integrations/serviceClients/0/claims/tenant"
     );
-    // The session leaves a source's timeouts at the runtime's defaults.
-    let timeout = refused(
-        integrations(
-            "  sources:\n    source:\n      baseUrl: http://127.0.0.1:8080\n      readerProfile: casework-reader\n      tokenEndpoint: http://127.0.0.1:8093/oauth2/token\n      clientIdRef: secret:file/service-reader-id\n      clientAssertionKeyRef: secret:file/service-reader-key\n      webhookSecretRef: secret:file/source-webhook\n      eventSource: urn:example:source\n      requestTimeoutMilliseconds: 5000\n",
-        )
-        .as_bytes(),
-    );
-    assert_eq!(
-        timeout,
-        expected(&[(
-            "config.unknown-key",
-            "/integrations/sources/source/requestTimeoutMilliseconds"
-        )])
-    );
+    // The session leaves a source's timeouts and reconciliation interval at
+    // the runtime's defaults; a retained key is a removed key, not an unknown
+    // one.
+    for key in [
+        "requestTimeoutMilliseconds",
+        "connectTimeoutMilliseconds",
+        "reconciliationIntervalMilliseconds",
+    ] {
+        let retained = refused(
+            integrations(&format!(
+                "  sources:\n    source:\n      baseUrl: http://127.0.0.1:8080\n      readerProfile: casework-reader\n      tokenEndpoint: http://127.0.0.1:8093/oauth2/token\n      clientIdRef: secret:file/service-reader-id\n      clientAssertionKeyRef: secret:file/service-reader-key\n      webhookSecretRef: secret:file/source-webhook\n      eventSource: urn:example:source\n      {key}: 5000\n"
+            ))
+            .as_bytes(),
+        );
+        assert_eq!(
+            retained,
+            expected(&[(
+                "config.removed-key",
+                &format!("/integrations/sources/source/{key}")
+            )])
+        );
+    }
 }
 
 #[test]
