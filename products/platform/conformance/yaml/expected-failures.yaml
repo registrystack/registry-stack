@@ -12,14 +12,6 @@
 # holds.
 
 expectedFailures:
-- format: breg/dev-clients
-  case: init-modeline
-  reason: 'the first line of dev-clients.yaml is not a `# yaml-language-server: $schema=` modeline'
-  digest: e8486e633102
-- format: breg/journeys
-  case: init-modeline
-  reason: 'the first line of tests/journeys.yaml is not a `# yaml-language-server: $schema=` modeline'
-  digest: db8e4a2d4591
 - format: breg/module
   case: comments-only-file
   reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
@@ -225,161 +217,21 @@ expectedFailures:
   reason: exit status 0, expected 1; missing config.wrong-kind at /kind 2:7
   digest: 137899d927f4
 - format: evidence/fixture
-  case: alias
-  reason: missing yaml.alias at /conformanceAlias 197:19; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 9472a9917b0f
-- format: evidence/fixture
-  case: ambiguous-number
-  reason: missing yaml.ambiguous-number at /conformanceNumber 197:20; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 9a6e12c2ce92
-- format: evidence/fixture
-  case: anchor
-  reason: missing yaml.anchor at /conformanceAnchor 197:20; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 770b4a424bce
-- format: evidence/fixture
-  case: bom-keeps-positions
-  reason: missing yaml.anchor at /conformanceAnchor 197:20; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 770b4a424bce
-- format: evidence/fixture
-  case: colon-in-plain-value
-  reason: missing yaml.colon-in-plain-value at the root 197:27; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 84ba04048f31
-- format: evidence/fixture
-  case: columns-count-characters
-  reason: missing yaml.anchor at /conformanceÉté 197:17; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 08cdff182b5d
-- format: evidence/fixture
-  case: comments-only-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 3a570504aaa5
-- format: evidence/fixture
-  case: control-character
-  reason: missing yaml.control-character at /conformanceControl 197:21; missing yaml.control-character at /conformanceControlC1 198:23 (and 3 more problems)
-  digest: 1f2050418be8
-- format: evidence/fixture
-  case: crlf-keeps-positions
-  reason: missing yaml.anchor at /conformanceAnchor 197:20; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 770b4a424bce
-- format: evidence/fixture
-  case: deny-warnings-accepted
-  reason: exit status 2, expected 0; unexpected evidencectl.usage at $ (file) (and 2 more problems)
-  digest: cbef8bd14ec5
-- format: evidence/fixture
   case: duplicate-id
   reason: missing config.duplicate-id at /cases/13/id 183:9; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
   digest: d5846cd11199
-- format: evidence/fixture
-  case: duplicate-key
-  reason: missing yaml.duplicate-key at /conformanceDuplicate 198:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 4 more problems)
-  digest: 8d13efa5a5ef
-- format: evidence/fixture
-  case: duplicate-key-in-flow-mapping
-  reason: missing yaml.duplicate-key at /conformanceFlow/a 197:25; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 0872945adc15
-- format: evidence/fixture
-  case: empty-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 3a570504aaa5
 - format: evidence/fixture
   case: extension-field
   reason: missing config.unknown-key at /x-conformance 197:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
   digest: ea010f8469b6
 - format: evidence/fixture
-  case: invalid-escape
-  reason: missing yaml.invalid-escape at /conformanceEscape 197:20; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 611b77ae36c6
-- format: evidence/fixture
-  case: lone-star
-  reason: missing yaml.alias at /conformanceStar 197:18; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 7848327c0982
-- format: evidence/fixture
-  case: merge-key
-  reason: missing yaml.merge-key at /conformanceMerge/<< 198:3; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 1a2178896546
-- format: evidence/fixture
-  case: missing-api-version
-  reason: missing config.missing-envelope at the root 5:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: e8bc84815f88
-- format: evidence/fixture
-  case: missing-envelope
-  reason: missing config.missing-envelope at the root 8:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 33d69ae2db1b
-- format: evidence/fixture
-  case: missing-kind
-  reason: missing config.missing-envelope at the root 5:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: e8bc84815f88
-- format: evidence/fixture
-  case: multiple-documents
-  reason: missing yaml.multiple-documents at the root 197:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 8a79f64d8719
-- format: evidence/fixture
-  case: non-string-key
-  reason: missing yaml.non-string-key at /7 197:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: ccf86e383d1c
-- format: evidence/fixture
-  case: not-utf8
-  reason: missing yaml.not-utf8 at the root 197:15; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 18634cd021ca
-- format: evidence/fixture
-  case: oversize
-  reason: missing yaml.too-large at the root (file); unexpected evidence.test.failed at $ (file) (and 2 more problems)
-  digest: d9c87f048394
-- format: evidence/fixture
-  case: structural-problems-together
-  reason: missing yaml.duplicate-key at /conformanceDuplicate 198:1; missing yaml.anchor at /conformanceAnchor 199:20 (and 4 more problems)
-  digest: 18f0e19b5825
-- format: evidence/fixture
-  case: syntax-error
-  reason: missing yaml.syntax at the root 198:3; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: b0937ac05968
-- format: evidence/fixture
-  case: tab-indentation
-  reason: missing yaml.tab-indentation at /conformanceTab 198:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 32ca98ef1d7f
-- format: evidence/fixture
-  case: tag
-  reason: missing yaml.tag at /conformanceTag 197:17; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: a82741613f17
-- format: evidence/fixture
-  case: text-after-quote
-  reason: missing yaml.text-after-quote at /conformanceQuote 197:23; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 965932901b09
-- format: evidence/fixture
-  case: too-deep
-  reason: missing yaml.too-deep at /conformanceDeep/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0 197:145; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 6a1ceaa838b5
-- format: evidence/fixture
   case: too-many-problems
   reason: missing config.unknown-key at /conformanceUnknown001 197:1; missing config.unknown-key at /conformanceUnknown002 198:1 (and 102 more problems)
   digest: df8e54568e12
 - format: evidence/fixture
-  case: unclosed-quote
-  reason: missing yaml.unclosed-quote at /conformanceQuote 197:19; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: f162fcbf6133
-- format: evidence/fixture
-  case: unexpected-end
-  reason: missing yaml.unexpected-end at /conformanceList/2 198:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 577f3e8ca397
-- format: evidence/fixture
   case: unknown-keys
   reason: missing config.unknown-key at /conformanceFirst 197:1; missing config.unknown-key at /conformanceSecond 198:1 (and 3 more problems)
   digest: 52183416d8f4
-- format: evidence/fixture
-  case: unrepresentable-integer
-  reason: missing config.out-of-range at /conformanceNumber 197:20; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 5a4cd93fa607
-- format: evidence/fixture
-  case: wrong-api-version
-  reason: missing config.unsupported-api-version at /apiVersion 5:13; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: e232e5ea1294
-- format: evidence/fixture
-  case: wrong-kind
-  reason: missing config.wrong-kind at /kind 6:7; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 02259ddf716b
-- format: evidence/fixture
-  case: wrong-kind-and-api-version
-  reason: missing config.wrong-kind at /kind 6:7; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
-  digest: 02259ddf716b
 - format: evidence/holder-bound-verification-policy
   case: comments-only-file
   reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
