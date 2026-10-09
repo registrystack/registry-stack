@@ -16,6 +16,12 @@ as `config.removed-key`, and the message names its replacement; the old
 `apiVersion` is refused as `config.retired-api-version` with the new one.
 Every value keeps its meaning unless the step below says otherwise.
 
+A package the previous release built is refused too, so upgrade in this
+order: apply the steps in this note to the project and to the runtime file,
+build the package again with this release's `messagingctl package` (it writes
+a new directory), point `package.root` at it, run `messagingctl plan` and
+then `messagingctl apply`, and only then start the runtime.
+
 | Old spelling | New spelling | Migration |
 |---|---|---|
 | `apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1` | `apiVersion: id.registrystack.org/formats/messaging/runtime/v1alpha1` | Replace the value. |
