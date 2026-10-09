@@ -20,6 +20,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import upgrade_steps  # noqa: E402
+import yaml  # noqa: E402
 
 Error = upgrade_steps.StepError
 
@@ -1062,6 +1063,41 @@ class ProductStepsApplyTest(unittest.TestCase):
         self.assertEqual(document["artifacts"], {
             "adapters/a.rhai": {"type": "keep"},
             "adapters/b.rhai": {"type": "file", "path": "reviewed/b.rhai"}})
+
+    def test_evidence_authored_documents_take_their_envelope_and_match_the_reference_project(
+        self,
+    ) -> None:
+        """Each step turns the previous release's document into the one the reference project holds."""
+
+        reference = (Path(__file__).resolve().parents[2]
+                     / "products/evidence/reference/authoring-projects/example")
+        cases = [
+            ("evidence-access-policy-envelope", "access/policies/record-status-readers.yaml",
+             "EvidenceAccessPolicy", {"version": 1}, {}),
+            ("evidence-access-client-envelope", "access/clients/example-caller.yaml",
+             "EvidenceAccessClient", {"version": 1}, {}),
+            ("evidence-target-settings-envelope", "targets/local/settings.yaml",
+             "EvidenceTargetSettings", {"formatVersion": 1}, {"version": 1}),
+            ("evidence-mock-plan-envelope", "mocks/source.yaml",
+             "EvidenceMockPlan", {"version": 1}, {}),
+        ]
+        for step, name, kind, old_top, old_governance in cases:
+            with self.subTest(step=step):
+                current = upgrade_steps.load_document(reference / name)
+                self.assertEqual(current["kind"], kind)
+                previous = {key: value for key, value in current.items()
+                            if key not in ("apiVersion", "kind")}
+                previous.update(old_top)
+                if old_governance:
+                    previous["governance"] = {**old_governance, **previous["governance"]}
+                # The document sits where the step looks for it.
+                destination = upgrade_steps.load_catalog()[step]["file"].replace(
+                    "*", Path(name).stem)
+                write(self.root, destination, yaml.safe_dump(previous))
+                self.apply(step)
+                migrated = self.load(destination)
+                self.assertEqual(migrated, current)
+                self.assertEqual(list(migrated)[:2], ["apiVersion", "kind"])
 
     def test_evidence_dev_state_and_source_import_state_are_manual(self) -> None:
         manual = self.apply("evidence-dev-state-reset", "evidence-source-import-state-reset")
