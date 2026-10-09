@@ -4,6 +4,9 @@
 #[cfg(test)]
 #[path = "package/tests/immediate_actions.rs"]
 mod immediate_action_tests;
+#[cfg(test)]
+#[path = "package/tests/retired_anonymous.rs"]
+mod retired_anonymous_tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};

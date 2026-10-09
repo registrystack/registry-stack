@@ -568,18 +568,36 @@ fn a_predecessor_migration_baseline_reads_the_retired_anonymous_member() {
     let (directory, _) = verified_successor(&legacy_predecessor);
     let successor = directory.path().join("package");
 
-    for (anonymous, readable) in [(false, true), (true, false)] {
+    // Each row sets the retired member on one kind of site; every other site
+    // carries `false`.
+    for (site, anonymous, readable) in [
+        ("profile", false, true),
+        ("profile", true, false),
+        ("action permission", false, true),
+        ("action permission", true, false),
+    ] {
         let copy = fixture_copy(&successor);
         let manifest_path = copy.path().join("package.json");
         let mut envelope: Value =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
         let baseline = &mut envelope["manifest"]["migrationPlan"]["priorBaseline"];
-        set_retired_anonymous(&mut baseline["entities"], "person-reader", anonymous);
+        let profile_anonymous = anonymous && site == "profile";
+        set_retired_anonymous(
+            &mut baseline["entities"],
+            "person-reader",
+            profile_anonymous,
+        );
+        let mut permissions_set = 0;
         for action in baseline["actions"]["actions"].as_array_mut().unwrap() {
             for permission in action["permissions"].as_array_mut().unwrap() {
-                permission["anonymous"] = json!(false);
+                permission["anonymous"] = json!(anonymous && site == "action permission");
+                permissions_set += 1;
             }
         }
+        assert!(
+            permissions_set > 0,
+            "the baseline carries an action permission"
+        );
         fs::write(
             &manifest_path,
             canonicalize_json(&envelope).expect("rebound envelope canonicalizes"),
@@ -589,7 +607,7 @@ fn a_predecessor_migration_baseline_reads_the_retired_anonymous_member() {
         assert_eq!(
             load_predecessor_package(copy.path(), &context).is_ok(),
             readable,
-            "anonymous: {anonymous}"
+            "{site}, anonymous: {anonymous}"
         );
     }
 }
