@@ -314,7 +314,7 @@ A fixture changes spelling:
 | `name: X` | `id: X` |
 | `source: {id: S, requestEntity: E, reviewStage: T}` | `request: {source: S, entity: E}`; `reviewStage` was never read and is removed |
 | `expect.targetElapsed: PT48H` | `expect.target: {elapsedMinutes: 2880}` |
-| `expect.targetElapsed:` (empty, no target) | `expect.target: none` |
+| `expect.targetElapsed:` (empty), or `expect.targetElapsed` omitted, meaning no target | `expect.target: none`; an absent `target` is no longer checked |
 
 A simulation and a holiday set gain an envelope, and a simulation changes
 spelling:

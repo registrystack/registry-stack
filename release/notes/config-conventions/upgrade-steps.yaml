@@ -14,7 +14,7 @@ steps:
   - {op: delete, path: request.reviewStage, optional: true}
 - {id: casework-fixture-target, product: casework, kind: manual, file: fixtures/*.yaml, instruction: 'Rewrite
     expect.targetElapsed: PT48H as expect.target: {elapsedMinutes: 2880} (the duration in minutes), and
-    an empty expect.targetElapsed as expect.target: none.'}
+    an empty or omitted expect.targetElapsed as expect.target: none (an absent target is no longer checked).'}
 - id: casework-simulation-spelling
   product: casework
   kind: edit
@@ -23,6 +23,7 @@ steps:
   - {op: envelope, apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1, kind: CaseworkSimulation}
   - {op: rename, path: subject.id, to: recordId, optional: true}
   - {op: rename, path: expect.ruleId, to: rule, optional: true}
+  - {op: set, path: expect.rule, value: none, ifAbsent: true, optional: true}
   - {op: replace-value, path: expect.dueState, from: atRisk, to: at-risk, optional: true}
 - id: casework-holiday-set-envelope
   product: casework

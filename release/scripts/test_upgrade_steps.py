@@ -705,6 +705,19 @@ expect: {ruleId: first, dueState: atRisk}
         self.assertEqual(clients["kind"], "CaseworkDevClients")
         self.assertNotIn("version", clients)
 
+    def test_a_casework_simulation_with_no_rule_expects_no_rule_after_migration(self) -> None:
+        write(self.root, "simulations/none.yaml", "subject: {id: r-1}\nexpect: {queue: q}\n")
+        write(self.root, "simulations/named.yaml", "subject: {id: r-1}\nexpect: {ruleId: first}\n")
+        write(self.root, "simulations/bare.yaml", "subject: {id: r-1}\n")
+        self.apply("casework-simulation-spelling")
+        self.assertEqual(self.load("simulations/none.yaml")["expect"], {"queue": "q", "rule": "none"})
+        self.assertEqual(self.load("simulations/named.yaml")["expect"], {"rule": "first"})
+        self.assertNotIn("expect", self.load("simulations/bare.yaml"))
+
+    def test_the_casework_fixture_target_instruction_covers_an_omitted_target(self) -> None:
+        step = upgrade_steps.load_catalog()["casework-fixture-target"]
+        self.assertIn("omitted expect.targetElapsed", step["instruction"])
+
     def test_a_casework_fixture_with_no_source_block_still_migrates(self) -> None:
         write(self.root, "fixtures/a.yaml", "name: x\nexpect: {queue: q}\n")
         self.apply("casework-fixture-spelling")
