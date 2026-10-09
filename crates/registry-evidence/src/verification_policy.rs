@@ -350,8 +350,8 @@ enum ListItemForm {
 }
 
 /// The rules that span members: how many subjects, outputs, and revoked
-/// keys a policy pins, and that a list form writes `items` and `unique`
-/// together.
+/// keys a policy pins, that a list form writes `items` and `unique`
+/// together, that `unique` is true, and that its bounds are not inverted.
 fn check_expectations(
     document: &Document,
     subjects: &[ExpectedSubject],
@@ -401,6 +401,24 @@ fn check_expectations(
                     &format!("/expectedOutputs/{index}/form/list"),
                     "a list form writes items and unique together, or neither",
                     "Write both `items` and `unique`; only a stored legacy procedure omits both.",
+                ));
+            }
+            if wrapper.list.unique == Some(false) {
+                diagnostics.push(document.diagnostic_at_value(
+                    Severity::Error,
+                    "evidence.policy.list-not-unique",
+                    &format!("/expectedOutputs/{index}/form/list/unique"),
+                    "a list form's items are unique, so unique is true",
+                    "Write `unique: true`; the verifier refuses a list that repeats an item.",
+                ));
+            }
+            if wrapper.list.minimum_items.get() > wrapper.list.maximum_items.get() {
+                diagnostics.push(document.diagnostic_at_value(
+                    Severity::Error,
+                    "evidence.policy.list-bounds-inverted",
+                    &format!("/expectedOutputs/{index}/form/list/minimumItems"),
+                    "minimumItems exceeds maximumItems",
+                    "Write a minimumItems that is at most maximumItems.",
                 ));
             }
         }
@@ -589,6 +607,23 @@ maximumAssertionLifetimeSeconds: 3600
                 base.replace(", unique: true", ""),
                 "evidence.policy.unpaired-list-form",
                 "/expectedOutputs/1/form/list",
+                20,
+            ),
+            (
+                "list that is not unique",
+                base.replace("unique: true", "unique: false"),
+                "evidence.policy.list-not-unique",
+                "/expectedOutputs/1/form/list/unique",
+                20,
+            ),
+            (
+                "inverted list bounds",
+                base.replace(
+                    "minimumItems: 1, maximumItems: 4",
+                    "minimumItems: 5, maximumItems: 4",
+                ),
+                "evidence.policy.list-bounds-inverted",
+                "/expectedOutputs/1/form/list/minimumItems",
                 20,
             ),
             (

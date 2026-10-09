@@ -3703,6 +3703,49 @@ fn check_policy_positions_what_verify_reports_only_as_malformed() {
     );
 }
 
+/// `check-policy` refuses a list form the verifier would refuse, for both
+/// policy kinds, at the member that is wrong and without repeating a value.
+#[test]
+fn check_policy_refuses_a_list_form_the_verifier_refuses() {
+    let root = tempfile::tempdir().expect("temporary policies");
+    let list = |form: &str| format!("    form: {{list: {form}}}\n");
+    let cases = [
+        (
+            "unique false",
+            "{items: string, minimumItems: 1, maximumItems: 4, unique: false}",
+            "evidence.policy.list-not-unique",
+            "/expectedOutputs/0/form/list/unique",
+        ),
+        (
+            "inverted bounds",
+            "{items: string, minimumItems: 5, maximumItems: 4, unique: true}",
+            "evidence.policy.list-bounds-inverted",
+            "/expectedOutputs/0/form/list/minimumItems",
+        ),
+    ];
+    for (flag, document) in [
+        ("--verification-policy", fixture_policy()),
+        ("--holder-bound-policy", holder_bound_fixture_policy()),
+    ] {
+        for (label, form, code, path) in cases {
+            let file = root.path().join("policy.yaml");
+            fs::write(&file, document.replace("    form: boolean\n", &list(form)))
+                .expect("stage the policy");
+            let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+                .args(["check-policy", flag, &file.display().to_string()])
+                .args(["--format", "json"])
+                .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+                .output()
+                .expect("evidence binary starts");
+            assert_eq!(output.status.code(), Some(1), "{flag} {label}");
+            let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON document");
+            assert_eq!(report["status"], "domain-refusal", "{flag} {label}");
+            assert_eq!(report["diagnostics"][0]["code"], code, "{flag} {label}");
+            assert_eq!(report["diagnostics"][0]["path"], path, "{flag} {label}");
+        }
+    }
+}
+
 fn fixture_policy() -> String {
     format!(
         "expectedAssuranceProfile: evidence-grade

@@ -658,7 +658,7 @@ unchanged.
 | `--require-audit-under needs a file audit destination; ...` | `evidence.deployment.audit-not-a-file` |
 | `evidence: warning: rateLimits.burstPerPrincipal is <n>, below <m>, ...` | `evidence.bundle.burst-below-largest-request` (warning) |
 | (offline check skipped a substituted value, new) | `evidence.runtime.not-checked`, `evidence.package.not-checked` (warnings) |
-| (verification policy refusals, new with `check-policy`) | the reader's `yaml.*` and `config.*` codes, `evidence.policy.invalid-count`, `evidence.policy.unpaired-list-form`, `evidence.policy.not-verifiable`, `evidence.policy.unavailable` |
+| (verification policy refusals, new with `check-policy`) | the reader's `yaml.*` and `config.*` codes, `evidence.policy.invalid-count`, `evidence.policy.unpaired-list-form`, `evidence.policy.list-not-unique`, `evidence.policy.list-bounds-inverted`, `evidence.policy.not-verifiable`, `evidence.policy.unavailable` |
 
 ### Respellings held for the stable release (WP11)
 
