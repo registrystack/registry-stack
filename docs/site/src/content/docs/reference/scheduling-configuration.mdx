@@ -62,6 +62,25 @@ envelope, the package digest, and the activation ledger.
 {/* Generated from src/data/generated/scheduling-configuration.json by
     docs/site/scripts/generate-scheduling-configuration.mjs. Run npm run generate from docs/site. */}
 
+## Start a project
+
+No tutorial covers Registry Scheduling yet. To start a project and prove it offline, with no database
+and no network, write the `standalone-exact-time` starter, check it, and replay its synthetic
+fixtures:
+
+```sh
+schedulingctl init ./scheduling --template standalone-exact-time
+schedulingctl check ./scheduling
+schedulingctl test ./scheduling
+```
+
+`init` writes `scheduling.yaml`, `runtime.example.yaml`, `records.yaml`, and two fixture files. A
+passing `check` ends with `0 errors, 0 warnings in 4 files`, and a passing `test` reports
+`Offline synthetic fixtures passed.` with `productionClosure: false`: the replay proves the policy
+against its fixtures, not source reachability or deployment readiness. Copy `runtime.example.yaml` to
+`runtime.yaml` and set its absolute paths and secret references before you check it with
+`schedulingctl check ./scheduling --runtime-config runtime.yaml`.
+
 ## Check commands
 
 Every file Registry Scheduling reads has a command that checks it offline, with no service running. Each prints
