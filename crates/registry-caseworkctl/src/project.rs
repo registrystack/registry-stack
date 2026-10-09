@@ -639,7 +639,7 @@ pub(super) fn checked_project(
             .iter()
             .filter(|source| project.join(&source.description).is_file())
             .count();
-    if !policy.sources.is_empty() && !pending {
+    if !policy.sources.is_empty() {
         if let Err(error) = check_source_descriptions(project) {
             let Some(refused) = crate::configuration_report(&error) else {
                 return Err(error);
@@ -1935,6 +1935,11 @@ fn check_source_descriptions(project: &Path) -> Result<()> {
     let mut diagnostics = Vec::new();
     for (index, source) in policy.sources.iter().enumerate() {
         let at = format!("/sources/{index}");
+        // A description not imported yet is reported by the offline
+        // resolution; the sources that are imported are still checked.
+        if !project.join(&source.description).is_file() {
+            continue;
+        }
         let path = project_input_path(project, &source.description)?;
         let bytes = read_package_input(&path)?;
         if let Err(refusal) = validate_breg_source_description(source, &bytes) {
@@ -3490,6 +3495,42 @@ mod tests {
         )
         .unwrap();
         (root, project)
+    }
+
+    /// A source whose description is not imported yet leaves the checks of
+    /// the sources that are imported running.
+    #[test]
+    fn a_source_awaiting_import_does_not_hide_a_simulation_mismatch_on_another() {
+        let yaml = CASEWORK_YAML
+            .replace(
+                "        contextProjection:\n",
+                "        projection: [reason]\n        contextProjection:\n",
+            )
+            .replace(
+                "queues:\n",
+                "  - id: awaiting-register\n    adapter: breg\n    description: sources/awaiting.json\n    requests:\n      - entity: transfer\n        queue: corrections\nqueues:\n",
+            );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+        fs::create_dir_all(project.join("simulations")).unwrap();
+        fs::write(
+            project.join("simulations/mistyped.yaml"),
+            "apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1\nkind: CaseworkSimulation\nid: mistyped\nsource: professional-licences\nsubject:\n  entity: scope-correction\n  recordId: request-1\n  version: \"1\"\n  activity: apply\n  fields: {reason: 5}\nnow: \"2026-09-11T17:00:00+07:00\"\nexpect:\n  queue: corrections\n",
+        )
+        .unwrap();
+
+        let error = check(&project, false, false).unwrap_err();
+        let report = error.downcast_ref::<Report>().unwrap();
+        let codes = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            codes.contains(&"casework.simulation.field-mismatch"),
+            "{report}"
+        );
+        assert!(codes.contains(&MISSING_SOURCE_DESCRIPTION), "{report}");
     }
 
     #[test]
