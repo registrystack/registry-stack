@@ -2422,6 +2422,29 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_refused_package_value_is_not_repeated_in_the_startup_report() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = runtime_value(root.path());
+        let canary = "DO_NOT_DISCLOSE_PACKAGE_VALUE";
+        let mut package = package_value();
+        package["accessProfiles"][0]["id"] = json!(canary);
+        package["accessProfiles"][0]["principalClaim"] = json!(canary);
+        let path = write_project(root.path(), &runtime, &package);
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        assert!(matches!(error, RuntimeConfigError::Package(_)), "{error}");
+        assert!(!error.to_string().contains(canary), "{error}");
+        let report = startup_report(&path, &error).expect("a package report");
+        assert!(report.error_count() > 0);
+        for diagnostic in report.diagnostics() {
+            assert!(!diagnostic.message.contains(canary), "{diagnostic:?}");
+            assert!(
+                !diagnostic.suggested_action.contains(canary),
+                "{diagnostic:?}"
+            );
+        }
+    }
+
+    #[test]
     fn an_invalid_package_is_refused_at_load() {
         let root = tempfile::tempdir().unwrap();
         let runtime = runtime_value(root.path());
