@@ -15,6 +15,9 @@ steps:
 - {id: casework-fixture-target, product: casework, kind: manual, file: fixtures/*.yaml, instruction: 'Rewrite
     expect.targetElapsed: PT48H as expect.target: {elapsedMinutes: 2880} (the duration in minutes), and
     an empty or omitted expect.targetElapsed as expect.target: none (an absent target is no longer checked).'}
+- {id: casework-simulation-file-extension, product: casework, kind: manual, file: simulations/*.yml,
+  instruction: 'Rename each simulations/*.yml file to .yaml before the simulation spelling changes, which
+    the upgrade applies only to .yaml files.'}
 - id: casework-simulation-spelling
   product: casework
   kind: edit

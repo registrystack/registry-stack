@@ -718,6 +718,13 @@ expect: {ruleId: first, dueState: atRisk}
         step = upgrade_steps.load_catalog()["casework-fixture-target"]
         self.assertIn("omitted expect.targetElapsed", step["instruction"])
 
+    def test_the_casework_simulation_extension_step_is_manual_and_precedes_the_spelling_step(self) -> None:
+        catalog = list(upgrade_steps.load_catalog())
+        step = upgrade_steps.load_catalog()["casework-simulation-file-extension"]
+        self.assertEqual((step["kind"], step["file"]), ("manual", "simulations/*.yml"))
+        self.assertLess(catalog.index("casework-simulation-file-extension"),
+                        catalog.index("casework-simulation-spelling"))
+
     def test_a_casework_fixture_with_no_source_block_still_migrates(self) -> None:
         write(self.root, "fixtures/a.yaml", "name: x\nexpect: {queue: q}\n")
         self.apply("casework-fixture-spelling")
