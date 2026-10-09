@@ -1015,7 +1015,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=20).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=21).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -1260,7 +1260,7 @@ async fn migration_16_releases_superseded_identities_in_a_database_that_holds_th
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=20).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
     let second_a = observe_open_in_generation(&store, "binding-a").await;
     let states: Vec<(uuid::Uuid, String)> = items_by_state(&client)
@@ -1458,7 +1458,7 @@ async fn migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox(
     store.migrate().await.expect("a drained outbox is dropped");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=20).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
     let dropped: bool = client
         .query_one("SELECT to_regclass('casework_audit_outbox') IS NULL", &[])
@@ -1480,7 +1480,7 @@ async fn migration_replaces_empty_hosted_tables_through_the_ledger_head() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=20).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
     let hosted_tables_remaining: bool = client
         .query_one(
@@ -1547,7 +1547,7 @@ async fn migration_locks_hosted_work_before_counting_it_for_the_drop() {
         .expect("migration completes once the blocker releases the table");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=20).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
 }
 
@@ -1568,7 +1568,7 @@ async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=20).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
     let indexes: Vec<String> = client
         .query(
@@ -1593,14 +1593,16 @@ async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
 async fn migration_20_adds_review_discovery_indexes_to_an_existing_schema() {
     let (store, client, schema) = isolated_schema("review_discovery_indexes").await;
     store.migrate().await.expect("establish current schema");
-    // Migration 20 adds only these indexes; removing all three and its ledger
-    // entry restores the schema at version 19.
+    // Remove migration 21's outcome and author index too, so removing migration
+    // 20's discovery indexes and both ledger entries restores version 19.
     client
         .batch_execute(
-            "DROP INDEX casework_review_task_queue_position_idx; \
+            "DROP INDEX casework_review_decision_author_position_idx; \
+             ALTER TABLE casework_review_accountability DROP COLUMN outcome; \
+             DROP INDEX casework_review_task_queue_position_idx; \
              DROP INDEX casework_review_task_assigned_position_idx; \
              DROP INDEX casework_review_accountability_task_idx; \
-             DELETE FROM casework_schema_migrations WHERE version=20;",
+             DELETE FROM casework_schema_migrations WHERE version>=20;",
         )
         .await
         .expect("return the schema to version 19");
@@ -1615,7 +1617,7 @@ async fn migration_20_adds_review_discovery_indexes_to_an_existing_schema() {
         .expect("apply review discovery indexes");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=20).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
     let indexes = review_discovery_indexes(&client, &schema).await;
     assert_eq!(
@@ -1634,7 +1636,7 @@ async fn migration_20_adds_review_discovery_indexes_to_an_existing_schema() {
     store.migrate().await.expect("repeat the migration");
     assert_eq!(
         applied_versions(&client).await,
-        (1..=20).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
     assert_eq!(
         review_discovery_indexes(&client, &schema).await,
@@ -1666,14 +1668,14 @@ async fn readiness_rejects_an_unmigrated_schema() {
             store.ready().await,
             Err(StoreError::SchemaNotCurrent {
                 applied: None,
-                required: 20
+                required: 21
             })
         ),
         "a schema without the migration ledger must fail readiness"
     );
     assert_eq!(
         store.ready().await.unwrap_err().to_string(),
-        "the Casework database schema is not current: no migration has been applied, and this binary requires version 20; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
+        "the Casework database schema is not current: no migration has been applied, and this binary requires version 21; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
     );
 }
 
@@ -1696,8 +1698,8 @@ async fn readiness_rejects_a_partial_schema_missing_review_tables() {
         matches!(
             store.ready().await,
             Err(StoreError::SchemaNotCurrent {
-                applied: Some(20),
-                required: 20
+                applied: Some(21),
+                required: 21
             })
         ),
         "a partial migration ledger must fail readiness"
@@ -1728,15 +1730,15 @@ async fn readiness_rejects_an_unsupported_migration_version() {
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 21,
-                supported: 20
+                found: 22,
+                supported: 21
             }
         ),
         "a newer schema is not reported as corrupt data: {refusal:?}"
     );
     assert_eq!(
         refusal.to_string(),
-        "the Casework database schema version 21 is newer than this binary supports (20); run a casework release that supports it"
+        "the Casework database schema version 22 is newer than this binary supports (21); run a casework release that supports it"
     );
 }
 
@@ -1765,8 +1767,8 @@ async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() 
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 21,
-                supported: 20
+                found: 22,
+                supported: 21
             }
         ),
         "{refusal:?}"
