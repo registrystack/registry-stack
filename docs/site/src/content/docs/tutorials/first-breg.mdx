@@ -132,6 +132,13 @@ finding does not.
 as `warning[...]` lines and count them as warnings.
 Both are expected, as the second step under `Next:` says, and every later command repeats them.
 
+The comment in `registry.yaml` says you can close the operator finding by giving the operator's
+`record` grant a `rowBoundaries` entry. If you try that later, `bregctl check` replaces it with
+`breg.access.profile-writable-row-boundary`: the row boundary pins a field to the caller's claim on
+insert, so `create` needs that field in `writableFields`. Keep it writable, expect a `create` naming
+any other value to be refused, and review separately that `patch` can move a record within the
+values the caller may hold. This tutorial leaves both findings as they are.
+
 ### The local callers
 
 The `operator` and `reader` callers in `dev-clients.yaml` are ready to use with no edits, and
