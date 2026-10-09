@@ -3791,7 +3791,7 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/access-client.schema.json",
@@ -3809,7 +3809,7 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/access-policy.schema.json",
@@ -3827,7 +3827,7 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/project-marker.schema.json",
@@ -3917,7 +3917,7 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/mock-plan.schema.json",
@@ -3953,7 +3953,7 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/question.schema.json",
@@ -3971,7 +3971,7 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/selector.schema.json",
@@ -3989,7 +3989,7 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json",
@@ -4007,7 +4007,7 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/source.schema.json",
@@ -4025,7 +4025,7 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/target-governance.schema.json",
@@ -4043,11 +4043,11 @@
       "description": "Evidence authoring project marker and question JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-authoring/src/schema.rs",
-        "sha256": "63827ecbfd0f2418a4132563dbdca520953d55eadda5083ab719a91ef91636a7"
+        "sha256": "a427b1b4e4b036fe7d67c397702d607f85c92d2ec7d640b8d78770b038eb4057"
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/target-settings.schema.json",
-        "sha256": "d9a554d9d276d960e529be93c99ddf6265738aa73ff4ea3e2d08d69d491746fb",
+        "sha256": "57901b3860ce929c3b4727128d8ef4c627935d14dc58ac7950c6346d4af20467",
         "mediaType": "application/schema+json"
       }
     },
