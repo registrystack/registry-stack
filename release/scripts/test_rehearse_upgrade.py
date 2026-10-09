@@ -557,17 +557,21 @@ class BregLedgerTest(unittest.TestCase):
         breg.secrets = root / "secrets"
         breg.project = root / "project"
         breg.clients = [MODULE.BREG_CLIENT]
+        breg.upgraded = False
         return breg
 
     EMPTY_PLAN = {"ok": False, "command": "plan", "diagnostics": [
         {"severity": "error", "code": "apply.package.empty_plan", "path": "package"}]}
 
     def rehearse_ledger_upgrade(self, root: Path, upgraded_plan: dict[str, Any] | None,
-                                *, upgrade_loses_rows: bool = False):
+                                *, upgrade_loses_rows: bool = False,
+                                real_steps: bool = False):
         """Run rehearse_breg against mocked binaries. `upgraded_plan` is what
         bregctl plan prints, exiting 1, for the rebuilt predecessor; None plans
         it as a pending successor. `upgrade_loses_rows` empties the table the
-        previous release seeded until the upgraded runtime writes again."""
+        previous release seeded until the upgraded runtime writes again.
+        `real_steps` applies the catalog steps to the files under
+        `root/project` instead of recording the call."""
         old = unittest.mock.Mock()
         new = unittest.mock.Mock()
         postgres = unittest.mock.Mock()
@@ -673,13 +677,16 @@ class BregLedgerTest(unittest.TestCase):
         new.run.side_effect = process
         report = {}
         registry = {"package": {}, "entities": [{"id": "record-group", "fields": []}]}
+        steps_patch = (unittest.mock.patch.object(
+            MODULE.upgrade_steps, "apply_steps", wraps=MODULE.upgrade_steps.apply_steps)
+            if real_steps else unittest.mock.patch.object(
+                MODULE.upgrade_steps, "apply_steps", side_effect=steps))
         with (unittest.mock.patch.object(MODULE, "Breg", return_value=breg),
               unittest.mock.patch.object(MODULE, "Service"),
               unittest.mock.patch.object(MODULE, "instance_claim", side_effect=claim),
               unittest.mock.patch.object(MODULE, "load_yaml", return_value=registry),
               unittest.mock.patch.object(MODULE, "dump_yaml"),
-              unittest.mock.patch.object(MODULE.upgrade_steps, "apply_steps",
-                                         side_effect=steps)):
+              steps_patch):
             MODULE.rehearse_breg(root, unittest.mock.Mock(), postgres, old, new, report)
         packages = {"old": old_package, "upgraded": upgraded_package,
                     "successor": successor_package}
@@ -709,6 +716,38 @@ class BregLedgerTest(unittest.TestCase):
         self.assertEqual(events.count(("journeys",)), 1)
         self.assertLess(events.index(("journeys",)),
                         events.index(("package", "build-upgraded", packages["old"])))
+
+    def test_the_leg_changes_the_project_only_through_cataloged_steps(self) -> None:
+        # The project the leg leaves on disk equals the project after applying
+        # exactly the listed steps to the starter the previous release wrote.
+        starter = {
+            "registry.yaml": {
+                "accessProfiles": [{"id": "operator", "requiredScopes": [],
+                                    "permissions": [{"entity": "record",
+                                                     "rowBoundaries": []}]}]},
+            "tests/journeys.yaml": {"journeys": [{"id": "j", "steps": [
+                {"id": "s", "request": {"operation": "read_path"}}]}]},
+        }
+
+        def write_starter(project: Path) -> None:
+            for name, document in starter.items():
+                (project / name).parent.mkdir(parents=True, exist_ok=True)
+                (project / name).write_text(json.dumps(document))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "project").mkdir()
+            write_starter(root / "project")
+            (root / "expected").mkdir()
+            write_starter(root / "expected")
+            MODULE.upgrade_steps.apply_steps(list(MODULE.BREG_UPGRADE_STEPS),
+                                             {"project": root / "expected"})
+            self.rehearse_ledger_upgrade(root, None, real_steps=True)
+            for name in starter:
+                with self.subTest(file=name):
+                    leg = (root / "project" / name).read_text()
+                    self.assertEqual(leg, (root / "expected" / name).read_text())
+                    self.assertNotEqual(leg, json.dumps(starter[name]))
 
     def test_a_rebuild_with_nothing_to_apply_keeps_the_predecessor_package(self) -> None:
         # Rebuilding against the predecessor always records fromPackageDigest,
@@ -752,6 +791,19 @@ class BregLedgerTest(unittest.TestCase):
                                           8000)
             self.assertEqual(load_json(root / "runtime.yaml")["package"],
                              {"root": str(root / "pkg")})
+
+    def test_an_upgraded_runtime_carries_the_documented_runtime_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            breg = self.breg(root)
+            breg.clients = []
+            breg.write_runtime(root / "before.yaml", "registry", root / "pkg", 8000)
+            breg.upgraded = True
+            breg.write_runtime(root / "after.yaml", "registry", root / "pkg", 8000)
+            self.assertEqual(load_json(root / "before.yaml")["authentication"]["oidc"][
+                "allowedClients"], [])
+            self.assertEqual(MODULE.upgrade_steps.load_document(root / "after.yaml")[
+                "authentication"]["oidc"]["allowedClients"], "unrestricted")
 
     def test_a_ledger_package_is_tested_and_built_against_its_baseline_unsigned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -819,7 +871,8 @@ class BregLedgerTest(unittest.TestCase):
                                         "tokenRef": "secret:file/journey-token-j-held"}}]})
 
     def test_the_journeys_step_replaces_the_starter_shortcut(self) -> None:
-        self.assertEqual(MODULE.BREG_UPGRADE_STEPS, ("breg-journeys",))
+        self.assertEqual(MODULE.BREG_UPGRADE_STEPS,
+                         ("breg-journeys", "breg-access-unrestricted"))
         self.assertFalse(hasattr(MODULE.Breg, "adopt_journeys"))
 
     def author(self, root: Path, package: dict[str, Any]) -> dict[str, Any]:

@@ -329,15 +329,32 @@ def apply_steps(ids: list[str], roots: dict[str, Path],
             raise StepError(f"{step_id}: no file matches {step['file']} under the "
                             f"{step['root']} root {root}")
         for file in files:
-            document = load_document(file)
-            for edit in step["edits"]:
-                validate_edit(edit, step_id)
-                try:
-                    document = _apply(document, edit)
-                except _EditFailure as failure:
-                    raise StepError(f"{step_id}: {file}: {failure}") from failure
-            dump_document(file, document)
+            _edit_file(step_id, step, file)
     return manual
+
+
+def _edit_file(step_id: str, step: dict[str, Any], file: Path) -> None:
+    document = load_document(file)
+    for edit in step["edits"]:
+        validate_edit(edit, step_id)
+        try:
+            document = _apply(document, edit)
+        except _EditFailure as failure:
+            raise StepError(f"{step_id}: {file}: {failure}") from failure
+    dump_document(file, document)
+
+
+def apply_step_to_file(step_id: str, file: Path,
+                       catalog: dict[str, dict[str, Any]] | None = None) -> None:
+    """Apply one `edit` step to a single file, whatever its name."""
+
+    catalog = load_catalog() if catalog is None else catalog
+    step = catalog.get(step_id)
+    if step is None:
+        raise StepError(f"unknown upgrade step id '{step_id}'")
+    if step["kind"] != "edit":
+        raise StepError(f"{step_id}: only an edit step applies to a file")
+    _edit_file(step_id, step, file)
 
 
 # ---------------------------------------------------------------------------

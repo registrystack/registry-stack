@@ -114,11 +114,20 @@ class RehearsalError(RuntimeError):
 # the rehearsal applies on disk after the previous release wrote state and
 # before the new binaries run. Each id must name an `edit` step. Messaging is
 # not listed: its stored package ledger names a digest an applied step changes.
-BREG_UPGRADE_STEPS = ("breg-journeys",)
+BREG_UPGRADE_STEPS = (
+    "breg-journeys",
+    "breg-access-unrestricted",
+)
+# The runtime file is rewritten by the rehearsal for every package build and
+# serve, so these steps follow each write instead of running once.
+BREG_RUNTIME_UPGRADE_STEPS = ("breg-runtime-allowed-clients",)
 CASEWORK_UPGRADE_STEPS = ("casework-fixture-spelling", "casework-dev-clients-envelope")
 EVIDENCE_UPGRADE_STEPS = (
     "evidence-project-envelope",
     "evidence-question-envelope",
+    "evidence-question-answer-uri",
+    "evidence-source-envelope",
+    "evidence-selector-envelope",
     "evidence-fixture-envelope",
     "evidence-target-governance-envelope",
 )
@@ -998,6 +1007,9 @@ class Breg:
         self.runtime = work / "runtime.yaml"
         self.port = free_port()
         self.operator: dict[str, Any] = {}
+        # Set once the documented steps ran: runtime files written from then
+        # on carry the steps' edits, as an upgraded operator's file would.
+        self.upgraded = False
 
     def provision(self) -> None:
         passwords = {role: secrets.token_hex(16)
@@ -1099,6 +1111,12 @@ class Breg:
                       "path": str(private_directory(path.parent / "audit") / "breg.jsonl")},
             "cursor": {"secretRef": "secret:file/cursor-key"},
         })
+        if self.upgraded:
+            for step_id in BREG_RUNTIME_UPGRADE_STEPS:
+                try:
+                    upgrade_steps.apply_step_to_file(step_id, path)
+                except upgrade_steps.StepError as error:
+                    raise RehearsalError(f"BReg upgrade step failed: {error}") from error
 
     def credentials(self, path: Path, side: Side) -> None:
         journeys = load_yaml(self.project / "tests" / "journeys.yaml")
@@ -1270,6 +1288,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     # rebuild as an empty plan; the operator then keeps the active package.
     predecessor_activation = "initial"
     apply_upgrade_steps("BReg", BREG_UPGRADE_STEPS, project=breg.project)
+    breg.upgraded = True
     upgraded, upgraded_digest = breg.package(new, work / "build-upgraded", baseline=package)
     if breg_rebuild_changes(new, breg.runtime, upgraded):
         apply(upgraded, upgraded_digest)
