@@ -51,7 +51,7 @@ done
 # The journeys must answer what they claim to answer, not merely exit 0.
 check_output=$("$schedulingctl_bin" check "$work/standalone-exact-time")
 echo "$check_output" | grep -q '^Authoring check passed.$'
-echo "$check_output" | grep -q '^0 errors, 0 warnings in 4 files$'
+echo "$check_output" | grep -q '^0 errors, 0 warnings in 5 files$'
 test_output=$("$schedulingctl_bin" test "$work/standalone-exact-time")
 echo "$test_output" | grep -q '^Offline synthetic fixtures passed.$'
 echo "$test_output" | grep -q '^proofBoundary: offline_synthetic$'

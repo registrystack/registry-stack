@@ -1457,7 +1457,7 @@ mod tests {
             assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
             assert!(stderr.is_empty());
             assert_eq!(report["status"], "domain-refusal");
-            assert_eq!(report["filesChecked"], 4);
+            assert_eq!(report["filesChecked"], 5);
             let diagnostics = report["diagnostics"].as_array().unwrap();
             assert_eq!(diagnostics.len(), 1, "{report}");
             assert_eq!(diagnostics[0]["path"], "/openings/0/startTime");
@@ -1686,7 +1686,7 @@ mod tests {
         // check read close the report.
         assert!(text.contains("\"projectId\":\"registry-updates\""));
         assert!(
-            text.ends_with("0 errors, 0 warnings in 4 files\n"),
+            text.ends_with("0 errors, 0 warnings in 5 files\n"),
             "{text}"
         );
 
@@ -1710,7 +1710,7 @@ mod tests {
         assert!(text.contains("scheduling.yaml:"), "{text}");
         assert!(text.contains(" /openings/0/startTime\n"), "{text}");
         assert!(text.contains("\n  next: "), "{text}");
-        assert!(text.ends_with("1 error, 0 warnings in 4 files\n"), "{text}");
+        assert!(text.ends_with("1 error, 0 warnings in 5 files\n"), "{text}");
     }
 
     #[test]
@@ -1914,7 +1914,7 @@ mod tests {
         assert_eq!(exit, ExitCode::SUCCESS, "{report}");
         assert!(stderr.is_empty());
         assert_eq!(report["status"], "complete");
-        assert_eq!(report["filesChecked"], 5);
+        assert_eq!(report["filesChecked"], 6);
         assert_eq!(report["runtimeConfig"], runtime);
         assert_eq!(report["diagnostics"], json!([]));
 
@@ -1927,7 +1927,7 @@ mod tests {
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stderr.is_empty());
         assert_eq!(report["status"], "domain-refusal");
-        assert_eq!(report["filesChecked"], 5);
+        assert_eq!(report["filesChecked"], 6);
         assert_eq!(report["diagnostics"][0]["path"], "/retention/stray");
         assert_eq!(report["diagnostics"][0]["source"]["file"], runtime);
 

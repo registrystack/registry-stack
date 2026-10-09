@@ -164,6 +164,9 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
             }
         }
     }
+    if fixtures {
+        files += read_runtime_example(project, checked.map(|policy| &policy.value), &mut report)?;
+    }
     report.set_files_checked(files);
     Ok(ProjectReading {
         policy,
@@ -171,6 +174,46 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
         fixtures: readings,
         report,
     })
+}
+
+/// The runtime configuration example every template ships.
+const RUNTIME_EXAMPLE_FILE: &str = "runtime.example.yaml";
+
+/// Check the project's `runtime.example.yaml` as the runtime reads a runtime
+/// file, without the environment: an expression is checked by syntax only, so
+/// the placeholder paths and deferred secrets an example carries pass. Returns
+/// the number of files read, which is 0 for a project that has no example.
+fn read_runtime_example(
+    project: &Path,
+    policy: Option<&SchedulingPolicy>,
+    report: &mut Report,
+) -> Result<usize> {
+    let example = project.join(RUNTIME_EXAMPLE_FILE);
+    // The loader refuses a path through a symbolic link, and a project may
+    // sit under one.
+    let resolved = match fs::canonicalize(&example) {
+        Ok(resolved) => resolved,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", example.display())),
+    };
+    let resolved_name = resolved.display().to_string();
+    let given = example.display().to_string();
+    let runtime = check_runtime(&resolved, policy, false);
+    report.extend(Report::new(
+        runtime
+            .diagnostics
+            .into_iter()
+            .map(|mut diagnostic| {
+                if let Some(source) = &mut diagnostic.source {
+                    if source.file == resolved_name {
+                        source.file.clone_from(&given);
+                    }
+                }
+                diagnostic
+            })
+            .collect(),
+    ));
+    Ok(1)
 }
 
 /// Every fixture file under `project/fixtures`, in name order. A project
@@ -834,8 +877,8 @@ mod tests {
         assert_eq!(report["ok"], true);
         assert_eq!(report["command"], "check");
         assert_eq!(report["diagnostics"], json!([]));
-        // The policy, the records, and both fixtures.
-        assert_eq!(report["filesChecked"], 4);
+        // The policy, the records, both fixtures, and the runtime example.
+        assert_eq!(report["filesChecked"], 5);
         assert_eq!(report["networkAccess"], false);
         assert_eq!(report["databaseAccess"], false);
         let effective = &report["effective"];
@@ -890,7 +933,32 @@ mod tests {
             ]
         );
         let report = crate::configuration_report(&error).unwrap();
-        assert_eq!(report.files_checked(), Some(4));
+        assert_eq!(report.files_checked(), Some(5));
+    }
+
+    /// The runtime example ships in the project, so a check reads it as the
+    /// runtime reads a runtime file, and a pristine one passes with its
+    /// placeholder paths and deferred secrets.
+    #[test]
+    fn check_refuses_a_runtime_example_the_runtime_would_refuse() {
+        let (_root, project) = initialized("standalone-exact-time");
+        assert_eq!(check(&project, false).unwrap()["filesChecked"], 5);
+        edit(
+            &project,
+            "runtime.example.yaml",
+            "retention:\n",
+            "retention:\n  stray: 1\n",
+        );
+        let error = check(&project, false).unwrap_err();
+        let refused = refusals(&project, &error);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(
+            refused[0].starts_with("runtime.example.yaml:")
+                && refused[0].ends_with(" /retention/stray config.unknown-key"),
+            "{refused:?}"
+        );
+        let report = crate::configuration_report(&error).unwrap();
+        assert_eq!(report.files_checked(), Some(5));
     }
 
     #[test]
@@ -920,7 +988,7 @@ mod tests {
         let report = test(&project).unwrap();
         assert_eq!(report["command"], "test");
         assert_eq!(report["diagnostics"], json!([]));
-        assert_eq!(report["filesChecked"], 4);
+        assert_eq!(report["filesChecked"], 5);
         assert_eq!(report["proofBoundary"], "offline_synthetic");
         assert_eq!(report["productionClosure"], false);
         assert_eq!(report["networkAccess"], false);
@@ -1106,7 +1174,7 @@ mod tests {
                 ["fixtures  scheduling.fixture.none"]
             );
             // A check has nothing to replay, so it passes.
-            assert_eq!(check(&project, false).unwrap()["filesChecked"], 2);
+            assert_eq!(check(&project, false).unwrap()["filesChecked"], 3);
             fs::remove_dir(&fixtures).unwrap_or(());
         }
     }
@@ -1138,7 +1206,7 @@ mod tests {
         let checked =
             check_runtime_config(&project, &runtime, false, false, check(&project, false)).unwrap();
         assert_eq!(checked["runtimeConfig"], runtime.display().to_string());
-        assert_eq!(checked["filesChecked"], 5);
+        assert_eq!(checked["filesChecked"], 6);
 
         fs::write(
             &runtime,
@@ -1156,6 +1224,6 @@ mod tests {
         );
         // The refusal still counts the project files the check read.
         let report = crate::configuration_report(&error).unwrap();
-        assert_eq!(report.files_checked(), Some(5));
+        assert_eq!(report.files_checked(), Some(6));
     }
 }
