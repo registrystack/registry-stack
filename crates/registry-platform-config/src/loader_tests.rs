@@ -301,8 +301,19 @@ fn removed_keys_are_refused_with_their_replacement_named() {
         "use listener.bind."
     );
     // `server` is not a member either, so it is reported beside the removed
-    // key below it.
-    assert!(has_code(&error, "config.removed-key"), "{error}");
+    // key below it; the removed key decides.
+    let reported: Vec<(&str, &str)> = error
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect();
+    assert_eq!(
+        reported,
+        [
+            ("config.unknown-key", "/server"),
+            ("config.removed-key", "/server/bind"),
+        ]
+    );
 
     let error = parse(&format!(
         "{}sources:\n  people:\n    file: /data/people.sqlite\n",
@@ -324,7 +335,7 @@ fn cfg_diag_5_the_envelope_is_checked_before_removed_keys() {
             env(&[]),
         )
         .expect_err("envelope first");
-    assert!(is_envelope_refusal(&error), "{error}");
+    assert_deciding(&error, "config.wrong-kind", "/kind", "envelope first");
     assert!(error
         .diagnostics()
         .iter()
@@ -424,7 +435,12 @@ fn a_retired_api_version_is_refused_with_its_replacement() {
             env(&[]),
         )
         .expect_err("retired apiVersion refuses");
-    assert!(is_envelope_refusal(&error), "{error}");
+    assert_deciding(
+        &error,
+        "config.retired-api-version",
+        "/apiVersion",
+        "retired apiVersion",
+    );
     let diagnostic = &error.diagnostics()[0];
     assert_eq!(diagnostic.code, "config.retired-api-version");
     assert_eq!(diagnostic.path, "/apiVersion");
@@ -444,15 +460,27 @@ fn a_retired_api_version_is_refused_with_its_replacement() {
 
 #[test]
 fn the_envelope_must_be_literal() {
-    for text in [
-        "kind: ExampleRuntimeConfig\n".to_owned(),
-        format!("apiVersion: {}\nkind: Other\n", ENVELOPE.api_version),
-        format!("apiVersion: ${{API}}\nkind: {}\n", ENVELOPE.kind),
+    for (text, code, path) in [
+        (
+            "kind: ExampleRuntimeConfig\n".to_owned(),
+            "config.missing-envelope",
+            "",
+        ),
+        (
+            format!("apiVersion: {}\nkind: Other\n", ENVELOPE.api_version),
+            "config.wrong-kind",
+            "/kind",
+        ),
+        (
+            format!("apiVersion: ${{API}}\nkind: {}\n", ENVELOPE.kind),
+            "config.substitution-not-allowed",
+            "/apiVersion",
+        ),
     ] {
         let error = loader()
             .parse_str::<Example>(&text, env(&[("API", ENVELOPE.api_version)]))
             .expect_err("envelope refuses");
-        assert!(is_envelope_refusal(&error), "{text}");
+        assert_deciding(&error, code, path, &text);
     }
 }
 
@@ -460,23 +488,32 @@ fn the_envelope_must_be_literal() {
 fn an_envelope_refusal_points_at_the_member_at_fault() {
     // The reader reports a missing member at the mapping that lacks it, so
     // that diagnostic points at the root.
-    for (text, field) in [
+    for (text, code, path) in [
         (
             format!("apiVersion: other/v1\nkind: {}\n", ENVELOPE.kind),
-            "apiVersion",
+            "config.unsupported-api-version",
+            "/apiVersion",
         ),
         (
             format!("apiVersion: {}\nkind: Other\n", ENVELOPE.api_version),
-            "kind",
+            "config.wrong-kind",
+            "/kind",
         ),
+        (
+            format!("kind: {}\n", ENVELOPE.kind),
+            "config.missing-envelope",
+            "",
+        ),
+        (
+            format!("apiVersion: {}\n", ENVELOPE.api_version),
+            "config.missing-envelope",
+            "",
+        ),
+        ("name: x\n".to_owned(), "config.missing-envelope", ""),
     ] {
         let error = parse(&text).expect_err("envelope refuses");
-        assert!(is_envelope_refusal(&error), "{text}");
-        assert_eq!(error.deciding_diagnostic().path, pointer(field), "{text}");
+        assert_deciding(&error, code, path, &text);
     }
-    let missing = parse(&format!("kind: {}\n", ENVELOPE.kind)).expect_err("refuses");
-    assert_eq!(missing.diagnostics()[0].code, "config.missing-envelope");
-    assert_eq!(missing.diagnostics()[0].path, "");
 }
 
 #[test]
@@ -488,20 +525,32 @@ fn a_refusal_is_small_enough_for_the_products_to_carry_in_their_errors() {
 
 #[test]
 fn the_document_must_be_one_mapping_with_string_keys_and_no_tags() {
-    for text in [
-        format!("{}name: [unterminated\n", header()),
-        format!("{}---\n{}", header(), header()),
-        "- a\n- b\n".to_owned(),
-        format!("{}1: x\n", header()),
-        format!("{}name: !custom x\n", header()),
-        format!("{}name: a\nname: b\n", header()),
+    for (text, code, path) in [
+        (
+            format!("{}name: [unterminated\n", header()),
+            "yaml.unexpected-end",
+            "/name/1",
+        ),
+        (
+            format!("{}---\n{}", header(), header()),
+            "yaml.multiple-documents",
+            "",
+        ),
+        ("- a\n- b\n".to_owned(), "config.invalid-type", ""),
+        (format!("{}1: x\n", header()), "yaml.non-string-key", "/1"),
+        (
+            format!("{}name: !custom x\n", header()),
+            "yaml.tag",
+            "/name",
+        ),
+        (
+            format!("{}name: a\nname: b\n", header()),
+            "yaml.duplicate-key",
+            "/name",
+        ),
     ] {
         let error = parse(&text).expect_err("syntax refuses");
-        assert!(
-            error.deciding_diagnostic().code.starts_with("yaml.")
-                || error.deciding_diagnostic().code == "config.invalid-type",
-            "{text}: {error}"
-        );
+        assert_deciding(&error, code, path, &text);
     }
 }
 
@@ -627,18 +676,14 @@ fn environment_expressions_are_detected_in_authored_yaml() {
 fn the_authored_check_fails_closed_on_text_that_does_not_parse() {
     // An authored file the check cannot read is refused, never waved through
     // to a parser that might accept what this reader could not.
-    for text in [
-        "a: [unterminated ${HOST}\n",
-        "a: b\n  c: d\n",
-        "a: 1\na: 2\n",
+    for (text, code, path) in [
+        ("a: [unterminated ${HOST}\n", "yaml.syntax", "/a/1"),
+        ("a: b\n  c: d\n", "yaml.syntax", ""),
+        ("a: 1\na: 2\n", "yaml.duplicate-key", "/a"),
     ] {
         let error =
             reject_environment_expressions_in_authored_yaml(text).expect_err("unparsed refuses");
-        assert_ne!(
-            error.deciding_diagnostic().code,
-            "config.substitution-not-allowed",
-            "{text}"
-        );
+        assert_deciding(&error, code, path, text);
         assert!(!error.to_string().contains("HOST"), "{error}");
     }
 }
@@ -776,7 +821,7 @@ mod files {
         let error = loader()
             .load_with::<Example>(&empty, env(&[]))
             .expect_err("empty refuses");
-        assert!(is_envelope_refusal(&error), "{error}");
+        assert_deciding(&error, "config.missing-envelope", "", "empty file");
 
         let large = root.join("large.yaml");
         std::fs::write(&large, format!("{}name: {}\n", header(), "x".repeat(200))).unwrap();
@@ -906,18 +951,14 @@ fn pointer(field: &str) -> String {
     format!("/{}", field.replace('.', "/"))
 }
 
-fn is_envelope_refusal(error: &RuntimeConfigError) -> bool {
-    matches!(
-        error.deciding_diagnostic().code.as_str(),
-        "config.missing-envelope"
-            | "config.wrong-kind"
-            | "config.unsupported-api-version"
-            | "config.retired-api-version"
-            | "config.deprecated-api-version"
-            | "config.expected-string"
-            | "config.null-value"
-            | "config.substitution-not-allowed"
-    )
+/// The deciding diagnostic carries exactly this code at exactly this path.
+fn assert_deciding(error: &RuntimeConfigError, code: &str, path: &str, context: &str) {
+    let deciding = error.deciding_diagnostic();
+    assert_eq!(
+        (deciding.code.as_str(), deciding.path.as_str()),
+        (code, path),
+        "{context}: {error}"
+    );
 }
 
 fn has_code(error: &RuntimeConfigError, code: &str) -> bool {
@@ -972,8 +1013,12 @@ fn cfg_sec_2_api_version_and_kind_are_never_substituted() {
         let error = loader()
             .parse_str::<Example>(&text, lookup())
             .expect_err("envelope refuses");
-        assert!(is_envelope_refusal(&error), "{text}");
-        assert_eq!(error.deciding_diagnostic().path, pointer(member));
+        assert_deciding(
+            &error,
+            "config.substitution-not-allowed",
+            &pointer(member),
+            &text,
+        );
         assert!(
             has_code(&error, "config.substitution-not-allowed"),
             "{error}"
