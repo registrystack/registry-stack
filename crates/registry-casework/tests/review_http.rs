@@ -1380,6 +1380,151 @@ async fn source_context_review_history_notes_and_clocks_require_current_pinned_s
 }
 
 #[tokio::test]
+async fn review_task_cursor_refusals_are_concealed_result_expired_problems_over_http() {
+    let idp = MockIdp::start().await;
+    let (app, service, revoked, _, _, _, database) = app_with_database(&idp).await;
+    let source_request = review_request_for_subject(
+        "cursor-source-canary",
+        "cursor-source-canary",
+        &idp.issuer(),
+    );
+    let (accepted, anchor) = create_task(&app, &database, &idp, &source_request).await;
+    let (_, following) = create_task(
+        &app,
+        &database,
+        &idp,
+        &review_request_for_subject("cursor-following", "cursor-following", &idp.issuer()),
+    )
+    .await;
+    let problem = |response: axum::response::Response| async move {
+        assert_eq!(response.status(), StatusCode::GONE);
+        assert_eq!(response.headers()[CONTENT_TYPE], "application/problem+json");
+        let body: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), 32 * 1024)
+                .await
+                .expect("bounded cursor problem"),
+        )
+        .expect("cursor problem JSON");
+        assert_eq!(body["code"], "review.result-expired");
+        assert_eq!(body["status"], 410);
+        assert_eq!(
+            body["type"],
+            registry_casework::problem::ProblemCode::ReviewResultExpired.type_uri()
+        );
+        assert_eq!(body.as_object().expect("problem object").len(), 6);
+        assert!(!body.to_string().contains("cursor-source-canary"));
+        body
+    };
+    for (path, principal, profile) in [
+        ("/v1/review-tasks", "reviewer", "staff"),
+        ("/v1/review-tasks/supervision", "supervisor", "supervisor"),
+    ] {
+        let bearer = idp.mint_token(json!({
+            "aud": AUDIENCE,
+            "registry_principal": principal,
+            "scope": format!("casework:{profile}"),
+            "registry_actor_kind": "human"
+        }));
+        let list = |cursor: Uuid, source_profile: Option<&str>, queue: &str| {
+            let mut request = Request::builder()
+                .uri(format!("{path}?queue={queue}&cursor={cursor}&limit=1"))
+                .header("authorization", format!("Bearer {bearer}"))
+                .header(CASEWORK_PROFILE_HEADER, profile);
+            if let Some(source_profile) = source_profile {
+                request = request.header(SOURCE_PROFILE_HEADER, source_profile);
+            }
+            app.clone().oneshot(
+                request
+                    .body(Body::empty())
+                    .expect("cursor task page request"),
+            )
+        };
+        let authorized = list(anchor, Some("reviewer-source"), "review")
+            .await
+            .expect("authorized source cursor response");
+        assert_eq!(authorized.status(), StatusCode::OK);
+        let authorized: Value = serde_json::from_slice(
+            &to_bytes(authorized.into_body(), 32 * 1024)
+                .await
+                .expect("bounded authorized cursor page"),
+        )
+        .expect("authorized cursor page JSON");
+        assert_eq!(authorized["items"].as_array().unwrap().len(), 1);
+        assert_eq!(authorized["items"][0]["taskId"], following.to_string());
+
+        for (cursor, source_profile, queue) in [
+            (Uuid::new_v4(), Some("reviewer-source"), "review"),
+            (anchor, None, "review"),
+            (anchor, Some("other-source-profile"), "review"),
+            (anchor, Some("reviewer-source"), "elsewhere"),
+        ] {
+            problem(list(cursor, source_profile, queue).await.unwrap()).await;
+        }
+        revoked.store(true, Ordering::SeqCst);
+        problem(
+            list(anchor, Some("reviewer-source"), "review")
+                .await
+                .unwrap(),
+        )
+        .await;
+        revoked.store(false, Ordering::SeqCst);
+    }
+    service
+        .cancel_review_request(
+            &ActorContext {
+                principal: registry_casework_core::IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "registry-service".to_owned(),
+                },
+                profile_id: "producer".to_owned(),
+                role: CaseworkRole::Requester,
+            },
+            accepted.request_id,
+            registry_casework_core::ReviewCancelRequest {
+                subject: source_request.subject,
+                reason: "End the cursor fixture".to_owned(),
+            },
+            "cancel-cursor-anchor",
+        )
+        .await
+        .expect("settle cursor anchor before expiry");
+    database
+        .execute(
+            "UPDATE casework_review_requests SET terminal_at=now()-interval '91 days',
+             result_available_until=now()-interval '1 day' WHERE request_id=$1",
+            &[&accepted.request_id],
+        )
+        .await
+        .expect("expire the retained cursor anchor");
+    for (path, principal, profile) in [
+        ("/v1/review-tasks", "reviewer", "staff"),
+        ("/v1/review-tasks/supervision", "supervisor", "supervisor"),
+    ] {
+        let bearer = idp.mint_token(json!({
+            "aud": AUDIENCE,
+            "registry_principal": principal,
+            "scope": format!("casework:{profile}"),
+            "registry_actor_kind": "human"
+        }));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{path}?cursor={anchor}"))
+                    .header("authorization", format!("Bearer {bearer}"))
+                    .header(CASEWORK_PROFILE_HEADER, profile)
+                    .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                    .body(Body::empty())
+                    .expect("expired cursor request"),
+            )
+            .await
+            .expect("expired cursor response");
+        problem(response).await;
+    }
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn review_task_inbox_continues_after_the_configured_source_read_budget() {
     let idp = MockIdp::start().await;
     let (app, service, _, _, _, _) = app(&idp).await;

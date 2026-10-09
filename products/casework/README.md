@@ -148,15 +148,30 @@ caller's current source visibility. Resolving an event id through
 `GET /v1/review-accountability/{eventId}` performs that endpoint's independent
 Supervisor authority and audit checks.
 
-Reviewer and Supervisor task cursors identify an immutable task creation and id
-position in a live walk. Continue with the same queue and ownership filters.
-Each page rechecks current membership, queue service, retention, and task
-existence; reviewer pages also recheck the pinned deciding profile. A claim,
-release, or decision at the cursor anchor does not invalidate it, and the
-original policy anchor need not remain active. Restart without a cursor after a
-refresh or filter change to see earlier rows that newly entered the view.
-An unknown, erased, expired, or no-longer-authorized cursor anchor returns
-`410 review.result-expired`; so does continuing it under a different queue.
+Reviewer and Supervisor task cursors resume an immutable task creation and id
+position in a live walk. Pass `nextCursor` unchanged with the same caller,
+Casework profile, source profile, queue and ownership filters. A disclosed task
+anchor uses its task UUID and requires current source visibility before its
+position is accepted. Each page rechecks current membership, queue service,
+retention and task existence; reviewer pages also recheck the pinned deciding
+profile. A claim, release or decision at the anchor does not invalidate it, and
+the original policy anchor need not remain active. Restart without a cursor
+after a refresh or filter change to see earlier rows that newly entered the view.
+
+A page stopped by a source-read budget, candidate scan or deadline can need to
+continue past an undisclosed candidate. Its `nextCursor` is then an opaque UUID
+checkpoint in the existing expiring cursor mechanism, not a task reference.
+The checkpoint lasts at most 15 minutes, is bound to the caller, both selected
+profiles and the exact list view and filters, and is erased with its anchor's
+review result. It saves only a scan position. Every returned row still requires
+current Casework and source authority. Unknown, erased, expired or
+no-longer-authorized anchors and mismatched checkpoints all return
+`410 review.result-expired`; restart without a cursor after this refusal.
+
+The configured source-read budget bounds candidate preflights. A supplied
+source-backed task anchor adds at most one preflight under the same page
+deadline. Internal scan positions and issued checkpoints add no anchor source
+read, so a one-read candidate budget can still advance past hidden work.
 
 Every mutation checks the current task revision, membership, queue service,
 exclusions, and idempotency binding in the committing transaction.

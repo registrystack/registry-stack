@@ -5958,6 +5958,372 @@ async fn a_display_schema_the_source_disclosure_fails_is_logged_for_the_operator
 }
 
 #[tokio::test]
+async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_progress() {
+    for supervisory in [false, true] {
+        for source_profile in [None, Some("staff")] {
+            let fixture = fixture().await;
+            let mut bounded_project = project("2");
+            bounded_project.review_kinds[0].context_strategy = ReviewContextStrategy::Source;
+            bounded_project.inbox = InboxPolicy {
+                default_page_size: 1,
+                maximum_candidate_scan: 2,
+                maximum_source_reads: 1,
+                maximum_concurrent_source_reads: 1,
+                page_deadline_milliseconds: 5_000,
+            };
+            bounded_project.check().expect("bounded checkpoint project");
+            let service = CaseworkService::new(
+                fixture.store.clone(),
+                bounded_project,
+                [Arc::new(ReviewSource {
+                    revoked: Arc::clone(&fixture.source_revoked),
+                    state: Arc::clone(&fixture.source_state),
+                    read_blocked: Arc::clone(&fixture.source_read_blocked),
+                    read_started: Arc::clone(&fixture.source_read_started),
+                    read_continue: Arc::clone(&fixture.source_read_continue),
+                    advanced: Arc::clone(&fixture.source_advanced),
+                }) as Arc<dyn SourceAdapter>],
+            )
+            .expect("bounded checkpoint service");
+            let mut hidden = Vec::new();
+            for index in 0..3 {
+                let subject = format!("record-checkpoint-{index}");
+                let mut source_request = request(&subject, &format!("checkpoint-ref-{index}"));
+                source_request.context = ReviewContext::Source {
+                    binding: SourceContextBinding {
+                        reference: format!("registry:record:{subject}"),
+                    },
+                };
+                let created = service
+                    .create_review_request(
+                        &fixture.producer,
+                        source_request.clone(),
+                        &format!("create-checkpoint-{index}"),
+                    )
+                    .await
+                    .expect("create source candidate");
+                hidden.push((
+                    created.accepted.request_id,
+                    task_id(&fixture, created.accepted.request_id, 0).await,
+                    source_request.subject,
+                ));
+            }
+            let submitted = fixture
+                .service_v1
+                .create_review_request(
+                    &fixture.producer,
+                    request("record-checkpoint-visible", "checkpoint-visible-ref"),
+                    "create-checkpoint-visible",
+                )
+                .await
+                .expect("create a submitted candidate after hidden source candidates");
+            let visible = task_id(&fixture, submitted.accepted.request_id, 0).await;
+            let actor = if supervisory {
+                fixture.supervisor.clone()
+            } else {
+                fixture.reviewer_a.clone()
+            };
+            let read = |actor: ActorContext,
+                        source_profile: Option<&'static str>,
+                        queue: Option<&'static str>,
+                        ownership: Option<registry_casework_core::ReviewTaskOwnership>,
+                        supervisory: bool,
+                        cursor: Option<Uuid>| {
+                let service = service.clone();
+                async move {
+                    if supervisory {
+                        service
+                            .supervisory_review_tasks(
+                                &actor,
+                                source_profile,
+                                "human-bearer",
+                                queue,
+                                cursor,
+                                10,
+                            )
+                            .await
+                            .map(|page| {
+                                (
+                                    page.items
+                                        .iter()
+                                        .map(|task| task.task_id)
+                                        .collect::<Vec<_>>(),
+                                    page.next_cursor,
+                                    page.status,
+                                )
+                            })
+                    } else {
+                        service
+                            .review_tasks_with_ownership(
+                                &actor,
+                                source_profile,
+                                "human-bearer",
+                                queue,
+                                ownership,
+                                cursor,
+                                10,
+                            )
+                            .await
+                            .map(|page| {
+                                (
+                                    page.items
+                                        .iter()
+                                        .map(|task| task.task_id)
+                                        .collect::<Vec<_>>(),
+                                    page.next_cursor,
+                                    page.status,
+                                )
+                            })
+                    }
+                }
+            };
+            fixture.source_revoked.store(true, Ordering::SeqCst);
+            let first = read(
+                actor.clone(),
+                source_profile,
+                Some("review"),
+                None,
+                supervisory,
+                None,
+            )
+            .await
+            .expect("first bounded hidden page");
+            assert!(first.0.is_empty());
+            assert_eq!(first.2, registry_casework_core::PageStatus::BudgetExhausted);
+            let checkpoint = first.1.expect("hidden candidates retain a continuation");
+            assert!(hidden.iter().all(|(_, task, _)| *task != checkpoint));
+            assert_ne!(checkpoint, visible);
+            let bounded_expiry: bool = fixture
+                .database
+                .query_one(
+                    "SELECT expires_at>now() AND expires_at<=now()+interval '15 minutes'
+                     FROM casework_cursors WHERE cursor_id=$1 AND last_item_id=$2",
+                    &[&checkpoint, &hidden[0].1],
+                )
+                .await
+                .expect("checkpoint uses the existing expiring position store")
+                .get(0);
+            assert!(bounded_expiry);
+
+            let mut different_profile = actor.clone();
+            different_profile.profile_id = "other-profile".to_owned();
+            for (reader, selected_source, queue, ownership, view) in [
+                (
+                    fixture.reviewer_b.clone(),
+                    source_profile,
+                    Some("review"),
+                    None,
+                    false,
+                ),
+                (
+                    different_profile,
+                    source_profile,
+                    Some("review"),
+                    None,
+                    supervisory,
+                ),
+                (
+                    actor.clone(),
+                    Some("other-source-profile"),
+                    Some("review"),
+                    None,
+                    supervisory,
+                ),
+                (actor.clone(), source_profile, None, None, supervisory),
+            ] {
+                assert!(matches!(
+                    read(
+                        reader,
+                        selected_source,
+                        queue,
+                        ownership,
+                        view,
+                        Some(checkpoint)
+                    )
+                    .await,
+                    Err(ReviewRuntimeError::ResultExpired)
+                ));
+            }
+            assert!(matches!(
+                read(
+                    actor.clone(),
+                    source_profile,
+                    Some("review"),
+                    Some(registry_casework_core::ReviewTaskOwnership::Unclaimed),
+                    false,
+                    Some(checkpoint),
+                )
+                .await,
+                Err(ReviewRuntimeError::ResultExpired)
+            ));
+            if supervisory {
+                assert!(matches!(
+                    read(
+                        actor.clone(),
+                        source_profile,
+                        Some("review"),
+                        None,
+                        false,
+                        Some(checkpoint)
+                    )
+                    .await,
+                    Err(ReviewRuntimeError::ResultExpired)
+                ));
+            }
+
+            let mut cursor = Some(checkpoint);
+            let mut delivered = Vec::new();
+            for _ in 0..3 {
+                let page = read(
+                    actor.clone(),
+                    source_profile,
+                    Some("review"),
+                    None,
+                    supervisory,
+                    cursor,
+                )
+                .await
+                .expect("continue past an undisclosed candidate");
+                delivered.extend(page.0);
+                cursor = page.1;
+                if cursor.is_none() {
+                    assert_eq!(page.2, registry_casework_core::PageStatus::Complete);
+                    break;
+                }
+                assert_eq!(page.2, registry_casework_core::PageStatus::BudgetExhausted);
+            }
+            assert!(cursor.is_none(), "bounded progress reaches the end");
+            assert_eq!(delivered, [visible]);
+
+            let membership = if supervisory { "supervisor" } else { "staff" };
+            set_review_membership(&fixture, &actor, membership, false).await;
+            assert!(matches!(
+                read(
+                    actor.clone(),
+                    source_profile,
+                    Some("review"),
+                    None,
+                    supervisory,
+                    Some(checkpoint)
+                )
+                .await,
+                Err(ReviewRuntimeError::ResultExpired)
+            ));
+            set_review_membership(&fixture, &actor, membership, true).await;
+            fixture.database.execute(
+                "UPDATE casework_cursors SET expires_at=now()-interval '1 second' WHERE cursor_id=$1",
+                &[&checkpoint],
+            ).await.expect("expire the checkpoint");
+            assert!(matches!(
+                read(
+                    actor.clone(),
+                    source_profile,
+                    Some("review"),
+                    None,
+                    supervisory,
+                    Some(checkpoint)
+                )
+                .await,
+                Err(ReviewRuntimeError::ResultExpired)
+            ));
+            assert!(
+                fixture
+                    .store
+                    .erase_expired_cursors()
+                    .await
+                    .expect("existing cursor cleanup")
+                    > 0
+            );
+            assert!(fixture
+                .database
+                .query_opt(
+                    "SELECT cursor_id FROM casework_cursors WHERE cursor_id=$1",
+                    &[&checkpoint],
+                )
+                .await
+                .unwrap()
+                .is_none());
+
+            let checkpoint = read(
+                actor.clone(),
+                source_profile,
+                Some("review"),
+                None,
+                supervisory,
+                None,
+            )
+            .await
+            .unwrap()
+            .1
+            .expect("a new checkpoint before review expiry");
+            service
+                .cancel_review_request(
+                    &fixture.producer,
+                    hidden[0].0,
+                    ReviewCancelRequest {
+                        subject: hidden[0].2.clone(),
+                        reason: "Settle the checkpoint fixture".to_owned(),
+                    },
+                    "cancel-checkpoint-anchor",
+                )
+                .await
+                .expect("settle the hidden anchor");
+            // Age the whole terminal lifecycle, as in the retention fixtures,
+            // so completion delivery does not outlive the backdated result.
+            let now = Utc::now();
+            for statement in [
+                "UPDATE casework_review_results
+                 SET completed_at=$2,available_until=$3 WHERE request_id=$1",
+                "UPDATE casework_review_terminal_events
+                 SET completed_at=$2,retained_until=$3 WHERE request_id=$1",
+                "UPDATE casework_review_completion_outbox
+                 SET next_attempt_at=$2,retained_until=$3 WHERE request_id=$1",
+                "UPDATE casework_review_requests
+                 SET terminal_at=$2,result_available_until=$3 WHERE request_id=$1",
+            ] {
+                fixture
+                    .database
+                    .execute(
+                        statement,
+                        &[
+                            &hidden[0].0,
+                            &(now - TimeDelta::days(91)),
+                            &(now - TimeDelta::days(1)),
+                        ],
+                    )
+                    .await
+                    .expect("expire the retained review lifecycle behind the checkpoint");
+            }
+            assert!(matches!(
+                read(
+                    actor,
+                    source_profile,
+                    Some("review"),
+                    None,
+                    supervisory,
+                    Some(checkpoint)
+                )
+                .await,
+                Err(ReviewRuntimeError::ResultExpired)
+            ));
+            service
+                .erase_expired_reviews()
+                .await
+                .expect("erase expired review and its checkpoint");
+            assert!(fixture
+                .database
+                .query_opt(
+                    "SELECT cursor_id FROM casework_cursors WHERE cursor_id=$1",
+                    &[&checkpoint],
+                )
+                .await
+                .unwrap()
+                .is_none());
+        }
+    }
+}
+
+#[tokio::test]
 async fn source_context_task_inbox_reports_a_first_read_deadline_without_losing_the_task() {
     let fixture = fixture().await;
     let mut bounded_project = project("2");
@@ -5985,26 +6351,44 @@ async fn source_context_task_inbox_reports_a_first_read_deadline_without_losing_
             reference: "registry:record:record-source-deadline".to_owned(),
         },
     };
-    fixture
+    let created = fixture
         .service_v2
         .create_review_request(&fixture.producer, source_request, "create-source-deadline")
         .await
         .expect("create deadline-bounded source review");
-    fixture.source_read_blocked.store(true, Ordering::SeqCst);
+    let anchor = task_id(&fixture, created.accepted.request_id, 0).await;
 
-    assert!(matches!(
-        bounded_service
-            .review_tasks(
-                &fixture.reviewer_a,
-                Some("staff"),
-                "human-bearer",
-                None,
-                None,
-                10,
+    for cursor in [None, Some(anchor)] {
+        fixture.source_read_blocked.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                bounded_service.review_tasks(
+                    &fixture.reviewer_a,
+                    Some("staff"),
+                    "human-bearer",
+                    None,
+                    cursor,
+                    10,
+                ),
             )
             .await,
-        Err(ReviewRuntimeError::SourceUnavailable)
-    ));
+            Ok(Err(ReviewRuntimeError::SourceUnavailable))
+        ));
+    }
+    let recovered = fixture
+        .service_v2
+        .review_tasks(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-bearer",
+            None,
+            None,
+            10,
+        )
+        .await
+        .expect("retry without losing the timed-out task");
+    assert_eq!(recovered.items[0].task_id, anchor);
 }
 
 #[tokio::test]
@@ -6104,6 +6488,142 @@ async fn review_task_lists_recheck_queue_after_source_io() {
         .expect("discover work in its current queue");
     assert_eq!(destination.items.len(), 1);
     assert_eq!(destination.items[0].queue, "intake");
+}
+
+#[tokio::test]
+async fn review_task_cursor_rechecks_scope_after_source_io() {
+    for supervisory in [false, true] {
+        for change in ["membership", "queue", "retention"] {
+            let fixture = fixture().await;
+            let mut source_request = request("record-cursor-race", "producer-ref-cursor-race");
+            source_request.context = ReviewContext::Source {
+                binding: SourceContextBinding {
+                    reference: "registry:record:record-cursor-race".to_owned(),
+                },
+            };
+            let created = fixture
+                .service_v2
+                .create_review_request(
+                    &fixture.producer,
+                    source_request.clone(),
+                    "create-cursor-race",
+                )
+                .await
+                .expect("create source-context cursor anchor");
+            let anchor = task_id(&fixture, created.accepted.request_id, 0).await;
+            let mut following = request("record-cursor-following", "producer-ref-cursor-following");
+            following.context = ReviewContext::Source {
+                binding: SourceContextBinding {
+                    reference: "registry:record:record-cursor-following".to_owned(),
+                },
+            };
+            fixture
+                .service_v2
+                .create_review_request(&fixture.producer, following, "create-cursor-following")
+                .await
+                .expect("create a task after the anchor");
+            fixture
+                .database
+                .batch_execute(
+                    "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+                     VALUES('intake','review-team',1)",
+                )
+                .await
+                .expect("the same team serves both queues");
+            if change == "retention" {
+                fixture
+                    .service_v2
+                    .cancel_review_request(
+                        &fixture.producer,
+                        created.accepted.request_id,
+                        ReviewCancelRequest {
+                            subject: source_request.subject,
+                            reason: "Settle the retained cursor fixture".to_owned(),
+                        },
+                        "cancel-cursor-race",
+                    )
+                    .await
+                    .expect("a terminal anchor remains valid within retention");
+            }
+            let actor = if supervisory {
+                fixture.supervisor.clone()
+            } else {
+                fixture.reviewer_a.clone()
+            };
+            let service = fixture.service_v2.clone();
+            let reader = actor.clone();
+            fixture.source_read_blocked.store(true, Ordering::SeqCst);
+            let list = tokio::spawn(async move {
+                if supervisory {
+                    service
+                        .supervisory_review_tasks(
+                            &reader,
+                            Some("staff"),
+                            "human-bearer",
+                            Some("review"),
+                            Some(anchor),
+                            10,
+                        )
+                        .await
+                        .map(|page| page.items.len())
+                } else {
+                    service
+                        .review_tasks(
+                            &reader,
+                            Some("staff"),
+                            "human-bearer",
+                            Some("review"),
+                            Some(anchor),
+                            10,
+                        )
+                        .await
+                        .map(|page| page.items.len())
+                }
+            });
+            fixture.source_read_started.notified().await;
+            match change {
+                "membership" => {
+                    set_review_membership(
+                        &fixture,
+                        &actor,
+                        if supervisory { "supervisor" } else { "staff" },
+                        false,
+                    )
+                    .await;
+                }
+                "queue" => {
+                    fixture
+                        .database
+                        .execute(
+                            "UPDATE casework_review_tasks SET queue_id='intake' WHERE task_id=$1",
+                            &[&anchor],
+                        )
+                        .await
+                        .expect("move only the cursor anchor during source I/O");
+                }
+                "retention" => {
+                    fixture
+                        .database
+                        .execute(
+                            "UPDATE casework_review_requests SET terminal_at=now()-interval '91 days',
+                             result_available_until=now()-interval '1 day' WHERE request_id=$1",
+                            &[&created.accepted.request_id],
+                        )
+                        .await
+                        .expect("expire only the cursor anchor during source I/O");
+                }
+                _ => unreachable!(),
+            }
+            fixture.source_read_continue.notify_one();
+            assert!(
+                matches!(
+                    list.await.expect("cursor request joins"),
+                    Err(ReviewRuntimeError::ResultExpired)
+                ),
+                "cursor authority changed during source I/O: {change}, supervisory={supervisory}"
+            );
+        }
+    }
 }
 
 #[tokio::test]

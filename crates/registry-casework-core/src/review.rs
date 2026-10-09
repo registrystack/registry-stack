@@ -487,6 +487,9 @@ pub struct ReviewerTask {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewTaskPage {
     pub items: Vec<ReviewerTask>,
+    /// Pass unchanged with the same caller, profiles and filters. A cursor
+    /// after an undisclosed candidate is an opaque expiring scan checkpoint,
+    /// not a task identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<Uuid>,
     /// Whether the page stopped early: `budget_exhausted` when the source-read
@@ -523,6 +526,9 @@ pub struct SupervisoryReviewTask {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SupervisoryReviewTaskPage {
     pub items: Vec<SupervisoryReviewTask>,
+    /// Pass unchanged with the same caller, profiles and queue. A cursor
+    /// after an undisclosed candidate is an opaque expiring scan checkpoint,
+    /// not a task identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<Uuid>,
     pub status: crate::PageStatus,
