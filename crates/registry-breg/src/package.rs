@@ -29,7 +29,7 @@ use std::borrow::Cow;
 use thiserror::Error;
 
 use crate::artifacts::{restore_effective_model_planner_origins, REGISTRY_METADATA_ARTIFACT_PATH};
-use crate::compiler::{compile_project_with_assets, CompileProfile};
+use crate::compiler::{compile_project_with_assets, module_digest_with_assets, CompileProfile};
 use crate::contract::{
     parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource, RegistryModule,
     RegistryProject,
@@ -4584,6 +4584,27 @@ fn authored_source(bytes: &[u8], spelling: SourceSpelling) -> Result<Cow<'_, [u8
     }
 }
 
+/// Lock each module of a predecessor project under the digest this release
+/// computes for it. A module digest covers the module as its release
+/// serialized it, and an earlier release serialized access members this
+/// release reads with their meaning, so the sealed lock names a value this
+/// release cannot compute. The lock adds nothing a predecessor read relies
+/// on: the verified closure already binds every module byte to the package
+/// digest the caller pinned, and the release that sealed the package checked
+/// the lock when it built it. A module the project does not lock, a lock
+/// without a module, and a version that differs are still refused.
+fn relock_predecessor_modules(
+    project: &mut RegistryProject,
+    modules: &[RegistryModule],
+    assets: &[ModuleAssetSource],
+) {
+    for lock in &mut project.modules {
+        if let Some(module) = modules.iter().find(|module| module.id == lock.id) {
+            lock.digest = Some(module_digest_with_assets(module, assets));
+        }
+    }
+}
+
 /// Compile the sources of one verified package closure. The caller
 /// decides whether generated artifacts must also match byte for byte.
 fn compile_package_sources(
@@ -4602,7 +4623,7 @@ fn compile_package_sources(
     let project_bytes = loaded
         .get(&manifest.sources.project)
         .ok_or(PackageError::Derivation)?;
-    let project = parse_project_yaml(&authored_source(project_bytes, spelling)?)
+    let mut project = parse_project_yaml(&authored_source(project_bytes, spelling)?)
         .map_err(|_| PackageError::Derivation)?;
     let modules = manifest
         .sources
@@ -4619,6 +4640,9 @@ fn compile_package_sources(
         })
         .collect::<Result<Vec<RegistryModule>>>()?;
     let module_assets = captured_compiler_assets(manifest, loaded)?;
+    if matches!(spelling, SourceSpelling::Predecessor) {
+        relock_predecessor_modules(&mut project, &modules, &module_assets);
+    }
     let project_assets = module_assets
         .iter()
         .filter(|asset| asset.module.is_none())

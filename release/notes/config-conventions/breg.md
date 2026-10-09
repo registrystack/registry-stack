@@ -1675,6 +1675,11 @@ false` is dropped, and a `null` optional member reads as absent. Each keeps the
 meaning the earlier release gave it. This applies to the predecessor only: a
 project or module you check, build, package as the successor, or start still
 refuses the empty list.
+A predecessor's module lock is not compared with its module either: the
+earlier release computed that digest over the spellings it wrote, and the
+sealed package already binds every module byte to the package digest the
+rehearsal names. A predecessor that locks a module therefore compiles for a
+rehearsal; a module whose version differs from its lock is still refused.
 The predecessor's sealed sources are read through the shared reader's
 structural pass, so a sealed source outside the YAML subset (an anchor, an
 alias, a tag, a merge key, or a duplicate key) is no longer a readable upgrade

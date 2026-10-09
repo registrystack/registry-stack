@@ -31,9 +31,9 @@ use registry_breg::package::{
 #[cfg(feature = "tooling")]
 use registry_breg::package::{
     compiled_registry_change_set_from_baseline, inspect_package_integrity,
-    load_predecessor_package, prepare_package, prepare_package_with_project_assets,
-    PackageEnvelope, PackageError, PackageFileRole, PackageLoadContext, PreparedPackage,
-    MAX_RHAI_PLANNER_SOURCE_BYTES,
+    load_predecessor_package, load_predecessor_rehearsal_baseline, prepare_package,
+    prepare_package_with_project_assets, PackageEnvelope, PackageError, PackageFileRole,
+    PackageLoadContext, PreparedPackage, MAX_RHAI_PLANNER_SOURCE_BYTES,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
@@ -398,6 +398,124 @@ fn rhai_planner_predecessor_without_a_declared_origin_is_refused() {
             "declaringOrigin removed: {remove_origin}"
         );
     }
+}
+
+/// A digest an earlier release locked a module under. That release hashed
+/// its own serialization of the module, which carried the access members it
+/// wrote; this release serializes the meaning of those members, so it cannot
+/// compute the value again and any digest of the earlier release reads the
+/// same way.
+#[cfg(feature = "tooling")]
+const EARLIER_RELEASE_MODULE_LOCK: &str =
+    "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+
+/// Publish the base package with its sealed module and lock rewritten to the
+/// form an earlier release sealed: every module profile reaches every row
+/// with `rowBoundaries: []`, demands no scope by omitting `requiredScopes`,
+/// and says `anonymous: false`; the project locks the module under the digest
+/// that release computed.
+#[cfg(feature = "tooling")]
+fn publish_earlier_release_locked_module(package: &std::path::Path) -> PreparedPackage {
+    let source = source_for_variant(Variant::Base);
+    let prepared = prepare_package(build_request(
+        None,
+        source.project_bytes.clone(),
+        source.module_bytes.clone(),
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    ))
+    .expect("the base package builds");
+    prepared.publish_to_directory(package).unwrap();
+
+    let mut module: serde_json::Value = serde_json::from_slice(&source.module_bytes).unwrap();
+    for entity in module["entities"].as_array_mut().unwrap() {
+        for profile in entity["accessProfiles"].as_array_mut().unwrap() {
+            let profile = profile.as_object_mut().unwrap();
+            assert_eq!(
+                profile.remove("requiredScopes"),
+                Some(json!("unrestricted"))
+            );
+            assert_eq!(
+                profile.insert("rowBoundaries".to_owned(), json!([])),
+                Some(json!("unrestricted"))
+            );
+            profile.insert("anonymous".to_owned(), json!(false));
+        }
+    }
+    let mut project: serde_json::Value = serde_json::from_slice(&source.project_bytes).unwrap();
+    project["modules"][0]["digest"] = json!(EARLIER_RELEASE_MODULE_LOCK);
+
+    let manifest_path = package.join("package.json");
+    let mut envelope: PackageEnvelope =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    for (path, value) in [
+        ("source/modules/core/module.yaml", &module),
+        ("source/registry.yaml", &project),
+    ] {
+        let bytes = serde_json::to_vec(value).unwrap();
+        fs::write(package.join(path), &bytes).unwrap();
+        let entry = envelope
+            .manifest
+            .files
+            .iter_mut()
+            .find(|entry| entry.path == path)
+            .expect("the package lists the source");
+        entry.size = bytes.len() as u64;
+        entry.sha256 = digest(&bytes);
+    }
+    fs::write(&manifest_path, canonical(&envelope)).unwrap();
+    refresh_shared_package_envelope(package);
+    prepared
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn a_predecessor_with_a_locked_module_in_the_earlier_access_spelling_compiles_for_a_rehearsal() {
+    let root = tempfile::Builder::new()
+        .prefix("registry-locked-module-predecessor-")
+        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .unwrap();
+    let package = root.path().join("package");
+    let current = publish_earlier_release_locked_module(&package);
+    let context = PackageLoadContext {
+        database_initialization_environment: "local",
+    };
+
+    let (predecessor, registry) = load_predecessor_rehearsal_baseline(&package, &context)
+        .expect("a sealed predecessor with a locked module compiles for a rehearsal");
+    assert_eq!(
+        predecessor.migration_baseline().registry_id,
+        "neutral-registry"
+    );
+    // The earlier spellings keep their meaning, so the predecessor compiles
+    // to the schema the same project has in this release's spelling.
+    assert_eq!(registry.ddl().script(), current.registry().ddl().script());
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn a_predecessor_module_changed_after_it_was_sealed_is_still_refused() {
+    // The sealed closure, not the module lock, is what binds a predecessor's
+    // module bytes: a module edited after sealing fails the closure check
+    // before any source is compiled.
+    let root = tempfile::Builder::new()
+        .prefix("registry-locked-module-tamper-")
+        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .unwrap();
+    let package = root.path().join("package");
+    publish_earlier_release_locked_module(&package);
+    let module_path = package.join("source/modules/core/module.yaml");
+    let mut bytes = fs::read(&module_path).unwrap();
+    bytes.push(b'\n');
+    fs::write(&module_path, bytes).unwrap();
+
+    let refused = load_predecessor_rehearsal_baseline(
+        &package,
+        &PackageLoadContext {
+            database_initialization_environment: "local",
+        },
+    )
+    .err();
+    assert_eq!(refused, Some(PackageError::Envelope));
 }
 
 #[cfg(feature = "tooling")]
