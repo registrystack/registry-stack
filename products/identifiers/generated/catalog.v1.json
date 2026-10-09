@@ -3107,7 +3107,7 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "5054e4ddd407f0104c88c6b084684fc85eb4437517845df26cfa886647bcfa13"
+        "sha256": "5957a538ecc946aa930b9210a825e9e410bb3f216f68277b921b9938c8d24141"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
@@ -3125,7 +3125,7 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "5054e4ddd407f0104c88c6b084684fc85eb4437517845df26cfa886647bcfa13"
+        "sha256": "5957a538ecc946aa930b9210a825e9e410bb3f216f68277b921b9938c8d24141"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
@@ -3197,7 +3197,7 @@
       "description": "Base Registry Engine runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "5054e4ddd407f0104c88c6b084684fc85eb4437517845df26cfa886647bcfa13"
+        "sha256": "5957a538ecc946aa930b9210a825e9e410bb3f216f68277b921b9938c8d24141"
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
@@ -3449,7 +3449,7 @@
       "description": "Registry Casework fixture JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "90463ee0113e3d86b5e974c1d29ecdaa53bf445a2f86155f791e846e62e7eee6"
+        "sha256": "30f6f9c079764cf3f6037659d559e0c4be7e38a408dcb1ba77b35e66b8617e36"
       },
       "artifact": {
         "path": "products/casework/generated/fixture/fixture.schema.json",
@@ -3467,7 +3467,7 @@
       "description": "Registry Casework holiday set JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "90463ee0113e3d86b5e974c1d29ecdaa53bf445a2f86155f791e846e62e7eee6"
+        "sha256": "30f6f9c079764cf3f6037659d559e0c4be7e38a408dcb1ba77b35e66b8617e36"
       },
       "artifact": {
         "path": "products/casework/generated/holiday-set/holiday-set.schema.json",
@@ -3557,7 +3557,7 @@
       "description": "Registry Casework project JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "90463ee0113e3d86b5e974c1d29ecdaa53bf445a2f86155f791e846e62e7eee6"
+        "sha256": "30f6f9c079764cf3f6037659d559e0c4be7e38a408dcb1ba77b35e66b8617e36"
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
@@ -3629,7 +3629,7 @@
       "description": "Registry Casework simulation JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "90463ee0113e3d86b5e974c1d29ecdaa53bf445a2f86155f791e846e62e7eee6"
+        "sha256": "30f6f9c079764cf3f6037659d559e0c4be7e38a408dcb1ba77b35e66b8617e36"
       },
       "artifact": {
         "path": "products/casework/generated/simulation/simulation.schema.json",
@@ -3881,7 +3881,7 @@
       "description": "Evidence code list JSON Schema.",
       "source": {
         "path": "crates/registry-evidence/src/schema.rs",
-        "sha256": "9c38223af0f149388d15ddc6715ddca152da85084928cf2307770321dd467fa1"
+        "sha256": "5369bd256d7731c2f6648ba9e4cd0aa638dfd26be4e023163a93b7009deef42e"
       },
       "artifact": {
         "path": "products/evidence/generated/codelist/codelist.schema.json",
@@ -3899,7 +3899,7 @@
       "description": "Evidence fixture JSON Schema.",
       "source": {
         "path": "crates/registry-evidence/src/schema.rs",
-        "sha256": "9c38223af0f149388d15ddc6715ddca152da85084928cf2307770321dd467fa1"
+        "sha256": "5369bd256d7731c2f6648ba9e4cd0aa638dfd26be4e023163a93b7009deef42e"
       },
       "artifact": {
         "path": "products/evidence/generated/fixture/fixture.schema.json",
@@ -4277,7 +4277,7 @@
       "description": "Registry Scheduling fixture JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling-core/src/schema.rs",
-        "sha256": "e9ad23ee1bd7f91ae0dbef75b46d2edaf99d644f50d47d036e0f512ae26464be"
+        "sha256": "f7aacc60249cd9317cc7a40e546b83c33043b6309adca6f2a2adfbf4021ab454"
       },
       "artifact": {
         "path": "products/scheduling/generated/fixture/fixture.schema.json",
@@ -4295,7 +4295,7 @@
       "description": "Registry Scheduling project JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling-core/src/schema.rs",
-        "sha256": "e9ad23ee1bd7f91ae0dbef75b46d2edaf99d644f50d47d036e0f512ae26464be"
+        "sha256": "f7aacc60249cd9317cc7a40e546b83c33043b6309adca6f2a2adfbf4021ab454"
       },
       "artifact": {
         "path": "products/scheduling/generated/project/project.schema.json",
@@ -4313,7 +4313,7 @@
       "description": "Registry Scheduling records JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling-core/src/schema.rs",
-        "sha256": "e9ad23ee1bd7f91ae0dbef75b46d2edaf99d644f50d47d036e0f512ae26464be"
+        "sha256": "f7aacc60249cd9317cc7a40e546b83c33043b6309adca6f2a2adfbf4021ab454"
       },
       "artifact": {
         "path": "products/scheduling/generated/records/records.schema.json",
