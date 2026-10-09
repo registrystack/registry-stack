@@ -854,3 +854,217 @@ apiVersion
 kind
 ```
 <!-- evidence-authoring-project-marker-key-paths:end -->
+
+### `access/clients/<id>.yaml`
+
+A local access client document names one caller of a development Evidence
+runtime. `apiVersion` and `kind` are the envelope in the table above.
+`clientId` is the lowercase client identifier, `status` is `active` or
+`revoked`, and `policies` lists the access policies the client is assigned.
+`principal` and `evidenceAudience` must both equal the local URI derived from
+`clientId`. `keys` holds exactly one public JWK for the client. `exchange` is
+optional local issuer wiring for a client whose authority comes from a task
+assertion; it grants no access. Its `kind` is `institutional-grant` or
+`first-party`, `bootstrapScope` is one bounded OAuth scope token,
+`bootstrapResource` is a bounded resource URI (when it is omitted, the issuer
+owner's default resource applies, not the Evidence resource), and
+`sourceIssuer` is the issuer URL, which a `first-party` exchange requires and
+an `institutional-grant` exchange refuses because that issuer comes from its
+governed task policy. A `first-party` exchange also requires
+`bootstrapResource`.
+
+<!-- evidence-authoring-access-client-key-paths:start -->
+```text
+apiVersion
+clientId
+evidenceAudience
+exchange
+exchange.bootstrapResource
+exchange.bootstrapScope
+exchange.kind
+exchange.sourceIssuer
+keys
+kind
+policies
+policies[]
+principal
+status
+```
+<!-- evidence-authoring-access-client-key-paths:end -->
+
+### `access/policies/<id>.yaml`
+
+The policy document is described in "Local access policies" above: `id` is the
+policy identifier and `questions` lists the question ids it covers.
+`taskGrant` is optional and names the trusted task-grant origin for every
+question in the policy. Its `kind` names the grant kind, `sourceIssuer` is the
+issuer URL, and `requesterClients` lists the client identifiers allowed to
+request under it. Each entry of `bindings` ties one authored selector field to
+a verified-token claim path: `question` is the question id, `selectorProfile`
+the selector profile, `role` the role within it, and `valueClaims` maps each
+local identifier of the selector's fields to the claim path that supplies it.
+
+<!-- evidence-authoring-access-policy-key-paths:start -->
+```text
+apiVersion
+id
+kind
+questions
+questions[]
+taskGrant
+taskGrant.bindings
+taskGrant.bindings[]
+taskGrant.bindings[].question
+taskGrant.bindings[].role
+taskGrant.bindings[].selectorProfile
+taskGrant.bindings[].valueClaims
+taskGrant.bindings[].valueClaims.*
+taskGrant.kind
+taskGrant.requesterClients
+taskGrant.requesterClients[]
+taskGrant.sourceIssuer
+```
+<!-- evidence-authoring-access-policy-key-paths:end -->
+
+### `mocks/source.yaml`
+
+The mock plan configures the source mock that `evidencectl` serves from an
+OpenAPI description. `openapi` names that description and `openapiDigest`
+optionally pins it as a `sha256:` digest. `generation` holds the settings that
+`generate --config` keeps to create missing response bodies: `contract` names
+the contract, `seed` is the generator seed, `asOf` is an ISO calendar date, and
+`datasets` maps local identifiers to the `sha256:` digest of each dataset.
+Each entry of `operations` is one configured GET operation, identified by
+`method` plus the templated `path`, with an optional `operationId`. Its
+`response` carries `status`, which is always 200, and `mediaType`. Each entry
+of its `cases` has a `name`, a `body`, and a `request` whose `pathParameters`
+bind each template parameter name to one string, boolean, or number.
+
+<!-- evidence-authoring-mock-plan-key-paths:start -->
+```text
+apiVersion
+generation
+generation.asOf
+generation.contract
+generation.datasets
+generation.datasets.*
+generation.seed
+kind
+openapi
+openapiDigest
+operations
+operations[]
+operations[].cases
+operations[].cases[]
+operations[].cases[].body
+operations[].cases[].name
+operations[].cases[].request
+operations[].cases[].request.pathParameters
+operations[].cases[].request.pathParameters.*
+operations[].method
+operations[].operationId
+operations[].path
+operations[].response
+operations[].response.mediaType
+operations[].response.status
+```
+<!-- evidence-authoring-mock-plan-key-paths:end -->
+
+### `selectors/<name>.yaml`
+
+A selector profile is a member of the Evidence bundle grammar. Only the
+envelope is checked when the file is read; `evidencectl check` validates every
+other key against `bundle.schema.yaml` after the compile, so the keys a profile
+may carry are those of that grammar and are not listed here.
+
+<!-- evidence-authoring-selector-key-paths:start -->
+```text
+apiVersion
+kind
+```
+<!-- evidence-authoring-selector-key-paths:end -->
+
+### `sources/<name>.yaml`
+
+A source definition is a member of the Evidence bundle grammar. Only the
+envelope is checked when the file is read; `evidencectl check` validates every
+other key against `bundle.schema.yaml` after the compile, so the keys a source
+may carry are those of that grammar and are not listed here.
+
+<!-- evidence-authoring-source-key-paths:start -->
+```text
+apiVersion
+kind
+```
+<!-- evidence-authoring-source-key-paths:end -->
+
+### Source import resolution file
+
+A resolution file records what to do with each artifact a source import could
+not decide. `artifacts` maps an artifact identifier, at most 256 of them, to
+one resolution. The `type` of a resolution is `keep` (keep the current file),
+`adopt` (take the upstream file), or `file` (use the file named by `path`, read relative to the resolution file).
+`path` is allowed and required only for `file`. The reader checks and strips
+`apiVersion` and `kind`.
+
+<!-- evidence-authoring-source-resolution-key-paths:start -->
+```text
+apiVersion
+artifacts
+artifacts.*
+artifacts.*.path
+artifacts.*.type
+kind
+```
+<!-- evidence-authoring-source-resolution-key-paths:end -->
+
+### A target's `governance.yaml`
+
+A target's governance document carries the governance members of the bundle
+grammar into the bundle as written. `assuranceProfile` is `local`,
+`production`, or `evidence-grade`. Every other member (`service`, `issuer`,
+`authentication`, `audit`, `subjectBinding`, `rateLimits`, `signing`,
+`authorityProfiles`, and the optional `publication`, `responseFormats`, and
+`sourceConnections`) is a passthrough node: the reader does not look inside
+it, and `evidencectl check` validates it against `bundle.schema.yaml` after the
+compile. Every member except the last three is required.
+
+<!-- evidence-authoring-target-governance-key-paths:start -->
+```text
+apiVersion
+assuranceProfile
+audit
+authentication
+authorityProfiles
+issuer
+kind
+publication
+rateLimits
+responseFormats
+service
+signing
+sourceConnections
+subjectBinding
+```
+<!-- evidence-authoring-target-governance-key-paths:end -->
+
+### `settings.yaml` for `target new`
+
+The settings file is what `target new --settings` writes a target from.
+`publicKeys` maps the name of each public key file the target carries to the path of the file that supplies it, read relative to the settings file. `governance` is a
+passthrough node holding the governance members of the bundle grammar;
+`evidencectl check` validates it against `bundle.schema.yaml` after the
+compile. `runtime` is a passthrough node holding the runtime document of the
+runtime grammar; `target new` validates it against `runtime.schema.yaml` before
+it writes the target.
+
+<!-- evidence-authoring-target-settings-key-paths:start -->
+```text
+apiVersion
+governance
+kind
+publicKeys
+publicKeys.*
+runtime
+```
+<!-- evidence-authoring-target-settings-key-paths:end -->

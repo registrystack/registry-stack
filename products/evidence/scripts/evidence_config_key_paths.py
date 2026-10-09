@@ -75,6 +75,62 @@ CONTRACTS = {
         reference=AUTHORING_REFERENCE,
         marker="evidence-authoring-project-marker-key-paths",
     ),
+    "authoring-access-client": Contract(
+        schema=(
+            "crates/registry-evidencectl/schemas/authoring/access-client.schema.json"
+        ),
+        reference=AUTHORING_REFERENCE,
+        marker="evidence-authoring-access-client-key-paths",
+    ),
+    "authoring-access-policy": Contract(
+        schema=(
+            "crates/registry-evidencectl/schemas/authoring/access-policy.schema.json"
+        ),
+        reference=AUTHORING_REFERENCE,
+        marker="evidence-authoring-access-policy-key-paths",
+    ),
+    "authoring-mock-plan": Contract(
+        schema=(
+            "crates/registry-evidencectl/schemas/authoring/mock-plan.schema.json"
+        ),
+        reference=AUTHORING_REFERENCE,
+        marker="evidence-authoring-mock-plan-key-paths",
+    ),
+    "authoring-selector": Contract(
+        schema=(
+            "crates/registry-evidencectl/schemas/authoring/selector.schema.json"
+        ),
+        reference=AUTHORING_REFERENCE,
+        marker="evidence-authoring-selector-key-paths",
+    ),
+    "authoring-source": Contract(
+        schema=(
+            "crates/registry-evidencectl/schemas/authoring/source.schema.json"
+        ),
+        reference=AUTHORING_REFERENCE,
+        marker="evidence-authoring-source-key-paths",
+    ),
+    "authoring-source-resolution": Contract(
+        schema=(
+            "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json"
+        ),
+        reference=AUTHORING_REFERENCE,
+        marker="evidence-authoring-source-resolution-key-paths",
+    ),
+    "authoring-target-governance": Contract(
+        schema=(
+            "crates/registry-evidencectl/schemas/authoring/target-governance.schema.json"
+        ),
+        reference=AUTHORING_REFERENCE,
+        marker="evidence-authoring-target-governance-key-paths",
+    ),
+    "authoring-target-settings": Contract(
+        schema=(
+            "crates/registry-evidencectl/schemas/authoring/target-settings.schema.json"
+        ),
+        reference=AUTHORING_REFERENCE,
+        marker="evidence-authoring-target-settings-key-paths",
+    ),
 }
 
 FENCE = "```"
