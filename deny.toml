@@ -116,6 +116,7 @@ allow-workspace = false
 # nothing until it returns; this ban refuses the return itself.
 # `products/platform/scripts/check-yaml-reader-boundary.sh` requires it.
 deny = [
+  { crate = "saphyr-parser", wrappers = ["registry-platform-yaml"], reason = "the YAML subset parser is reached only through registry_platform_yaml (CFG-YAML-1)" },
   { crate = "serde_yaml_ng", reason = "read YAML through registry_platform_yaml::Document::decode or RuntimeConfigLoader, and write it with serde_norway (CFG-YAML-1)" },
 ]
 skip = []

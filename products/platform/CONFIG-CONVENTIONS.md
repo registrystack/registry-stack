@@ -192,8 +192,10 @@ behavior depended on the target type: duplicate keys refused in one product
 and silently last-wins in another, `id: null` read as the text `"null"`, line
 numbers in some errors and none in others.
 *Enforced by:* `disallowed-methods` in every `clippy.toml` in the repository
-(each repeats the list, since clippy does not merge them), with the proof
-script; the conformance corpus.
+(each repeats the list, since clippy does not merge them), run by workspace
+clippy with `-D warnings`; `products/platform/scripts/check-yaml-reader-boundary.sh`
+(with `check-yaml-reader-boundary.py`), which proves every entry still refuses
+its call and audits each suppression; the conformance corpus.
 
 **CFG-YAML-2 (MUST). Duplicate keys are refused in every mapping,** naming
 both lines (`yaml.duplicate-key`).
@@ -901,7 +903,7 @@ Each MUST rule appears once; SHOULD rules are in the last row.
 | Rules | Gate |
 |---|---|
 | CFG-ENV-1, 4; CFG-YAML-2 to 8; CFG-VAL-1 to 3; CFG-EMPTY-1; CFG-SEC-2, 3; CFG-DIAG-1, 2, 5; CFG-CHANGE-2 | reader unit tests named with the rule ID; the conformance corpus; for CFG-ENV-1 also the convention lint (`const` envelope) |
-| CFG-YAML-1 | `disallowed-methods` in every `clippy.toml` in the repository, with the proof script; the conformance corpus; the convention lint's source scan (a reader that bypasses `registry-platform-yaml`) |
+| CFG-YAML-1 | `disallowed-methods` in every `clippy.toml` in the repository, with `check-yaml-reader-boundary.sh`; the conformance corpus |
 | CFG-ENV-2, 3, 6; CFG-NAME-1 to 5; CFG-ID-1, 6, 7; CFG-QTY-1 to 4; CFG-VAL-6, 7; CFG-EMPTY-2, 4; CFG-SEC-1; CFG-EMBED-2; CFG-SCHEMA-1, 3 to 6 | `check-config-conventions.py` over the registry and every schema, with the exceptions register as ratchet; for CFG-EMPTY-2 the lint checks the sentinel shape and review classifies each member as granting or restricting; for CFG-SEC-1 also the `SecretReference` parser tests; for CFG-ID-6 also the source lint (set types) and the corpus's duplicated set item; for CFG-QTY-4 also the corpus boundary sweep over the bounds each format's registered schema states |
 | CFG-SCHEMA-8; CFG-CHANGE-1 | source lint over the reader-type closure (`flatten`, `untagged`, `tag`, `alias`, set types); the corpus unknown-key sweep |
 | CFG-SCHEMA-2 | each product's schema drift check, in a job that runs on every pull request touching the product; the convention lint (a format with no generated schema) |
