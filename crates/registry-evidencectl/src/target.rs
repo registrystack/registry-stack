@@ -106,7 +106,7 @@ pub(crate) struct TargetSettings {
     pub(crate) governance: Value,
     #[cfg_attr(
         feature = "schema",
-        schemars(extend("x-registry-passthrough" = "The runtime document of the Evidence runtime grammar; `target new` validates it against runtime.schema.yaml before it writes the target."))
+        schemars(extend("x-registry-passthrough" = "The runtime document of the Evidence runtime grammar; `target new` checks only its top-level members against the closed runtime key set, and `evidence check`, `doctor` and startup check the contents against runtime.schema.yaml."))
     )]
     pub(crate) runtime: Value,
     #[serde(default)]
