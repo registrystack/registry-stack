@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 
 use registry_evidence_authoring::formats::{
     ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND, ACCESS_CLIENT_SCHEMA_ID, MOCK_PLAN_API_VERSION,
-    MOCK_PLAN_KIND, MOCK_PLAN_SCHEMA_ID, TARGET_SETTINGS_API_VERSION, TARGET_SETTINGS_KIND,
+    MOCK_PLAN_KIND, MOCK_PLAN_SCHEMA_ID, TARGET_GOVERNANCE_API_VERSION, TARGET_GOVERNANCE_KIND,
+    TARGET_GOVERNANCE_SCHEMA_ID, TARGET_SETTINGS_API_VERSION, TARGET_SETTINGS_KIND,
     TARGET_SETTINGS_SCHEMA_ID,
 };
 use registry_evidence_authoring::schema::publish;
@@ -24,6 +25,9 @@ pub const MOCK_PLAN_SCHEMA_FILE: &str = "mock-plan.schema.json";
 
 /// The schema for one source import resolution file.
 pub const SOURCE_RESOLUTION_SCHEMA_FILE: &str = "source-resolution.schema.json";
+
+/// The schema for one deployment target's `governance.yaml`.
+pub const TARGET_GOVERNANCE_SCHEMA_FILE: &str = "target-governance.schema.json";
 
 /// The schema for one deployment target's `settings.yaml`.
 pub const TARGET_SETTINGS_SCHEMA_FILE: &str = "target-settings.schema.json";
@@ -55,6 +59,15 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
             )?,
         ),
         (
+            TARGET_GOVERNANCE_SCHEMA_FILE,
+            publish(
+                crate::build::governance_document_schema(),
+                "Evidence deployment target governance",
+                TARGET_GOVERNANCE_SCHEMA_ID,
+                (TARGET_GOVERNANCE_API_VERSION, TARGET_GOVERNANCE_KIND),
+            )?,
+        ),
+        (
             TARGET_SETTINGS_SCHEMA_FILE,
             publish(
                 crate::target::settings_document_schema(),
@@ -79,7 +92,7 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
 mod tests {
     use super::{
         documents, ACCESS_CLIENT_SCHEMA_FILE, MOCK_PLAN_SCHEMA_FILE, SOURCE_RESOLUTION_SCHEMA_FILE,
-        TARGET_SETTINGS_SCHEMA_FILE,
+        TARGET_GOVERNANCE_SCHEMA_FILE, TARGET_SETTINGS_SCHEMA_FILE,
     };
 
     fn compile(file: &str) -> jsonschema::JSONSchema {
@@ -206,5 +219,58 @@ mod tests {
         ] {
             assert_eq!(reads(document.clone()), (accepted, accepted), "{document}");
         }
+    }
+
+    #[test]
+    fn target_governance_schema_and_reader_agree_on_the_top_level() {
+        use registry_evidence_authoring::formats::{decode_authored, TARGET_GOVERNANCE};
+
+        let schema = compile(TARGET_GOVERNANCE_SCHEMA_FILE);
+        let header = "apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1\nkind: EvidenceTargetGovernance\n";
+        let required = [
+            "assuranceProfile: local",
+            "service: {}",
+            "issuer: {}",
+            "authentication: {}",
+            "audit: {}",
+            "subjectBinding: {}",
+            "rateLimits: {}",
+            "signing: {}",
+            "authorityProfiles: {}",
+        ];
+        let optional = [
+            "publication: {}",
+            "responseFormats: {}",
+            "sourceConnections: {}",
+        ];
+        let document = |members: &[&str]| format!("{header}{}\n", members.join("\n"));
+        let agree = |text: String, accepted: bool| {
+            let value: serde_json::Value =
+                serde_norway::from_str(&text).expect("the test document is YAML");
+            let reader = decode_authored::<crate::build::TargetGovernance>(
+                "governance.yaml",
+                text.as_bytes(),
+                &TARGET_GOVERNANCE,
+            )
+            .is_ok();
+            assert_eq!(
+                (schema.is_valid(&value), reader),
+                (accepted, accepted),
+                "{text}"
+            );
+        };
+        agree(document(&required), true);
+        let mut with_optional = required.to_vec();
+        with_optional.extend(optional);
+        agree(document(&with_optional), true);
+        for index in 0..required.len() {
+            let mut without = required.to_vec();
+            without.remove(index);
+            agree(document(&without), false);
+        }
+        let mut unknown = required.to_vec();
+        unknown.push("unknown: true");
+        agree(document(&unknown), false);
+        agree(required.join("\n") + "\n", false);
     }
 }

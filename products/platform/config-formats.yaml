@@ -3297,7 +3297,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1
       kind: EvidenceTargetGovernance
-    schema: none
+    schema:
+      path: crates/registry-evidencectl/schemas/authoring/target-governance.schema.json
+      id: https://id.registrystack.org/schemas/evidence/target-governance/target-governance.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-evidencectl --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
+      driftCheck: products/evidence/scripts/check-authoring-schema.sh
     reader:
       crate: registry-evidencectl
       file: crates/registry-evidencectl/src/build.rs
@@ -3306,9 +3311,9 @@ formats:
     check: evidencectl check {project} --target {target}
     example: products/evidence/reference/deployment-targets/environments/local/evidence/governance.yaml
     conformance:
-      requiredText: /issuer/id
+      requiredText: none
       optionalText: none
-      integer: /rateLimits/burstPerPrincipal
+      integer: none
       boolean: none
     securityMembers: []
     restrictingMembers: []

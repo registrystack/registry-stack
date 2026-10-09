@@ -61,23 +61,73 @@ pub struct BuildArgs {
 /// bundle check holds each one to its closed shape; the format version is the
 /// document's `apiVersion`.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TargetGovernance {
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("enum" = ["local", "production", "evidence-grade"]))
+    )]
     assurance_profile: String,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
     service: Value,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_object"))]
     issuer: Value,
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
     publication: Option<Value>,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
     authentication: Value,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
     audit: Value,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
     subject_binding: Value,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
     rate_limits: Value,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
     signing: Value,
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
     response_formats: Option<Value>,
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
     source_connections: Option<Value>,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "bundle_member"))]
     authority_profiles: Value,
+}
+
+/// The derived JSON Schema of one target governance document.
+#[cfg(feature = "schema")]
+pub(crate) fn governance_document_schema() -> serde_json::Value {
+    let mut schema = serde_json::to_value(schemars::schema_for!(TargetGovernance))
+        .expect("a derived schema is JSON");
+    // An omitted optional member is simply absent from the bundle; the derived
+    // `null` default would say otherwise.
+    if let Some(Value::Object(properties)) = schema.get_mut("properties") {
+        for member in properties.values_mut().filter_map(Value::as_object_mut) {
+            member.remove("default");
+        }
+    }
+    schema
+}
+
+/// A governance member the bundle grammar holds to an object, copied as
+/// written by the compile.
+#[cfg(feature = "schema")]
+fn bundle_object(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    })
+}
+
+/// A governance member the compile copies unchanged into the bundle, so the
+/// Evidence bundle grammar owns its shape.
+#[cfg(feature = "schema")]
+fn bundle_member(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "x-registry-passthrough": "A member of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+    })
 }
 
 #[derive(Debug)]

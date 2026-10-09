@@ -121,6 +121,10 @@ SCHEMAS = {
         ("products/evidence/generated/client-profile/client-profile.schema.json", "*.profile.json"),
     ),
     "evidence-deployment": (
+        (
+            "crates/registry-evidencectl/schemas/authoring/target-governance.schema.json",
+            "governance.yaml",
+        ),
         ("products/evidence/contracts/runtime.schema.yaml", "runtime.yaml"),
         ("products/evidence/contracts/bundle.schema.yaml", "bundle/evidence.yaml"),
         ("products/evidence/contracts/holder-bound-verification-policy.schema.yaml", "holder-bound*.policy.yaml"),
