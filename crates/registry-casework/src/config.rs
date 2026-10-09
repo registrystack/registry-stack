@@ -901,6 +901,12 @@ impl RuntimeConfig {
                 document_ref,
             ));
         }
+        if let Some(authority) = &self.task_authority {
+            references.push((
+                "taskAuthority.signingKeyRef".to_owned(),
+                authority.signing_key_ref.as_str(),
+            ));
+        }
         for (field, raw) in references {
             if let Err(error) = self.secret_providers.check_reference(&field, raw) {
                 findings.push(error.into());
@@ -3595,6 +3601,41 @@ reviewProducers:
                 if block.kind() == registry_platform_config::ConfigBlockErrorKind::SecretProviderDisabled
         ));
         assert_eq!(error.path(), "database.runtimeUrlRef");
+    }
+
+    /// The task signing key is resolved at startup, so the offline check must
+    /// refuse a reference to a provider the runtime does not enable.
+    #[test]
+    fn the_task_signing_key_reference_names_a_provider_that_is_enabled() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document["secretProviders"] = serde_json::json!({"environment": {}});
+        document["audit"]["hashKeyRef"] = "secret:env/AUDIT".into();
+        let source = &mut document["sources"]["professional"];
+        for member in ["clientIdRef", "clientAssertionKeyRef", "webhookSecretRef"] {
+            source[member] = "secret:env/SOURCE".into();
+        }
+        document["taskAuthority"] = serde_json::json!({
+            "issuer": "https://casework.example.test",
+            "exchangeAudience": "https://casework.example.test/exchange",
+            "signingKeyRef": "secret:file/task-key",
+            "statusClients": {}
+        });
+        let operator = write_operator(root.path(), &document);
+        let config = RuntimeConfig::loader()
+            .load::<RuntimeConfig>(&operator)
+            .unwrap()
+            .config;
+        let secret_findings: Vec<_> = config
+            .findings(None)
+            .into_iter()
+            .filter(|finding| finding.code() == "casework.runtime.secret-provider-disabled")
+            .collect();
+        assert_eq!(secret_findings.len(), 1, "{secret_findings:?}");
+        assert_eq!(secret_findings[0].path(), "taskAuthority.signingKeyRef");
     }
 
     /// RFC 9068 gives the access token one media type spelled two ways,
