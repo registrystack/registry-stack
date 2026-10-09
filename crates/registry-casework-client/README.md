@@ -14,6 +14,12 @@ accountability references, and its state is a holder-free string. A single decid
 recovery exposes the caller's own decision without private reasons or result
 data.
 
+Pass review-task `next_cursor` values unchanged with the same caller, profiles
+and query filters. A continuation past undisclosed candidates is an opaque UUID
+scan checkpoint valid for at most 15 minutes, so it cannot be used as a task id.
+On `410 review.result-expired`, restart without the cursor. Task rows remain
+subject to current source visibility, Casework membership and retention.
+
 The client takes a bearer token and explicit Casework profile for each call.
 Source-reading calls also take an explicit source profile. It never retains a
 human token or follows redirects, and it resends a mutation only under the

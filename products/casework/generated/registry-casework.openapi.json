@@ -14098,7 +14098,7 @@
             }
           },
           {
-            "description": "Last delivered task UUID. It identifies an immutable created-at and task-id scan position, not a snapshot. Continue with the same queue and ownership filters. Current membership, queue service, pinned deciding profile, retention, and task existence are rechecked; ownership and the original policy anchor's active status are not cursor validity conditions. An unknown, erased, expired, no-longer-authorized, or different-queue anchor returns 410 review.result-expired. Refresh or change a filter by restarting without a cursor.",
+            "description": "Returned continuation UUID for a live created-at and task-id scan position. Pass unchanged with the same caller, Casework and source profiles, queue and ownership filters. A disclosed task anchor is its task UUID and requires current source visibility. After an undisclosed candidate, a bounded page instead issues an opaque scan checkpoint lasting at most 15 minutes and bound to the exact caller, profiles, view and filters. A checkpoint grants no task or source authority. Current membership, queue service, pinned deciding profile, retention and task existence are rechecked. Ownership and the original policy anchor's active status are not task-anchor validity conditions. Unknown, erased, expired, no-longer-authorized or different-queue anchors and mismatched checkpoints return 410 review.result-expired. Refresh or change a filter by restarting without a cursor. A source-backed task anchor adds at most one preflight outside the candidate source-read budget, under the same page deadline.",
             "in": "query",
             "name": "cursor",
             "required": false,
@@ -14141,9 +14141,6 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemCursorInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
                     },
                     {
@@ -14159,7 +14156,7 @@
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid, request.limit-out-of-range, source-profile.not-applicable, source-profile.required",
+            "description": "Problem response: request.invalid, request.limit-out-of-range, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14246,11 +14243,11 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                  "$ref": "#/components/schemas/ProblemReviewResultExpired"
                 }
               }
             },
-            "description": "Problem response: cursor.expired",
+            "description": "Problem response: review.result-expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14381,7 +14378,7 @@
             }
           },
           {
-            "description": "Last delivered task UUID. It identifies an immutable created-at and task-id scan position, not a snapshot. Continue with the same queue filter. Current Supervisor membership, queue service, retention, and task existence are rechecked; the original policy anchor's active status is not a cursor validity condition. An unknown, erased, expired, no-longer-authorized, or different-queue anchor returns 410 review.result-expired. Refresh or change the filter by restarting without a cursor.",
+            "description": "Returned continuation UUID for a live created-at and task-id scan position. Pass unchanged with the same caller, Casework and source profiles and queue filter. A disclosed task anchor is its task UUID and requires current source visibility. After an undisclosed candidate, a bounded page instead issues an opaque scan checkpoint lasting at most 15 minutes and bound to the exact caller, profiles and supervisory view and queue. A checkpoint grants no task or source authority. Current Supervisor membership, queue service, retention and task existence are rechecked; a deciding profile and the original policy anchor's active status are not required. Unknown, erased, expired, no-longer-authorized or different-queue anchors and mismatched checkpoints return 410 review.result-expired. Refresh or change the filter by restarting without a cursor. A source-backed task anchor adds at most one preflight outside the candidate source-read budget, under the same page deadline.",
             "in": "query",
             "name": "cursor",
             "required": false,
@@ -14424,9 +14421,6 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemCursorInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
                     },
                     {
@@ -14442,7 +14436,7 @@
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid, request.limit-out-of-range, source-profile.not-applicable, source-profile.required",
+            "description": "Problem response: request.invalid, request.limit-out-of-range, source-profile.not-applicable, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14529,11 +14523,11 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemCursorExpired"
+                  "$ref": "#/components/schemas/ProblemReviewResultExpired"
                 }
               }
             },
-            "description": "Problem response: cursor.expired",
+            "description": "Problem response: review.result-expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
