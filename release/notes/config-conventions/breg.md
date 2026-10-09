@@ -1830,6 +1830,19 @@ a consent recipient organization, still needs each of them listed, so
 `unrestricted` does not start with such a project, as an omitted member did
 not.
 
+`bregctl check <project> --runtime-config runtime.yaml` holds the runtime file
+to the project it is checked with. It refuses the file when the project names
+a client in a profile's `requesterClients`, in `authorityClaims.trustedActors`,
+or in a consent recipient organization that `allowedClients` does not list
+(`breg.runtime.clients-unlisted`), and when the configured principal claim is not
+the one the project's access profiles require
+(`breg.runtime.principal-claim-mismatch`). A mapping of authority claims the
+runtime would refuse at startup is refused offline as
+`breg.runtime.invalid-authority-claims`. A list that spells a wildcard item
+is warned of (`breg.access.wildcard-spelled-item`). A registry started with
+`allowedClients: unrestricted` logs the closed event
+`startup.authentication.clients_unrestricted` once, with no configured value.
+
 `bregctl dev` writes the list of clients its session admits, and writes
 `unrestricted` when the session has no client to name. `bregctl init`
 writes a list.
