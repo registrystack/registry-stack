@@ -404,6 +404,15 @@ checks each format without starting the service. Run it in your pipeline before 
 the project directory or runtime file it names. A format marked None has no check command of its
 own; the program that reads it refuses it when it starts.
 
+A check command that takes a project takes the project directory, not a file inside it (`discoveryctl`
+names it with `--project`), and a
+`--runtime-config` argument names the runtime file. Both accept a relative or an absolute path;
+`bregctl check` also refuses a project path with a `..` component, so name the directory from its
+parent or give its absolute path. `bregctl check reg`, `bregctl check "$PWD/reg"`,
+`schedulingctl check scheduling`, and `schedulingctl check scheduling --runtime-config
+scheduling/runtime.yaml` all run. A command that goes beyond an offline check, such as `bregctl
+doctor`, may require an absolute runtime file; its reference says so.
+
 Every check command reads its files through the shared reader, applies the rules the runtime would
 apply that need no network or database, and reads no secret. It reports in two forms and ends with
 an exit code.
