@@ -1629,6 +1629,15 @@ fn minimal_example() -> PathBuf {
         .expect("the minimal example exists")
 }
 
+/// Everything a run wrote, standard output then standard error.
+fn human_output(output: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
 /// The minimal example's runtime file with `edit` applied, written into a
 /// scratch directory so the check reads it from a path the test chose.
 fn edited_runtime_config(scratch: &TestProject, edit: impl Fn(&str) -> String) -> PathBuf {
@@ -1776,6 +1785,19 @@ fn check_refuses_a_runtime_that_lists_none_of_the_clients_a_profile_names() {
     assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic}");
     // The refusal names the member, never a configured client.
     assert!(!report.to_string().contains("portal"), "{report}");
+
+    let human = bregctl(&[
+        "check",
+        path(scratch.path()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(
+        human_output(&human).contains("breg.runtime.clients-unlisted"),
+        "{human:?}"
+    );
+    assert!(!human_output(&human).contains("portal"), "{human:?}");
 }
 
 #[test]
@@ -1805,6 +1827,68 @@ fn check_refuses_a_principal_claim_the_access_profiles_do_not_use() {
         "/authentication/authorityClaims/principal"
     );
     assert!(!report.to_string().contains("other_principal"), "{report}");
+
+    let human = bregctl(&[
+        "check",
+        path(&minimal_example()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(
+        human_output(&human).contains("breg.runtime.principal-claim-mismatch"),
+        "{human:?}"
+    );
+    assert!(
+        !human_output(&human).contains("other_principal"),
+        "{human:?}"
+    );
+}
+
+#[test]
+fn check_refuses_an_authority_claim_mapping_the_access_profiles_contradict() {
+    let scratch = TestProject::from_registry_source(b"");
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace("    purpose: registry_purpose\n", "")
+    });
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&minimal_example()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let report = json_stdout(&json);
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    assert_eq!(
+        diagnostics[0]["code"],
+        "breg.runtime.invalid-authority-claims"
+    );
+    assert_eq!(diagnostics[0]["path"], "/authentication/authorityClaims");
+    assert!(
+        !report.to_string().contains("registry_principal"),
+        "{report}"
+    );
+
+    let human = bregctl(&[
+        "check",
+        path(&minimal_example()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(
+        human_output(&human).contains("breg.runtime.invalid-authority-claims"),
+        "{human:?}"
+    );
+    assert!(
+        !human_output(&human).contains("registry_principal"),
+        "{human:?}"
+    );
 }
 
 #[test]
