@@ -560,6 +560,7 @@ DOCS_ARCHIVE_INPUTS = frozenset(
         "docs/site/scripts/generate-breg-configuration.mjs",
         "docs/site/scripts/generate-configuration-formats.mjs",
         "docs/site/scripts/generate-evidence-configuration.mjs",
+        "docs/site/scripts/generate-scheduling-configuration.mjs",
         "docs/site/scripts/retry.mjs",
         "docs/site/src/data/archive-lock.yaml",
         "docs/site/src/data/docsets.yaml",
