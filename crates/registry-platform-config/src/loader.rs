@@ -164,7 +164,8 @@ const AUTHORED_PRECEDENCE: [RuntimeConfigErrorKind; 2] = [
 /// (CFG-DIAG-3).
 const CODE_PATH: &str = "platform.runtime-config.path";
 const CODE_UNSAFE_FILE: &str = "platform.runtime-config.unsafe-file";
-const CODE_UNAVAILABLE: &str = "platform.runtime-config.unavailable";
+/// The code of the refusal for a configuration file that cannot be read.
+pub const UNAVAILABLE_CODE: &str = "platform.runtime-config.unavailable";
 /// The reader's code for a document over the size bound (CFG-YAML-6).
 const CODE_TOO_LARGE: &str = "yaml.too-large";
 
@@ -888,7 +889,7 @@ fn unsafe_file(message: &str, suggested_action: &str) -> RuntimeConfigError {
 fn unavailable() -> RuntimeConfigError {
     RuntimeConfigError::file_level(
         RuntimeConfigErrorKind::Unavailable,
-        CODE_UNAVAILABLE,
+        UNAVAILABLE_CODE,
         "the runtime configuration could not be read",
         "Check that the file exists and that the runtime user can read it.",
     )
