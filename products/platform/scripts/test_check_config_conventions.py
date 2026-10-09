@@ -712,6 +712,18 @@ class EnvelopeTests(ConventionsTestCase):
         self.repo.project["properties"]["kind"] = {"type": "string"}
         self.assertFinding(self.repo.run(), "CFG-ENV-1", P, at(PROJECT_SCHEMA, "/properties/kind"))
 
+    def test_cfg_env_1_reports_a_schema_that_does_not_require_the_envelope(self) -> None:
+        for member in ("apiVersion", "kind"):
+            with self.subTest(member=member):
+                self.setUp()
+                self.repo.project["required"].remove(member)
+                report = self.repo.run()
+                self.assertFinding(report, "CFG-ENV-1", P, at(PROJECT_SCHEMA, "/required"))
+                self.assertEqual(
+                    [finding.message for finding in report.findings if finding.rule == "CFG-ENV-1"],
+                    [f"the schema does not require {member}"],
+                )
+
     def test_cfg_env_1_resolves_a_composed_root_schema(self) -> None:
         root = self.repo.project
         defs = root.pop("$defs")

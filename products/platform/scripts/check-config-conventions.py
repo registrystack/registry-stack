@@ -1866,6 +1866,7 @@ class Lint:
         if not self.applies(entry, "CFG-ENV-1"):
             return
         parts = expand(document, document)
+        _, required = object_view(document, document)
         for member in ("apiVersion", "kind"):
             value = entry["current"].get(member)
             if value in (None, "none"):
@@ -1875,6 +1876,9 @@ class Lint:
                 self.find("CFG-ENV-1", fid, path, "/properties", f"the schema does not declare {member}",
                           f"Declare {member} with const {value}")
                 continue
+            if member not in required:
+                self.find("CFG-ENV-1", fid, path, "/required", f"the schema does not require {member}",
+                          f"List {member} in required")
             sub = holder["properties"][member]
             values = [sub.get("const")] if isinstance(sub, dict) and "const" in sub else (
                 sub.get("enum") if isinstance(sub, dict) and isinstance(sub.get("enum"), list) and len(sub["enum"]) == 1 else []
