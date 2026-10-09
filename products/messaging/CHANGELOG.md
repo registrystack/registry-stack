@@ -27,6 +27,11 @@
   `projectDigest`, and `projectFiles` replace `package`, `packageDigest`, and
   `packageFiles`. Migration steps are in
   `release/notes/config-conventions/messaging.md`.
+- BREAKING: an optional member written as an explicit `null` is refused with
+  `config.null-value` at the member (`actorKind: null` in an access profile,
+  `metricsListener: null` in the runtime file). Migration: remove the key;
+  leaving it out means what `null` did. Migration steps are in
+  `release/notes/config-conventions/messaging.md`.
 - BREAKING: `authentication.oidc.assertionIssuers: {}` is refused: delete the
   member to apply no assertion-issuer rule. The generated runtime schema types
   the client keys as `ExternalId` and requires at least one client.

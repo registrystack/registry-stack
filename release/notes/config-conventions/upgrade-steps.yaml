@@ -437,6 +437,21 @@ steps:
   kind: manual
   file: messaging.yaml
   instruction: Lower an access profile's requestsPerMinute, burst or maximumMessagesPerDay that exceeds its bound, remove a repeated client, sender profile, template, locale, part or header name, and rename a script path to lowercase segments ending in .rhai; messagingctl check names each member.
+- id: messaging-project-null-members
+  product: messaging
+  kind: manual
+  file: messaging.yaml
+  instruction: >-
+    Remove every member written as an explicit null (actorKind: null becomes no actorKind key); leaving a
+    member out means the same as null did, and an omitted actorKind admits any actor kind.
+- id: messaging-runtime-null-members
+  product: messaging
+  kind: manual
+  root: runtime
+  file: runtime.yaml
+  instruction: >-
+    Remove every member written as an explicit null (metricsListener: null becomes no metricsListener
+    key); leaving a member out loads its default, and an omitted metricsListener serves no metrics.
 - id: scheduling-reader-refusals
   product: scheduling
   kind: manual

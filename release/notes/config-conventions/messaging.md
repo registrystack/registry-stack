@@ -240,6 +240,18 @@ list item grants only itself, so the spelling names no wildcard. Migration:
 write `requiredScopes: unrestricted` without a list, or list the items
 meant.
 
+## BREAKING: an optional member written as `null` is refused
+<!-- upgrade: messaging-project-null-members, messaging-runtime-null-members -->
+
+The reader refuses an explicit `null` at its member with `config.null-value`
+where it read `null` as the member left out. Migration: remove the key, in
+`messaging.yaml` (`actorKind: null` becomes no `actorKind` key, and an
+access profile without `actorKind` admits any actor kind), in
+`template.yaml` and `provider.yaml`, and in `runtime.yaml`
+(`metricsListener: null` becomes no `metricsListener` key, and a runtime
+without one serves no metrics listener). Leaving a member out has the
+meaning `null` had.
+
 ## BREAKING: `messagingctl check --project`, `package`, and the runtime report every finding at its file
 <!-- upgrade: no-file -->
 

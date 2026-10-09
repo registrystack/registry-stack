@@ -725,6 +725,16 @@ expect: {ruleId: first, dueState: atRisk}
         self.assertLess(catalog.index("casework-simulation-file-extension"),
                         catalog.index("casework-simulation-spelling"))
 
+    def test_the_messaging_null_member_steps_are_manual_and_name_the_refused_members(self) -> None:
+        catalog = upgrade_steps.load_catalog()
+        project = catalog["messaging-project-null-members"]
+        self.assertEqual((project["kind"], project["file"]), ("manual", "messaging.yaml"))
+        self.assertIn("actorKind", project["instruction"])
+        runtime = catalog["messaging-runtime-null-members"]
+        self.assertEqual((runtime["kind"], runtime["root"], runtime["file"]),
+                         ("manual", "runtime", "runtime.yaml"))
+        self.assertIn("metricsListener", runtime["instruction"])
+
     def test_a_casework_fixture_with_no_source_block_still_migrates(self) -> None:
         write(self.root, "fixtures/a.yaml", "name: x\nexpect: {queue: q}\n")
         self.apply("casework-fixture-spelling")
