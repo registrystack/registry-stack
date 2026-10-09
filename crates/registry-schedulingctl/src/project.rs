@@ -63,6 +63,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     let staging_path = staging.keep();
     fs::rename(&staging_path, project)
         .context("publishing scheduling project without replacement")?;
+    let directory = project.display();
     Ok(json!({
         "ok": true,
         "command": "init",
@@ -71,7 +72,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "created": created,
         "next": [
             "Run schedulingctl check PROJECT, then schedulingctl test PROJECT.",
-            "Copy runtime.example.yaml to runtime.yaml, set its absolute paths, run schedulingctl check PROJECT --runtime-config runtime.yaml, run schedulingctl plan --runtime-config runtime.yaml then schedulingctl apply --runtime-config runtime.yaml, apply records.yaml, then run scheduling serve with it.",
+            format!("Copy {directory}/runtime.example.yaml to {directory}/runtime.yaml, set its absolute paths, run schedulingctl check {directory} --runtime-config {directory}/runtime.yaml, run schedulingctl plan --runtime-config {directory}/runtime.yaml then schedulingctl apply --runtime-config {directory}/runtime.yaml, apply records.yaml, then run scheduling serve with it."),
         ],
     }))
 }
@@ -802,6 +803,21 @@ mod tests {
                 "fixtures/household-afternoon.yaml"
             ])
         );
+        // The printed sequence names the runtime file by a path that is
+        // valid from the working directory, beside the example it is copied
+        // from.
+        let runtime = project.join("runtime.yaml").display().to_string();
+        let next = report["next"][1].as_str().unwrap();
+        for command in [
+            format!(
+                "Copy {}/runtime.example.yaml to {runtime}",
+                project.display()
+            ),
+            format!("--runtime-config {runtime}"),
+        ] {
+            assert!(next.contains(&command), "{command:?} not in {next:?}");
+        }
+        assert!(!next.contains("--runtime-config runtime.yaml"), "{next:?}");
         assert!(project.join(AUTHORED_POLICY_FILE).is_file());
         assert!(project.join("runtime.example.yaml").is_file());
         assert!(project.join("records.yaml").is_file());

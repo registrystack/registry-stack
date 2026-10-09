@@ -77,9 +77,9 @@ schedulingctl test ./scheduling
 `init` writes `scheduling.yaml`, `runtime.example.yaml`, `records.yaml`, and two fixture files, and `check` reads all five, the runtime example as the runtime reads a runtime file. A
 passing `check` ends with `0 errors, 0 warnings in 5 files`, and a passing `test` reports
 `Offline synthetic fixtures passed.` with `productionClosure: false`: the replay proves the policy
-against its fixtures, not source reachability or deployment readiness. Copy `runtime.example.yaml` to
-`runtime.yaml` and set its absolute paths and secret references before you check it with
-`schedulingctl check ./scheduling --runtime-config runtime.yaml`.
+against its fixtures, not source reachability or deployment readiness. Copy `scheduling/runtime.example.yaml`
+to `scheduling/runtime.yaml` and set its absolute paths and secret references before you check it
+with `schedulingctl check ./scheduling --runtime-config ./scheduling/runtime.yaml`.
 
 ## Check commands
 
