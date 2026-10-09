@@ -833,8 +833,9 @@ fn load_runtime(path: &Path) -> Result<RuntimeConfig, Outcome> {
 fn refusal_exit(error: &RuntimeConfigError) -> u8 {
     match error {
         RuntimeConfigError::Load(error)
-            if error.kind()
-                == registry_messaging::config::SharedRuntimeConfigErrorKind::Unavailable =>
+            if error.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code == registry_messaging::config::RUNTIME_CONFIG_UNAVAILABLE_CODE
+            }) =>
         {
             OPERATIONAL_FAILURE_EXIT
         }

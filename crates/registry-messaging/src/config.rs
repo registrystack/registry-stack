@@ -25,12 +25,12 @@ pub use registry_platform_config::{
     DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
     JwksSource as OidcJwksSource, ListenerConfig as MetricsListenerConfig, ListenerNetworkExposure,
     OidcClientsConfig, OidcIssuerConfig, PackageConfig as RuntimePackageConfig,
-    PrivateListenerConfig as ListenerConfig,
-    RuntimeConfigErrorKind as SharedRuntimeConfigErrorKind, SecretProvidersConfig, TlsTermination,
+    PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
     MAX_ASSERTION_ISSUERS_PER_CLIENT as MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT,
     MAX_ASSERTION_ISSUER_BYTES as MAXIMUM_ASSERTION_ISSUER_BYTES,
     MAX_ASSERTION_ISSUER_CLIENTS as MAXIMUM_ASSERTION_ISSUER_CLIENTS,
     MAX_ASSERTION_ISSUER_CLIENT_BYTES as MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES,
+    UNAVAILABLE_CODE as RUNTIME_CONFIG_UNAVAILABLE_CODE,
 };
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
