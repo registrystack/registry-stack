@@ -273,10 +273,14 @@ error[yaml.duplicate-key] runtime.yaml:15:1 /listener
   note: runtime.yaml:3:1 /listener the first definition
 ```
 
-The reader reports every unknown and removed key it finds, and stops decoding at the first other
-problem. It shows at most 100 diagnostics for one file, then one `config.too-many-problems`
-diagnostic that counts the rest. After you fix what it reports, run the check again: a later
-problem can surface.
+A check finds problems in passes. The first pass reads the file's structure (YAML syntax and the
+header) and reports every structural problem together; a file with one is not decoded. The second
+pass decodes the file, reports every unknown and removed key it finds, and stops at the first other
+problem in a document. The third pass applies the semantic checks, and runs only on a file that
+decoded without error. A check therefore reports every problem it finds in a pass, not every
+problem the file has. Fix what it reports and run the check again: a later pass can report more.
+It shows at most 100 diagnostics for one file, then one `config.too-many-problems` diagnostic that
+counts the rest.
 
 {/* Evidence: crates/registry-platform-yaml/src/diagnostic.rs, Diagnostic, Severity, and
     render_human();

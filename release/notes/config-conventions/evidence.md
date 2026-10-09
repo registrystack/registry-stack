@@ -177,7 +177,7 @@ position.
 ### BREAKING: `evidence-oid4vci check` reports in the shared diagnostic shape
 <!-- upgrade: no-file -->
 
-- `check --config <file>` prints every problem, each on standard error as
+- `check --config <file>` prints every problem it finds in a pass, each on standard error as
   `error[CODE] FILE:LINE:COLUMN /json/pointer` followed by the message and a
   `next:` line, then a count of errors and warnings. The old command logged
   one JSON tracing line naming the first problem. Migration: a script that
@@ -516,8 +516,9 @@ held for the stable release" lists them.
    the previous `evidence check` gave. `evidencectl doctor` treats exit 3 as
    a dependency failure. `evidence evaluate` and `evidence serve` still
    refuse a writable runtime file, bundle, or CA bundle.
-2. **`evidence check` output.** One run reports every problem it finds
-   instead of stopping at the first. The human output on standard error
+2. **`evidence check` output.** One run reports every problem it finds in a pass
+   instead of stopping at the first; fix them and run it again, because a later pass
+   can report more (see the "Read a diagnostic" section of the Configuration files reference). The human output on standard error
    prints each diagnostic in the shared shape
    (`error[code] file:line:col /pointer`, the message, then `next:` with the
    fix) and ends with a summary line (`0 errors, 0 warnings in N files`); a
@@ -593,7 +594,7 @@ held for the stable release" lists them.
 
 - `evidence check-policy --verification-policy FILE` or
   `--holder-bound-policy FILE` checks one policy offline exactly as `verify`
-  or `verify-presentation` reads it, reports every problem with the shared
+  or `verify-presentation` reads it, reports every problem it finds in a pass with the shared
   diagnostics, and exits 0 clean, 1 refused, 2 usage, 3 the file could not
   be read. `--format json` writes the same document shape as
   `evidence check`, and `--deny-warnings` exits 1 on a warning. A file over

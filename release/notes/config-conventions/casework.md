@@ -11,7 +11,8 @@ step that migrates a file or a script. The Casework `CHANGELOG.md` points here.
 runtime read `casework.yaml` through the reader every Registry Stack product
 shares.
 
-- Every problem in the file is reported, each as its own diagnostic with the
+- Every problem a pass finds in the file is reported (see
+  the "Read a diagnostic" section of the Configuration files reference), each as its own diagnostic with the
   file, line, and column where it was written, where the first problem was
   reported alone. `path` is a JSON pointer into the file as written
   (`/reviewProducers/0/recoveryDays`), where it was a file-prefixed path
@@ -143,7 +144,7 @@ diagnostic never repeats the value.
 <!-- upgrade: no-file -->
 
 The `casework` runtime and every `caseworkctl` command that reads
-`runtime.yaml` report every problem in the file, each at its line and
+`runtime.yaml` report every problem a pass finds in the file, each at its line and
 column, where they reported the first problem alone. The diagnostics never
 repeat a value from the file.
 
@@ -455,7 +456,7 @@ checked by `caseworkctl check`.
   the regenerated `CheckReport.schema.json` and `TestReport.schema.json`.
   Checks that need a connected source's
   arguments still run at `caseworkctl dev`.
-- `caseworkctl dev` reports every problem in the file as a positioned
+- `caseworkctl dev` reports every problem a pass finds in the file as a positioned
   diagnostic with its own code, where it reported the first problem alone as
   one sentence. No diagnostic repeats a client, claim, or scope value; the
   path locates it.

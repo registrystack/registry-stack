@@ -18,7 +18,8 @@ reader every Registry Stack product shares, wherever Scheduling reads them:
 the `scheduling` runtime when it loads the packaged `scheduling.yaml`. The
 runtime file was already read by the shared reader.
 
-- Every problem in a file is reported, each as its own diagnostic with the
+- Every problem a check finds in a pass is reported (the passes are described in
+  the "Read a diagnostic" section of the Configuration files reference), each as its own diagnostic with the
   file, line, and column where it was written, a JSON Pointer `path` into the
   file as written (`/offerings/0/because`), and a `next:` action. A check
   reported each finding as a `path` in dotted form (`offerings[0].because`)

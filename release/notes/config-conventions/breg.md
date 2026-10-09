@@ -168,7 +168,8 @@ what it meant before. The members are:
 
 `breg` and every `bregctl` command that takes `--runtime-config` decode
 `runtime.yaml` through the shared runtime loader rather than a second
-product-side pass. Every problem in the file is reported in one run, each
+product-side pass. Every problem the run finds in a pass is reported (the passes are described in
+the "Read a diagnostic" section of the Configuration files reference; fix them and run again), each
 with its code, JSON Pointer path, line, column, and fix, and an unknown key
 names the closest accepted key. The platform blocks (`package`,
 `authentication.oidc`, `audit`) are read the same way, so two unknown keys
@@ -263,7 +264,7 @@ matching `bregctl --format json` output sees.
 
 `attachmentStorage`, `attachmentVerification`, and `fieldEncryption.provider`
 are read as the shared reader's tagged unions: `kind` still names the form and
-the accepted spellings are unchanged, and every problem inside the chosen form
+the accepted spellings are unchanged, and every problem the decoding pass finds inside the chosen form
 is now reported at its own member, line, and column rather than at the block.
 
 ### BREAKING: `bregctl check` reports in the shared diagnostic shape
