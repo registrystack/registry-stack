@@ -850,7 +850,7 @@ fn check_rate_limits(
         return (run.finish(), None);
     }
     let message = format!(
-        "rateLimits.burstPerPrincipal is {burst}, below {cost}, the largest request cost this bundle admits: a request batch or holder-bound release that costs more than the burst is always refused as evidence.invalid_request. Raise rateLimits.burstPerPrincipal to at least {cost} unless capping those requests below {cost} is intended"
+        "rateLimits.burstPerPrincipal is below {cost}, the largest request cost this bundle admits: a request batch or holder-bound release that costs more than the burst is always refused as evidence.invalid_request. Raise rateLimits.burstPerPrincipal to at least {cost} unless capping those requests below {cost} is intended"
     );
     run.warn(bundle_config_path, message.clone());
     let diagnostic = serde_json::json!({

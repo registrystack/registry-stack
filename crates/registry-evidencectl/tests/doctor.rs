@@ -409,7 +409,7 @@ fn doctor_warns_when_the_burst_cannot_hold_a_full_request_batch() {
     );
     assert!(
         stdout.contains(
-            "bundle/evidence.yaml: rateLimits.burstPerPrincipal is 10, below 16, the largest request cost this bundle admits"
+            "bundle/evidence.yaml: rateLimits.burstPerPrincipal is below 16, the largest request cost this bundle admits"
         ),
         "{stdout}"
     );
@@ -417,6 +417,8 @@ fn doctor_warns_when_the_burst_cannot_hold_a_full_request_batch() {
         stdout.contains("Raise rateLimits.burstPerPrincipal to at least 16"),
         "{stdout}"
     );
+    // The configured burst is a value read from a file; no message repeats it.
+    assert!(!stdout.contains("is 10"), "{stdout}");
     assert!(stdout.contains("0 failed"), "{stdout}");
 
     assert!(json.status.success());
@@ -441,7 +443,7 @@ fn doctor_warns_when_the_burst_cannot_hold_the_holder_bound_ceiling() {
     let stdout = stdout_of(&text);
     assert!(text.status.success(), "{stdout}");
     assert!(
-        stdout.contains("rateLimits.burstPerPrincipal is 10, below 12"),
+        stdout.contains("rateLimits.burstPerPrincipal is below 12"),
         "no request batch can name a holder-bound requirement, so the release ceiling is the cost: {stdout}"
     );
 }
