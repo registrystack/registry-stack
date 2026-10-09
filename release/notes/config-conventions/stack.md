@@ -19,12 +19,12 @@ item states its migration step in the fragment.
 | Casework | 13 | `casework.md` |
 | Discovery | 6 | `discovery.md` |
 | Evidence | 35 | `evidence.md` |
-| Manifest | 5 | `manifest.md` |
-| Messaging | 12 | `messaging.md` |
-| Platform files and tooling | 7 | `platform.md` |
+| Manifest | 6 | `manifest.md` |
+| Messaging | 14 | `messaging.md` |
+| Platform files and tooling | 9 | `platform.md` |
 | Render | 11 | `render.md` |
-| Scheduling | 9 | `scheduling.md` |
-| Total | 132 | |
+| Scheduling | 11 | `scheduling.md` |
+| Total | 139 | |
 
 ## Diagnostic codes, old to new
 
@@ -103,7 +103,7 @@ entry in a fragment. Each states its migration step.
 
 The counts above come from the fragments. The product changelogs list fewer
 `BREAKING:` bullets than the fragments (Base Registry Engine 25, Casework 13,
-Discovery 3, Evidence 16, Manifest 5, Messaging 7, Platform 4, Render 8,
-Scheduling 4), because a fragment item is one migration step and a changelog
+Discovery 3, Evidence 18, Manifest 6, Messaging 9, Platform 6, Render 8,
+Scheduling 6), because a fragment item is one migration step and a changelog
 bullet often covers several. The items in "Breaking changes outside the
 program fragments" are the changelog items no fragment states.
