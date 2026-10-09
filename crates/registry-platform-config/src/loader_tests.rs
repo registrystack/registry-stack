@@ -298,7 +298,7 @@ fn removed_keys_are_refused_with_their_replacement_named() {
     );
     assert_eq!(
         error.deciding_diagnostic().suggested_action,
-        "use listener.bind."
+        "Use listener.bind."
     );
     // `server` is not a member either, so it is reported beside the removed
     // key below it; the removed key decides.
@@ -955,7 +955,10 @@ fn the_shared_removed_jwks_uri_key_names_jwks_source() {
         error.deciding_diagnostic().path,
         "/authentication/oidc/jwksUri"
     );
-    assert!(error.to_string().contains("authentication.oidc.jwksSource"));
+    assert_eq!(
+        error.deciding_diagnostic().suggested_action,
+        "Declare `authentication.oidc.jwksSource` with `kind: uri` and `uri` set to the https URL."
+    );
     assert!(!error.to_string().contains("issuer.example.test"));
 }
 

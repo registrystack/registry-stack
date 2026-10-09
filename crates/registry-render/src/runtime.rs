@@ -48,7 +48,7 @@ const RETIRED_RUNTIME_API_VERSIONS: &[RetiredApiVersion<'static>] = &[RetiredApi
 const RENDER_REMOVED_KEYS: &[RemovedKey] = &[
     RemovedKey {
         path: "server",
-        replacement: "declare listener.bind and listener.shutdownGraceMilliseconds instead",
+        replacement: "Declare `listener.bind` and `listener.shutdownGraceMilliseconds` instead.",
     },
     RemovedKey {
         path: "bundle",
@@ -56,7 +56,7 @@ const RENDER_REMOVED_KEYS: &[RemovedKey] = &[
     },
     RemovedKey {
         path: "listener.shutdownGraceSeconds",
-        replacement: "declare listener.shutdownGraceMilliseconds instead, the value times 1000",
+        replacement: "Declare `listener.shutdownGraceMilliseconds` instead, the value times 1000.",
     },
     RemovedKey {
         path: "limits.maxOutputBytes",

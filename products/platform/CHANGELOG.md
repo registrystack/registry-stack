@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A removed key's `next` sentence now opens with a capital letter, whatever case
+  the product wrote its replacement in. Render writes its own with code formatting.
 - `registry-platform-yaml` is the shared configuration reader: one YAML
   subset (no anchors, aliases, merge keys, tags, or several documents), one
   scalar table, the `apiVersion` and `kind` envelope check, and a serde

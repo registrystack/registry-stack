@@ -81,7 +81,8 @@ pub struct RemovedKey {
 /// `jwksSource`, for a runtime whose issuer block sits at `authentication.oidc`.
 pub const REMOVED_OIDC_JWKS_URI: RemovedKey = RemovedKey {
     path: "authentication.oidc.jwksUri",
-    replacement: "declare authentication.oidc.jwksSource with kind: uri and uri: <https URL>",
+    replacement:
+        "Declare `authentication.oidc.jwksSource` with `kind: uri` and `uri` set to the https URL.",
 };
 
 /// Codes of the refusals the loader reports itself, before the reader runs
@@ -411,14 +412,18 @@ impl RuntimeConfigLoader {
 }
 
 /// A removed key's replacement as a suggested action: the text as the
-/// product wrote it, ending in a full stop.
+/// product wrote it, opening with a capital letter and ending in a full stop.
 fn sentence(replacement: &str) -> String {
     let replacement = replacement.trim_end();
-    if replacement.ends_with('.') {
-        replacement.to_owned()
-    } else {
-        format!("{replacement}.")
+    let mut characters = replacement.chars();
+    let mut sentence: String = characters
+        .next()
+        .map(|first| first.to_uppercase().chain(characters).collect())
+        .unwrap_or_default();
+    if !sentence.ends_with('.') {
+        sentence.push('.');
     }
+    sentence
 }
 
 /// Whether `text` holds an environment expression the runtime loader would
