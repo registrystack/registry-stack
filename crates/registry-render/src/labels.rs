@@ -59,7 +59,8 @@ pub(crate) fn read_labels(file: &str, bytes: &[u8]) -> Result<ReadLabels, Report
     let mut hook = registry_platform_config::AuthoredExpressions;
     let decoded = Reader::new(file)
         .with_hook(&mut hook)
-        .decode::<LabelsFile>(bytes, &Expect::one(&LABELS_FORMAT))?;
+        .decode::<LabelsFile>(bytes, &Expect::one(&LABELS_FORMAT))
+        .map_err(with_table_shape)?;
     let table = decoded
         .value
         .labels
@@ -70,6 +71,25 @@ pub(crate) fn read_labels(file: &str, bytes: &[u8]) -> Result<ReadLabels, Report
         table: Value::Object(table),
         document: decoded.document,
     })
+}
+
+/// The shared reader's fix for a missing envelope names only the envelope;
+/// a label table also needs its `labels:` mapping, so the fix names both.
+fn with_table_shape(report: Report) -> Report {
+    let files_checked = report.files_checked();
+    let mut diagnostics = report.into_diagnostics();
+    for diagnostic in &mut diagnostics {
+        if diagnostic.code == "config.missing-envelope" {
+            let fix = diagnostic.suggested_action.trim_end_matches('.');
+            diagnostic.suggested_action =
+                format!("{fix}, then write the label keys as a mapping under `labels:`.");
+        }
+    }
+    let mut report = Report::new(diagnostics);
+    if let Some(files) = files_checked {
+        report.set_files_checked(files);
+    }
+    report
 }
 
 #[cfg(test)]
@@ -106,6 +126,17 @@ mod tests {
         assert_eq!(
             codes("title: Receipt\n"),
             [("config.missing-envelope".to_owned(), String::new())]
+        );
+    }
+
+    #[test]
+    fn a_table_without_its_envelope_is_told_the_whole_shape() {
+        let report = read_labels("labels/en.yaml", b"title: Receipt\n").expect_err("refused");
+        let diagnostic = &report.into_diagnostics()[0];
+        assert_eq!(
+            diagnostic.suggested_action,
+            "Start the file with `apiVersion: id.registrystack.org/formats/render/labels/v1alpha1` \
+             and `kind: RenderLabels`, then write the label keys as a mapping under `labels:`."
         );
     }
 

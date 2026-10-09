@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A label table with no envelope is told the whole shape: after the envelope
+  lines, write the label keys as a mapping under `labels:`.
 - BREAKING: `manifest.yaml` opens with
   `apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1`, and each
   document names its files with `entryFile` and `schemaFile` in place of
