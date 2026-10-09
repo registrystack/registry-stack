@@ -724,6 +724,12 @@ words the common type errors this way, taking `<unit>` from the key
 | `yes`, `no`, `on`, or `off` in a boolean position | expected true or false; yes, no, on, and off are text | Write true or false. |
 | a substitution in an integer or boolean position | substitution fills text values only | Write the value, or template the whole file. |
 
+When an unquoted value refused as an integer, number, boolean, unknown
+variant, or invalid value holds a `#` with no space before it, YAML reads the
+`#` and what follows as part of the value, and the fix adds: "A `#` starts a
+comment only after a space: put a space before the `#` that starts the
+comment." The sentence names no part of the value (CFG-SEC-3).
+
 ## 11. Schemas, editors, and the registry
 
 **CFG-SCHEMA-1 (MUST). Every format is registered** in
