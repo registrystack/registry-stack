@@ -395,7 +395,7 @@ here is added to the list in the same change that first uses it. See CFG-QTY.
 | Longest accepted token lifetime | `maximumTokenLifetimeSeconds` | `maxTokenLifetimeSeconds` |
 | How long records of a kind are kept | `retentionDays`, or `<thing>RetentionDays` where one block keeps several kinds | `retainDays`, `retention.<thing>Days` |
 | Cache entry lifetime | `cacheTtlSeconds` | |
-| Largest accepted body or file | `maximum<Thing>Bytes` | `max<Thing>Bytes`, `maxSize` |
+| Largest accepted body or file | `maximum<Thing>Bytes` | `max<Thing>Bytes`, `maxSize` outside `pool` |
 
 Adding a shared concept adds a row here in the same change.
 *Enforced by:* the schema convention lint (one unit per key stem across all
