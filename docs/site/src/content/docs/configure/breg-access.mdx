@@ -259,13 +259,13 @@ The project now passes `check`, with a warning the gate cannot close by itself, 
 With `food-targeting` added first under `accessProfiles`, the three read:
 
 ```text
-warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:217:9 /accessProfiles/3/permissions/0
+warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:220:9 /accessProfiles/3/permissions/0
   this profile admits any client and reads `record` without consent, so a client of the consent-gated `food-targeting` can read the same rows through it. List requesterClients that no gated profile admits (in entities[].accessProfiles[].requesterClients)
   next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:171:9 /accessProfiles/1/permissions/1
+warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:174:9 /accessProfiles/1/permissions/1
   this profile admits any client and reads `record` without consent, so a client of the consent-gated `food-targeting` can read the same rows through it. List requesterClients that no gated profile admits (in entities[].accessProfiles[].requesterClients)
   next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:193:9 /accessProfiles/2/permissions/0
+warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:196:9 /accessProfiles/2/permissions/0
   this profile admits any client and reads `record` without consent, so a client of the consent-gated `food-targeting` can read the same rows through it. List requesterClients that no gated profile admits (in entities[].accessProfiles[].requesterClients)
   next: Review the finding, and change the source if the behavior it describes is not intended.
 ```

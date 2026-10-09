@@ -84,10 +84,10 @@ bregctl check --production tutorial-work/candidate-project
 
 ```text
 Production check passed; registry revision sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc.
-warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:138:24 /accessProfiles/0/permissions/1/rowBoundaries
+warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:141:24 /accessProfiles/0/permissions/1/rowBoundaries
   this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:184:24 /accessProfiles/2/permissions/0/rowBoundaries
+warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
   this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
 0 errors, 2 warnings in 2 files
@@ -106,10 +106,10 @@ bregctl check --production --deny-warnings tutorial-work/candidate-project
 
 ```text
 bregctl check refused the project: --deny-warnings refuses a warning.
-warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:138:24 /accessProfiles/0/permissions/1/rowBoundaries
+warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:141:24 /accessProfiles/0/permissions/1/rowBoundaries
   this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:184:24 /accessProfiles/2/permissions/0/rowBoundaries
+warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
   this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
 0 errors, 2 warnings in 2 files
