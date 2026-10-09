@@ -123,7 +123,8 @@ module directory, including modules awaiting a lock entry; `bregctl check` owns 
 
 ## Diagnostics
 
-Every diagnostic this server publishes has severity `Error`. Evidence semantic diagnostics carry what its authoring reader or compiler refuses.
+Most diagnostics this server publishes have severity `Error`. A warning the shared configuration reader raises on an accepted document is published with severity `Warning`. Evidence semantic diagnostics carry what its authoring reader or compiler refuses.
+Evidence source and selector documents (`sources/<id>.yaml`, `selectors/<id>.yaml`) get navigation but no editor diagnostics; `evidencectl check` is what checks them.
 The additional products diagnose their explicitly modeled local authoring relationships. The separately named indexing-ceiling diagnostics explain when the editor cannot
 safely build an index and do not claim that the compiler applies the same operational budget.
 
