@@ -4611,7 +4611,15 @@ fn validate_entities(
                 }
             }
         }
-        for identifier in &entity.identifiers {
+        let mut identifier_names = BTreeSet::new();
+        for (identifier_index, identifier) in entity.identifiers.iter().enumerate() {
+            if !identifier_names.insert(identifier.name.as_str()) {
+                errors.push(ValidationError::new(
+                    ValidationCondition::DuplicateId,
+                    format!("{entity_path}.identifiers[{identifier_index}].name"),
+                    "identifier must be listed once within an entity",
+                ));
+            }
             if !field_names.contains(identifier.name.as_str()) {
                 errors.push(ValidationError::new(
                     ValidationCondition::UnknownReference,
@@ -4620,6 +4628,7 @@ fn validate_entities(
                 ));
             }
         }
+        let mut relationship_names = BTreeSet::new();
         for (relationship_index, relationship) in entity.relationships.iter().enumerate() {
             let relationship_path = format!("{entity_path}.relationships[{relationship_index}]");
             validate_id(
@@ -4627,6 +4636,13 @@ fn validate_entities(
                 format!("{relationship_path}.name"),
                 errors,
             );
+            if !relationship_names.insert(relationship.name.as_str()) {
+                errors.push(ValidationError::new(
+                    ValidationCondition::DuplicateId,
+                    format!("{relationship_path}.name"),
+                    "relationship name must be unique within an entity",
+                ));
+            }
             let Some(target) = relationship.target_name() else {
                 errors.push(ValidationError::new(
                     ValidationCondition::MissingMember,

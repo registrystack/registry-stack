@@ -1846,6 +1846,60 @@ fn validation_rejects_duplicate_entities() {
 }
 
 #[test]
+fn validation_rejects_a_repeated_relationship_name_in_one_entity() {
+    let mut manifest = fixture("example-civil-registration");
+    let entity = &mut manifest.datasets[0].entities[0];
+    entity
+        .relationships
+        .push(registry_manifest_core::RelationshipManifest {
+            name: "same_name".to_string(),
+            target_entity: Some("vital_event".to_string()),
+            target: None,
+            cardinality: None,
+            role: None,
+            concept_uri: None,
+        });
+    let repeated = entity.relationships[entity.relationships.len() - 1].clone();
+    entity.relationships.push(repeated);
+    let index = entity.relationships.len() - 1;
+
+    let err = validate_manifest(&manifest).expect_err("a repeated relationship should fail");
+    let MetadataError::Validation { errors } = err else {
+        panic!("expected validation errors");
+    };
+    assert!(errors.iter().any(|error| {
+        error.condition == ValidationCondition::DuplicateId
+            && error
+                .path
+                .ends_with(&format!("entities[0].relationships[{index}].name"))
+    }));
+}
+
+#[test]
+fn validation_rejects_a_repeated_identifiers_item_in_one_entity() {
+    let mut manifest = fixture("example-civil-registration");
+    let entity = &mut manifest.datasets[0].entities[0];
+    let repeated = entity
+        .identifiers
+        .first()
+        .expect("the fixture entity declares an identifier")
+        .clone();
+    entity.identifiers.push(repeated);
+    let index = entity.identifiers.len() - 1;
+
+    let err = validate_manifest(&manifest).expect_err("a repeated identifier should fail");
+    let MetadataError::Validation { errors } = err else {
+        panic!("expected validation errors");
+    };
+    assert!(errors.iter().any(|error| {
+        error.condition == ValidationCondition::DuplicateId
+            && error
+                .path
+                .ends_with(&format!("entities[0].identifiers[{index}].name"))
+    }));
+}
+
+#[test]
 fn validation_rejects_duplicate_evidence_offering_ids_globally() {
     let manifest: MetadataManifest = support::from_yaml(
         r#"

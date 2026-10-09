@@ -50,6 +50,16 @@ them and how it reports what it finds.
    64 KiB. A file between the two bounds that was refused is now read.
    Migration: none.
 
+## BREAKING: a repeated relationship name or `identifiers` item is `config.duplicate-id`
+
+Two relationships with the same `name` in one entity, and an `identifiers`
+item listed twice in one entity, are refused with `config.duplicate-id` at the
+second one (`/datasets/N/entities/N/relationships/N/name`,
+`/datasets/N/entities/N/identifiers/N/name`). They were accepted before, and
+the later relationship silently shadowed the earlier one in the rendered IRIs.
+
+Migration: rename the second relationship, or remove the repeated item.
+
 ## Other changes
 
 - **The checks.** `registry-manifest validate <metadata.yaml>` is the

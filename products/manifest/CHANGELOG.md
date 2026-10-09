@@ -9,6 +9,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- BREAKING: an entity that repeats a relationship `name`, or lists the same
+  `identifiers` item twice, is refused with `config.duplicate-id` at the
+  repetition. Both were accepted before: the later relationship shadowed the
+  earlier one in the rendered IRIs. Migration: rename or remove the duplicate.
 - BREAKING: `registry-manifest` reads a metadata manifest and a profile
   descriptor through the shared Registry Stack YAML reader, and reports every
   finding in the shared shape: `error[code] file:line:col /pointer`, the
