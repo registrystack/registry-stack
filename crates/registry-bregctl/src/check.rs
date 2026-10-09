@@ -105,9 +105,14 @@ pub(super) fn run(
     let mut outcome = Outcome::default();
     let subject = match (request.project, request.package) {
         (Some(project), None) => {
-            check_project(project, profile, &mut outcome);
+            let compiled = check_project(project, profile, &mut outcome);
             if let Some(runtime) = request.runtime_config {
-                check_runtime_file(runtime, request.environment, &mut outcome);
+                check_runtime_file(
+                    runtime,
+                    request.environment,
+                    compiled.as_ref(),
+                    &mut outcome,
+                );
                 "project or its runtime configuration"
             } else {
                 "project"
@@ -189,17 +194,21 @@ struct Documents {
     modules: Vec<(String, Document)>,
 }
 
-fn check_project(project: &Path, profile: ProfileArg, outcome: &mut Outcome) {
-    let Some(documents) = read_documents(project, outcome) else {
-        return;
-    };
+/// The compiled registry when the project compiled, so the runtime file can be
+/// held to it.
+fn check_project(
+    project: &Path,
+    profile: ProfileArg,
+    outcome: &mut Outcome,
+) -> Option<CompiledRegistry> {
+    let documents = read_documents(project, outcome)?;
     let source = match capture_project_source(project) {
         Ok(source) => source,
         Err(diagnostic) => {
             outcome
                 .report
                 .push(place(project, &documents, diagnostic, Severity::Error));
-            return;
+            return None;
         }
     };
     match compile_captured_project(&source, profile, "check") {
@@ -216,6 +225,7 @@ fn check_project(project: &Path, profile: ProfileArg, outcome: &mut Outcome) {
                     .push(place(project, &documents, finding, severity));
             }
             outcome.revision = Some(compiled.revision().to_owned());
+            Some(compiled)
         }
         Err(failure) => {
             for refusal in failure.diagnostics {
@@ -230,6 +240,7 @@ fn check_project(project: &Path, profile: ProfileArg, outcome: &mut Outcome) {
                     .report
                     .push(place(project, &documents, diagnostic, severity));
             }
+            None
         }
     }
 }
@@ -496,7 +507,12 @@ fn file_diagnostic(
     diagnostic
 }
 
-fn check_runtime_file(path: &Path, environment: bool, outcome: &mut Outcome) {
+fn check_runtime_file(
+    path: &Path,
+    environment: bool,
+    registry: Option<&CompiledRegistry>,
+    outcome: &mut Outcome,
+) {
     let given = path.display().to_string();
     let Some(absolute) = absolute_lexical(path) else {
         outcome.unavailable = true;
@@ -510,7 +526,7 @@ fn check_runtime_file(path: &Path, environment: bool, outcome: &mut Outcome) {
         return;
     };
     let absolute_text = absolute.display().to_string();
-    let check = check_runtime_config(&absolute, environment);
+    let check = check_runtime_config(&absolute, environment, registry);
     outcome.files += 1;
     outcome.unavailable |= check.unavailable;
     for mut diagnostic in check.diagnostics {

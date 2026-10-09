@@ -37,7 +37,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::{
-    auth::AuthorityClaimConfig,
+    auth::{AuthenticationConfigError, AuthorityClaimConfig},
     cursor::CursorCodec,
     event_destination::{
         ActivatedEventDestinationRegistry, EventDestinationConfigs, RawEventDestinationConfigs,
@@ -501,8 +501,17 @@ pub struct RuntimeConfigCheck {
 /// own rules stop at their first refusal, as they do at startup. The package
 /// root and the file secret provider root are not looked for: a runtime file
 /// is checked before the deployment it describes exists.
+///
+/// With the `registry` the file will serve, the authentication block is also
+/// held to the compiled access profiles, as startup holds it: a client the
+/// registry names that `authentication.oidc.allowedClients` does not list, or
+/// a principal claim the profiles do not use, is refused here.
 #[must_use]
-pub fn check_runtime_config(path: &Path, substitute: bool) -> RuntimeConfigCheck {
+pub fn check_runtime_config(
+    path: &Path,
+    substitute: bool,
+    registry: Option<&CompiledRegistry>,
+) -> RuntimeConfigCheck {
     let mut check = runtime_config_loader().check_offline::<RawRuntimeConfig>(
         path,
         substitute,
@@ -510,16 +519,34 @@ pub fn check_runtime_config(path: &Path, substitute: bool) -> RuntimeConfigCheck
     );
     let mut diagnostics = std::mem::take(&mut check.diagnostics);
     if let Some(loaded) = check.loaded.take() {
-        if let Err(error) = RuntimeConfig::from_raw(loaded.config) {
-            for refusal in error.diagnostics(None) {
-                if !check.defers_within(&refusal.path) {
-                    diagnostics.push(check.error_at(
-                        RUNTIME_CONFIG_KIND,
-                        &refusal.code,
-                        &refusal.path,
-                        refusal.message,
-                        refusal.suggested_action,
-                    ));
+        match RuntimeConfig::from_raw(loaded.config) {
+            Err(error) => {
+                for refusal in error.diagnostics(None) {
+                    if !check.defers_within(&refusal.path) {
+                        diagnostics.push(check.error_at(
+                            RUNTIME_CONFIG_KIND,
+                            &refusal.code,
+                            &refusal.path,
+                            refusal.message,
+                            refusal.suggested_action,
+                        ));
+                    }
+                }
+            }
+            Ok(config) => {
+                if let Some(registry) = registry {
+                    if !check.defers_within("/authentication") {
+                        if let Err(error) = config.authentication().check_against(registry) {
+                            let (pointer, code) = authentication_refusal_site(error);
+                            diagnostics.push(check.error_at(
+                                RUNTIME_CONFIG_KIND,
+                                code,
+                                pointer,
+                                error.to_string(),
+                                "Correct the authentication block so it agrees with the project's access profiles.",
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -527,6 +554,25 @@ pub fn check_runtime_config(path: &Path, substitute: bool) -> RuntimeConfigCheck
     RuntimeConfigCheck {
         diagnostics,
         unavailable: check.unavailable,
+    }
+}
+
+/// The member of the runtime file an authentication refusal is about, and its
+/// diagnostic code.
+fn authentication_refusal_site(error: AuthenticationConfigError) -> (&'static str, &'static str) {
+    match error {
+        AuthenticationConfigError::NamedClientNotListed => (
+            "/authentication/oidc/allowedClients",
+            "breg.runtime.clients-unlisted",
+        ),
+        AuthenticationConfigError::PrincipalClaimMismatch => (
+            "/authentication/authorityClaims/principal",
+            "breg.runtime.principal-claim-mismatch",
+        ),
+        _ => (
+            "/authentication/authorityClaims",
+            "breg.runtime.invalid-authority-claims",
+        ),
     }
 }
 
@@ -1639,6 +1685,18 @@ impl AuthenticationConfig {
 
     pub fn authority_claim_config(&self) -> AuthorityClaimConfig {
         self.authority_claims.to_platform_config()
+    }
+
+    /// Hold this block to the compiled access profiles, as startup does.
+    pub fn check_against(
+        &self,
+        registry: &CompiledRegistry,
+    ) -> std::result::Result<(), AuthenticationConfigError> {
+        crate::auth::check_claim_mapping(
+            registry,
+            &self.oidc.token_verifier_config(),
+            &self.authority_claim_config(),
+        )
     }
 }
 

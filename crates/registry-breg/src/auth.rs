@@ -457,6 +457,16 @@ fn admits_one_access_token_type(allowed_typ: &[String]) -> bool {
         || is_access_token_typ_pair(allowed_typ)
 }
 
+/// Hold a claim mapping to the compiled access profiles without building an
+/// authenticator, so an offline check refuses what startup refuses.
+pub(crate) fn check_claim_mapping(
+    registry: &CompiledRegistry,
+    verifier: &TokenVerifierConfig,
+    claims: &AuthorityClaimConfig,
+) -> Result<(), AuthenticationConfigError> {
+    validate_claim_mapping(registry, verifier, claims).map(|_| ())
+}
+
 fn validate_claim_mapping(
     registry: &CompiledRegistry,
     verifier: &TokenVerifierConfig,

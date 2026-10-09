@@ -1723,6 +1723,109 @@ fn check_refuses_a_runtime_configuration_in_the_reader_words() {
     );
 }
 
+/// The minimal project with its reader profile limited to the client `portal`.
+fn minimal_project_limited_to_portal(scratch: &TestProject) {
+    let example = minimal_example();
+    let registry = fs::read_to_string(example.join("registry.yaml"))
+        .expect("the minimal registry reads")
+        .replace(
+            "    requiredPurposes: [record-administration]\n",
+            "    requiredPurposes: [record-administration]\n    actorKind: service\n    requesterClients: [portal]\n",
+        );
+    assert!(registry.contains("requesterClients: [portal]"));
+    fs::write(scratch.path().join("registry.yaml"), registry).expect("the registry writes");
+    let module = scratch.path().join("modules/minimal-core");
+    fs::create_dir_all(&module).expect("module directory is created");
+    fs::copy(
+        example.join("modules/minimal-core/module.yaml"),
+        module.join("module.yaml"),
+    )
+    .expect("module source is copied");
+}
+
+#[test]
+fn check_refuses_a_runtime_that_lists_none_of_the_clients_a_profile_names() {
+    let scratch = TestProject::from_registry_source(b"");
+    minimal_project_limited_to_portal(&scratch);
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace(
+            "allowedClients: [minimal-client]",
+            "allowedClients: unrestricted",
+        )
+    });
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(scratch.path()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let report = json_stdout(&json);
+    assert_eq!(report["ok"], false);
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    let diagnostic = &diagnostics[0];
+    assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["path"], "/authentication/oidc/allowedClients");
+    assert_eq!(diagnostic["source"]["file"], path(&runtime));
+    assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic}");
+    // The refusal names the member, never a configured client.
+    assert!(!report.to_string().contains("portal"), "{report}");
+}
+
+#[test]
+fn check_refuses_a_principal_claim_the_access_profiles_do_not_use() {
+    let scratch = TestProject::from_registry_source(b"");
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace(
+            "principal: registry_principal",
+            "principal: other_principal",
+        )
+    });
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&minimal_example()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let report = json_stdout(&json);
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    assert_eq!(
+        diagnostics[0]["path"],
+        "/authentication/authorityClaims/principal"
+    );
+    assert!(!report.to_string().contains("other_principal"), "{report}");
+}
+
+#[test]
+fn check_accepts_a_runtime_that_lists_the_clients_a_profile_names() {
+    let scratch = TestProject::from_registry_source(b"");
+    minimal_project_limited_to_portal(&scratch);
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace(
+            "allowedClients: [minimal-client]",
+            "allowedClients: [portal]",
+        )
+    });
+
+    let output = bregctl(&[
+        "check",
+        path(scratch.path()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+}
+
 #[test]
 fn check_cannot_read_a_missing_runtime_configuration() {
     let scratch = TestProject::asset_fixture();
