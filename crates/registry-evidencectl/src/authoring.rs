@@ -8024,24 +8024,20 @@ maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimum
 
     #[test]
     fn referenced_http_source_without_an_authentication_declaration_is_refused() {
-        for authentication in [""] {
-            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-            write_referenced_people_project(&fixture, authentication);
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        write_referenced_people_project(&fixture, "");
 
-            let error =
-                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-                    .expect_err("an undeclared credential posture must not compile")
-                    .to_string();
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("an undeclared credential posture must not compile")
+            .to_string();
 
-            assert_eq!(
-                error,
-                "the referenced source sends no credential, and an absent field does not decide \
+        assert_eq!(
+            error,
+            "the referenced source sends no credential, and an absent field does not decide \
 that: question `adult-status` must declare the posture itself by adding an `authentication:` \
-mapping naming the `kind:` its channel uses, in sources/people.yaml",
-                "{authentication:?} was not refused as an absent posture"
-            );
-            assert!(fixture.staging_is_empty());
-        }
+mapping naming the `kind:` its channel uses, in sources/people.yaml"
+        );
+        assert!(fixture.staging_is_empty());
     }
 
     #[test]
