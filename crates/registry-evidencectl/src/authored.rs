@@ -135,6 +135,10 @@ pub(crate) fn node_findings_report(
 /// names: the value when it is written, and otherwise the key of the nearest
 /// written member above it, where the missing member belongs.
 fn placed(mut diagnostic: Diagnostic, root: &Node) -> Diagnostic {
+    // The count of hidden problems concerns the whole file, not a member.
+    if diagnostic.code == "config.too-many-problems" {
+        return diagnostic;
+    }
     let wanted = diagnostic.path.clone();
     let mut pointer = wanted.as_str();
     while root.pointer(pointer).is_none() && !pointer.is_empty() {
@@ -517,6 +521,23 @@ mod tests {
         let source = rebased.diagnostics()[0].source.as_ref().unwrap();
         assert_eq!(source.file, "./project/questions/a.yaml");
         assert_eq!((source.line, source.column), (Some(3), Some(5)));
+    }
+
+    #[test]
+    fn the_count_of_hidden_problems_stays_at_the_file_rather_than_a_line() {
+        let root = registry_platform_yaml::Reader::new("a.yaml")
+            .scan(b"# comment\nkey: value\n")
+            .expect("scans")
+            .expect("a document");
+        let mut diagnostic = Diagnostic::error("config.too-many-problems", "", "m", "a");
+        diagnostic.source = Some(Source {
+            file: "a.yaml".to_owned(),
+            line: None,
+            column: None,
+        });
+        let kept = placed(diagnostic, &root);
+        let source = kept.source.as_ref().unwrap();
+        assert_eq!((source.line, source.column), (None, None));
     }
 
     #[test]
