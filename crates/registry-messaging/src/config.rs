@@ -1337,6 +1337,10 @@ const PACKAGE_EXPECTED_DIGEST: &str = "package.expectedDigest";
 const REBUILD_PACKAGE: &str =
     "Correct the project as `messagingctl check --project` reports, then rebuild the package with `messagingctl package` and point package.root at it.";
 
+/// The fix when nothing usable exists at `package.root`.
+const BUILD_PACKAGE: &str =
+    "Build the package with `messagingctl package PROJECT --output DIRECTORY`, then point package.root at DIRECTORY.";
+
 impl RuntimeConfigError {
     /// The JSON Pointer, in the runtime document, of the member this refusal
     /// concerns. A member that is absent is located by the mapping that
@@ -1495,6 +1499,7 @@ impl RuntimeConfigError {
             Self::Package(error) if error.path() == PACKAGE_EXPECTED_DIGEST => {
                 "Set package.expectedDigest to the digest `messagingctl package` reported for the package at package.root, or remove it."
             }
+            Self::Package(error) if error.is_root_invalid() => BUILD_PACKAGE,
             Self::Package(_) => REBUILD_PACKAGE,
             Self::ProfileClientNotAllowed { .. } => {
                 "Add every requester client the package's access profiles name to authentication.oidc.allowedClients."
@@ -2821,6 +2826,19 @@ pub(crate) mod tests {
         );
         let source = check.diagnostics[0].source.as_ref().unwrap();
         assert!(source.line.is_some());
+        // The binary is named as it is installed, and an absent package is
+        // fixed by building it, not by checking the project.
+        assert!(
+            check.diagnostics[0]
+                .message
+                .contains("`messagingctl package`"),
+            "{}",
+            check.diagnostics[0].message
+        );
+        assert_eq!(
+            check.diagnostics[0].suggested_action,
+            "Build the package with `messagingctl package PROJECT --output DIRECTORY`, then point package.root at DIRECTORY."
+        );
 
         // An expression the check leaves to the deployment is not read.
         runtime["package"]["root"] = json!("${MESSAGING_CHECK_UNSET_ROOT}");

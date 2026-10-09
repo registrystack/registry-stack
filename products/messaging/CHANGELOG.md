@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `messaging.package.invalid` names the binary `messagingctl`, and when
+  nothing usable exists at `package.root` its next step is to build the
+  package with `messagingctl package` and point `package.root` at it, instead
+  of sending the reader to `check --project`.
 - `messagingctl check` closes a passed run with the summary line
   (`0 errors, 0 warnings in 18 files`), and a refused run opens with
   `messagingctl check refused the input.` and closes with the summary line.

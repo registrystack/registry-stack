@@ -89,7 +89,7 @@ pub const MAXIMUM_PACKAGE_BYTES: u64 = 32 * 1024 * 1024;
 const MAXIMUM_ENVELOPE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Remediation named by shared package refusals.
-pub const PACKAGE_COMMAND: &str = "registry-messagingctl package";
+pub const PACKAGE_COMMAND: &str = "messagingctl package";
 
 #[must_use]
 pub const fn package_limits() -> PackageLimits {
@@ -234,6 +234,17 @@ impl PackageLoadError {
             PackageLoadReason::Refused(report) => Some(report),
             _ => None,
         }
+    }
+
+    /// Whether nothing usable exists at `package.root`: it is absent, a
+    /// symbolic link, or not a directory.
+    #[must_use]
+    pub fn is_root_invalid(&self) -> bool {
+        matches!(
+            self.reason,
+            PackageLoadReason::Envelope(ref error)
+                if matches!(error.kind(), SharedPackageErrorKind::RootInvalid { .. })
+        )
     }
 
     /// Whether the package could not be read at all, rather than read and
