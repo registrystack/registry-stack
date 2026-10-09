@@ -408,6 +408,7 @@ async fn review_task_discovery_forwards_ownership_and_supervision_without_expand
             CaseworkAuth::new(&token, "supervisor").with_source_profile("reviewer"),
             &registry_casework_client::SupervisoryReviewTaskQuery {
                 queue: Some("reviews".to_owned()),
+                request_id: Some(Uuid::from_u128(9)),
                 cursor: Some(Uuid::from_u128(8)),
                 limit: Some(10),
             },
@@ -424,7 +425,24 @@ async fn review_task_discovery_forwards_ownership_and_supervision_without_expand
             .supervisory_review_tasks(
                 CaseworkAuth::new(&token, "supervisor"),
                 &registry_casework_client::SupervisoryReviewTaskQuery {
+                    request_id: Some(Uuid::from_u128(10)),
+                    ..Default::default()
+                },
+            )
+            .await,
+        Err(CaseworkClientError::Protocol {
+            status: 200,
+            failure: CaseworkProtocolFailure::Body,
+            ..
+        })
+    ));
+    assert!(matches!(
+        client
+            .supervisory_review_tasks(
+                CaseworkAuth::new(&token, "supervisor"),
+                &registry_casework_client::SupervisoryReviewTaskQuery {
                     queue: Some("leaky".to_owned()),
+                    request_id: None,
                     cursor: None,
                     limit: Some(10),
                 },
@@ -444,7 +462,7 @@ async fn review_task_discovery_forwards_ownership_and_supervision_without_expand
     );
     assert_eq!(
         observations[1].0,
-        "/v1/review-tasks/supervision?queue=reviews&cursor=00000000-0000-0000-0000-000000000008&limit=10"
+        "/v1/review-tasks/supervision?queue=reviews&requestId=00000000-0000-0000-0000-000000000009&cursor=00000000-0000-0000-0000-000000000008&limit=10"
     );
     assert_eq!(observations[1].1["registry-casework-profile"], "supervisor");
     assert_eq!(observations[1].1["registry-source-profile"], "reviewer");

@@ -783,6 +783,7 @@ class ReviewTaskQuery(ReviewPageQuery, total=False):
     ownership: ReviewTaskOwnership
 class SupervisoryReviewTaskQuery(ReviewPageQuery, total=False):
     queue: str
+    requestId: Uuid
 
 class WorkItemHistoryQuery(TypedDict, total=False):
     cursor: str

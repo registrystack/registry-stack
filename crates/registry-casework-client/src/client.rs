@@ -322,6 +322,9 @@ impl CaseworkClient {
                     .queue
                     .as_ref()
                     .is_some_and(|queue| &task.queue != queue)
+                    || query
+                        .request_id
+                        .is_some_and(|request_id| task.request_id != request_id)
             })
         {
             return Err(protocol(

@@ -97,6 +97,9 @@ pub struct ReviewTaskQuery {
 pub struct SupervisoryReviewTaskQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue: Option<String>,
+    /// Exact canonical request selection, applied before pagination.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -145,5 +148,32 @@ mod tests {
             "ownership": "unclaimed"
         }))
         .is_err());
+    }
+
+    #[test]
+    fn supervisory_request_selection_uses_a_canonical_uuid() {
+        let request_id = uuid::Uuid::from_u128(9);
+        let query = SupervisoryReviewTaskQuery {
+            request_id: Some(request_id),
+            ..Default::default()
+        };
+        let wire = json!({"requestId": "00000000-0000-0000-0000-000000000009"});
+        assert_eq!(serde_json::to_value(&query).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<SupervisoryReviewTaskQuery>(wire).unwrap(),
+            query
+        );
+        for invalid in [
+            json!(""),
+            json!("not-a-uuid"),
+            json!(42),
+            json!({}),
+            json!([]),
+        ] {
+            assert!(serde_json::from_value::<SupervisoryReviewTaskQuery>(json!({
+                "requestId": invalid
+            }))
+            .is_err());
+        }
     }
 }

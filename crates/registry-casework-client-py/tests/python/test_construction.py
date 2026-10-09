@@ -57,6 +57,9 @@ class ConstructionTests(unittest.TestCase):
             lambda: client.supervisory_review_tasks(
                 "valid-token", "supervisor", {"ownership": "unclaimed"}
             ),
+            *(lambda request_id=request_id: client.supervisory_review_tasks(
+                "valid-token", "supervisor", {"requestId": request_id}
+            ) for request_id in ("", "not-a-uuid", 42, {}, [])),
         )
         for call in calls:
             with self.subTest(call=call):

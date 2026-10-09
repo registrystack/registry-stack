@@ -502,6 +502,7 @@ async fn review_tasks(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SupervisoryReviewTaskQuery {
     queue: Option<String>,
+    request_id: Option<Uuid>,
     cursor: Option<Uuid>,
     limit: Option<usize>,
 }
@@ -521,6 +522,7 @@ async fn supervisory_review_tasks(
                 source_profile_id,
                 token,
                 query.queue.as_deref(),
+                query.request_id,
                 query.cursor,
                 page_limit(&state, query.limit)?,
             )

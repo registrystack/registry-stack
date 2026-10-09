@@ -36,18 +36,25 @@ const REVIEW_RETENTION_BATCH_SIZE: i64 = 100;
 #[derive(Clone, Copy)]
 enum ReviewTaskListView {
     Reviewer(Option<ReviewTaskOwnership>),
-    Supervision,
+    Supervision(Option<Uuid>),
 }
 
 impl ReviewTaskListView {
     fn is_supervisory(self) -> bool {
-        matches!(self, Self::Supervision)
+        matches!(self, Self::Supervision(_))
     }
 
     fn ownership(self) -> Option<ReviewTaskOwnership> {
         match self {
             Self::Reviewer(ownership) => ownership,
-            Self::Supervision => None,
+            Self::Supervision(_) => None,
+        }
+    }
+
+    fn request_id(self) -> Option<Uuid> {
+        match self {
+            Self::Reviewer(_) => None,
+            Self::Supervision(request_id) => request_id,
         }
     }
 }
@@ -60,6 +67,8 @@ struct ReviewTaskScanContext<'a> {
     supervisory: bool,
     ownership: Option<ReviewTaskOwnership>,
     queue: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<Uuid>,
     source_profile: Option<&'a str>,
 }
 
@@ -449,12 +458,14 @@ impl CaseworkService {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn supervisory_review_tasks(
         &self,
         actor: &ActorContext,
         source_profile_id: Option<&str>,
         token: &str,
         queue: Option<&str>,
+        request_id: Option<Uuid>,
         cursor: Option<Uuid>,
         limit: usize,
     ) -> Result<SupervisoryReviewTaskPage, ReviewRuntimeError> {
@@ -468,7 +479,7 @@ impl CaseworkService {
                 source_profile_id,
                 token,
                 queue,
-                ReviewTaskListView::Supervision,
+                ReviewTaskListView::Supervision(request_id),
                 cursor,
                 limit,
             )
@@ -516,6 +527,7 @@ impl CaseworkService {
             supervisory: view.is_supervisory(),
             ownership: view.ownership(),
             queue,
+            request_id: view.request_id(),
             source_profile: source_profile_id,
         })?;
         let mut scan_cursor = cursor;
@@ -638,7 +650,24 @@ impl CaseworkService {
                             ReviewRuntimeError::Forbidden
                             | ReviewRuntimeError::NotFound
                             | ReviewRuntimeError::ResultExpired,
-                        ) => {}
+                        ) => {
+                            // Losing one task does not conceal its siblings.
+                            // Complete neutrally only if current scope is empty.
+                            if view.request_id().is_some()
+                                && self
+                                    .store
+                                    .review_tasks(actor, queue, view, None, 1)
+                                    .await?
+                                    .items
+                                    .is_empty()
+                            {
+                                return Ok(ReviewTaskPage {
+                                    items: Vec::new(),
+                                    next_cursor: None,
+                                    status: PageStatus::Complete,
+                                });
+                            }
+                        }
                         Err(error) => return Err(error),
                     },
                     Err(_) => {
@@ -656,7 +685,18 @@ impl CaseworkService {
                         ReviewRuntimeError::Forbidden
                         | ReviewRuntimeError::NotFound
                         | ReviewRuntimeError::SourceProfileNotApplicable,
-                    )) => {}
+                    )) => {
+                        // Every task in an exact lookup has the same pinned
+                        // request and source binding. A concealed request must
+                        // look absent even when its tasks exceed the page budget.
+                        if view.request_id().is_some() {
+                            return Ok(ReviewTaskPage {
+                                items: Vec::new(),
+                                next_cursor: None,
+                                status: PageStatus::Complete,
+                            });
+                        }
+                    }
                     Ok(Err(error)) => return Err(error),
                 }
                 completed_preflights += 1;
@@ -695,16 +735,60 @@ impl CaseworkService {
             None
         };
         let next_cursor = match next_cursor {
-            Some(anchor) if !full && !continuation_disclosed => Some(
-                self.store
-                    .issue_review_task_scan_cursor(
-                        actor,
-                        source_profile_id,
-                        &cursor_context,
-                        anchor,
+            Some(anchor) if !full && !continuation_disclosed => {
+                // A task can leave scope during source I/O without the whole
+                // request disappearing. Do not checkpoint an invalid anchor or
+                // infer an empty lookup from that task alone.
+                let anchor_in_scope = if view.request_id().is_some() {
+                    match self
+                        .store
+                        .review_task_cursor_position(actor, queue, view, anchor)
+                        .await
+                    {
+                        Ok(_) => true,
+                        Err(ReviewRuntimeError::ResultExpired) => false,
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    true
+                };
+                if anchor_in_scope {
+                    Some(
+                        self.store
+                            .issue_review_task_scan_cursor(
+                                actor,
+                                source_profile_id,
+                                &cursor_context,
+                                anchor,
+                            )
+                            .await?,
                     )
-                    .await?,
-            ),
+                } else {
+                    // This bounded store-only check releases no unchecked row
+                    // and spends no additional source reads.
+                    if self
+                        .store
+                        .review_tasks(actor, queue, view, None, 1)
+                        .await?
+                        .items
+                        .is_empty()
+                    {
+                        return Ok(ReviewTaskPage {
+                            items: Vec::new(),
+                            next_cursor: None,
+                            status: PageStatus::Complete,
+                        });
+                    }
+                    // Retain disclosed work and resume after its last current
+                    // anchor, so candidates beyond the budget are not skipped.
+                    // Without one, require a refetch instead of false absence.
+                    let retained = items.last().ok_or(ReviewRuntimeError::ResultExpired)?;
+                    self.store
+                        .review_task_cursor_position(actor, queue, view, retained.task_id)
+                        .await?;
+                    Some(retained.task_id)
+                }
+            }
             cursor => cursor,
         };
         // A final empty page caused only by the absent Registry-Source-Profile
@@ -1848,7 +1932,8 @@ impl PostgresStore {
                    AND (r.lifecycle='reviewing' OR r.result_available_until>now())
                    AND m.issuer=$2 AND m.subject=$3 AND m.membership_kind=$4
                    AND ($5::text IS NULL OR t.queue_id=$5)
-                   AND ($7 OR ((r.policy_snapshot->'stages'->t.stage_index->'decidingProfiles') ? $6))",
+                   AND ($7 OR ((r.policy_snapshot->'stages'->t.stage_index->'decidingProfiles') ? $6))
+                   AND ($8::uuid IS NULL OR t.request_id=$8)",
                 &[
                     &task_id,
                     &actor.principal.issuer,
@@ -1857,6 +1942,7 @@ impl PostgresStore {
                     &queue,
                     &actor.profile_id,
                     &view.is_supervisory(),
+                    &view.request_id(),
                 ],
             )
             .await?
@@ -1918,6 +2004,7 @@ impl PostgresStore {
                         OR ($10='unclaimed' AND t.state='open')
                         OR ($10='assigned_to_me' AND t.state='claimed'
                             AND t.holder_issuer=$1 AND t.holder_subject=$2))
+                   AND ($11::uuid IS NULL OR t.request_id=$11)
                  ORDER BY t.created_at,t.task_id LIMIT $7",
                 &[
                     &actor.principal.issuer,
@@ -1930,6 +2017,7 @@ impl PostgresStore {
                     &actor.profile_id,
                     &supervisory,
                     &ownership,
+                    &view.request_id(),
                 ],
             )
             .await?;

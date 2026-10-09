@@ -336,6 +336,21 @@ async fn app_with_database(
     Arc<Mutex<OccurrenceState>>,
     tokio_postgres::Client,
 ) {
+    app_with_project(idp, project(&idp.issuer())).await
+}
+
+async fn app_with_project(
+    idp: &MockIdp,
+    project: CaseworkProject,
+) -> (
+    axum::Router,
+    CaseworkService,
+    Arc<AtomicBool>,
+    Arc<AtomicBool>,
+    Arc<AtomicU8>,
+    Arc<Mutex<OccurrenceState>>,
+    tokio_postgres::Client,
+) {
     let base = env::var("CASEWORK_REVIEW_TEST_DATABASE_URL")
         .expect("CASEWORK_REVIEW_TEST_DATABASE_URL is required for review HTTP tests");
     let schema = format!("review_http_{}", Uuid::new_v4().simple());
@@ -394,7 +409,6 @@ async fn app_with_database(
     let store = PostgresStore::connect_runtime(&database_config, &secrets)
         .expect("runtime store")
         .with_audit(registry_casework::CaseworkAudit::capture().0);
-    let project = project(&idp.issuer());
     project.check().expect("review HTTP project");
     let authenticator = CaseworkAuthenticator::new(
         &project,
@@ -555,7 +569,7 @@ async fn create_task(
     .expect("accepted review");
     let task_id = database
         .query_one(
-            "SELECT task_id FROM casework_review_tasks WHERE request_id=$1",
+            "SELECT task_id FROM casework_review_tasks WHERE request_id=$1 ORDER BY slot LIMIT 1",
             &[&accepted.request_id],
         )
         .await
@@ -2683,6 +2697,259 @@ async fn reviewer_ownership_filters_precede_pagination_and_survive_state_changes
         .items
         .is_empty());
     server.abort();
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn supervisory_request_lookup_precedes_pagination_and_conceals_inaccessible_requests_over_http(
+) {
+    let idp = MockIdp::start().await;
+    let mut policy = project(&idp.issuer());
+    policy.review_kinds[0].stages[0].required_approvals = 3;
+    policy.inbox.default_page_size = 1;
+    policy.inbox.maximum_candidate_scan = 2;
+    policy.inbox.maximum_source_reads = 2;
+    let (app, service, revoked, changed, _, source_state, database) =
+        app_with_project(&idp, policy).await;
+    let (earlier, earlier_task) = create_answer_task(&app, &database, &idp, "earlier").await;
+    let (other, other_task) = create_answer_task(&app, &database, &idp, "other-team").await;
+    let body = review_request_for_subject("exact-source-canary", "exact-reference", &idp.issuer());
+    let (target, _) = create_task(&app, &database, &idp, &body).await;
+    let expected = database
+        .query("SELECT task_id FROM casework_review_tasks WHERE request_id=$1 ORDER BY created_at,task_id", &[&target.request_id])
+        .await.expect("request tasks").iter().map(|row| row.get::<_, Uuid>(0)).collect::<Vec<_>>();
+    assert_eq!(expected.len(), 3);
+    let list = |query: String, principal: &str| {
+        let bearer = idp.mint_token(json!({
+            "aud": AUDIENCE, "registry_principal": principal,
+            "scope": "casework:supervisor", "registry_actor_kind": "human"
+        }));
+        app.clone().oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-tasks/supervision?{query}"))
+                .header("authorization", format!("Bearer {bearer}"))
+                .header(CASEWORK_PROFILE_HEADER, "supervisor")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("supervisory lookup"),
+        )
+    };
+    let page = |response: axum::response::Response| async move {
+        assert_eq!(response.status(), StatusCode::OK);
+        serde_json::from_slice::<Value>(
+            &to_bytes(response.into_body(), 32 * 1024)
+                .await
+                .expect("bounded lookup page"),
+        )
+        .expect("lookup page JSON")
+    };
+    let query = format!("queue=review&requestId={}&limit=1", target.request_id);
+    let first = page(
+        list("queue=review&limit=1".to_owned(), "supervisor")
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        first["items"][0]["requestId"],
+        earlier.request_id.to_string()
+    );
+    assert_ne!(
+        first["items"][0]["requestId"],
+        target.request_id.to_string()
+    );
+    let mut cursor = None;
+    let mut found = Vec::new();
+    for expected_task in &expected {
+        let mut scoped = query.clone();
+        if let Some(cursor) = cursor {
+            scoped.push_str(&format!("&cursor={cursor}"));
+        }
+        let result = page(list(scoped, "supervisor").await.unwrap()).await;
+        assert_eq!(result["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            result["items"][0],
+            json!({
+                "taskId": expected_task, "requestId": target.request_id,
+                "queue": "review", "revision": 1, "state": "open"
+            })
+        );
+        found.push(*expected_task);
+        cursor = result["nextCursor"]
+            .as_str()
+            .map(|value| Uuid::parse_str(value).unwrap());
+    }
+    assert_eq!(found, expected);
+    assert_eq!(cursor, None);
+    let submitted = page(
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/review-tasks/supervision?requestId={}",
+                        earlier.request_id
+                    ))
+                    .header(
+                        "authorization",
+                        format!(
+                            "Bearer {}",
+                            idp.mint_token(json!({
+                                "aud": AUDIENCE, "registry_principal": "supervisor",
+                                "scope": "casework:supervisor", "registry_actor_kind": "human"
+                            }))
+                        ),
+                    )
+                    .header(CASEWORK_PROFILE_HEADER, "supervisor")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(submitted["items"].as_array().unwrap().len(), 1);
+    assert_eq!(submitted["items"][0]["taskId"], earlier_task.to_string());
+    let empty = json!({"items": [], "status": "complete"});
+    for (scoped, principal) in [
+        (format!("requestId={}", Uuid::new_v4()), "supervisor"),
+        (format!("{query}&cursor={}", expected[2]), "supervisor"),
+        (
+            format!("requestId={}&queue=elsewhere", target.request_id),
+            "supervisor",
+        ),
+        (query.clone(), "outsider"),
+    ] {
+        assert_eq!(page(list(scoped, principal).await.unwrap()).await, empty);
+    }
+    // Raw anchors outside the exact request scope have the same refusal as an unknown anchor.
+    for anchor in [earlier_task, Uuid::new_v4()] {
+        let response = list(format!("{query}&cursor={anchor}"), "supervisor")
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::GONE);
+        let problem: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 32 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(problem["code"], "review.result-expired");
+        assert_eq!(problem.as_object().unwrap().len(), 6);
+        assert!(!problem.to_string().contains("exact-source-canary"));
+    }
+    for invalid in ["not-a-uuid", ""] {
+        let response = list(format!("requestId={invalid}"), "supervisor")
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    database.batch_execute(
+        "INSERT INTO casework_teams(team_id,revision) VALUES('other-team',1);
+         INSERT INTO casework_queue_service(queue_id,team_id,revision) VALUES('other','other-team',1);
+         INSERT INTO casework_queue_service(queue_id,team_id,revision) VALUES('intake','review-team',1);"
+    ).await.expect("queue composition fixture");
+    database
+        .execute(
+            "UPDATE casework_review_tasks SET queue_id='other' WHERE task_id=$1",
+            &[&other_task],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        page(
+            list(format!("requestId={}", other.request_id), "supervisor")
+                .await
+                .unwrap()
+        )
+        .await,
+        empty
+    );
+    database
+        .execute(
+            "UPDATE casework_review_tasks SET queue_id='intake' WHERE task_id=$1",
+            &[&expected[1]],
+        )
+        .await
+        .unwrap();
+    let intake = page(
+        list(
+            format!("requestId={}&queue=intake", target.request_id),
+            "supervisor",
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(intake["items"].as_array().unwrap().len(), 1);
+    assert_eq!(intake["items"][0]["taskId"], expected[1].to_string());
+    database
+        .execute(
+            "DELETE FROM casework_queue_service WHERE queue_id='intake'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        page(
+            list(
+                format!("requestId={}&queue=intake", target.request_id),
+                "supervisor"
+            )
+            .await
+            .unwrap()
+        )
+        .await,
+        empty
+    );
+    // Concealment remains neutral even with more tasks than the source-read budget.
+    revoked.store(true, Ordering::SeqCst);
+    assert_eq!(
+        page(list(query.clone(), "supervisor").await.unwrap()).await,
+        empty
+    );
+    revoked.store(false, Ordering::SeqCst);
+    changed.store(true, Ordering::SeqCst);
+    assert_eq!(
+        page(list(query.clone(), "supervisor").await.unwrap()).await,
+        empty
+    );
+    changed.store(false, Ordering::SeqCst);
+    *source_state.lock().unwrap() = OccurrenceState::Cancelled;
+    assert_eq!(
+        page(list(query.clone(), "supervisor").await.unwrap()).await,
+        empty
+    );
+    *source_state.lock().unwrap() = OccurrenceState::Open;
+    database
+        .execute(
+            "DELETE FROM casework_memberships WHERE subject='supervisor'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        page(list(query.clone(), "supervisor").await.unwrap()).await,
+        empty
+    );
+    database.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('review-team',$1,'supervisor','supervisor')", &[&idp.issuer()]).await.unwrap();
+    service
+        .cancel_review_request(
+            &ActorContext {
+                principal: registry_casework_core::IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "registry-service".to_owned(),
+                },
+                profile_id: "producer".to_owned(),
+                role: CaseworkRole::Requester,
+            },
+            target.request_id,
+            registry_casework_core::ReviewCancelRequest {
+                subject: body.subject,
+                reason: "End exact lookup fixture".to_owned(),
+            },
+            "cancel-exact-lookup",
+        )
+        .await
+        .unwrap();
+    database.execute("UPDATE casework_review_requests SET terminal_at=now()-interval '91 days', result_available_until=now()-interval '1 day' WHERE request_id=$1", &[&target.request_id]).await.unwrap();
+    assert_eq!(page(list(query, "supervisor").await.unwrap()).await, empty);
     idp.stop().await;
 }
 

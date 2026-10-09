@@ -14378,7 +14378,17 @@
             }
           },
           {
-            "description": "Returned continuation UUID for a live created-at and task-id scan position. Pass unchanged with the same caller, Casework and source profiles and queue filter. A disclosed task anchor is its task UUID and requires current source visibility. After an undisclosed candidate, a bounded page instead issues an opaque scan checkpoint lasting at most 15 minutes and bound to the exact caller, profiles and supervisory view and queue. A checkpoint grants no task or source authority. Current Supervisor membership, queue service, retention and task existence are rechecked; a deciding profile and the original policy anchor's active status are not required. Unknown, erased, expired, no-longer-authorized or different-queue anchors and mismatched checkpoints return 410 review.result-expired. Refresh or change the filter by restarting without a cursor. A source-backed task anchor adds at most one preflight outside the candidate source-read budget, under the same page deadline.",
+            "description": "Optional exact canonical request UUID, selected before pagination and composed with queue and limit. A reference grants no authority. Unknown, other-team, revoked, concealed or expired requests return the same neutral empty page under current list semantics.",
+            "in": "query",
+            "name": "requestId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Returned continuation UUID for a live created-at and task-id scan position. Pass unchanged with the same caller, Casework and source profiles, queue and requestId filters. A disclosed task anchor is its task UUID and requires current source visibility. After an undisclosed candidate, a bounded page instead issues an opaque scan checkpoint lasting at most 15 minutes and bound to the exact caller, profiles, supervisory view, queue and requestId selection. A checkpoint grants no task or source authority. Current Supervisor membership, queue service, retention and task existence are rechecked; a deciding profile and the original policy anchor's active status are not required. Unknown, erased, expired, no-longer-authorized or different-queue or different-request anchors and mismatched checkpoints return 410 review.result-expired. Refresh or change the filter by restarting without a cursor. A source-backed task anchor adds at most one preflight outside the candidate source-read budget, under the same page deadline.",
             "in": "query",
             "name": "cursor",
             "required": false,

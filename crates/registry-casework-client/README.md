@@ -14,6 +14,13 @@ accountability references, and its state is a holder-free string. A single decid
 recovery exposes the caller's own decision without private reasons or result
 data.
 
+Set `SupervisoryReviewTaskQuery::request_id` to the canonical request UUID to
+find a shared request before pagination. It composes with queue, limit and
+continuation, and the client rejects a response row for another request.
+Unknown or inaccessible requests return the same neutral empty page under
+current list semantics. A reference grants no authority to decide, read review
+content or retrieve the separate audited accountability record.
+
 Pass review-task `next_cursor` values unchanged with the same caller, profiles
 and query filters. A continuation past undisclosed candidates is an opaque UUID
 scan checkpoint valid for at most 15 minutes, so it cannot be used as a task id.
