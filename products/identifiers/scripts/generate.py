@@ -28,6 +28,7 @@ REFERENCE_TEMPLATES = {
     f"{BASE_URL}/problems/..",
     f"{BASE_URL}/problems/",
     f"{BASE_URL}/schemas/",
+    f"{BASE_URL}/schemas/breg/",
 }
 
 
