@@ -832,6 +832,24 @@ impl PackageReader<'_> {
         .into_iter()
         .filter_map(|(field, path)| path.map(|path| (field, path.clone())))
         .collect();
+        // A link is refused where the manifest names it, never by reading
+        // through it, and the message repeats no path.
+        for (field, path) in &scripts {
+            let linked = std::fs::symlink_metadata(self.root.join(format!("{directory}/{path}")))
+                .is_ok_and(|metadata| metadata.file_type().is_symlink());
+            if linked {
+                let diagnostic = document.diagnostic_at_value(
+                    Severity::Error,
+                    "config.refused",
+                    &format!("/{field}"),
+                    "the script is a symbolic link, which a package may not contain",
+                    "Replace the link with the script file itself, inside the provider directory.",
+                );
+                self.found
+                    .note(&manifest_path, Report::new(vec![diagnostic]));
+                return Ok(None);
+            }
+        }
         let mut expected: BTreeSet<String> = scripts.iter().map(|(_, path)| path.clone()).collect();
         expected.insert(PROVIDER_FILE.to_owned());
         self.expect_only(&directory, "", &expected)?;
@@ -1661,14 +1679,16 @@ pub(crate) mod tests {
         std::fs::rename(&script, &outside).unwrap();
         std::os::unix::fs::symlink(&outside, &script).unwrap();
         let error = refusal(root.path());
-        assert!(
-            matches!(error.reason(), PackageLoadReason::Symlink),
-            "{error}"
-        );
-        assert_eq!(
-            error.path(),
-            format!("package.root/{GATEWAY}/scripts/prepare.rhai")
-        );
+        let report = error.report().unwrap_or_else(|| panic!("{error}"));
+        let [diagnostic] = report.diagnostics() else {
+            panic!("{error}");
+        };
+        assert_eq!(diagnostic.code, "config.refused");
+        assert_eq!(diagnostic.path, "/prepareScript");
+        let source = diagnostic.source.as_ref().expect("a position");
+        assert!(source.file.ends_with(&format!("{GATEWAY}/provider.yaml")));
+        assert!(source.line.is_some() && source.column.is_some());
+        assert!(!diagnostic.message.contains("outside.rhai"));
 
         let root = starter_copy();
         let directory = root.path().join(GATEWAY);

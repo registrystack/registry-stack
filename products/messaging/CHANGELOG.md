@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A provider script that is a symbolic link is refused with `config.refused`
+  at the manifest member that names it (`/prepareScript`, `/interpretScript`,
+  or `/receiptScript`), with its line and column, instead of at the file.
 - A `template.yaml` or `provider.yaml` of up to 1 MiB, the shared YAML
   document bound, is read. The package no longer applies a 64 KiB bound to
   these two files; locale text, `schema.json`, and `sample.json` keep it.
