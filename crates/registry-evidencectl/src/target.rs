@@ -30,7 +30,7 @@ use registry_evidence_authoring::formats::{
     TARGET_GOVERNANCE_API_VERSION, TARGET_GOVERNANCE_KIND, TARGET_SETTINGS,
 };
 use registry_platform_crypto::{PublicJwk, SigningAlgorithm};
-use registry_platform_yaml::Reader;
+use registry_platform_yaml::{ExternalId, Reader};
 
 const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 const MAX_PUBLIC_KEY_BYTES: u64 = 256 * 1024;
@@ -105,12 +105,27 @@ pub(crate) struct ExplainArgs {
 /// closed shapes by `validate_settings_documents`; the format version is the
 /// document's `apiVersion`.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TargetSettings {
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-passthrough" = "The governance members of the Evidence bundle grammar; `evidencectl check` validates them against bundle.schema.yaml after the compile."))
+    )]
     pub(crate) governance: Value,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-passthrough" = "The runtime document of the Evidence runtime grammar; `target new` validates it against runtime.schema.yaml before it writes the target."))
+    )]
     pub(crate) runtime: Value,
     #[serde(default)]
-    public_keys: BTreeMap<String, PathBuf>,
+    public_keys: BTreeMap<ExternalId, PathBuf>,
+}
+
+/// The derived JSON Schema of one target settings document.
+#[cfg(feature = "schema")]
+pub(crate) fn settings_document_schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(TargetSettings)).expect("a derived schema is JSON")
 }
 
 /// The closed Version 1 runtime settings shape, mirroring
@@ -831,13 +846,14 @@ fn signing_public_key_reference(
 }
 
 fn normalize_supplied_public_keys(
-    public_keys: BTreeMap<String, PathBuf>,
+    public_keys: BTreeMap<ExternalId, PathBuf>,
     settings_parent: &Path,
 ) -> Result<BTreeMap<String, PublicKeySource>> {
     let mut normalized = BTreeMap::new();
     for (name, source) in public_keys {
+        let name = name.as_str();
         let relative = if name.starts_with("public-keys/") {
-            public_key_path(&name)?
+            public_key_path(name)?
         } else {
             public_key_path(&format!("public-keys/{name}"))?
         };
@@ -1480,7 +1496,8 @@ runtime:
         let active = settings.path().join("active.jwk.json");
         fs::write(&active, ES256_PUBLIC_JWK).expect("active key");
         supplied.insert(
-            "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json".to_owned(),
+            ExternalId::new("_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json")
+                .expect("an external id"),
             PathBuf::from("active.jwk.json"),
         );
         assert_eq!(

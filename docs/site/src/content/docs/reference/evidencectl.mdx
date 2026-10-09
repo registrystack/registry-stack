@@ -252,27 +252,32 @@ production candidate input.
 
 | Command | Inputs | Result | Does not do |
 | --- | --- | --- | --- |
-| `evidencectl tooling editor [<project>]` | Editable project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all six managed files | Install an extension, change editor settings outside the project, or replace a file it did not write |
+| `evidencectl tooling editor [<project>]` | Editable project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all ten managed files | Install an extension, change editor settings outside the project, or replace a file it did not write |
 | `evidencectl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Evidence Gateway authoring diagnostics for every document it indexes in the project, not only the open one | Open a socket, contact a source, read source values, or observe SQLite |
 
-`tooling editor` writes six files into the project:
+`tooling editor` writes ten files into the project:
 
 ```text
 .evidence-editor/manifest.json
+.evidence-editor/schemas/access-client.schema.json
+.evidence-editor/schemas/access-policy.schema.json
+.evidence-editor/schemas/mock-plan.schema.json
 .evidence-editor/schemas/project-marker.schema.json
 .evidence-editor/schemas/question.schema.json
+.evidence-editor/schemas/target-settings.schema.json
 .vscode/extensions.json
 .vscode/settings.json
 .zed/settings.json
 ```
 
-Commit all six with the rest of the project. They are generated, nonsecret configuration matched to
+Commit all ten with the rest of the project. They are generated, nonsecret configuration matched to
 the schemas the checks apply, and the `.gitignore` that `evidencectl init` writes excludes `secrets/`
 and `.evidence/` only. A later run refreshes exactly what an earlier run recorded writing. A managed
 file someone has edited by hand stops the command, which names that file and changes nothing.
 
-The mappings cover `evidence-project.yaml` and `questions/*.yaml`, the two document kinds a Rust type
-stands behind. Sources, selectors, derivations, answer schemas, and fixtures carry no static schema;
+The mappings cover `evidence-project.yaml`, `questions/*.yaml`, `access/clients/*.yaml`,
+`access/policies/*.yaml`, `mocks/source.yaml`, and `targets/*/settings.yaml`, the document kinds a
+Rust type stands behind. Sources, selectors, derivations, answer schemas, and fixtures carry no static schema;
 the language server checks those.
 
 A diagnostic in your editor carries the sentence `evidencectl` reports for the same input, because

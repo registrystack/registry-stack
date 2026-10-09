@@ -3449,20 +3449,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-SCHEMA-2
-  format: evidence/target-settings
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: evidence/target-settings
-  location: editors/configure.py#/SCHEMAS/evidence
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
 - rule: CFG-ENV-1
   format: evidence/verification-policy
   location: products/platform/config-formats.yaml#/current/apiVersion

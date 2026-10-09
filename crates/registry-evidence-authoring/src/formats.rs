@@ -67,6 +67,12 @@ pub const TARGET_SETTINGS_API_VERSION: &str =
     "id.registrystack.org/formats/evidence/target-settings/v1alpha1";
 /// The `kind` of a target's settings.
 pub const TARGET_SETTINGS_KIND: &str = "EvidenceTargetSettings";
+/// The published `$id` of a target's `settings.yaml` JSON Schema.
+pub const TARGET_SETTINGS_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/evidence/target-settings/target-settings.v1alpha1.schema.json";
+/// The published `$id` of a target's `governance.yaml` JSON Schema.
+pub const TARGET_GOVERNANCE_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/evidence/target-governance/target-governance.v1alpha1.schema.json";
 /// The published `$id` of a materialized source mock plan's JSON Schema.
 pub const MOCK_PLAN_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/evidence/mock-plan/mock-plan.v1alpha1.schema.json";

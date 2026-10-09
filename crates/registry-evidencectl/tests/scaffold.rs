@@ -905,7 +905,8 @@ fn assert_editor_schema_mappings(project: &Path) {
             "access-policy.schema.json",
             "mock-plan.schema.json",
             "project-marker.schema.json",
-            "question.schema.json"
+            "question.schema.json",
+            "target-settings.schema.json"
         ]
     );
     assert_eq!(
@@ -936,6 +937,10 @@ fn assert_editor_schema_mappings(project: &Path) {
         (
             ".evidence-editor/schemas/project-marker.schema.json",
             include_str!("../schemas/authoring/project-marker.schema.json"),
+        ),
+        (
+            ".evidence-editor/schemas/target-settings.schema.json",
+            include_str!("../schemas/authoring/target-settings.schema.json"),
         ),
     ] {
         assert_eq!(

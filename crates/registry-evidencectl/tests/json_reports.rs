@@ -210,6 +210,7 @@ fn tooling_editor_publishes_its_setup_report_in_json() {
             ".evidence-editor/schemas/mock-plan.schema.json",
             ".evidence-editor/schemas/project-marker.schema.json",
             ".evidence-editor/schemas/question.schema.json",
+            ".evidence-editor/schemas/target-settings.schema.json",
             ".vscode/extensions.json",
             ".vscode/settings.json",
             ".zed/settings.json",

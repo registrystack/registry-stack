@@ -3328,7 +3328,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
       kind: EvidenceTargetSettings
-    schema: none
+    schema:
+      path: crates/registry-evidencectl/schemas/authoring/target-settings.schema.json
+      id: https://id.registrystack.org/schemas/evidence/target-settings/target-settings.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-evidencectl --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
+      driftCheck: products/evidence/scripts/check-authoring-schema.sh
     reader:
       crate: registry-evidencectl
       file: crates/registry-evidencectl/src/target.rs
@@ -3337,10 +3342,10 @@ formats:
     check: evidencectl check {project}
     example: products/evidence/reference/authoring-projects/example/targets/local/settings.yaml
     conformance:
-      requiredText: /governance/issuer/id
+      requiredText: none
       optionalText: none
-      integer: /governance/audit/hashKeyVersion
-      boolean: /runtime/outboundTls/systemRoots
+      integer: none
+      boolean: none
     securityMembers: []
     restrictingMembers: []
   - id: evidence/mock-plan
