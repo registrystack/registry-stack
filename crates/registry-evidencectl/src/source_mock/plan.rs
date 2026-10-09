@@ -31,6 +31,8 @@ pub(super) const MAX_PLAN_BYTES: usize = registry_platform_yaml::MAXIMUM_DOCUMEN
 pub(super) const MAX_SEED: u64 = 9_007_199_254_740_991;
 /// A generation seed, bounded where the reader reads it.
 pub(super) type Seed = registry_platform_yaml::BoundedU64<0, MAX_SEED>;
+/// The one response status a plan describes, bounded where the reader reads it.
+pub(super) type ResponseStatus = registry_platform_yaml::BoundedU32<200, 200>;
 pub(super) const MAX_OPERATIONS: usize = 256;
 pub(super) const MAX_CASES_PER_OPERATION: usize = 256;
 pub(super) const MAX_TOTAL_CASES: usize = 1024;
@@ -103,8 +105,7 @@ pub(super) struct PlanOperation {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PlanResponse {
-    #[cfg_attr(feature = "schema", schemars(range(min = 200, max = 200)))]
-    pub status: u16,
+    pub status: ResponseStatus,
     pub media_type: String,
 }
 
@@ -311,7 +312,7 @@ fn validate_operation(operation: &PlanOperation, index: usize) -> Result<()> {
         bail!("operation {index} method must be GET");
     }
     validate_route_template(&operation.path)?;
-    if operation.response.status != 200 || operation.response.media_type != "application/json" {
+    if operation.response.status.get() != 200 || operation.response.media_type != "application/json" {
         bail!("operation {index} response must be 200 application/json");
     }
     if operation.cases.is_empty() || operation.cases.len() > MAX_CASES_PER_OPERATION {
@@ -485,7 +486,7 @@ mod tests {
                 path: "/people/{person_id}".to_owned(),
                 operation_id: None,
                 response: PlanResponse {
-                    status: 200,
+                    status: ResponseStatus::new(200).expect("status"),
                     media_type: "application/json".to_owned(),
                 },
                 cases: vec![PlanCase {
@@ -580,6 +581,24 @@ mod tests {
         assert_eq!(diagnostic.path, "/generation/seed");
         assert!(diagnostic.message.contains("9007199254740991"));
         assert!(!diagnostic.message.contains("9007199254740992"));
+    }
+
+    #[test]
+    fn a_response_status_other_than_200_is_refused_by_the_reader_at_the_value() {
+        let rendered = String::from_utf8(render_plan(&plan()).expect("render")).unwrap();
+        for status in [199, 201] {
+            let error = parse_plan(
+                "source.yaml",
+                rendered
+                    .replace("status: 200", &format!("status: {status}"))
+                    .as_bytes(),
+            )
+            .expect_err("refused");
+            let found = crate::authored::report_in(&error).expect("the reader's report");
+            let diagnostic = &found.diagnostics()[0];
+            assert_eq!(diagnostic.code, "config.out-of-range");
+            assert_eq!(diagnostic.path, "/operations/0/response/status");
+        }
     }
 
     #[test]

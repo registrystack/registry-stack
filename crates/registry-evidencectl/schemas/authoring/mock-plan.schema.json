@@ -141,7 +141,7 @@
           "type": "string"
         },
         "status": {
-          "format": "uint16",
+          "format": "uint32",
           "maximum": 200,
           "minimum": 200,
           "type": "integer"

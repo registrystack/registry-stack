@@ -471,7 +471,7 @@ fn generate_initial(args: GenerateArgs) -> Result<ExitCode> {
             path: operation.key.path.clone(),
             operation_id: operation.operation_id.clone(),
             response: PlanResponse {
-                status: 200,
+                status: plan::ResponseStatus::new(200).context("the mock response status")?,
                 media_type: "application/json".to_owned(),
             },
             cases: vec![PlanCase {
