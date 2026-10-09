@@ -146,10 +146,12 @@ range of the member's type.
 
 Leaving a key out and writing it with no value are different. An optional key you leave out takes
 its default. A key with nothing after the colon, or with `null` or `~`, is null, and no member
-accepts null. With `logLevel:` on a line of its own, the reader reports:
+accepts null. In a Scheduling runtime file, `authentication.oidc.scopeClaim` is optional and
+defaults to `registry_scopes`. With `scopeClaim:` on a line of its own, the reader reports it
+under `schedulingctl check <project> --runtime-config runtime.yaml`:
 
 ```text
-error[config.null-value] runtime.yaml:14:1 /logLevel
+error[config.null-value] runtime.yaml:79:5 /authentication/oidc/scopeClaim
   null is never a value; an empty value after a key is null too
   next: Give a value, or remove the key if the member is optional.
 ```
