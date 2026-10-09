@@ -15,6 +15,8 @@ standards_referenced:
   - shacl
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
 {/* Evidence: products/discovery/README.md describes the operator flow as offline `check`, one
     explicit `package`, immutable-package deployment, then restart. `crates/registry-discoveryctl/src/lib.rs`
     exposes only `check` and `package`; `crates/registry-discovery/src/server.rs` fixes the public routes. */}
@@ -325,6 +327,14 @@ No credential, evidence request, or assertion passes through Discovery.
     `startup_refuses_an_index_with_the_retired_header_with_rebuild_guidance`; `crates/registry-discovery/src/query.rs`,
     `service_matches_filters`; `crates/registry-discovery-client/src/selection.rs`, exact selection
     errors and no-native-I/O test. */}
+
+## Check commands
+
+Every file Registry Discovery reads has a command that checks it offline, with no service running. Each prints
+the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../../reference/configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="discovery" />
 
 ## Next
 

@@ -47,10 +47,13 @@ Registry Messaging reads `MessagingRuntimeConfig` through the same reader.
 
 </DocsetProduct>
 
-The YAML rules, value rules, substitution, and diagnostics on this page are that reader's, so they
-apply to runtime files today. Each product still reads its authored files with its own YAML parser,
-whose rules and error text differ by product. The reference linked for each format describes its
-keys.
+The shared reader is the `registry-platform-yaml` library. Every product's check command reads
+its authored files through it, as the runtimes above read their runtime files, so one YAML subset,
+one value table, one header check, and one diagnostic format apply to every file on this page. Two
+rules belong to runtime files alone: the absolute path in
+[how a runtime reads its file](#how-a-runtime-reads-its-file), and `${...}` substitution in
+[values from the environment](#values-from-the-environment). The reference linked for each format
+describes its keys.
 
 {/* Evidence: crates/registry-platform-config/src/loader.rs, RuntimeConfigLoader;
     crates/registry-breg/src/runtime_config.rs, RuntimeConfigLoader;
@@ -81,8 +84,8 @@ or No kind does not carry that member.
 ## How a runtime reads its file
 
 A runtime reads its configuration file only from an absolute path with no `.` or `..` segment and
-no symbolic link anywhere along it, and only when that path names a regular file of at most 1 MiB.
-The file is one YAML document in a strict subset of YAML 1.2, in UTF-8, nested at most 128 levels
+no symbolic link anywhere along it, and only when that path names a regular file. Every file the reader reads, authored or runtime, is at most 1 MiB
+and is one YAML document in a strict subset of YAML 1.2, in UTF-8, nested at most 128 levels
 deep. Write block mappings and lists, indent with spaces, and add comments wherever they help. The
 reader refuses these constructs, each with its own code:
 
@@ -129,12 +132,12 @@ A member keeps the type its format gives it. An integer member refuses `1_000` a
 
 ```text
 error[config.expected-integer] runtime.yaml:10:25 /limits/maximumResultRecords
-  expected a whole number from 0 to 18446744073709551615; quoted values are text
+  expected a whole number from 1 to 10000; quoted values are text
   next: Remove the quotes.
 ```
 
-A message about a whole number states both bounds: the ones the format declares, or else the
-range of the member's type, as here.
+A message about a whole number states both bounds: the ones the format declares, as here, or else the
+range of the member's type.
 
 {/* Evidence: crates/registry-platform-yaml/src/scalar.rs, resolve_plain();
     crates/registry-platform-yaml/src/messages.rs, CODES, whole_number(), and expected_integer(). */}
@@ -159,7 +162,7 @@ A runtime file can take part of a text value from the runtime's environment whil
 | --- | --- |
 | `${NAME}` | The value of `NAME`; refused when `NAME` is unset or empty |
 | `${NAME:-fallback}` | The value of `NAME`, or `fallback` when `NAME` is unset or empty |
-| `${NAME:?message}` | The value of `NAME`; refused when `NAME` is unset or empty, without repeating the message |
+| `${NAME:?message}` | The value of `NAME`; refused when `NAME` is unset or empty, naming `NAME` and withholding the message |
 
 `NAME` starts with a letter or `_` and continues with letters, digits, or `_`. An expression can
 sit inside a longer value, such as `${PACKAGE_ROOT}/current`.
@@ -174,7 +177,9 @@ sit inside a longer value, such as `${PACKAGE_ROOT}/current`.
 - A diagnostic about a substituted value points at the expression as you wrote it, and names the
   variable but never its value.
 
-With `DISCOVERY_PACKAGE_ROOT` unset, `root: ${DISCOVERY_PACKAGE_ROOT}` is refused:
+A check command fills expressions only when you pass `--environment`. With `DISCOVERY_PACKAGE_ROOT`
+unset, `discoveryctl check --runtime-config runtime.yaml --environment` refuses
+`root: ${DISCOVERY_PACKAGE_ROOT}`:
 
 ```text
 error[config.substitution] runtime.yaml:6:9 /package/root
@@ -182,13 +187,23 @@ error[config.substitution] runtime.yaml:6:9 /package/root
   next: Set DISCOVERY_PACKAGE_ROOT in the runtime's environment, or write a fallback as ${DISCOVERY_PACKAGE_ROOT:-fallback}.
 ```
 
+With `root: ${DISCOVERY_PACKAGE_ROOT:?set the package root}` and the variable unset, the refusal
+names the variable and says the message you wrote is withheld, since a message is configured text
+that can end up in a log:
+
+```text
+error[config.substitution] runtime.yaml:6:9 /package/root
+  the environment variable DISCOVERY_PACKAGE_ROOT is unset or empty; the message written for it is withheld
+  next: Set DISCOVERY_PACKAGE_ROOT in the runtime's environment.
+```
+
 Substitution is for ordinary settings. A secret goes in a reference member, a key ending in `Ref`,
 as `secret:env/<NAME>` or `secret:file/<name>`, and the runtime resolves it through the providers
 its file declares under `secretProviders`. The
 [secret reference grammar](../environment-variables/#secret-references) gives the accepted names.
 
-An authored file is never substituted. Depending on the product, a `${...}` expression in an
-authored file is refused or read as literal text, so write the value itself.
+An authored file is never substituted. A check command refuses a `${...}` expression in one with
+`config.substitution-not-allowed`, so write the value itself.
 
 {/* Evidence: crates/registry-platform-config/src/loader.rs, RuntimeConfigLoader and
     reject_environment_expressions_in_authored_yaml();
@@ -200,8 +215,8 @@ authored file is refused or read as literal text, so write the value itself.
 
 ## Read a diagnostic
 
-A runtime that refuses its file reports diagnostics, one per problem. Take a Discovery runtime file
-whose last line misspells `logLevel`:
+A check command, and a runtime that refuses its file at startup, report diagnostics, one per
+problem. Take a Discovery runtime file whose last line misspells `logLevel`:
 
 ```yaml
 apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
@@ -209,7 +224,7 @@ kind: DiscoveryRuntimeConfig
 listener:
   bind: 127.0.0.1:38080
 package:
-  root: ${DISCOVERY_PACKAGE_ROOT}
+  root: /srv/discovery/current
 limits:
   maximumRequestBytes: 65536
   maximumResponseBytes: 1048576
@@ -220,15 +235,17 @@ limits:
 logLevl: info
 ```
 
-The reader reports two problems:
+`discoveryctl check --runtime-config runtime.yaml` reports two problems and a summary line:
 
 ```text
+discoveryctl check refused the input.
 error[config.missing-key] runtime.yaml:1:1
   the required member `logLevel` is missing
   next: Add `logLevel`.
 error[config.unknown-key] runtime.yaml:14:1 /logLevl
   `logLevl` is not a member of this mapping
   next: Rename `logLevl` to `logLevel`, or remove it.
+2 errors, 0 warnings in 1 file
 ```
 
 Each diagnostic has the same parts:
@@ -278,11 +295,13 @@ runtime file most often meets:
 | `config.missing-envelope` | The document is empty, or its top-level mapping lacks `apiVersion` or `kind` |
 | `config.wrong-kind` | `kind` is not one the reader accepts |
 | `config.unsupported-api-version` | `apiVersion` is not one the reader accepts for this kind |
+| `config.retired-api-version` | `apiVersion` is one an earlier release wrote; `next:` names the current one |
 | `config.unknown-key` | A key is not a member of its mapping |
 | `config.removed-key` | A key was removed or renamed; `next:` names what to write instead |
 | `config.missing-key` | A required member is absent |
 | `config.unknown-variant` | A value is not one of the accepted names; the message lists them |
 | `config.null-value` | A member is null |
+| `config.invalid-value` | A value has the right type but a product rule refuses it; the message states what is accepted |
 | `config.expected-integer` | An integer member holds something other than an integer |
 | `config.expected-string` | A text member holds something other than text |
 | `config.substitution` | A `${...}` expression cannot be filled |
@@ -295,7 +314,7 @@ runtime file most often meets:
 | `yaml.control-character` | A text value holds a control character other than tab, line feed, or carriage return |
 
 `CODES` in `crates/registry-platform-yaml/src/messages.rs` lists every reader code with its meaning.
-The one warning, `config.deprecated-api-version`, reports an `apiVersion` the runtime still reads
+The reader's one warning, `config.deprecated-api-version`, reports an `apiVersion` the runtime still reads
 and names the version to change to.
 
 For an unknown key, `next:` proposes the closest accepted key when one differs only in letter
@@ -327,24 +346,52 @@ The code names the problem. The message wording is human-readable output, which
     suggest(), unknown_variant(), too_many_problems(), and deprecated_api_version();
     crates/registry-platform-yaml/src/de.rs, serde_unknown_field();
     crates/registry-casework/src/config.rs, AuditConfig;
-    crates/registry-platform-config/src/loader.rs, RuntimeConfigError, deciding_diagnostic(). */}
+    crates/registry-platform-config/src/loader.rs, RuntimeConfigError. */}
 
-### How a product prints them
+### Fix a removed key, a retired version, or an empty list
 
-A runtime prints the diagnostics inside its own startup error, and the surrounding words differ by
-product. Some runtimes print the lines as shown on this page, some restate a refusal in their own
-words, and Registry Discovery writes the lines inside a JSON log record.
+A key that a format used to accept is refused with a sentence that says what to write instead. A
+Discovery runtime file that still says `address` under `listener` is refused:
 
-The BReg runtime prints the least. It reads the file through the reader, then applies its own rules
-to the decoded values. It reports one problem per run, on one line: the deciding diagnostic's
-pointer, message, and suggested action, without its code, line, or column.
+```text
+discoveryctl check refused the input.
+error[config.missing-key] runtime.yaml:3:1 /listener
+  the required member `bind` is missing
+  next: Add `bind`.
+error[config.removed-key] runtime.yaml:4:3 /listener/address
+  `address` is no longer accepted
+  next: declare listener.bind instead.
+2 errors, 0 warnings in 1 file
+```
 
-{/* Evidence: crates/registry-render/src/runtime.rs, load();
-    crates/registry-breg/src/runtime_config.rs, parse_runtime_config_with_env() and
-    ReaderRefusal;
-    crates/registry-platform-config/src/loader.rs, message();
-    crates/registry-evidence/src/config.rs, render_refusal();
-    crates/registry-discovery/src/startup.rs, RuntimeConfigLoader. */}
+Rename the key, and both problems go away. A header that carries a retired `apiVersion` is refused
+the same way, with the current one named. A Scheduling runtime file that starts with the earlier
+`registry.registrystack.org/scheduling-runtime/v1alpha1` is refused by
+`schedulingctl check <project> --runtime-config runtime.yaml`:
+
+```text
+error[config.retired-api-version] runtime.yaml:17:13 /apiVersion
+  apiVersion `registry.registrystack.org/scheduling-runtime/v1alpha1` is retired; the current apiVersion is `id.registrystack.org/formats/scheduling/runtime/v1alpha1`
+  next: Write apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1.
+1 error, 0 warnings in 5 files
+```
+
+An empty list never states an open choice. Where a member can be open, you write the word
+`unrestricted` in place of the list, and an empty list is refused with that fix. With
+`requiredScopes: []` in a Base Registry Engine access profile,
+`bregctl check my-registry` reports:
+
+```text
+bregctl check refused the project.
+error[config.invalid-value] my-registry/registry.yaml:58:21 /accessProfiles/0/requiredScopes
+  expected unrestricted, or a list of at least one scope
+  next: List the scopes a token must carry, or write unrestricted to require none.
+1 error, 0 warnings in 2 files
+```
+
+{/* Evidence: crates/registry-discovery/src/runtime_config.rs, REMOVED_RUNTIME_KEYS;
+    crates/registry-scheduling/src/config.rs, SCHEDULING_RETIRED_RUNTIME_API_VERSIONS;
+    crates/registry-breg/src/contract/sentinel.rs, Scopes. */}
 
 ## Check a file before you deploy it
 
@@ -353,17 +400,109 @@ checks each format without starting the service. Run it in your pipeline before 
 the project directory or runtime file it names. A format marked None has no check command of its
 own; the program that reads it refuses it when it starts.
 
-`bregctl check <project> --runtime-config <file>` checks the BReg runtime file offline, as `breg`
-reads it at startup, and prints each diagnostic in full. It reads no package, database, network
-endpoint, or secret. Add `--environment` to fill `${NAME}` expressions from the process environment;
-without it, each expression is checked by syntax and position only. `bregctl doctor --runtime-config
-<absolute-file>` also connects to the database and the other dependencies the file names, so it is a
-deployment preflight rather than an offline check.
+Every check command reads its files through the shared reader, applies the rules the runtime would
+apply that need no network or database, and reads no secret. It reports in two forms and ends with
+an exit code.
+
+**Human output** is the default. It prints a line naming the command's verdict, each diagnostic as
+described in [read a diagnostic](#read-a-diagnostic), and a summary line that counts errors,
+warnings, and files checked. A file with no problem prints only the summary:
+
+```text
+0 errors, 0 warnings in 1 file
+```
+
+**JSON output**, selected by `--format json`, prints one report on standard output. A tool reads
+`diagnostics`, whose members mirror the human line: `severity`, `code`, `artifact`, `path`,
+`message`, `suggestedAction`, `source` (`file`, `line`, `column`), and `related` when a second
+place explains the problem. `discoveryctl check --runtime-config runtime.yaml --format json` on the
+misspelled file above prints:
+
+```json
+{
+  "ok": false,
+  "command": "check",
+  "status": "domain-refusal",
+  "apiVersion": "id.registrystack.org/formats/discovery/ctl-report/v1alpha1",
+  "diagnostics": [
+    {
+      "artifact": "DiscoveryRuntimeConfig",
+      "code": "config.missing-key",
+      "message": "the required member `logLevel` is missing",
+      "path": "",
+      "severity": "error",
+      "source": {
+        "column": 1,
+        "file": "runtime.yaml",
+        "line": 1
+      },
+      "suggestedAction": "Add `logLevel`."
+    },
+    {
+      "artifact": "DiscoveryRuntimeConfig",
+      "code": "config.unknown-key",
+      "message": "`logLevl` is not a member of this mapping",
+      "path": "/logLevl",
+      "severity": "error",
+      "source": {
+        "column": 1,
+        "file": "runtime.yaml",
+        "line": 14
+      },
+      "suggestedAction": "Rename `logLevl` to `logLevel`, or remove it."
+    }
+  ],
+  "errors": 2,
+  "filesChecked": 1,
+  "kind": "DiscoveryCtlReport",
+  "warnings": 0
+}
+```
+
+The report envelope (`ok`, `command`, `status`, `kind`, `apiVersion`, the counts) differs by
+product; the diagnostics inside it do not. `path` is empty when the problem concerns the whole
+document.
+
+**Exit codes** are the same for every check command:
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | No error was reported; warnings are allowed |
+| 1 | The input was refused |
+| 2 | The command line was wrong |
+| 3 | Something the command depends on was unavailable, such as a file it could not read |
+
+**Warnings** do not fail a check by default. A check reports a warning for a file it accepts but
+that probably does not say what its author meant.
+
+<DocsetProduct product="registry-messaging">
+
+A Registry Messaging project whose access profile lists `requesterClients: ["*"]` passes with a
+warning, since the item names one entry and matches nothing else:
+
+```text
+warning[messaging.project.wildcard-spelled-item] ./messaging.yaml:43:24 /accessProfiles/0/requesterClients/0
+  The item is spelled like a wildcard but names one entry: `*` and `unrestricted` match nothing else in this list.
+  next: Name the entry the profile is for.
+0 errors, 1 warning in 18 files
+```
+
+{/* Evidence: crates/registry-messaging-core/src/finding.rs, WildcardSpelledItem. */}
+
+</DocsetProduct>
+
+Add `--deny-warnings` to make a reported warning exit 1, so a pipeline fails on it.
+
+For a runtime file, `--environment` fills `${NAME}` expressions from the process environment and
+checks the values they produce. Without it, each expression is checked by syntax and position only,
+and no secret is read. `bregctl doctor --runtime-config <absolute-file>` goes further than a check:
+it also connects to the database and the other dependencies the file names, so it is a deployment
+preflight rather than an offline check.
 
 {/* Evidence: products/platform/config-formats.yaml;
-    crates/registry-bregctl/src/lib.rs, CheckArgs and DoctorArgs;
-    crates/registry-bregctl/src/check.rs, check_runtime_file();
-    crates/registry-breg/src/runtime_config.rs, check_runtime_config();
+    crates/registry-discoveryctl/src/lib.rs, deny_warnings;
+    crates/registry-platform-yaml/src/diagnostic.rs, render_human() and to_json_value();
+    crates/registry-bregctl/src/lib.rs, DoctorArgs;
     crates/registry-bregctl/src/doctor.rs, run(). */}
 
 ### Check as you type

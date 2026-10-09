@@ -23,6 +23,7 @@ type Product = {
   title: string;
   docsetProduct: string | null;
   references: { label: string; page: string }[];
+  checkPage: string | null;
   formats: Format[];
 };
 
@@ -76,6 +77,11 @@ const sections = products
 // The page lives at reference/configuration-files/, two levels below the
 // docs root, so a relative link keeps the docset base.
 const href = (page: string) => `../../${page}/`;
+// Only a product page that renders ConfigurationFormatChecks carries a row per format.
+const checkFragment = (product: Product, format: Format) =>
+  product.checkPage?.startsWith('products/') || product.checkPage?.startsWith('reference/cli/')
+    ? ''
+    : `#check-${format.id.replace('/', '-')}`;
 ---
 
 {
@@ -149,7 +155,16 @@ const href = (page: string) => `../../${page}/`;
                     </span>
                   )}
                 </td>
-                <td>{format.check ? <code>{format.check}</code> : 'None'}</td>
+                <td>
+                  {format.check ? <code>{format.check}</code> : 'None'}
+                  {format.check && product.checkPage && (
+                    <span class="note">
+                      <a href={`${href(product.checkPage)}${checkFragment(product, format)}`}>
+                        {product.title} reference
+                      </a>
+                    </span>
+                  )}
+                </td>
                 <td>{stabilityLabels[format.stability]}</td>
               </tr>
             ))}

@@ -11,6 +11,8 @@ locale: en
 standards_referenced: []
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
 You have a verified template package and callers that need PDFs, and you want `registry-render serve`
 answering them. At the end of this page one `registry-render` process serves your package on a private
 address behind your TLS proxy, answers `GET /health` and `GET /ready`, renders under API-key
@@ -289,6 +291,14 @@ digest never gains different bytes.
 
 {/* Evidence: .github/workflows/render-golden.yml;
     products/render/EVIDENCE.md. */}
+
+## Check commands
+
+Every file Registry Render reads has a command that checks it offline, with no service running. Each prints
+the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../../reference/configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="render" />
 
 ## Next
 

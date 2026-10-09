@@ -12,6 +12,8 @@ standards_referenced:
   - json-schema
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
 You have decided an item in [Decide your first Casework item](../../tutorials/first-casework/), and now you want to author the policy a real team will work under.
 This page covers the project file: the access profiles that separate people from producer services, the queues work waits in, the unified review policies, the routing rules and clocks that move work over time, and the source declaration that binds a Base Registry Engine (BReg) register.
 At the end, `caseworkctl package` writes a directory whose `SHA256SUMS` an operator verifies before a runtime serves it.
@@ -689,6 +691,14 @@ Tell them which queues need teams, since the inbox stays closed until every decl
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, package();
     crates/registry-casework/src/config.rs, verify_casework_package() and RuntimeConfig::check;
     products/casework/examples/professional-review/runtime.example.yaml. */}
+
+## Check commands
+
+Every file Registry Casework reads has a command that checks it offline, with no service running. Each prints
+the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../../reference/configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="casework" />
 
 ## Next
 

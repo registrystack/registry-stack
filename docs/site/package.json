@@ -19,7 +19,7 @@
     "archive:snapshot": "node scripts/archive-lock.mjs snapshot",
     "preview": "astro preview",
     "generate": "npm run generate:source && npm run generate:archive",
-    "generate:source": "node scripts/generate-evidence-configuration.mjs && node scripts/generate-breg-configuration.mjs && node scripts/generate-configuration-formats.mjs && node scripts/generate-cli-reference.mjs && node scripts/generate-breg-evidence-starter.mjs",
+    "generate:source": "node scripts/generate-evidence-configuration.mjs && node scripts/generate-breg-configuration.mjs && node scripts/generate-scheduling-configuration.mjs && node scripts/generate-configuration-formats.mjs && node scripts/generate-cli-reference.mjs && node scripts/generate-breg-evidence-starter.mjs",
     "generate:archive": "node scripts/generate-data.mjs && node scripts/fetch-openapi.mjs && node scripts/sync-repo-docs.mjs && node scripts/generate-sidebar.mjs",
     "pretest": "npm run generate",
     "test": "node --test \"scripts/**/*.test.mjs\"",

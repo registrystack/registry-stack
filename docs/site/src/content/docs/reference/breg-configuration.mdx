@@ -13,6 +13,7 @@ standards_referenced:
 wide: true
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
 import reference from '../../../data/generated/breg-configuration.json';
 
@@ -183,6 +184,14 @@ The generated `registry.yaml` tables include every nested dataset member. Compil
 {/* Evidence: crates/registry-breg/src/contract.rs;
     crates/registry-breg/src/compiler/statistics.rs;
     docs/site/scripts/generate-breg-configuration.mjs. */}
+
+## Check commands
+
+Every file Base Registry Engine reads has a command that checks it offline, with no service running. Each prints
+the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="breg" />
 
 ## Next
 

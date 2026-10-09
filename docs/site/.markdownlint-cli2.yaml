@@ -36,6 +36,7 @@ config:
       - AuthoringConfigurationReference
       - ConfigurationReference
       - ConfigurationFormatsTable
+      - ConfigurationFormatChecks
       - EventReferenceTable
       - DiagnosticReference
       - DocsetProduct

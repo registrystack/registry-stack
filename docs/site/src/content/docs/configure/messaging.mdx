@@ -12,6 +12,8 @@ standards_referenced:
   - json-schema
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
 You decided what your service sends and to whom, and now you want to author what Registry Messaging
 may send on its behalf. This page covers the package: the providers messages travel through, the
 sender profiles callers select, the templates Messaging renders, and the access profiles that decide
@@ -496,6 +498,14 @@ verified file buffers. Editing the authoring project never changes what a runnin
 
 {/* Evidence: crates/registry-messaging/src/package.rs; crates/registry-messagingctl/src/lib.rs;
     crates/registry-platform-config/src/package.rs; products/messaging/RUNTIME-CONFIG.md. */}
+
+## Check commands
+
+Every file Registry Messaging reads has a command that checks it offline, with no service running. Each prints
+the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../../reference/configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="messaging" />
 
 ## Next
 

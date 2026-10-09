@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -115,6 +115,33 @@ test('links each product to pages that exist', () => {
         `${product.id} links ${reference.page}, which has no page`,
       );
     }
+  }
+});
+
+test('names a check page for every product, and the page exists', () => {
+  for (const product of PRODUCTS) {
+    assert.ok(product.checkPage, `${product.id} names no check page`);
+    // Product pages under products/ are copied from the product source by npm run generate.
+    if (product.checkPage.startsWith('products/') || product.checkPage.startsWith('reference/cli/')) continue;
+    const candidates = [`${product.checkPage}.mdx`, `${product.checkPage}.md`];
+    assert.ok(
+      candidates.some((candidate) => existsSync(new URL(candidate, contentRoot))),
+      `${product.id} names check page ${product.checkPage}, which has no page`,
+    );
+  }
+});
+
+test('lists the check command of every authored and operator format on its check page', async () => {
+  const document = await buildConfigurationFormats();
+  for (const product of document.products) {
+    const page = product.checkPage;
+    if (page.startsWith('products/') || page.startsWith('reference/cli/')) continue;
+    const text = readFileSync(new URL(`${page}.mdx`, contentRoot), 'utf8');
+    assert.match(
+      text,
+      new RegExp(`<ConfigurationFormatChecks[^>]*product="${product.id}"`, 'u'),
+      `${page} does not render the check commands of ${product.id}`,
+    );
   }
 });
 

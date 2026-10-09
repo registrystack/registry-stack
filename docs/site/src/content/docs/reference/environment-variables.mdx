@@ -27,7 +27,8 @@ Evidence Gateway substitutes `${NAME}`, `${NAME:-fallback}`, and `${NAME:?messag
 values of its runtime file while the shared configuration reader builds the document, so a
 substituted value is always text: it fills a string member and never a number or boolean. A bare
 `${NAME}` refuses the file when the variable is unset or empty, `${NAME:-fallback}` substitutes the
-fallback in that case, and `${NAME:?message}` refuses the file without repeating the message. It
+fallback in that case, and `${NAME:?message}` refuses the file with a diagnostic that names `NAME` and withholds the
+message, because the message is configuration, which a diagnostic does not repeat. It
 refuses an expression in `apiVersion` and `kind`, in a member whose key ends in `Ref` or `Refs`, and
 under `secretProviders`, so the environment cannot choose which secret is read or where it comes
 from. It refuses any `${...}` expression in the governed bundle, so the reviewed bundle is the one
@@ -118,7 +119,7 @@ The `breg` binary reads one fixed variable.
 
 ### Expansion and secret references in `runtime.yaml`
 
-`breg` substitutes `${NAME}` expressions in the string values of `runtime.yaml` after parsing it, so a substituted value is always text: it cannot add a key, change a number or boolean, or carry YAML structure, and a line break inside it stays part of the string. A bare `${NAME}` refuses the file when the variable is unset or empty, `${NAME:-fallback}` substitutes the fallback in that case, and `${NAME:?message}` refuses the file without repeating the message. A field whose name ends in `Ref` and every value under `secretProviders` refuse an expression, so the environment cannot choose which secret is read or where it comes from. The authored project and module files refuse any `${...}` expression, so the reviewed package is the one that runs. A refused substitution stops the process at startup.
+`breg` substitutes `${NAME}` expressions in the string values of `runtime.yaml` after parsing it, so a substituted value is always text: it cannot add a key, change a number or boolean, or carry YAML structure, and a line break inside it stays part of the string. A bare `${NAME}` refuses the file when the variable is unset or empty, `${NAME:-fallback}` substitutes the fallback in that case, and `${NAME:?message}` refuses the file with a diagnostic that names `NAME` and withholds the message, because the message is configuration, which a diagnostic does not repeat. A field whose name ends in `Ref` and every value under `secretProviders` refuse an expression, so the environment cannot choose which secret is read or where it comes from. The authored project and module files refuse any `${...}` expression, so the reviewed package is the one that runs. A refused substitution stops the process at startup.
 
 Secret references use two grammars: `secret:env/<NAME>` names an operator-chosen environment
 variable and `secret:file/<name>` names a file under the `secretProviders.file.root` directory.

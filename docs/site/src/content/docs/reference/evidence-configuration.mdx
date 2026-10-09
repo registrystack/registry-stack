@@ -12,6 +12,8 @@ standards_referenced: []
 wide: true
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
 import reference from '../../../data/generated/evidence-configuration.json';
 
@@ -130,6 +132,14 @@ invokes the real Evidence checks before evaluating fixtures offline.
 
 {/* Evidence: crates/registry-evidencectl/src/runtime.rs, DoctorArgs and run();
     crates/registry-evidencectl/src/doctor.rs; crates/registry-evidencectl/src/fixtures.rs. */}
+
+## Check commands
+
+Every file Evidence Gateway reads has a command that checks it offline, with no service running. Each prints
+the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="evidence" />
 
 ## Next
 

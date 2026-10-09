@@ -26,6 +26,7 @@ export const PRODUCTS = [
     id: 'evidence',
     title: 'Evidence Gateway',
     docsetProduct: 'registry-evidence',
+    checkPage: 'reference/evidence-configuration',
     references: [
       { label: 'Evidence Gateway configuration reference', page: 'reference/evidence-configuration' },
     ],
@@ -34,6 +35,7 @@ export const PRODUCTS = [
     id: 'breg',
     title: 'Base Registry Engine',
     docsetProduct: null,
+    checkPage: 'reference/breg-configuration',
     references: [
       { label: 'Base Registry Engine configuration reference', page: 'reference/breg-configuration' },
     ],
@@ -42,6 +44,7 @@ export const PRODUCTS = [
     id: 'casework',
     title: 'Registry Casework',
     docsetProduct: 'registry-casework',
+    checkPage: 'configure/casework',
     references: [
       { label: 'Author a Casework policy', page: 'configure/casework' },
       { label: 'Deploy Registry Casework', page: 'operate/casework' },
@@ -51,7 +54,9 @@ export const PRODUCTS = [
     id: 'scheduling',
     title: 'Registry Scheduling',
     docsetProduct: 'registry-scheduling',
+    checkPage: 'reference/scheduling-configuration',
     references: [
+      { label: 'Registry Scheduling configuration reference', page: 'reference/scheduling-configuration' },
       { label: 'Registry Scheduling API', page: 'reference/apis/registry-scheduling' },
     ],
   },
@@ -59,6 +64,7 @@ export const PRODUCTS = [
     id: 'render',
     title: 'Registry Render',
     docsetProduct: 'registry-render',
+    checkPage: 'operate/registry-render',
     references: [
       { label: 'Render your first document', page: 'tutorials/first-render-document' },
       { label: 'Run Registry Render in serve mode', page: 'operate/registry-render' },
@@ -68,6 +74,7 @@ export const PRODUCTS = [
     id: 'messaging',
     title: 'Registry Messaging',
     docsetProduct: 'registry-messaging',
+    checkPage: 'configure/messaging',
     references: [
       { label: 'Author a Messaging package', page: 'configure/messaging' },
       { label: 'Deploy Registry Messaging', page: 'operate/messaging' },
@@ -77,6 +84,7 @@ export const PRODUCTS = [
     id: 'discovery',
     title: 'Registry Discovery',
     docsetProduct: null,
+    checkPage: 'configure/discovery',
     references: [
       { label: 'Package and run a Registry Discovery index', page: 'configure/discovery' },
     ],
@@ -85,6 +93,7 @@ export const PRODUCTS = [
     id: 'manifest',
     title: 'Registry Manifest',
     docsetProduct: 'registry-manifest',
+    checkPage: 'products/registry-manifest/validate-and-render',
     references: [
       { label: 'Registry Manifest portable metadata data model', page: 'spec/rs-dm-manifest' },
     ],
@@ -93,6 +102,7 @@ export const PRODUCTS = [
     id: 'platform',
     title: 'Registry Platform',
     docsetProduct: null,
+    checkPage: 'reference/cli/evidencectl',
     references: [],
   },
 ];

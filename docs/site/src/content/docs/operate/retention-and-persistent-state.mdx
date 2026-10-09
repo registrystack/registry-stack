@@ -52,9 +52,21 @@ Evidence Gateway, Registry Render, Base Registry Engine, Casework, and Schedulin
 shared per-process audit writer. The active file rotates at the configured size and sealed files
 expire by age. A `stdout` destination delegates both controls to the log collector.
 
+The age is set in whole days, from 1 to 36,500, and is 90 when omitted. The key differs by product:
+
+| Product | Key in `runtime.yaml` |
+| --- | --- |
+| Evidence Gateway | `audit.retainDays` |
+| Base Registry Engine | `audit.retainDays` |
+| Casework | `audit.retainDays` |
+| Registry Render | `audit.retentionDays` |
+| Scheduling | `audit.retentionDays` |
+
+The rest of this page calls the value the audit retention period. A runtime refuses the other spelling.
+
 Never truncate, rewrite, or reserialize the active audit file as part of cleanup: the writer
 treats any external change to it as a fault and stops, and audited requests fail closed until a
-restart. Copy sealed files to append-only storage before `audit.retainDays` deletes them.
+restart. Copy sealed files to append-only storage before the audit retention period deletes them.
 
 A crash, a killed process, or a full disk can leave the active file's final line incomplete (any
 byte other than a newline at end of file). The next start recovers it without operator action: the
@@ -84,7 +96,7 @@ one.
 
 The runtime recognizes a sealed file by its `<audit.path>.<sequence>` name, with an eight-digit
 sequence, and never deletes the active file. Retention deletes sealed files in sequence order,
-oldest first, and stops at the first one whose last modification is inside `audit.retainDays`, so
+oldest first, and stops at the first one whose last modification is inside the audit retention period, so
 the local directory holds a rolling window, not the whole history. A deletion that fails is logged
 and retried at the next rotation or start; it never stops the writer. Each stream reserves every `<audit.path>.<sequence>` name, plus
 `<audit.path>.lock`, `<audit.path>.seq`, `<audit.path>.seq.tmp`, and `<audit.path>.torn`, and a
@@ -100,7 +112,7 @@ The local audit file is not tamper-evident, and retention deletes it by age, so 
 store you ship to is the audit record of the deployment. A shipper reads the same directory the
 runtime writes, so three rules keep it safe:
 
-- Copy sealed files, and ship each one before `audit.retainDays` deletes it. The runtime never
+- Copy sealed files, and ship each one before the audit retention period deletes it. The runtime never
   depends on a sealed file after sealing it, so removing one after it is archived is safe.
 - Key archived copies on more than the file name, for example the host and the first entry's
   `time`. Sequence numbers continue across restarts only while `<audit.path>.seq` survives, so a
@@ -130,7 +142,7 @@ described in
 
 The runtime recognizes a sealed file by its `<audit.path>.<sequence>` name and never deletes the
 active file. Retention deletes only sealed files whose last modification is older than
-`audit.retainDays`, so the local directory holds a rolling window, not the whole history. Ship
+the audit retention period, so the local directory holds a rolling window, not the whole history. Ship
 sealed files the way
 [Ship Evidence Gateway audit records off host](#ship-evidence-gateway-audit-records-off-host)
 describes; the mechanics are identical.
