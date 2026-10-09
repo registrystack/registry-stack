@@ -740,6 +740,7 @@ The conventional names `source-resolutions.json` and `*.resolutions.json` have
 a generated schema, mapped by `editors/configure.py`.
 
 ### BREAKING: a source file has an envelope and a schema
+<!-- upgrade: evidence-source-envelope -->
 
 Every file under `sources/` opens with `apiVersion` and `kind`, and is read by the
 shared configuration reader. A file without them is refused as
@@ -762,6 +763,7 @@ applies after the compile. A BReg source export writes the
 two lines itself, so a source imported from an export needs no edit.
 
 ### BREAKING: a selector file has an envelope and a schema
+<!-- upgrade: evidence-selector-envelope -->
 
 Every file under `selectors/` opens with `apiVersion` and `kind`, and is read by the
 shared configuration reader. A file without them is refused as
@@ -784,6 +786,7 @@ applies after the compile. A BReg source export writes the
 two lines itself, so a source imported from an export needs no edit.
 
 ### BREAKING: retired `evidencectl` argument spellings are refused
+<!-- upgrade: no-file -->
 
 `evidencectl source mock serve`, `generate`, and `check` no longer accept
 `--project <dir>`; `evidencectl client profile create` and `evidencectl client

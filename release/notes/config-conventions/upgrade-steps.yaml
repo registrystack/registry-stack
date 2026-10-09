@@ -119,6 +119,18 @@ steps:
   edits:
   - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1, kind: EvidenceMockPlan}
   - {op: delete, path: version}
+- id: evidence-source-envelope
+  product: evidence
+  kind: edit
+  file: sources/*.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1, kind: EvidenceSource}
+- id: evidence-selector-envelope
+  product: evidence
+  kind: edit
+  file: selectors/*.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1, kind: EvidenceSelector}
 - id: evidence-fixture-envelope
   product: evidence
   kind: edit
