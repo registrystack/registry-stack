@@ -199,6 +199,11 @@ This first question uses the compact OpenAPI form, so you will add only a questi
 derivation. Evidence Gateway keeps the source-mock hints out of the narrowed authoring schema.
 Later institution integrations use the reusable source, selector, adapter, and schema directories.
 
+`evidencectl init` prints a next step, `evidencectl source suggest`, that drafts an editable source file
+in `sources/`. This tutorial does not use it: the compact form names the operation inside the
+question, so there is no source file to draft. Use `source suggest` when you build the reusable
+form for a later integration.
+
 ### `questions/adult-status.yaml`
 
 Open `questions/adult-status.yaml` in your editor and add the question definition:
