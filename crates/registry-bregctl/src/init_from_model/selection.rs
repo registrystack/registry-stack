@@ -267,7 +267,10 @@ entities:
         );
         let document = document.replace("kind: BRegModelSelection", "kind: ModelSelection");
         let report = Selection::parse("test", document.as_bytes()).expect_err("refused");
-        assert_eq!(codes(&report), ["config.wrong-kind"]);
+        assert_eq!(
+            codes(&report),
+            ["config.retired-api-version", "config.wrong-kind"]
+        );
     }
 
     #[test]

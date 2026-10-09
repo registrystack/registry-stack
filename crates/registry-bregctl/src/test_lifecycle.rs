@@ -759,7 +759,14 @@ mod tests {
         let old_kind = credentials_codes(&format!("{retired}kind: SchemaTestCredentials\n{body}"));
         assert_eq!(
             old_kind,
-            [("config.wrong-kind".to_owned(), "/kind".to_owned(), Some(2))]
+            [
+                (
+                    "config.retired-api-version".to_owned(),
+                    "/apiVersion".to_owned(),
+                    Some(1)
+                ),
+                ("config.wrong-kind".to_owned(), "/kind".to_owned(), Some(2))
+            ]
         );
 
         let source = format!("{retired}kind: BRegSchemaTestCredentials\n{body}");

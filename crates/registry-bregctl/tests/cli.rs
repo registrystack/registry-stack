@@ -2309,11 +2309,13 @@ entities:
     assert_eq!(report["ok"], false);
     assert_eq!(report["command"], "init");
     let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
-    assert_eq!(diagnostics.len(), 1, "{report}");
-    assert_eq!(diagnostics[0]["code"], "config.wrong-kind");
-    assert_eq!(diagnostics[0]["path"], "/kind");
-    assert_eq!(diagnostics[0]["source"]["file"], path(&selection));
-    assert_eq!(diagnostics[0]["source"]["line"], 2);
+    assert_eq!(diagnostics.len(), 2, "{report}");
+    assert_eq!(diagnostics[0]["code"], "config.retired-api-version");
+    assert_eq!(diagnostics[0]["path"], "/apiVersion");
+    assert_eq!(diagnostics[1]["code"], "config.wrong-kind");
+    assert_eq!(diagnostics[1]["path"], "/kind");
+    assert_eq!(diagnostics[1]["source"]["file"], path(&selection));
+    assert_eq!(diagnostics[1]["source"]["line"], 2);
     assert!(!destination.exists(), "a refused selection writes nothing");
 
     let output = init(&[]);
