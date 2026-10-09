@@ -185,6 +185,56 @@ class DocumentFilesTest(unittest.TestCase):
                 upgrade_steps.load_document(path)
 
 
+class SourceFidelityTest(unittest.TestCase):
+    """An edit rewrites the values it names and no others."""
+
+    def edited(self, text: str) -> str:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "file.yaml"
+            path.write_text(text, encoding="utf-8")
+            document = upgrade_steps.load_document(path)
+            document = upgrade_steps.apply_edit(
+                document, {"op": "set", "path": "added", "value": "x"}, "sample-step")
+            upgrade_steps.dump_document(path, document)
+            return path.read_text(encoding="utf-8")
+
+    def test_a_scalar_no_step_names_keeps_its_text_and_quoting(self) -> None:
+        for scalar in ("2026-01-01T00:00:00Z", "yes", "10:30", "010", "1_000", "0x1F",
+                       "'yes'", '"10:30"', "'plain text'", "~", "1e3", "Null"):
+            with self.subTest(scalar=scalar):
+                self.assertIn(f"value: {scalar}\n", self.edited(f"value: {scalar}\nother: 1\n"))
+        listed = self.edited("items:\n- 010\n- '1_000'\n- {inner: yes}\n")
+        self.assertIn("- 010\n", listed)
+        self.assertIn("- '1_000'\n", listed)
+        self.assertIn("inner: yes", listed)
+
+    def test_a_scalar_key_keeps_its_text(self) -> None:
+        self.assertIn("yes: 1\n", self.edited("yes: 1\n"))
+        self.assertIn("10:30: a\n", self.edited("10:30: a\n"))
+
+    def test_a_document_the_new_readers_refuse_is_refused_with_its_line(self) -> None:
+        cases = {
+            "duplicate key": "a: 1\nb: 2\na: 3\n",
+            "merge key": "base: {x: 1}\nuse:\n  <<: {x: 2}\n",
+            "anchor": "a: &shared {x: 1}\n",
+            "alias": "a: &shared {x: 1}\nb: *shared\n",
+        }
+        lines = {"duplicate key": 3, "merge key": 3, "anchor": 1, "alias": 1}
+        words = {"anchor": "anchor or alias", "alias": "anchor or alias"}
+        for name, text in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "old.yaml"
+                path.write_text(text, encoding="utf-8")
+                with self.assertRaisesRegex(Error, rf"old\.yaml:{lines[name]}.*{words.get(name, name)}"):
+                    upgrade_steps.load_document(path)
+
+    def test_a_json_document_is_not_checked_for_yaml_forms(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "old.json"
+            path.write_text('{"a": 1}', encoding="utf-8")
+            self.assertEqual(upgrade_steps.load_document(path), {"a": 1})
+
+
 CATALOG = """\
 apiVersion: id.registrystack.org/formats/release/upgrade-steps/v1alpha1
 kind: ReleaseUpgradeSteps
@@ -566,27 +616,27 @@ expect: {ruleId: first, dueState: atRisk}
         self.assertEqual(governance["kind"], "EvidenceTargetGovernance")
         self.assertNotIn("version", governance)
 
-    def test_breg_journeys_with_a_shared_mapping_and_a_batch(self) -> None:
+    def test_breg_journeys_with_a_batch(self) -> None:
         write(self.root, "tests/journeys.yaml", """\
 apiVersion: registry.registrystack.org/breg-journeys/v1
 journeys:
   - id: j
     steps:
       - id: create
-        claims: &claims {principal: p}
+        claims: {principal: p}
         request: {operation: create, data: {a: 1}}
         capture: made
       - id: submit
-        claims: *claims
+        claims: {principal: p}
         request:
           operation: submit_request
           recordRef: made
           etagRef: made
       - id: read
-        claims: *claims
+        claims: {principal: p}
         request: {operation: read_path, data: {parent: {recordRef: made}}}
       - id: batch
-        claims: *claims
+        claims: {principal: p}
         request:
           operation: batch
           items:

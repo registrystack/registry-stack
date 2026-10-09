@@ -84,16 +84,95 @@ def _yaml() -> Any:
     return yaml
 
 
+class _Source(str):
+    """A scalar an edit does not name, kept as its source wrote it.
+
+    PyYAML resolves `yes`, `10:30`, `010`, `1_000`, `0x1F`, and a bare
+    timestamp to values that dump differently, and a quoted scalar dumps in
+    the dumper's own style. A scalar whose dump would differ from its source
+    is loaded as this str subclass carrying the source text, its resolved tag,
+    and its style, and dumped back unchanged.
+    """
+
+    tag: str
+    style: str | None
+
+    def __new__(cls, text: str, tag: str, style: str | None) -> "_Source":
+        instance = super().__new__(cls, text)
+        instance.tag = tag
+        instance.style = style
+        return instance
+
+
+# A width past any line, so the dumper never folds a long scalar.
+_WIDTH = 10**6
+_QUOTED_OR_BLOCK = ("'", '"', "|", ">")
+
+
+def _dump_options() -> dict[str, Any]:
+    return {"sort_keys": False, "allow_unicode": True, "default_flow_style": False,
+            "width": _WIDTH}
+
+
 def _no_alias_dumper() -> Any:
     yaml = _yaml()
 
     class NoAliasDumper(yaml.SafeDumper):
-        # An alias in an old file is expanded in full, as the fragments tell an
-        # operator to do, so a shared mapping is written out at each use.
+        # An alias in an in-memory document is expanded in full, so a shared
+        # mapping is written out at each use.
         def ignore_aliases(self, _data: Any) -> bool:
             return True
 
+    def represent_source(dumper: Any, source: _Source) -> Any:
+        return dumper.represent_scalar(source.tag, str(source), style=source.style)
+
+    NoAliasDumper.add_representer(_Source, represent_source)
     return NoAliasDumper
+
+
+def _source_loader() -> Any:
+    yaml = _yaml()
+
+    class SourceLoader(yaml.SafeLoader):
+        def construct_object(self, node: Any, deep: bool = False) -> Any:
+            value = super().construct_object(node, deep)
+            if not isinstance(node, yaml.ScalarNode):
+                return value
+            if node.style not in _QUOTED_OR_BLOCK:
+                dumped = yaml.dump(value, Dumper=_no_alias_dumper(), **_dump_options())
+                if dumped.removesuffix("...\n").rstrip("\n") == node.value:
+                    return value
+            return _Source(node.value, node.tag, node.style)
+
+    return SourceLoader
+
+
+def _refuse_forms_the_readers_refuse(text: str, path: Path) -> None:
+    """Refuse an anchor, alias, merge key, or duplicate key, naming the line."""
+
+    yaml = _yaml()
+    for event in yaml.parse(text, Loader=yaml.SafeLoader):
+        line = event.start_mark.line + 1
+        if isinstance(event, yaml.AliasEvent):
+            raise StepError(f"{path}:{line}: an anchor or alias; write the shared value out in full")
+        if getattr(event, "anchor", None):
+            raise StepError(f"{path}:{line}: an anchor or alias; write the shared value out in full")
+    stack = [yaml.compose(text, Loader=yaml.SafeLoader)]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, yaml.SequenceNode):
+            stack.extend(node.value)
+        elif isinstance(node, yaml.MappingNode):
+            seen: set[str] = set()
+            for key, value in node.value:
+                line = key.start_mark.line + 1
+                if key.tag == "tag:yaml.org,2002:merge":
+                    raise StepError(f"{path}:{line}: a merge key; write the merged members out")
+                if isinstance(key, yaml.ScalarNode):
+                    if key.value in seen:
+                        raise StepError(f"{path}:{line}: a duplicate key; keep one")
+                    seen.add(key.value)
+                stack.extend((key, value))
 
 
 def load_document(path: Path) -> Any:
@@ -101,7 +180,8 @@ def load_document(path: Path) -> Any:
     try:
         text = path.read_text(encoding="utf-8")
         if suffix in (".yaml", ".yml"):
-            document = _yaml().safe_load(text)
+            _refuse_forms_the_readers_refuse(text, path)
+            document = _yaml().load(text, Loader=_source_loader())
         elif suffix == ".json":
             document = json.loads(text)
         else:
@@ -118,8 +198,7 @@ def load_document(path: Path) -> Any:
 def dump_document(path: Path, document: Any) -> None:
     suffix = path.suffix.lower()
     if suffix in (".yaml", ".yml"):
-        text = _yaml().dump(document, Dumper=_no_alias_dumper(), sort_keys=False,
-                            allow_unicode=True, default_flow_style=False)
+        text = _yaml().dump(document, Dumper=_no_alias_dumper(), **_dump_options())
     elif suffix == ".json":
         text = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
     else:

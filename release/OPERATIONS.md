@@ -1276,6 +1276,11 @@ The steps have one source of truth,
 - `edit`: a list of `envelope`, `set`, `delete`, `rename` and
   `replace-value` operations on the files matching its `file` glob under its
   `root` (`project`, `target` or `runtime`). Applying it is deterministic.
+  A scalar no edit names keeps its text and quoting (`yes`, `10:30`, `010`,
+  an unquoted timestamp), and comments in an edited file are lost. The engine
+  refuses a YAML file holding a duplicate key, a merge key, an anchor or an
+  alias, naming the file and the line, because the readers of the new release
+  refuse them too.
 - `manual`: an instruction the engine reports and never applies, for edits
   that need an operator decision or a recomputed value.
 - `unknown`: a breaking item whose edit is not yet derived. The engine refuses
