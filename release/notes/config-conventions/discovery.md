@@ -22,8 +22,12 @@ section "Respellings held for the stable release" lists them.
    `config.duplicate-item`. Migration: remove the repeat.
 4. **Size bounds follow the shared reader.** Each authored file holds at
    most 1 MiB (a mapping file was allowed 20 MiB), and `catalogUrl` holds at
-   most 2048 characters (was 4096). Migration: split an oversized mapping
-   into several mapping files; shorten a longer catalog URL.
+   most 2048 characters (was 4096). A mapping above 1 MiB is not supported in
+   this release, and it cannot be split: one requirement and jurisdiction
+   pair is mapped by one file only, so a second file is refused with
+   `discovery.project.duplicate-requirement`. Migration: shorten the
+   identifiers or remove alternatives until the file is under 1 MiB; shorten
+   a longer catalog URL.
 5. **The index opens with `apiVersion` and `kind`.** `discovery-index.json`
    now begins with
    `apiVersion: id.registrystack.org/formats/discovery/index/v1alpha1` and

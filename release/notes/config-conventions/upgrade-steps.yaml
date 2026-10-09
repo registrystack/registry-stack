@@ -685,8 +685,9 @@ steps:
   file: origins.yaml
   instruction: >-
     In origins.yaml and every mapping file write the value itself in place of a ${...} expression, remove
-    unknown, duplicate and null keys and repeated evidenceTypeIds entries, split a mapping over 1 MiB into
-    several mapping files, and shorten a catalogUrl over 2048 characters.
+    unknown, duplicate and null keys and repeated evidenceTypeIds entries, shorten the identifiers or remove
+    alternatives of a mapping over 1 MiB until it is under 1 MiB (a mapping cannot be split across files, and
+    a larger one is not supported in this release), and shorten a catalogUrl over 2048 characters.
 - id: discovery-index-rebuild
   product: discovery
   kind: manual
