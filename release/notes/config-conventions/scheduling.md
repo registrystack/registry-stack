@@ -275,7 +275,8 @@ and pointer from the error:
   `project`, where it used `scheduling`, and its offerings and windows carry
   the renamed members above. Migration: read the new names.
 - The human report opens with `Authoring check passed.` and closes with
-  `N errors, M warnings in K files`; a refusal prints the shared report on
+  `N errors, M warnings in K files`; a refusal prints
+  `schedulingctl check refused the input.` and then the shared report on
   standard error. Migration: a script that parsed the human output reads
   `--format json` instead.
 - `test` with no fixture exits 1 with `scheduling.fixture.none`, where it

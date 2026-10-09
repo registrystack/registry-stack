@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A refused `schedulingctl check` opens with
+  `schedulingctl check refused the input.` and closes with the summary line,
+  as the other check commands print it.
 - BREAKING: `authentication.oidc.allowedClients` is required in every file. An
   omitted member and `[]` are refused with
   `scheduling.runtime.allowed-clients-required`, development loopback

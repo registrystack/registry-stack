@@ -343,3 +343,10 @@ bound of 1 MiB. The package applied a 64 KiB bound to them before, which
 refused a file the convention accepts. Locale text, `schema.json`, and
 `sample.json` keep their 64 KiB bound. No migration step: a file that loaded
 still loads.
+
+## `messagingctl check` prints the verdict and summary lines
+
+A passed `messagingctl check` ends with the shared summary line
+(`0 errors, 0 warnings in 18 files`), and a refused one opens with
+`messagingctl check refused the input.` and ends with the summary line.
+Migration: a script that parsed the human output reads `--format json`.

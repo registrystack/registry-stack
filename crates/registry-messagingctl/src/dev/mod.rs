@@ -448,7 +448,7 @@ fn print_report(
         OutputFormat::Json => {
             report::write_line(&completed(&outcome.report, "dev", outcome.exit), stdout)?;
         }
-        OutputFormat::Human => render_human(outcome, stdout, stderr)?,
+        OutputFormat::Human => render_human(outcome, "dev", stdout, stderr)?,
     }
     stdout.flush()
 }

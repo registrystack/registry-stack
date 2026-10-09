@@ -1723,7 +1723,7 @@ fn finish(
         (OutputFormat::Json, None) => {
             report::write(&completed(&outcome.report, command, outcome.exit), stdout)
         }
-        (OutputFormat::Human, _) => render_human(outcome, stdout, stderr),
+        (OutputFormat::Human, _) => render_human(outcome, command, stdout, stderr),
     };
     match written {
         Ok(()) => ExitCode::from(outcome.exit),
@@ -1742,11 +1742,15 @@ fn text(value: &Value) -> &str {
 
 fn render_human(
     outcome: &Outcome,
+    command: &str,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> io::Result<()> {
     let report = &outcome.report;
     let failed = report["ok"] == json!(false);
+    if failed && command == "check" {
+        writeln!(stderr, "messagingctl check refused the input.")?;
+    }
     // A refusal with positions, and the warnings of a check that passed,
     // print as the shared human report.
     let warned = matches!(outcome.view, View::Check)
@@ -1786,12 +1790,21 @@ fn render_human(
                 writeln!(stderr, "  next: {action}")?;
             }
         }
+        if command == "check" {
+            writeln!(stderr, "{}", shared_report(report).summary())?;
+        }
         return Ok(());
     }
     match outcome.view {
         View::Init => render_init(report, stdout),
         View::Package => render_package(report, stdout),
-        View::Check | View::Diagnostics => render_check(report, stdout),
+        View::Check | View::Diagnostics => {
+            render_check(report, stdout)?;
+            if report.get("filesChecked").is_some() && !warned {
+                writeln!(stdout, "{}", shared_report(report).summary())?;
+            }
+            Ok(())
+        }
         View::Preview => render_preview(report, stdout),
         View::Activation => render_activation(report, stdout),
         View::MessageList => render_message_list(report, stdout),
@@ -2243,6 +2256,29 @@ audit:
             "{stdout}"
         );
         assert!(stderr.is_empty());
+        assert!(
+            stdout.ends_with("0 errors, 0 warnings in 2 files\n"),
+            "{stdout}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_without_a_position_opens_with_the_verdict_and_ends_with_the_summary() {
+        let outcome = Outcome::refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "config.refused",
+            "arguments",
+            "the --runtime-config path could not be resolved".to_owned(),
+        );
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        render_human(&outcome, "check", &mut stdout, &mut stderr).unwrap();
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(stdout.is_empty());
+        assert!(
+            stderr.starts_with("messagingctl check refused the input.\nerror[config.refused]"),
+            "{stderr}"
+        );
+        assert!(stderr.ends_with("1 error, 0 warnings\n"), "{stderr}");
     }
 
     #[test]
@@ -2291,6 +2327,7 @@ audit:
         // Position first, then the message, the next step, and the summary
         // (CFG-DIAG-2), with the file named as it was given.
         let mut lines = stderr.lines();
+        assert_eq!(lines.next(), Some("messagingctl check refused the input."));
         let head = lines.next().unwrap();
         assert!(
             head.starts_with(&format!("error[config.out-of-range] {}:", path.display())),

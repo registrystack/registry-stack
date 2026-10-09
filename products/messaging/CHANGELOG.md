@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `messagingctl check` closes a passed run with the summary line
+  (`0 errors, 0 warnings in 18 files`), and a refused run opens with
+  `messagingctl check refused the input.` and closes with the summary line.
 - A provider script that is a symbolic link is refused with `config.refused`
   at the manifest member that names it (`/prepareScript`, `/interpretScript`,
   or `/receiptScript`), with its line and column, instead of at the file.

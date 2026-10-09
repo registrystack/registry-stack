@@ -504,8 +504,16 @@ fn write_configuration_report(
         }
         report::write(&envelope, stdout)
     } else {
+        write_check_verdict(command, stderr);
         let _ = write!(stderr, "{}", report.render_human());
         Ok(())
+    }
+}
+
+/// The line that opens a refused check, as the other check commands print it.
+fn write_check_verdict(command: &str, stderr: &mut dyn io::Write) {
+    if command == "check" {
+        let _ = writeln!(stderr, "schedulingctl check refused the input.");
     }
 }
 
@@ -676,6 +684,7 @@ fn write_failure(
     if format == OutputFormat::Json {
         return report::write(report, stdout);
     }
+    write_check_verdict(report["command"].as_str().unwrap_or(""), stderr);
     if let Some(diagnostics) = report["diagnostics"].as_array() {
         for finding in diagnostics {
             let _ = writeln!(
@@ -689,6 +698,13 @@ fn write_failure(
             if let Some(action) = finding["suggestedAction"].as_str() {
                 let _ = writeln!(stderr, "  next: {action}");
             }
+        }
+    }
+    if report["command"] == "check" {
+        if let Ok(diagnostics) =
+            serde_json::from_value::<Vec<Diagnostic>>(report["diagnostics"].clone())
+        {
+            let _ = writeln!(stderr, "{}", Report::new(diagnostics).summary());
         }
     }
     Ok(())
@@ -1596,7 +1612,14 @@ mod tests {
         );
         assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
         assert!(stdout.is_empty());
-        assert!(String::from_utf8_lossy(&stderr).starts_with("error[schedulingctl.io-failure]"));
+        let text = String::from_utf8_lossy(&stderr);
+        assert!(
+            text.starts_with(
+                "schedulingctl check refused the input.\nerror[schedulingctl.io-failure]"
+            ),
+            "{text}"
+        );
+        assert!(text.ends_with("1 error, 0 warnings\n"), "{text}");
     }
 
     #[test]
@@ -1647,7 +1670,10 @@ mod tests {
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stdout.is_empty());
         let text = String::from_utf8(stderr).unwrap();
-        assert!(text.starts_with("error["), "{text}");
+        assert!(
+            text.starts_with("schedulingctl check refused the input.\nerror["),
+            "{text}"
+        );
         assert!(text.contains("scheduling.yaml:"), "{text}");
         assert!(text.contains(" /openings/0/startTime\n"), "{text}");
         assert!(text.contains("\n  next: "), "{text}");
