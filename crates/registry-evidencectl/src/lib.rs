@@ -146,7 +146,7 @@ enum CliFormat {
 
 #[derive(Debug, Args)]
 struct CheckArgs {
-    /// Editable Evidence project directory.
+    /// Editable Evidence project directory. Required unless --file is given.
     #[arg(required_unless_present = "file")]
     project: Option<PathBuf>,
     /// Check one tooling file on its own, offline: a client profile, reviewed

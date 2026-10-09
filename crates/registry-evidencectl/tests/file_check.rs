@@ -229,3 +229,16 @@ fn check_without_a_project_or_a_file_is_a_usage_error() {
         .expect("run evidencectl");
     assert_eq!(output.status.code(), Some(2));
 }
+
+#[test]
+fn check_help_says_the_project_is_required_unless_a_file_is_given() {
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["check", "--help"])
+        .output()
+        .expect("run evidencectl");
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        help.contains("Required unless --file is given"),
+        "check --help must say when PROJECT is required: {help}"
+    );
+}
