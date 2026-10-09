@@ -1460,7 +1460,11 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["listener", "bind"] => "127.0.0.1:8090",
         ["metricsListener", "bind"] => "127.0.0.1:9090",
         ["validationMode"] => "strict",
-        ["offers", "algorithms", _] => "EdDSA",
+        // The list is a set, so each position takes its own algorithm.
+        ["offers", "algorithms", index] => {
+            const ALGORITHMS: [&str; 3] = ["EdDSA", "ES256", "RS256"];
+            ALGORITHMS[index.parse::<usize>().unwrap_or(0) % ALGORITHMS.len()]
+        }
         ["offers", "authorizedClients" | "requiredScopes"] => "unrestricted",
         _ => DEFAULT_STAND_IN,
     }
@@ -2379,6 +2383,60 @@ store:
             .map(|diagnostic| diagnostic.code)
             .collect();
         assert_eq!(refused, ["config.substitution-not-allowed"]);
+    }
+
+    /// Two items of a list that must not repeat an item, each written as its
+    /// own expression, are two items: the check does not read one stand-in
+    /// into both and then refuse the list as a repeat.
+    #[test]
+    fn distinct_deferred_items_of_one_list_are_not_a_repeat() {
+        for (from, to) in [
+            (
+                "  authorizedClients: [adopter-front-end]",
+                "  authorizedClients: ['${EVIDENCE_OID4VCI_TEST_UNSET_FIRST}', '${EVIDENCE_OID4VCI_TEST_UNSET_SECOND}']",
+            ),
+            (
+                "  requiredScopes: [oid4vci:offer]",
+                "  requiredScopes: ['${EVIDENCE_OID4VCI_TEST_UNSET_FIRST}', '${EVIDENCE_OID4VCI_TEST_UNSET_SECOND}']",
+            ),
+        ] {
+            let text = VALID.replacen(from, to, 1);
+            assert_ne!(text, VALID, "{to}");
+            let report = check(&text, false);
+            assert!(report.diagnostics.is_empty(), "{to}: {:?}", report.diagnostics);
+        }
+    }
+
+    /// The offer endpoint accepts one algorithm, so an expression in its list
+    /// is read as an algorithm of the closed vocabulary, never as a value the
+    /// list could not decode.
+    #[test]
+    fn deferred_algorithms_are_counted_not_read_as_a_repeat() {
+        let text = VALID.replacen(
+            "  algorithms: [EdDSA]",
+            "  algorithms: ['${EVIDENCE_OID4VCI_TEST_UNSET_FIRST}', '${EVIDENCE_OID4VCI_TEST_UNSET_SECOND}']",
+            1,
+        );
+        assert_ne!(text, VALID);
+        let report = check(&text, false);
+        let codes: Vec<&str> = report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect();
+        assert!(!codes.contains(&"config.duplicate-item"), "{codes:?}");
+    }
+
+    #[test]
+    fn a_deferred_algorithm_decodes() {
+        let text = VALID.replacen(
+            "  algorithms: [EdDSA]",
+            "  algorithms: ['${EVIDENCE_OID4VCI_TEST_UNSET_ALGORITHM}']",
+            1,
+        );
+        assert_ne!(text, VALID);
+        let report = check(&text, false);
+        assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
     }
 
     #[test]
