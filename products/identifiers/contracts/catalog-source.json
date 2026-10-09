@@ -182,7 +182,7 @@
       "glob": "products/breg/contracts/explain/*.schema.json",
       "owner": "breg",
       "status": "active",
-      "compatibilityLine": "v1alpha3",
+      "compatibilityLine": "v1alpha4",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
     },
     {

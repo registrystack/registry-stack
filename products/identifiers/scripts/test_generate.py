@@ -430,5 +430,29 @@ class CatalogGeneratorTest(unittest.TestCase):
             self.build()
 
 
+class RepositoryCatalogSourceTest(unittest.TestCase):
+    """The repository's own catalog source, read as it is committed."""
+
+    def test_the_breg_explain_group_names_the_line_its_schemas_carry(self) -> None:
+        repo_root = SCRIPT.parents[3]
+        source = json.loads(
+            (repo_root / "products/identifiers/contracts/catalog-source.json").read_text()
+        )
+        (group,) = [
+            group
+            for group in source["schemaSources"]
+            if group["glob"] == "products/breg/contracts/explain/*.schema.json"
+        ]
+        schemas = sorted(repo_root.glob(group["glob"]))
+        self.assertTrue(schemas)
+        for path in schemas:
+            with self.subTest(schema=path.name):
+                identifier = json.loads(path.read_text())["$id"]
+                self.assertTrue(
+                    identifier.endswith(f".{group['compatibilityLine']}.schema.json"),
+                    f"{identifier} is not on line {group['compatibilityLine']}",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
