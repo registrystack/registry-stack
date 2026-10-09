@@ -133,8 +133,13 @@ fn type_map_keys(mut derived: Value) -> Result<Value, serde_json::Error> {
         };
         let pattern = pattern.to_owned();
         if retype_maps(&mut derived, &pattern, name) {
-            if let Some(Value::Object(defs)) = derived.get_mut("$defs") {
-                defs.entry(name).or_insert(identifier);
+            if let Some(root) = derived.as_object_mut() {
+                let defs = root
+                    .entry("$defs")
+                    .or_insert_with(|| Value::Object(Map::new()));
+                if let Value::Object(defs) = defs {
+                    defs.entry(name).or_insert(identifier);
+                }
             }
         }
     }
@@ -242,7 +247,8 @@ fn render(value: Value) -> Result<String, serde_json::Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        documents, ACCESS_POLICY_SCHEMA_FILE, PROJECT_MARKER_SCHEMA_FILE, QUESTION_SCHEMA_FILE,
+        documents, type_map_keys, ACCESS_POLICY_SCHEMA_FILE, PROJECT_MARKER_SCHEMA_FILE,
+        QUESTION_SCHEMA_FILE,
     };
 
     #[test]
@@ -290,6 +296,29 @@ mod tests {
         assert!(
             documents[QUESTION_SCHEMA_FILE].contains("which governed concepts the answer carries"),
             "the model's own prose must reach the editor, or the schema explains nothing",
+        );
+    }
+
+    #[test]
+    fn a_map_key_definition_is_added_when_the_derived_schema_has_no_definitions() {
+        let pattern = "^[^\\u0000-\\u001F\\u007F-\\u009F]+$";
+        let derived = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "keys": {
+                    "type": "object",
+                    "patternProperties": {pattern: {"type": "string"}},
+                },
+            },
+        });
+        let typed = type_map_keys(derived).expect("the map keys are typed");
+        assert_eq!(
+            typed["properties"]["keys"]["propertyNames"]["$ref"],
+            "#/$defs/ExternalId"
+        );
+        assert!(
+            typed["$defs"]["ExternalId"].is_object(),
+            "a reference to $defs/ExternalId must resolve inside the document"
         );
     }
 }
