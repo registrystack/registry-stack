@@ -383,10 +383,10 @@ perl -pi -e 's/^(\s+)kind: (flow|stock)$/$1type: $2/' registry.yaml
 
 then review the diff: the expression also renames any other `kind: flow` or
 `kind: stock` line in the file. Rebuild and promote the project as usual.
-`bregctl test` rebuilds a deployed registry from its packaged sources with
-this release's reader, so a deployed package whose project still writes
-`kind` cannot be rehearsed and reports
-`migration.rehearsal.baseline_unavailable`.
+`bregctl test` rebuilds a deployed registry from its packaged sources, and
+reads the period of a deployed package with the tag the earlier release
+wrote, so a deployed package whose project still writes `kind` is rehearsed
+as the baseline it is.
 
 ### BREAKING: configuration diagnostic codes are named `breg.<area>.<condition>`
 <!-- upgrade: no-file -->
@@ -1726,6 +1726,18 @@ earlier release computed that digest over the spellings it wrote, and the
 sealed package already binds every module byte to the package digest the
 rehearsal names. A predecessor that locks a module therefore compiles for a
 rehearsal; a module whose version differs from its lock is still refused.
+A predecessor's statistical datasets are read with the forms the earlier
+release wrote too. A period tagged by `kind` reads as the same period, and
+the profiles a dataset named under `live` and `releases` read as the profile
+permissions the migration steps of "statistical dataset access is granted in
+profile permissions" write: `read-live` for a live profile, `publish` for the
+publisher, and `read-releases` for every profile a dataset with `releases`
+named. The predecessor compiles to the registry its project compiles to once
+those steps are applied, with the live profiles and the publisher it had. Its
+reader list leaves out the publisher or a live profile it listed under
+`releases.readers`, which the release routes served either way. A dataset
+that names a profile the project does not declare is refused, as the earlier
+release refused it.
 The predecessor's sealed sources are read through the shared reader's
 structural pass, so a sealed source outside the YAML subset (an anchor, an
 alias, a tag, a merge key, or a duplicate key) is no longer a readable upgrade

@@ -444,27 +444,37 @@ fn publish_earlier_release_locked_module(package: &std::path::Path) -> PreparedP
     let mut project: serde_json::Value = serde_json::from_slice(&source.project_bytes).unwrap();
     project["modules"][0]["digest"] = json!(EARLIER_RELEASE_MODULE_LOCK);
 
+    reseal_sources(
+        package,
+        &[
+            ("source/modules/core/module.yaml", &module),
+            ("source/registry.yaml", &project),
+        ],
+    );
+    prepared
+}
+
+/// Replace sealed sources of a published package and seal it again, as the
+/// release that wrote those sources sealed it.
+#[cfg(feature = "tooling")]
+fn reseal_sources(package: &std::path::Path, sources: &[(&str, &serde_json::Value)]) {
     let manifest_path = package.join("package.json");
     let mut envelope: PackageEnvelope =
         serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-    for (path, value) in [
-        ("source/modules/core/module.yaml", &module),
-        ("source/registry.yaml", &project),
-    ] {
+    for (path, value) in sources {
         let bytes = serde_json::to_vec(value).unwrap();
         fs::write(package.join(path), &bytes).unwrap();
         let entry = envelope
             .manifest
             .files
             .iter_mut()
-            .find(|entry| entry.path == path)
+            .find(|entry| entry.path == *path)
             .expect("the package lists the source");
         entry.size = bytes.len() as u64;
         entry.sha256 = digest(&bytes);
     }
     fs::write(&manifest_path, canonical(&envelope)).unwrap();
     refresh_shared_package_envelope(package);
-    prepared
 }
 
 #[cfg(feature = "tooling")]
@@ -592,6 +602,183 @@ fn a_predecessor_requirement_comparing_a_field_with_null_keeps_its_literal() {
     )
     .expect("a predecessor comparing a field with null compiles for a rehearsal");
     assert_eq!(&registry, current.registry());
+}
+
+/// A project that counts its assets in a statistical dataset: `analyst`
+/// reads the live counts, `publisher` publishes the releases, and
+/// `release-reader` reads the releases and nothing else.
+#[cfg(feature = "tooling")]
+fn statistical_source() -> SourceFixture {
+    let mut module: serde_json::Value =
+        serde_json::from_slice(&module_bytes(Variant::Base)).unwrap();
+    module["entities"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({"id": "active", "type": "boolean", "classification": "internal"}),
+            json!({"id": "registered", "type": "date", "classification": "internal"}),
+        ]);
+    let module_bytes = serde_json::to_vec(&module).unwrap();
+    let module = parse_module_yaml(&module_bytes).expect("the module parses");
+    let mut project: serde_json::Value =
+        serde_json::from_slice(&project_bytes(&module_digest(&module))).unwrap();
+    let counts = json!({
+        "entity": "asset",
+        "operations": ["list"],
+        "readableFields": ["active", "registered"],
+        "filterableFields": ["active", "registered"],
+        "allowCount": true,
+        "rowBoundaries": "unrestricted"
+    });
+    let grant =
+        |operations: &[&str]| json!({"dataset": "assets-by-month", "operations": operations});
+    project["accessProfiles"] = json!([
+        {
+            "id": "analyst", "principalClaim": "principal", "requiredScopes": "unrestricted",
+            "permissions": [counts, grant(&["read-live", "read-releases"])]
+        },
+        {
+            "id": "publisher", "principalClaim": "principal", "requiredScopes": "unrestricted",
+            "permissions": [counts, grant(&["publish", "read-releases"])]
+        },
+        {
+            "id": "release-reader", "principalClaim": "principal", "requiredScopes": "unrestricted",
+            "permissions": [grant(&["read-releases"])]
+        }
+    ]);
+    project["statisticalDatasets"] = json!([{
+        "id": "assets-by-month",
+        "unit": "asset",
+        "population": "active eq true",
+        "period": {"type": "flow", "field": "registered", "granularity": "month", "firstPeriod": "2025-01"},
+        "dimensions": ["active"],
+        "disclosure": {"minimumCount": 5, "roundingBase": 5}
+    }]);
+    SourceFixture {
+        project_bytes: serde_json::to_vec(&project).unwrap(),
+        module_bytes,
+    }
+}
+
+/// The project of `statistical_source` as an earlier release sealed it: the
+/// dataset names the profiles that reach it under `live` and `releases`, no
+/// profile names the dataset, and the period writes its tag as `kind`. Each
+/// profile demands no scope by omitting `requiredScopes` and reaches every
+/// row with `rowBoundaries: []`, as that release wrote them.
+#[cfg(feature = "tooling")]
+fn earlier_release_statistical_project(readers: &[&str]) -> serde_json::Value {
+    let mut project: serde_json::Value =
+        serde_json::from_slice(&statistical_source().project_bytes).unwrap();
+    for profile in project["accessProfiles"].as_array_mut().unwrap() {
+        assert_eq!(
+            profile.as_object_mut().unwrap().remove("requiredScopes"),
+            Some(json!("unrestricted"))
+        );
+        let permissions = profile["permissions"].as_array_mut().unwrap();
+        permissions.retain(|permission| permission.get("dataset").is_none());
+        for permission in permissions {
+            assert_eq!(permission["rowBoundaries"], json!("unrestricted"));
+            permission["rowBoundaries"] = json!([]);
+        }
+    }
+    let dataset = project["statisticalDatasets"][0].as_object_mut().unwrap();
+    dataset.insert("live".to_owned(), json!(["analyst"]));
+    dataset.insert(
+        "releases".to_owned(),
+        json!({"publisher": "publisher", "readers": readers}),
+    );
+    let period = dataset["period"].as_object_mut().unwrap();
+    let tag = period.remove("type").unwrap();
+    period.insert("kind".to_owned(), tag);
+    project
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn a_predecessor_granting_a_statistical_dataset_from_the_dataset_compiles_for_a_rehearsal() {
+    let source = statistical_source();
+    let current = prepare_package(build_request(
+        None,
+        source.project_bytes,
+        source.module_bytes,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    ))
+    .expect("the package builds");
+    let context = PackageLoadContext {
+        database_initialization_environment: "local",
+    };
+
+    // The earlier release served the publisher and a live profile the
+    // releases whether or not `readers` listed them, so both forms grant what
+    // the profiles of this release's spelling hold.
+    for readers in [
+        vec!["release-reader"],
+        vec!["analyst", "publisher", "release-reader"],
+    ] {
+        let root = tempfile::Builder::new()
+            .prefix("registry-statistical-predecessor-")
+            .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+            .unwrap();
+        let package = root.path().join("package");
+        current.publish_to_directory(&package).unwrap();
+        reseal_sources(
+            &package,
+            &[(
+                "source/registry.yaml",
+                &earlier_release_statistical_project(&readers),
+            )],
+        );
+
+        let (_, registry) = load_predecessor_rehearsal_baseline(&package, &context)
+            .expect("a predecessor in the earlier statistical forms compiles for a rehearsal");
+        assert_eq!(&registry, current.registry(), "{readers:?}");
+        let dataset = &registry.statistical_datasets()["assets-by-month"];
+        assert_eq!(
+            dataset.live_profiles,
+            std::collections::BTreeSet::from(["analyst".to_owned()])
+        );
+        let releases = dataset.releases.as_ref().expect("the dataset is published");
+        assert_eq!(releases.publisher, "publisher");
+        assert_eq!(
+            releases.readers,
+            std::collections::BTreeSet::from(["release-reader".to_owned()])
+        );
+    }
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn a_predecessor_statistical_dataset_naming_an_undeclared_profile_is_refused() {
+    let source = statistical_source();
+    let current = prepare_package(build_request(
+        None,
+        source.project_bytes,
+        source.module_bytes,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    ))
+    .expect("the package builds");
+    let root = tempfile::Builder::new()
+        .prefix("registry-statistical-predecessor-refused-")
+        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .unwrap();
+    let package = root.path().join("package");
+    current.publish_to_directory(&package).unwrap();
+    reseal_sources(
+        &package,
+        &[(
+            "source/registry.yaml",
+            &earlier_release_statistical_project(&["auditor"]),
+        )],
+    );
+
+    let refused = load_predecessor_rehearsal_baseline(
+        &package,
+        &PackageLoadContext {
+            database_initialization_environment: "local",
+        },
+    )
+    .err();
+    assert_eq!(refused, Some(PackageError::Derivation));
 }
 
 #[cfg(feature = "tooling")]

@@ -4427,8 +4427,9 @@ enum SourceSpelling {
     /// The spellings this release writes. Anything else is refused.
     Current,
     /// A predecessor's sources, which an earlier release wrote. Access members
-    /// it spelled as an empty list read with the meaning that release gave
-    /// them, so a rehearsal can compile the predecessor it replaces.
+    /// it spelled as an empty list, and the statistical dataset grants it
+    /// wrote on the dataset, read with the meaning that release gave them, so
+    /// a rehearsal can compile the predecessor it replaces.
     Predecessor,
 }
 
@@ -4436,7 +4437,8 @@ enum SourceSpelling {
 /// release reads, keeping their meaning: an empty `rowBoundaries` reached
 /// every row, and an omitted or empty `requiredScopes` demanded no scope, so
 /// both become `unrestricted`; an empty narrowing list narrowed nothing, so it
-/// is omitted. Only a predecessor read calls this; a current source keeps
+/// is omitted. The statistical forms that release wrote are rewritten with
+/// them. Only a predecessor read calls this; a current source keeps
 /// refusing the empty list. The source is read through the shared reader's
 /// structural pass, so a sealed source outside the YAML subset is refused.
 fn retired_access_spellings_read(bytes: &[u8]) -> Result<Vec<u8>> {
@@ -4559,6 +4561,7 @@ fn retired_access_spellings_read(bytes: &[u8]) -> Result<Vec<u8>> {
         .map_err(|_| PackageError::Derivation)?
         .map_or(Value::Null, |node| node.to_json_value());
     without_nulls(&mut value);
+    retired_statistical_spellings_read(&mut value)?;
     for item in value
         .get_mut("accessProfiles")
         .and_then(Value::as_array_mut)
@@ -4588,6 +4591,93 @@ fn retired_access_spellings_read(bytes: &[u8]) -> Result<Vec<u8>> {
     serde_norway::to_string(&value)
         .map(String::into_bytes)
         .map_err(|_| PackageError::Derivation)
+}
+
+/// Rewrite the statistical forms an earlier release wrote into the ones this
+/// release reads, keeping who is served. That release granted a dataset from
+/// the dataset: `live` listed the profiles reading its live counts, and
+/// `releases` named the publisher and the release readers. This release
+/// grants it from the profile, so each profile a dataset named gains one
+/// permission on it: `read-live` for a live profile, `publish` for the
+/// publisher, and `read-releases` for every profile a published dataset
+/// named, because the earlier release served its releases to the publisher
+/// and to each live profile whether or not `readers` listed them. A period
+/// wrote its tag as `kind`. A dataset naming a profile the project does not
+/// declare is refused, as the earlier release refused it, and so is a list
+/// that holds anything but profile ids. A source in this release's spelling
+/// is left as written.
+fn retired_statistical_spellings_read(project: &mut Value) -> Result<()> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Releases {
+        publisher: String,
+        readers: Vec<String>,
+    }
+    fn retired<T: serde::de::DeserializeOwned>(member: Option<Value>) -> Result<Option<T>> {
+        member
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| PackageError::Derivation)
+    }
+    let mut grants = Vec::new();
+    for dataset in project
+        .get_mut("statisticalDatasets")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(period) = dataset.get_mut("period").and_then(Value::as_object_mut) {
+            if !period.contains_key("type") {
+                if let Some(tag) = period.remove("kind") {
+                    period.insert("type".into(), tag);
+                }
+            }
+        }
+        let Some(members) = dataset.as_object_mut() else {
+            continue;
+        };
+        let live: Vec<String> = retired(members.remove("live"))?.unwrap_or_default();
+        let releases: Option<Releases> = retired(members.remove("releases"))?;
+        let named =
+            live.iter()
+                .chain(releases.iter().flat_map(|releases| {
+                    std::iter::once(&releases.publisher).chain(&releases.readers)
+                }))
+                .collect::<BTreeSet<_>>();
+        for profile in named {
+            let mut operations = Vec::new();
+            if live.contains(profile) {
+                operations.push("read-live");
+            }
+            if let Some(releases) = &releases {
+                if releases.publisher == *profile {
+                    operations.push("publish");
+                }
+                operations.push("read-releases");
+            }
+            let id = members.get("id").ok_or(PackageError::Derivation)?;
+            grants.push((
+                profile.clone(),
+                json!({"dataset": id, "operations": operations}),
+            ));
+        }
+    }
+    for (profile, permission) in grants {
+        project
+            .get_mut("accessProfiles")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+            .find(|declared| declared.get("id").and_then(Value::as_str) == Some(profile.as_str()))
+            .and_then(Value::as_object_mut)
+            .ok_or(PackageError::Derivation)?
+            .entry("permissions")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or(PackageError::Derivation)?
+            .push(permission);
+    }
+    Ok(())
 }
 
 fn authored_source(bytes: &[u8], spelling: SourceSpelling) -> Result<Cow<'_, [u8]>> {
