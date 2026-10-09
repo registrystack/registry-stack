@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use registry_breg::literal_text::{
     LiteralText, WRITE_THE_VALUE, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE,
 };
-use registry_breg::{data, fixtures, migration_plan};
+use registry_breg::{data, fixtures, migration_plan, CompiledRegistry};
 use registry_platform_yaml::{
     Diagnostic, Document, Expect, FormatSpec, NodeValue, Reader, Report, Severity, Source,
     MAXIMUM_DOCUMENT_BYTES,
@@ -60,12 +60,24 @@ impl From<Report> for Failure {
     }
 }
 
+/// The project a journeys document is checked against.
+enum Against<'a> {
+    /// None was named: the document is checked on its own, and a warning
+    /// says so.
+    Nothing,
+    /// The project at this path, compiled for this check.
+    ProjectAt(&'a Path),
+    /// The project `bregctl check PROJECT` read: its compiled registry, or
+    /// none when that check refused the project and said why.
+    Checked(Option<&'a CompiledRegistry>),
+}
+
 /// The context one format's check reads.
 struct Input<'a> {
     document: &'a Document,
     bytes: &'a [u8],
     file: &'a Path,
-    project: Option<&'a Path>,
+    against: &'a Against<'a>,
 }
 
 type Check = fn(&Input<'_>) -> Result<Vec<Diagnostic>, Failure>;
@@ -170,7 +182,8 @@ pub(crate) fn run(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let label = request.file.display().to_string();
-    let outcome = check(request, &label);
+    let against = request.project.map_or(Against::Nothing, Against::ProjectAt);
+    let outcome = check(request.file, &label, &against);
     let (lead, report, exit) = match outcome {
         Ok(report) if report.has_errors() => (
             Some("bregctl check refused the file."),
@@ -224,8 +237,20 @@ pub(crate) fn run(
     ExitCode::from(exit)
 }
 
-fn check(request: &Request<'_>, label: &str) -> Result<Report, Failure> {
-    let bytes = read(request.file, label)?;
+/// Check one file a project holds, as `bregctl check --file` checks it, for
+/// the project check that read the project (CFG-CHECK-2). A journeys document
+/// is held to `registry`, the project as that check compiled it; without one
+/// the project was refused, and the document is checked on its own.
+pub(crate) fn check_project_file(file: &Path, registry: Option<&CompiledRegistry>) -> Report {
+    let label = file.display().to_string();
+    match check(file, &label, &Against::Checked(registry)) {
+        Ok(report) | Err(Failure::Refused(report)) => report,
+        Err(Failure::Unavailable(diagnostic)) => Report::new(vec![in_file(*diagnostic, &label)]),
+    }
+}
+
+fn check(file: &Path, label: &str, against: &Against<'_>) -> Result<Report, Failure> {
+    let bytes = read(file, label)?;
     let formats: Vec<FormatSpec<'static>> = CHECKS.iter().map(|(format, ..)| *format).collect();
     // Whether the file may hold a substitution expression depends on its
     // format, which only its `kind` names, so the kind is looked up before
@@ -253,11 +278,11 @@ fn check(request: &Request<'_>, label: &str) -> Result<Report, Failure> {
     let findings = check(&Input {
         document: &document,
         bytes: &bytes,
-        file: request.file,
-        project: request.project,
+        file,
+        against,
     })?;
     let mut report = document.warnings();
-    if request.project.is_some() && kind != fixtures::JOURNEYS_KIND {
+    if matches!(against, Against::ProjectAt(_)) && kind != fixtures::JOURNEYS_KIND {
         report.push(document.diagnostic_at_value(
             Severity::Warning,
             "breg.check.project-unused",
@@ -350,25 +375,33 @@ fn schema_test_receipt(input: &Input<'_>) -> Result<Vec<Diagnostic>, Failure> {
 /// project when one is named.
 fn journeys(input: &Input<'_>) -> Result<Vec<Diagnostic>, Failure> {
     fixtures::check_journeys_document(input.document)?;
-    let Some(project) = input.project else {
-        return Ok(vec![input.document.diagnostic_at_value(
-            Severity::Warning,
-            "breg.check.project-not-read",
-            "",
-            "the journeys were not checked against a project, so their access profiles, entities and references were not resolved",
-            "Name the project before --file to check the journeys against it.",
-        )]);
+    let compiled;
+    let registry = match input.against {
+        Against::Nothing => {
+            return Ok(vec![input.document.diagnostic_at_value(
+                Severity::Warning,
+                "breg.check.project-not-read",
+                "",
+                "the journeys were not checked against a project, so their access profiles, entities and references were not resolved",
+                "Name the project before --file to check the journeys against it.",
+            )]);
+        }
+        Against::ProjectAt(project) => {
+            compiled =
+                crate::compile(project, crate::ProfileArg::Authoring, "check").map_err(|_| {
+                    Failure::unavailable(
+                        "breg.check.project-refused",
+                        "the project does not compile, so the journeys were not checked against it",
+                        "Run `bregctl check PROJECT` and correct what it reports.",
+                    )
+                })?;
+            &compiled
+        }
+        Against::Checked(Some(registry)) => *registry,
+        Against::Checked(None) => return Ok(Vec::new()),
     };
-    let registry =
-        crate::compile(project, crate::ProfileArg::Authoring, "check").map_err(|_| {
-            Failure::unavailable(
-                "breg.check.project-refused",
-                "the project does not compile, so the journeys were not checked against it",
-                "Run `bregctl check PROJECT` and correct what it reports.",
-            )
-        })?;
     Ok(
-        match fixtures::validate_fixture_journeys(input.bytes, &registry) {
+        match fixtures::validate_fixture_journeys(input.bytes, registry) {
             Ok(_) => Vec::new(),
             Err(fixtures::FixtureError::JourneyDocument(report)) => {
                 return Err(Failure::Refused(report))

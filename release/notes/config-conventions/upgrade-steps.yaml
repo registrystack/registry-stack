@@ -436,6 +436,11 @@ steps:
   kind: manual
   file: tests/journeys.yaml
   instruction: Write the value itself in place of a ${...} expression in the fixture journeys, schema-test credentials, model selection, development clients, example scenarios, migration descriptor and backup binding; name a secret with a secret reference instead.
+- id: breg-project-check-tool-files
+  product: breg
+  kind: manual
+  file: tests/*
+  instruction: Run bregctl check PROJECT and correct each journeys or development clients file it now refuses; move a YAML file that is not a Base Registry Engine tool file out of tests/, and move the journeys a directory under tests/ holds up into tests/.
 - id: messaging-authored-bounds
   product: messaging
   kind: manual

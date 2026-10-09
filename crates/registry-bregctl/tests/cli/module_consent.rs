@@ -614,6 +614,16 @@ fn module_add_consent_fits_a_freshly_initialized_project() {
         "{before}  - id: record-reader\n    principalClaim: registry_principal\n    actorKind: service\n    requesterClients: [food-agency-portal]\n    requiredScopes: [registry:generic:read]\n    requiredPurposes: [food-assistance]\n    permissions:\n      - entity: record\n        operations: [get, list]\n        readableFields: [code, label, group, status]\n        filterableFields: [code]\n        rowBoundaries:\n          - {{field: status, claim: registry_record_status, operator: equals}}\n        requireConsent:\n        - {{record: record-consent-decision, on: id}}\n{after}"
     );
     fs::write(destination.join("registry.yaml"), gated).expect("gated project writes");
+    // The project check holds the journeys to the profile they call, so they
+    // follow it to its purpose and actor kind.
+    let journeys = destination.join("tests/journeys.yaml");
+    let followed = fs::read_to_string(&journeys)
+        .expect("the init template's journeys are present")
+        .replace(
+            "          purpose: registry-reporting\n",
+            "          purpose: food-assistance\n          actorKind: service\n",
+        );
+    fs::write(&journeys, followed).expect("journeys write");
 
     let checked = bregctl(&["--format", "json", "check", path(&destination)]);
 

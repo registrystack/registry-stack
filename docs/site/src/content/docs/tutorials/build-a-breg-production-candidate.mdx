@@ -90,7 +90,7 @@ warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-pro
 warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
   this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
-0 errors, 2 warnings in 2 files
+0 errors, 2 warnings in 4 files
 ```
 
 The generated project ships both warnings on purpose: the `operator` profile lists every record because
@@ -112,7 +112,7 @@ warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-pro
 warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
   this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
-0 errors, 2 warnings in 2 files
+0 errors, 2 warnings in 4 files
 ```
 
 The command exits with status 1. That is the gate for a pipeline that must never build a candidate

@@ -339,3 +339,203 @@ fn an_expression_is_refused_in_a_file_read_as_written_and_kept_in_a_written_one(
     assert_eq!(output.status.code(), Some(0), "{report}");
     assert_eq!(report["diagnostics"], json!([]));
 }
+
+/// A project `bregctl init` wrote, in a scratch directory removed on drop.
+fn initialized() -> (TestProject, PathBuf) {
+    let scratch = scratch();
+    let project = scratch.path().join("project");
+    let output = bregctl(&["init", path(&project)]);
+    assert!(output.status.success(), "{output:?}");
+    (scratch, project)
+}
+
+/// The diagnostics a report holds about `file`.
+fn diagnostics_about(report: &Value, file: &Path) -> Vec<Value> {
+    report["diagnostics"]
+        .as_array()
+        .expect("the report lists diagnostics")
+        .iter()
+        .filter(|diagnostic| diagnostic["source"]["file"] == path(file))
+        .cloned()
+        .collect()
+}
+
+/// CFG-CHECK-2: the project check reads the journeys and the development
+/// clients the project holds, and reports about each what `check --file`
+/// reports about it.
+#[test]
+fn a_project_check_reads_the_journeys_and_the_development_clients_it_holds() {
+    let (_scratch, project) = initialized();
+    let output = bregctl(&["check", path(&project)]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let human = String::from_utf8_lossy(&output.stdout);
+    assert!(human.contains("0 errors, 2 warnings in 4 files"), "{human}");
+
+    for (relative, with_project) in [("tests/journeys.yaml", true), ("dev-clients.yaml", false)] {
+        let file = project.join(relative);
+        let written = fs::read_to_string(&file).unwrap();
+        fs::write(&file, format!("{written}unexpected: true\n")).unwrap();
+
+        let alone = if with_project {
+            bregctl(&[
+                "check",
+                path(&project),
+                "--file",
+                path(&file),
+                "--format",
+                "json",
+            ])
+        } else {
+            check_file(&file, &["--format", "json"])
+        };
+        let expected = diagnostics_about(&json_report(&alone), &file);
+        assert_eq!(expected.len(), 1, "{relative}: {expected:?}");
+        assert_eq!(expected[0]["code"], "config.unknown-key", "{relative}");
+
+        let output = bregctl(&["check", path(&project), "--format", "json"]);
+        let report = json_report(&output);
+        assert_eq!(output.status.code(), Some(1), "{relative}: {report}");
+        assert_eq!(report["ok"], false, "{relative}");
+        assert_eq!(
+            diagnostics_about(&report, &file),
+            expected,
+            "{relative}: {report}"
+        );
+
+        fs::write(&file, written).unwrap();
+    }
+}
+
+/// CFG-ID-4: a journey that names an access profile the project does not
+/// declare is refused by the project check, as `check PROJECT --file` refuses
+/// it.
+#[test]
+fn a_project_check_resolves_the_journeys_against_the_project() {
+    let (_scratch, project) = initialized();
+    let file = project.join("tests/journeys.yaml");
+    let written = fs::read_to_string(&file).unwrap();
+    let edited = written.replacen(
+        "accessProfile: operator",
+        "accessProfile: absent-profile",
+        1,
+    );
+    assert_ne!(edited, written);
+    fs::write(&file, edited).unwrap();
+
+    let alone = bregctl(&[
+        "check",
+        path(&project),
+        "--file",
+        path(&file),
+        "--format",
+        "json",
+    ]);
+    let expected = diagnostics_about(&json_report(&alone), &file);
+    assert_eq!(expected.len(), 1, "{expected:?}");
+    assert!(
+        expected[0]["code"]
+            .as_str()
+            .is_some_and(|code| code.starts_with("breg.journeys.")),
+        "{expected:?}"
+    );
+
+    let output = bregctl(&["check", path(&project), "--format", "json"]);
+    let report = json_report(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    assert_eq!(diagnostics_about(&report, &file), expected, "{report}");
+}
+
+/// CFG-CHECK-2: every `.yaml` and `.yml` file under `tests/` is read and
+/// identified by its envelope. A second journeys document is checked, a file
+/// whose kind is not a BReg tool file's is refused instead of skipped, and a
+/// file that is not YAML is left alone.
+#[test]
+fn a_project_check_reads_every_yaml_file_under_tests() {
+    let (_scratch, project) = initialized();
+    let journeys = fs::read_to_string(project.join("tests/journeys.yaml")).unwrap();
+    fs::write(project.join("tests/README.md"), "Notes.\n").unwrap();
+    fs::write(project.join("tests/more-journeys.yml"), &journeys).unwrap();
+    let output = bregctl(&["check", path(&project)]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let human = String::from_utf8_lossy(&output.stdout);
+    assert!(human.contains("0 errors, 2 warnings in 5 files"), "{human}");
+
+    let second = project.join("tests/more-journeys.yml");
+    fs::write(&second, format!("{journeys}unexpected: true\n")).unwrap();
+    let other = project.join("tests/other.yaml");
+    fs::write(
+        &other,
+        "apiVersion: example.invalid/formats/other/v1\nkind: OtherDocument\n",
+    )
+    .unwrap();
+
+    let output = bregctl(&["check", path(&project), "--format", "json"]);
+    let report = json_report(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    for file in [&second, &other] {
+        let expected = diagnostics_about(
+            &json_report(&bregctl(&[
+                "check",
+                path(&project),
+                "--file",
+                path(file),
+                "--format",
+                "json",
+            ])),
+            file,
+        );
+        assert!(!expected.is_empty(), "{}", file.display());
+        assert_eq!(diagnostics_about(&report, file), expected, "{report}");
+    }
+}
+
+/// CFG-DIAG-5: a refused `registry.yaml` does not hide what is wrong with
+/// the journeys beside it.
+#[test]
+fn a_project_check_reads_the_journeys_of_a_project_it_refuses() {
+    let (_scratch, project) = initialized();
+    for relative in ["registry.yaml", "tests/journeys.yaml"] {
+        let file = project.join(relative);
+        let written = fs::read_to_string(&file).unwrap();
+        fs::write(&file, format!("{written}unexpected: true\n")).unwrap();
+    }
+    let output = bregctl(&["check", path(&project), "--format", "json"]);
+    let report = json_report(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    for relative in ["registry.yaml", "tests/journeys.yaml"] {
+        let found = diagnostics_about(&report, &project.join(relative));
+        assert_eq!(found.len(), 1, "{relative}: {report}");
+        assert_eq!(found[0]["code"], "config.unknown-key", "{relative}");
+    }
+}
+
+/// CFG-CHECK-2: the check never skips a YAML file silently. It reads the
+/// files directly under `tests/`, so a directory there is named with a
+/// warning, and a `tests` that cannot be listed is an error.
+#[test]
+fn a_project_check_names_what_it_does_not_read_under_tests() {
+    let (_scratch, project) = initialized();
+    let nested = project.join("tests/more");
+    fs::create_dir(&nested).unwrap();
+    fs::copy(project.join("tests/journeys.yaml"), nested.join("j.yaml")).unwrap();
+
+    let output = bregctl(&["check", path(&project), "--format", "json"]);
+    let report = json_report(&output);
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    let found = diagnostics_about(&report, &nested);
+    assert_eq!(found.len(), 1, "{report}");
+    assert_eq!(found[0]["code"], "breg.check.unread-directory");
+    assert_eq!(found[0]["severity"], "warning");
+    let denied = bregctl(&["check", path(&project), "--deny-warnings"]);
+    assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+
+    fs::remove_dir_all(project.join("tests")).unwrap();
+    fs::write(project.join("tests"), "not a directory\n").unwrap();
+    let output = bregctl(&["check", path(&project), "--format", "json"]);
+    let report = json_report(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    let found = diagnostics_about(&report, &project.join("tests"));
+    assert_eq!(found.len(), 1, "{report}");
+    assert_eq!(found[0]["code"], "breg.check.directory-unreadable");
+    assert_eq!(found[0]["severity"], "error");
+}

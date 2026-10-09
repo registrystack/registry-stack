@@ -34,7 +34,7 @@ warning[breg.access.profile-unrestricted-collection] ./my-registry/registry.yaml
 warning[breg.access.profile-unrestricted-rows] ./my-registry/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
   this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
-0 errors, 2 warnings in 2 files
+0 errors, 2 warnings in 4 files
 ```
 
 Two people holding the same revision hold the same project.
@@ -42,6 +42,9 @@ An error is a declaration the compiler cannot compile, printed as an `error[code
 A finding is an advisory attached to a member, printed as a `warning`: the project compiles, but a reviewer must read it.
 With `--format json`, `check` prints the same diagnostics in the shared shape, each with `severity`, `code`, `artifact`, `path`, `message`, `suggestedAction`, and a `source` naming the file, line, and column.
 A project `check` cannot read, such as a missing directory, exits with status 3.
+The four files are the ones `check` read: `registry.yaml`, the module's `module.yaml`, `tests/journeys.yaml`, and `dev-clients.yaml`.
+Beside the sources it compiles, `check` reads `dev-clients.yaml` and every `.yaml` and `.yml` file directly under `tests/`, each as `bregctl check --file` reads it, and holds the journeys to the project, so a journey that names a profile the project no longer declares is an error here.
+A YAML file under `tests/` whose `kind` is not a Base Registry Engine tool file's is refused, and a directory under `tests/` gets the warning `breg.check.unread-directory`, because `check` does not read into it.
 The project `init` wrote reports both findings on purpose: `breg.access.profile-unrestricted-collection`, because its `operator` profile lists every record, and `breg.access.profile-unrestricted-rows`, because its `evidence-source` profile looks up any record by code.
 
 Two flags change what counts as a failure, and a review gate wants both:
@@ -56,7 +59,7 @@ bregctl check ./my-registry --production
 The project `init` wrote already carries all of them, so `check --production` succeeds on it.
 `explain` and `generate` accept `--production` as well; `--deny-warnings` belongs to `check` alone.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, check(); crates/registry-breg/src/compiler.rs. */}
+{/* Evidence: crates/registry-bregctl/src/lib.rs, check(); crates/registry-bregctl/src/check.rs, check_tool_files(); crates/registry-breg/src/compiler.rs. */}
 
 ## Explain what the compiler derived
 

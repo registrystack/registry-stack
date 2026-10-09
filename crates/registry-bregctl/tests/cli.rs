@@ -1613,7 +1613,7 @@ fn deny_warnings_refuses_on_the_warnings_that_refused_it() {
         "{rendered}"
     );
     assert!(
-        rendered.ends_with("\n0 errors, 2 warnings in 2 files\n"),
+        rendered.ends_with("\n0 errors, 2 warnings in 4 files\n"),
         "{rendered}"
     );
     // The warnings are the ones the passing check reported, in its words.

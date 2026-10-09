@@ -10,6 +10,10 @@
 //! was read without error (CFG-DIAG-5). Compiler diagnostics address the
 //! source by the compiler's own path, which this module places at the JSON
 //! pointer, line, and column of the document it names.
+//!
+//! The project check then reads the tool files the project holds beside its
+//! sources, `dev-clients.yaml` and every YAML file directly under `tests/`,
+//! each as `bregctl check --file` checks it (CFG-CHECK-2).
 
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -26,7 +30,7 @@ use registry_platform_yaml::{
 use serde::Serialize;
 
 use super::{
-    capture_project_source, compile_captured_project, ensure_source_entry_identity,
+    capture_project_source, compile_captured_project, ensure_source_entry_identity, file_check,
     has_parent_component, inspect_package_integrity, path_diagnostic, read_module_directory_names,
     OutputFormat, ProfileArg, SafeDir, SafeEntry, SafePathError, DOMAIN_REFUSAL_EXIT,
     OPERATIONAL_FAILURE_EXIT,
@@ -199,6 +203,79 @@ struct Documents {
 /// The compiled registry when the project compiled, so the runtime file can be
 /// held to it.
 fn check_project(
+    project: &Path,
+    profile: ProfileArg,
+    outcome: &mut Outcome,
+) -> Option<CompiledRegistry> {
+    let compiled = compile_project(project, profile, outcome);
+    check_tool_files(project, compiled.as_ref(), outcome);
+    compiled
+}
+
+/// The tool files a project holds beside its sources, each identified by its
+/// envelope and checked as `bregctl check --file` checks it (CFG-CHECK-2):
+/// `dev-clients.yaml`, and every `.yaml` and `.yml` file directly under
+/// `tests/`. A file whose kind is no BReg tool file's is refused by the
+/// reader, never skipped, and a directory under `tests/` is named as unread.
+/// The journeys are held to `registry` when the project compiled.
+fn check_tool_files(project: &Path, registry: Option<&CompiledRegistry>, outcome: &mut Outcome) {
+    if project.as_os_str().is_empty()
+        || has_parent_component(project)
+        || SafeDir::resolve(project).is_err()
+    {
+        // The project directory was refused, and the report says why.
+        return;
+    }
+    let mut files = Vec::new();
+    let clients = project.join("dev-clients.yaml");
+    if clients.symlink_metadata().is_ok() {
+        files.push(clients);
+    }
+    let tests = project.join("tests");
+    match SafeDir::resolve(&tests).map(|directory| directory.read_entries()) {
+        Err(SafePathError::NotFound) => {}
+        Ok(Ok(mut entries)) => {
+            entries.sort_by(|left, right| left.name.cmp(&right.name));
+            for entry in entries {
+                let path = tests.join(&entry.name);
+                if entry.is_dir {
+                    let mut unread = file_diagnostic(
+                        "breg.check.unread-directory",
+                        &path,
+                        None,
+                        "bregctl check reads only the files directly under tests/, so nothing in this directory is read",
+                        "Move the files this directory holds up into tests/, or move the directory out of tests/.",
+                    );
+                    unread.severity = Severity::Warning;
+                    outcome.report.push(unread);
+                } else if is_yaml(&path) {
+                    files.push(path);
+                }
+            }
+        }
+        Ok(Err(_)) | Err(_) => outcome.report.push(file_diagnostic(
+            "breg.check.directory-unreadable",
+            &tests,
+            None,
+            "the tests directory could not be listed, so the files it holds were not checked: it must be a directory, and not a symbolic link",
+            "Make tests a directory this user may read, or remove it.",
+        )),
+    }
+    for file in files {
+        outcome.files += 1;
+        outcome
+            .report
+            .extend(file_check::check_project_file(&file, registry));
+    }
+}
+
+fn is_yaml(file: &Path) -> bool {
+    file.extension()
+        .is_some_and(|extension| extension == "yaml" || extension == "yml")
+}
+
+/// Read and compile the project's sources.
+fn compile_project(
     project: &Path,
     profile: ProfileArg,
     outcome: &mut Outcome,

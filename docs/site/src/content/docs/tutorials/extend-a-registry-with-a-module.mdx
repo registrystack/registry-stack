@@ -71,7 +71,7 @@ warning[breg.access.profile-unrestricted-collection] tutorial-work/project/regis
 warning[breg.access.profile-unrestricted-rows] tutorial-work/project/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
   this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
-0 errors, 2 warnings in 2 files
+0 errors, 2 warnings in 4 files
 ```
 
 This is the project the first tutorial started as a registry, so the entity, fields, and profiles are
@@ -179,7 +179,7 @@ error[breg.module.lock-digest-mismatch] tutorial-work/project/registry.yaml:200:
 error[breg.module.lock-version-mismatch] tutorial-work/project/registry.yaml:199:14 /modules/0/version
   an authored module does not match its locked version
   next: Run bregctl project lock against this project, then review the module lock change it records.
-2 errors, 0 warnings in 2 files
+2 errors, 0 warnings in 4 files
 ```
 
 A stale digest is an error, not a warning.

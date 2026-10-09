@@ -1533,6 +1533,40 @@ database, or network. It prints the diagnostics in the human form, or with
 passes, 1 when it is refused or, with `--deny-warnings`, when it carries a
 warning, 2 for a usage error, and 3 when the file cannot be read.
 
+### BREAKING: `bregctl check PROJECT` reads the journeys and the development clients
+<!-- upgrade: breg-project-check-tool-files -->
+
+`bregctl check PROJECT` reads the tool files a project holds beside its
+sources: `dev-clients.yaml` when the project has one, and every `.yaml` and
+`.yml` file directly under `tests/`. Each is identified by its `kind` and
+checked as `bregctl check --file` checks it, with the same diagnostics, and
+the journeys are held to the project the check compiled. When the project
+itself is refused, these files are still read, and the journeys are checked
+on their own. An earlier `bregctl check PROJECT` read `registry.yaml` and the
+modules only, so it passed a project whose journeys `bregctl test` would
+refuse.
+
+What a project meets:
+
+- The count that closes the report includes these files. The project
+  `bregctl init` writes reports `in 4 files` where it reported `in 2 files`.
+- A check that passed exits 1 when a journey no longer fits the project, for
+  example one that calls an access profile the project no longer declares or
+  claims a purpose the profile no longer requires, or when the development
+  clients file is refused. Correct the file as its diagnostic says.
+- A YAML file directly under `tests/` whose `kind` is not a Base Registry
+  Engine tool file's is refused with `config.wrong-kind`, or with
+  `config.missing-envelope` when it has none. Move such a file out of
+  `tests/`.
+- A directory under `tests/` is not read, and the check says so with the
+  warning `breg.check.unread-directory`, which `--deny-warnings` refuses.
+  Move the journeys it holds up into `tests/`.
+- A `tests` that is not a directory, or is a symbolic link, is refused with
+  `breg.check.directory-unreadable`.
+
+YAML elsewhere in the project directory, such as a runtime file kept beside
+`registry.yaml`, is not read by the project check.
+
 ### Published JSON Schemas for the tool files
 
 The fixture journeys, schema-test credentials, model selection, development
