@@ -337,7 +337,8 @@ The reader names the replacement for each old spelling at its position
 - Every member of a fixture's or a simulation's `expect` other than `queue`
   is optional, and one you leave out is not checked. `eligibleReminders`,
   `eligibleSteps`, and `outcomes` are compared as sets.
-- A holiday-set file is named `<holidaySet>-<revision>.yaml` (or `.yml`),
+- A holiday-set file is named `<holidaySet>-<revision>.yaml` (`.yml` is not
+  accepted for a holiday set),
   and a simulation finds the revision `holidayRevisions` pins by that name.
   A file whose name does not match its `holidaySet` and `revision` is
   `casework.holiday-set.misnamed`. Migration: rename the file.
