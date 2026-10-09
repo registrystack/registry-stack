@@ -2836,6 +2836,51 @@ factSchema: schemas/record-status-facts.schema.yaml
     }
 
     #[test]
+    fn target_refusals_never_repeat_a_value_read_from_a_target_file() {
+        const CANARY: &str = "TARGET_VALUE_CANARY";
+        let governance_edits: [(&str, &str); 3] = [
+            ("authorityProfiles:\n", "authorityProfiles: CANARY\n#"),
+            (
+                "rateLimits: {",
+                "rateLimits: [CANARY]\nunknownMember: CANARY\n#",
+            ),
+            (
+                "signing:\n",
+                "signing: CANARY\nauthorityProfiles2: CANARY\n#",
+            ),
+        ];
+        for (needle, replacement) in governance_edits {
+            let temporary = temporary();
+            let project = temporary.path().join("project");
+            let target = temporary.path().join("target");
+            fs::create_dir_all(project.join("questions")).unwrap();
+            put_marker(&project);
+            reference_target(&target, |governance| {
+                assert!(governance.contains(needle), "{needle}");
+                governance.replacen(needle, &replacement.replace("CANARY", CANARY), 1)
+            });
+            let error = check(&project, Some(&target), false, false).unwrap_err();
+            assert!(!printed(&refused(error)).contains(CANARY), "{needle}");
+        }
+
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        let target = temporary.path().join("target");
+        fs::create_dir_all(project.join("questions")).unwrap();
+        put_marker(&project);
+        reference_target(&target, |governance| governance);
+        let runtime = target.join("runtime.yaml");
+        let replaced = fs::read_to_string(&runtime).unwrap().replace(
+            "maximumRequestBytes: 65536",
+            &format!("maximumRequestBytes: {CANARY}"),
+        );
+        assert!(replaced.contains(CANARY));
+        fs::write(&runtime, replaced).unwrap();
+        let error = check(&project, Some(&target), false, false).unwrap_err();
+        assert!(!printed(&refused(error)).contains(CANARY));
+    }
+
+    #[test]
     fn an_unclassified_target_refusal_names_its_cause_and_the_fix() {
         let report = refused(target_refusal(
             anyhow::anyhow!("target governance published public key paths must be strings"),
