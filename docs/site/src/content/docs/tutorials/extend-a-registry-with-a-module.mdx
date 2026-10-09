@@ -65,10 +65,10 @@ bregctl check tutorial-work/project
 
 ```text test-expect
 Authoring check passed; registry revision sha256:<digest>.
-warning[breg.access.profile-unrestricted-collection] tutorial-work/project/registry.yaml:138:24 /accessProfiles/0/permissions/1/rowBoundaries
+warning[breg.access.profile-unrestricted-collection] tutorial-work/project/registry.yaml:141:24 /accessProfiles/0/permissions/1/rowBoundaries
   this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-rows] tutorial-work/project/registry.yaml:184:24 /accessProfiles/2/permissions/0/rowBoundaries
+warning[breg.access.profile-unrestricted-rows] tutorial-work/project/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
   this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
 0 errors, 2 warnings in 2 files
@@ -173,10 +173,10 @@ bregctl check tutorial-work/project
 
 ```text test-expect
 bregctl check refused the project.
-error[breg.module.lock-digest-mismatch] tutorial-work/project/registry.yaml:197:13 /modules/0/digest
+error[breg.module.lock-digest-mismatch] tutorial-work/project/registry.yaml:200:13 /modules/0/digest
   an authored module does not match its locked digest
   next: Run bregctl project lock against this project, then review the module lock change it records.
-error[breg.module.lock-version-mismatch] tutorial-work/project/registry.yaml:196:14 /modules/0/version
+error[breg.module.lock-version-mismatch] tutorial-work/project/registry.yaml:199:14 /modules/0/version
   an authored module does not match its locked version
   next: Run bregctl project lock against this project, then review the module lock change it records.
 2 errors, 0 warnings in 2 files
