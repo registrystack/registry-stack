@@ -68,6 +68,11 @@ open with `apiVersion` and `kind`.
    naming the variable, as the same character written in the file is refused
    with `yaml.control-character`. Migration: remove the control character
    from the variable.
+9. **A mapping key holds no control character.** A key with a control
+   character other than tab, line feed, or carriage return is refused with
+   `yaml.control-character` at the key, and the diagnostic's path is the
+   enclosing mapping, so it does not repeat the key. Migration: remove the
+   control character from the key.
 
 ## Other changes
 

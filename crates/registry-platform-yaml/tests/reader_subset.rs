@@ -742,6 +742,22 @@ fn cfg_val_1_delete_and_a_c1_control_character_in_a_text_value_are_refused() {
 }
 
 #[test]
+fn cfg_val_1_a_mapping_key_holding_a_control_character_is_refused_without_repeating_it() {
+    let text = format!("ok: 1\n\"{MARKER}\\e\": 2\nnested:\n  \"{MARKER}\u{7f}\": 3\n");
+    let report = scan_refusal(&text);
+    let found: Vec<(&str, &str)> = report
+        .diagnostics()
+        .iter()
+        .map(|d| (d.code.as_str(), d.path.as_str()))
+        .collect();
+    let code = "yaml.control-character";
+    assert_eq!(found, [(code, ""), (code, "/nested")]);
+    assert_eq!(at(&report.diagnostics()[0]), (2, 1));
+    assert_eq!(at(&report.diagnostics()[1]), (4, 3));
+    assert_no_marker(&report);
+}
+
+#[test]
 fn cfg_val_1_text_around_the_c1_range_is_accepted() {
     let NodeValue::Mapping(entries) = scan_ok("a: \"~\\xa0\"\nb: \"\u{a0}\u{e9}\"\n") else {
         panic!("a mapping");

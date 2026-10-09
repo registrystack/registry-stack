@@ -455,6 +455,17 @@ impl Builder<'_, '_> {
     }
 
     fn scalar_key(&mut self, value: &str, style: ScalarStyle, span: Span) {
+        if holds_control_character(value) {
+            // Reported at the enclosing mapping: the pointer to the key
+            // would repeat it.
+            self.problem_here(
+                "yaml.control-character",
+                span.start,
+                messages::control_character(),
+            );
+            self.set_refused_key(None);
+            return;
+        }
         let pointer = format!("{}/{}", self.pointer(), escape_pointer_segment(value));
         if style == ScalarStyle::Plain {
             if value == "<<" {

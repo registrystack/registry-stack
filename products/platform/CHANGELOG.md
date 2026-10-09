@@ -37,6 +37,11 @@
   carriage return, with `config.substitution` naming only the variable, as the
   reader refuses the same character written in the file. Migration: remove
   the control character from the variable.
+- BREAKING: `registry-platform-yaml` refuses a mapping key that holds a control
+  character other than tab, line feed, or carriage return with
+  `yaml.control-character`, at the key's position and at the enclosing mapping's
+  pointer, so the diagnostic never repeats the key. Migration: remove the
+  control character from the key.
 - `registry-platform-httputil` adds the bounded same-key resend the BReg,
   Casework, Messaging, and Scheduling clients share:
   `client::retry_keyed_mutation`,
