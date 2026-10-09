@@ -1656,7 +1656,7 @@ is security-sensitive: it removes the configuration and the runtime paths
 that admitted a caller without a verified token.
 
 ### BREAKING: anonymous access profiles are removed
-<!-- upgrade: breg-remove-anonymous -->
+<!-- upgrade: breg-remove-anonymous, breg-module-relock -->
 
 `anonymous` is refused wherever an access profile was written, with
 `true` or `false`, as `config.removed-key` when the file is read. The
@@ -1757,16 +1757,18 @@ To migrate a registry that served anonymous callers:
 1. Decide who the callers are, and have the identity provider issue them
    tokens. A public directory becomes a profile whose `requiredScopes`
    names a scope every directory client carries.
-2. On the earlier release, delete `anonymous` from every access profile, give
-   each profile a `principalClaim` and the scopes above, and `bregctl test`,
-   `package`, and `apply` that package.
+2. On the earlier release, delete `anonymous` from every access profile, in
+   `registry.yaml` and under `entities` and `extendEntities` in every
+   `module.yaml`, and give each profile a `principalClaim` and the scopes
+   above. Run `bregctl project lock` in each project that locks a module you
+   changed, then `bregctl test`, `package`, and `apply` that package.
 3. Upgrade the binaries, rebuild the package from the same sources, and apply
    it. Clients send a bearer token on every request, discovery included.
 4. Replace alerts on `breg_anonymous_refusals_total`, and update scripts that
    expected `404` from a request without a token to expect `401`.
 
 ### BREAKING: an access member says `unrestricted` or names what it restricts
-<!-- upgrade: breg-access-unrestricted, breg-access-requirements -->
+<!-- upgrade: breg-access-unrestricted, breg-module-access-unrestricted, breg-access-requirements, breg-module-relock -->
 
 An empty list no longer means "no restriction" in an access profile. A
 member that grants reach takes the keyword `unrestricted` or a list of at

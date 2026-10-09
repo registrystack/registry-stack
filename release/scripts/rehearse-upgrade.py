@@ -160,6 +160,7 @@ UNIT_TESTED_ONLY_STEPS = {
     "breg-model-selection": "the BReg starter writes no model selection file",
     "breg-example-scenarios": "the BReg starter writes no example scenarios file",
     "breg-statistical-period": "the BReg starter registry declares no statistical period",
+    "breg-module-access-unrestricted": "the BReg starter module contributes no access profile",
     "scheduling-project-keys": "no Scheduling leg for the previous release",
     "scheduling-records-envelope": "no Scheduling leg for the previous release",
     "scheduling-fixture-keys": "no Scheduling leg for the previous release",

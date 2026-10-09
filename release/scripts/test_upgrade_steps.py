@@ -875,6 +875,84 @@ accessProfiles:
         self.assertEqual(scoped["requiredScopes"], ["read"])
         self.assertEqual(scoped["permissions"][0]["rowBoundaries"], ["north"])
 
+    def test_breg_module_access_members_take_unrestricted(self) -> None:
+        write(self.root, "modules/benefits/module.yaml", """\
+id: benefits
+version: "1"
+entities:
+  - id: grant
+    accessProfiles:
+      - id: reader
+        operations: [get]
+        rowBoundaries: []
+        applyTargets:
+          - {entity: site, rowBoundaries: []}
+        requestPresence:
+          - {requestType: correction, rowBoundaries: []}
+      - id: scoped
+        requiredScopes: [read]
+        operations: [get]
+        rowBoundaries:
+          - {field: region, claim: region, operator: equals}
+extendEntities:
+  - entity: person
+    accessProfiles:
+      - id: reader
+        requiredScopes: []
+        operations: [get]
+        rowBoundaries: []
+        applyTargets:
+          - {entity: site, rowBoundaries: []}
+        requestPresence:
+          - {requestType: correction, rowBoundaries: []}
+""")
+        # A module that contributes no profile is left as it was written.
+        write(self.root, "modules/plain/module.yaml", """\
+id: plain
+version: "1"
+entities:
+  - id: site
+    fields: []
+""")
+        self.apply("breg-module-access-unrestricted")
+        module = self.load("modules/benefits/module.yaml")
+        reader, scoped = module["entities"][0]["accessProfiles"]
+        extended = module["extendEntities"][0]["accessProfiles"][0]
+        for profile in (reader, extended):
+            self.assertEqual(profile["requiredScopes"], "unrestricted")
+            self.assertEqual(profile["rowBoundaries"], "unrestricted")
+            self.assertEqual(profile["applyTargets"][0]["rowBoundaries"], "unrestricted")
+            self.assertEqual(profile["requestPresence"][0]["rowBoundaries"], "unrestricted")
+        self.assertEqual(scoped["requiredScopes"], ["read"])
+        self.assertEqual(scoped["rowBoundaries"],
+                         [{"field": "region", "claim": "region", "operator": "equals"}])
+        self.assertEqual(self.load("modules/plain/module.yaml"),
+                         {"id": "plain", "version": "1", "entities": [{"id": "site", "fields": []}]})
+
+    def test_the_breg_access_steps_cover_every_module_and_end_with_a_relock(self) -> None:
+        catalog = upgrade_steps.load_catalog()
+        self.assertEqual(catalog["breg-module-access-unrestricted"]["file"],
+                         "modules/*/module.yaml")
+        ids = list(catalog)
+        for step in ("breg-remove-anonymous", "breg-module-access-unrestricted",
+                     "breg-access-requirements"):
+            self.assertLess(ids.index(step), ids.index("breg-module-relock"), step)
+        manual = self.apply("breg-remove-anonymous", "breg-access-requirements",
+                            "breg-module-relock")
+        self.assertEqual(len(manual), 3)
+        anonymous, requirements, relock = manual
+        self.assertIn("module.yaml", anonymous)
+        self.assertIn("module.yaml", requirements)
+        self.assertIn("bregctl project lock", relock)
+
+    def test_the_breg_fragment_cites_the_module_steps_where_a_module_changes(self) -> None:
+        catalog = upgrade_steps.load_catalog()
+        items = upgrade_steps.check_fragment(upgrade_steps.FRAGMENTS / "breg.md", catalog)
+        citing = [item.ids for item in items if "breg-module-relock" in item.ids]
+        self.assertIn(("breg-remove-anonymous", "breg-module-relock"), citing)
+        self.assertIn(("breg-access-unrestricted", "breg-module-access-unrestricted",
+                       "breg-access-requirements", "breg-module-relock"), citing)
+
     def test_breg_runtime_allowed_clients(self) -> None:
         write(self.runtime, "runtime.yaml", "authentication:\n  oidc:\n    allowedClients: []\n")
         self.apply("breg-runtime-allowed-clients")
