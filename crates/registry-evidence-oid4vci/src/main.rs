@@ -146,6 +146,10 @@ fn load_config(path: &Path) -> Result<DeliveryConfig, String> {
     }
 }
 
+/// The envelope of the JSON report, shared with the `evidence` binary.
+const CHECK_REPORT_API_VERSION: &str = "id.registrystack.org/formats/evidence/ctl-report/v1alpha1";
+const CHECK_REPORT_KIND: &str = "EvidenceCtlReport";
+
 /// Check the runtime file at `path` offline (CFG-CHECK-1) and report it.
 ///
 /// Exits 0 when the file passes, 1 when it breaks a rule or, under
@@ -187,6 +191,8 @@ fn check(path: &Path, format: OutputFormat, deny_warnings: bool, environment: bo
                 "ok": code == 0,
                 "command": "check",
                 "status": status,
+                "apiVersion": CHECK_REPORT_API_VERSION,
+                "kind": CHECK_REPORT_KIND,
                 "filesChecked": usize::from(!unavailable),
                 "diagnostics": report.to_json_value(),
             })

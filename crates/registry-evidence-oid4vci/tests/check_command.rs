@@ -47,7 +47,14 @@ fn check(path: &Path, extra: &[&str]) -> Output {
 }
 
 fn json(output: &Output) -> Value {
-    serde_json::from_slice(&output.stdout).expect("check --format json prints one JSON document")
+    let document: Value = serde_json::from_slice(&output.stdout)
+        .expect("check --format json prints one JSON document");
+    assert_eq!(
+        document["apiVersion"],
+        "id.registrystack.org/formats/evidence/ctl-report/v1alpha1"
+    );
+    assert_eq!(document["kind"], "EvidenceCtlReport");
+    document
 }
 
 fn codes(document: &Value) -> Vec<String> {

@@ -186,6 +186,9 @@ position.
   `suggestedAction`, `source.file`, `source.line`, `source.column`). A
   passing file prints `0 errors, 0 warnings in 1 file` on standard error,
   where the old command logged `configuration is valid`.
+- The JSON report carries the Evidence report envelope, `apiVersion`
+  `id.registrystack.org/formats/evidence/ctl-report/v1alpha1` and `kind`
+  `EvidenceCtlReport`, as the `evidence` and `evidencectl` reports do.
 - Exit status: 0 when the file passes (warnings included), 1 when it breaks a
   rule (or reports a warning under `--deny-warnings`), 2 when the command line
   is invalid, and 3 when the file cannot be read. The old command exited 1
