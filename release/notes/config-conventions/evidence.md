@@ -562,11 +562,15 @@ held for the stable release" lists them.
    `https` URL without credentials.
 5. **The fixture header is an envelope.** A fixture opens with
    `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1` and
-   `kind: EvidenceFixture` in place of `fixture: <id>`. A file with only the
-   old header is refused as `config.missing-envelope`; `fixture:` beside the
-   envelope is refused as `config.removed-key`. Migration: replace the
-   `fixture: <id>` line with the two envelope lines, then rebuild the package
-   with `evidencectl package`.
+   `kind: EvidenceFixture` in place of `fixture: <id>`. A file with the
+   old header is refused twice: `config.missing-envelope` for the absent
+   envelope and `config.removed-key` for `fixture:`; both are reported for the
+   one cause, and `fixture:` beside the envelope is refused as
+   `config.removed-key` alone. Until the package is rebuilt with
+   `evidencectl package`, `evidence check` reports `evidence.package.mismatch`
+   first (the edited file no longer matches its `SHA256SUMS`) and hides these
+   content errors. Migration: replace the `fixture: <id>` line with the two
+   envelope lines, then rebuild the package with `evidencectl package`.
 6. **Code lists are read by the shared reader.** An unknown key, a
    `${...}` expression, or a repeated code is refused (`config.unknown-key`,
    `config.substitution-not-allowed`, `config.duplicate-item`). A code list
