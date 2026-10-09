@@ -214,17 +214,16 @@ fn rank(diagnostic: &Diagnostic) -> u8 {
         "yaml.not-utf8" => 1,
         code if code.starts_with("yaml.") => 2,
         "config.invalid-type" if diagnostic.path.is_empty() => 2,
-        "config.missing-envelope"
-        | "config.wrong-kind"
-        | "config.unsupported-api-version"
+        "config.missing-envelope" | "config.wrong-kind" => 3,
+        "config.unsupported-api-version"
         | "config.retired-api-version"
-        | "config.deprecated-api-version" => 3,
-        "config.expected-string" | "config.null-value" | CODE_NOT_ALLOWED if envelope_member => 3,
-        CODE_NOT_ALLOWED => 4,
-        CODE_SUBSTITUTION => 5,
-        "config.removed-key" => 6,
-        "config.unknown-key" => 7,
-        _ => 8,
+        | "config.deprecated-api-version" => 4,
+        "config.expected-string" | "config.null-value" | CODE_NOT_ALLOWED if envelope_member => 4,
+        CODE_NOT_ALLOWED => 5,
+        CODE_SUBSTITUTION => 6,
+        "config.removed-key" => 7,
+        "config.unknown-key" => 8,
+        _ => 9,
     }
 }
 

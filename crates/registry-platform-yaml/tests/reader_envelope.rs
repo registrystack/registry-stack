@@ -435,6 +435,30 @@ fn cfg_change_2_a_retired_api_version_names_the_current_one_and_the_fix() {
 }
 
 #[test]
+fn cfg_diag_5_an_old_kind_with_a_retired_api_version_reports_both() {
+    let text = format!("apiVersion: {RETIRED_API_VERSION}\nkind: Other\n");
+    let report = read_refusal(&text);
+    let found: Vec<(&str, &str)> = report
+        .diagnostics()
+        .iter()
+        .map(|d| (d.code.as_str(), d.path.as_str()))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("config.retired-api-version", "/apiVersion"),
+            ("config.wrong-kind", "/kind"),
+        ]
+    );
+    let retired = report
+        .diagnostics()
+        .iter()
+        .find(|d| d.code == "config.retired-api-version")
+        .unwrap();
+    assert_eq!(retired.suggested_action, RETIRED_REPLACEMENT);
+}
+
+#[test]
 fn cfg_change_2_a_deprecated_api_version_is_read_with_a_warning() {
     let text =
         format!("apiVersion: {DEPRECATED_API_VERSION}\nkind: ExampleRuntimeConfig\nname: a\n");

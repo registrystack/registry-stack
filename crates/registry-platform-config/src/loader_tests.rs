@@ -482,6 +482,32 @@ fn a_retired_api_version_is_refused_with_its_replacement() {
 }
 
 #[test]
+fn an_old_kind_with_a_retired_api_version_is_still_decided_by_the_kind() {
+    const RETIRED: &[RetiredApiVersion<'static>] = &[RetiredApiVersion {
+        api_version: "registry.registrystack.org/example-runtime/v0",
+        replacement: "Write the current apiVersion.",
+    }];
+    let error = loader()
+        .retired_api_versions(RETIRED)
+        .parse_str::<Example>(
+            "apiVersion: registry.registrystack.org/example-runtime/v0\nkind: OldKind\n",
+            env(&[]),
+        )
+        .expect_err("a wrong kind refuses");
+    let codes: Vec<&str> = error
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        ["config.retired-api-version", "config.wrong-kind"],
+        "both findings are reported, in file order"
+    );
+    assert_eq!(error.deciding_diagnostic().code, "config.wrong-kind");
+}
+
+#[test]
 fn the_envelope_must_be_literal() {
     for (text, code, path) in [
         (

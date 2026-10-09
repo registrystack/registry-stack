@@ -134,6 +134,22 @@ impl<'a> Expect<'a> {
         self.formats
     }
 
+    /// The first format that retired this apiVersion, with the retirement.
+    fn retired(&self, version: &str) -> Option<(FormatSpec<'a>, &'a RetiredApiVersion<'a>)> {
+        self.formats
+            .iter()
+            .find_map(|format| match format.envelope {
+                EnvelopeRule::ApiVersionKind {
+                    retired_api_versions,
+                    ..
+                } => retired_api_versions
+                    .iter()
+                    .find(|retired| retired.api_version == version)
+                    .map(|retired| (*format, retired)),
+                EnvelopeRule::Exempt { .. } => None,
+            })
+    }
+
     fn kinds(&self) -> Vec<&'a str> {
         self.formats.iter().map(|format| format.kind).collect()
     }
@@ -283,6 +299,20 @@ pub(crate) fn check(
             at,
             messages::wrong_kind(&expect.kinds()),
         ));
+        // A file of an older layout often carries both findings, and the
+        // author should not have to fix one to learn of the other.
+        if let Some((format, retired)) = api_version.and_then(|version| expect.retired(version)) {
+            outcome.problems.push(Problem::error(
+                "config.retired-api-version",
+                "/apiVersion",
+                root.get("apiVersion").map(|entry| entry.value.span.start),
+                messages::retired_api_version(
+                    retired.api_version,
+                    &format.current_versions(),
+                    retired.replacement,
+                ),
+            ));
+        }
         return outcome;
     };
     let Some(version) = api_version else {

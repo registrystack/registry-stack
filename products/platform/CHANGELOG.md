@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A file with a kind no format reads and a retired `apiVersion` reports both
+  `config.wrong-kind` and `config.retired-api-version`; `config.wrong-kind` still
+  decides the refusal.
 - `config.unknown-variant` with a single accepted value says "expected `x`" and
   "Write `x`." instead of listing one value.
 - `config.invalid-type` for a mapping no longer suggests writing `{}`; the reader
