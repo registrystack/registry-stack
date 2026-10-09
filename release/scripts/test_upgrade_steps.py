@@ -459,13 +459,11 @@ class ReleaseCatalogTest(unittest.TestCase):
                     if step in self.catalog:
                         self.assertEqual(self.catalog[step]["product"], name, step)
 
-    def test_a_step_without_a_known_edit_names_its_file_and_diagnostic(self) -> None:
-        unknown = [step for step in self.catalog.values() if step["kind"] == "unknown"]
-        self.assertEqual([step["id"] for step in unknown], ["breg-statistical-dataset-grants"])
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(Error, r"registry\.yaml.*config\.removed-key"):
-                upgrade_steps.apply_steps(["breg-statistical-dataset-grants"],
-                                          {"project": Path(directory)})
+    def test_every_catalog_step_has_an_edit_or_an_instruction(self) -> None:
+        # A step of kind `unknown` is a breaking item whose edit is not yet
+        # derived; the shipped catalog carries none.
+        unknown = [step["id"] for step in self.catalog.values() if step["kind"] == "unknown"]
+        self.assertEqual(unknown, [])
 
 
 class ReleaseStepsApplyTest(unittest.TestCase):

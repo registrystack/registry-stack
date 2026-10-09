@@ -385,7 +385,17 @@ steps:
     to: unrestricted
     optional: true
   - {op: set, path: authentication.oidc.allowedClients, value: unrestricted, ifAbsent: true}
-- {id: breg-statistical-dataset-grants, product: breg, kind: unknown, file: registry.yaml, diagnostic: config.removed-key}
+- id: breg-statistical-dataset-grants
+  product: breg
+  kind: manual
+  file: registry.yaml
+  instruction: >-
+    For each statistical dataset, delete its live and releases members and write a
+    permission {dataset: <dataset id>, operations: [...]} in each access profile that
+    reached it, one permission per profile and dataset. A profile listed in live
+    gets read-live, the releases publisher gets publish, and when the dataset had a
+    releases member the publisher, every releases reader and every live profile
+    also get read-releases.
 - {id: breg-service-runtime-keys, product: breg, kind: manual, file: runtime.yaml, instruction: 'Replace
     the breg-mcp and breg-review apiVersion values and rename their keys as the release note''s table
     shows (maxTokenLifetimeSeconds, requestTimeoutMilliseconds, maxRequestBodyBytes, limits, retainDays).'}
