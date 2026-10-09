@@ -58,7 +58,9 @@ class ConfigureTests(unittest.TestCase):
         settings = json.loads(settings_path.read_text())
         self.assertEqual(settings["editor.tabSize"], 4)
         schemas = settings["yaml.schemas"]
-        self.assertEqual(len(schemas), 6)
+        self.assertEqual(len(schemas), 7)
+        dev_clients_schema = (project / ".registry-stack-editor/schemas/dev-clients.v1alpha1.schema.json").as_uri()
+        self.assertEqual(schemas[dev_clients_schema], [str(project / "dev-clients.yaml")])
         project_schema = (project / ".registry-stack-editor/schemas/registry-project.schema.json").as_uri()
         self.assertEqual(schemas[project_schema], [str(project / "registry.yaml")])
         zed = json.loads((self.workspace / ".zed/settings.json").read_text())
@@ -235,7 +237,9 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("casework", casework, self.workspace, None)
         configure.configure("breg", breg, self.workspace, None)
         settings = json.loads(settings_path.read_text())
-        self.assertEqual(len(settings["yaml.schemas"]), 13)
+        self.assertEqual(len(settings["yaml.schemas"]), 14)
+        breg_dev_clients = (breg / ".registry-stack-editor/schemas/dev-clients.v1alpha1.schema.json").as_uri()
+        self.assertEqual(settings["yaml.schemas"][breg_dev_clients], [str(breg / "dev-clients.yaml")])
         self.assertEqual(settings["yaml.schemas"][unrelated_uri], [str(self.workspace / "unrelated/registry.yaml")])
         tasks = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"]
         self.assertEqual(len(tasks), 2)
@@ -404,7 +408,20 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(vscode["json.schemas"], expected)
         zed = json.loads((self.workspace / ".zed/settings.json").read_text())
         self.assertEqual(zed["lsp"]["json-language-server"]["settings"]["json"]["schemas"], expected)
-        self.assertNotIn("yaml-language-server", zed["lsp"])
+        # No JSON file match reaches the YAML server; it holds exactly the
+        # YAML mappings an Evidence project is given.
+        yaml_schemas = zed["lsp"]["yaml-language-server"]["settings"]["yaml"]["schemas"]
+        self.assertEqual(
+            yaml_schemas,
+            {
+                (schemas / "selector.schema.json").as_uri(): [str(evidence / "selectors/*.yaml")],
+                (schemas / "source.schema.json").as_uri(): [str(evidence / "sources/*.yaml")],
+                (schemas / "target-settings.schema.json").as_uri(): [str(evidence / "targets/*/settings.yaml")],
+            },
+        )
+        for matches in yaml_schemas.values():
+            for match in matches:
+                self.assertFalse(match.endswith(".json"), match)
         self.assertTrue(schema.is_file())
         self.assertTrue(profile.is_file())
 
@@ -418,6 +435,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             settings["yaml.schemas"],
             {
+                (schemas / "target-governance.schema.json").as_uri(): [str(project / "governance.yaml")],
                 (schemas / "runtime.schema.yaml").as_uri(): [str(project / "runtime.yaml")],
                 (schemas / "bundle.schema.yaml").as_uri(): [str(project / "bundle/evidence.yaml")],
                 (schemas / "codelist.schema.json").as_uri(): [str(project / "bundle/codelists/*.yaml")],
