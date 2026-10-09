@@ -810,6 +810,7 @@ project directory as the positional argument (`evidencectl fixtures run
 `keygen` and `jwks` flags.
 
 ### BREAKING: a fixture file the reader refuses stops `evidencectl test`
+<!-- upgrade: evidence-fixture-reader-refusals -->
 
 `evidencectl test` and `evidencectl fixtures run` read every
 `fixtures/*.yaml` of an editable project, and every fixture a deployment

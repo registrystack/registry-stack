@@ -142,6 +142,10 @@ steps:
   instruction: 'Write the value itself where a ${...} expression stands, and remove anchors, aliases,
     tags, merge keys, duplicate keys, unknown keys and null values from every authored document; evidencectl
     check names each file and line.'}
+- {id: evidence-fixture-reader-refusals, product: evidence, kind: manual, file: fixtures/*.yaml, instruction: 'Fix
+    each fixture file evidencectl test names with the reader code, line, and fix it reports, and move a
+    file under fixtures/ that is not an EvidenceFixture document out of that directory or give it the
+    fixture apiVersion and kind.'}
 - {id: evidence-bundle-reader-refusals, product: evidence, kind: manual, file: evidence.yaml, instruction: 'Remove
     anchors, aliases, tags, merge keys, duplicate keys and unknown keys from the bundle, runtime file,
     code lists and fact schemas; write each integer unquoted and within its range; write URLs as plain
