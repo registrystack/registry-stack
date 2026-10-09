@@ -90,6 +90,16 @@
       "reason": "Manifest profile identifiers in fixtures are not Registry Stack resolver contracts."
     },
     {
+      "glob": "products/evidence/contracts/*.schema.yaml",
+      "classification": "planned-resolution",
+      "reason": "The frozen Evidence contract schemas are YAML documents that carry their conventional identifier; the catalog lists JSON schema artifacts only, so these identifiers resolve when the schemas are published."
+    },
+    {
+      "glob": "products/platform/config-formats.yaml",
+      "classification": "planned-resolution",
+      "reason": "The format registry names the frozen Evidence contract schema identifiers, which resolve when those YAML schemas are published."
+    },
+    {
       "glob": "products/platform/config-conventions-exceptions.yaml",
       "classification": "planned-resolution",
       "reason": "Exception resolutions name the identifier a deviation moves to; the change that applies a resolution publishes its identifier and deletes the entry."
@@ -359,6 +369,14 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Evidence code list JSON Schema."
+    },
+    {
+      "glob": "products/evidence/generated/fixture/*.schema.json",
+      "sourcePath": "crates/registry-evidence/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Evidence fixture JSON Schema."
     }
   ],
   "records": [
