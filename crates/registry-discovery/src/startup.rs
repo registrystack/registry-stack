@@ -470,7 +470,7 @@ logLevel: info
             "{message}"
         );
         assert!(
-            message.contains("`schemaVersion` is no longer accepted\n  next: declare apiVersion"),
+            message.contains("`schemaVersion` is no longer accepted\n  next: Declare apiVersion"),
             "{message}"
         );
         let message = refusal(&RUNTIME.replace(
@@ -478,13 +478,13 @@ logLevel: info
             "kind: DiscoveryRuntimeConfig\nschemaVersion: registry-discovery/runtime/v1alpha1",
         ));
         assert!(
-            message.contains("`schemaVersion` is no longer accepted\n  next: declare apiVersion"),
+            message.contains("`schemaVersion` is no longer accepted\n  next: Declare apiVersion"),
             "{message}"
         );
         let message = refusal(&RUNTIME.replace("bind:", "address:"));
         assert!(
             message.contains(
-                "/listener/address\n  `address` is no longer accepted\n  next: declare \
+                "/listener/address\n  `address` is no longer accepted\n  next: Declare \
                  listener.bind instead."
             ),
             "{message}"
@@ -495,7 +495,7 @@ logLevel: info
         ));
         assert!(
             message.contains(
-                "`indexPath` is no longer accepted\n  next: declare package.root instead"
+                "`indexPath` is no longer accepted\n  next: Declare package.root instead"
             ),
             "{message}"
         );
