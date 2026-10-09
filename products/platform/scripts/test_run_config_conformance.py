@@ -1240,6 +1240,20 @@ class EndToEndTest(unittest.TestCase):
         self.assertIn("demo/project\tduplicate-key\tblocked", stdout)
         self.assertIn("3 blocked", stdout)
 
+    def test_a_listed_failure_whose_cell_no_longer_applies_is_stale(self) -> None:
+        document = self.record()
+        document["expectedFailures"].append(
+            {"format": "demo/project", "case": "operator-only", "reason": "r", "digest": runner.digest(["r"])}
+        )
+        self.write_expected(document)
+        code, stdout, _ = self.run_runner("--matrix", "--strict")
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("demo/project\toperator-only\tnot applicable", stdout)
+        self.assertIn("stale: demo/project operator-only no longer applies", stdout)
+        code, stdout, _ = self.run_runner()
+        self.assertEqual(code, 0, stdout)
+        self.assertIn("stale: demo/project operator-only no longer applies", stdout)
+
     def test_strict_refuses_unacknowledged_unreached_formats_and_cases(self) -> None:
         document = self.record()
         complete = dict(document)

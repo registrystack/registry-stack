@@ -110,8 +110,8 @@ a `prepare` command that failed, a report that is not the JSON the runner
 reads): those are never expected failures. When a format's baseline fails, its other check
 cells are `blocked` (not run), so the baseline entry is the format's one
 entry. With `--strict`, an entry that no longer holds (a cell that now
-passes, a format now reached, a case that now applies) fails the run too, as
-does an unlisted unreached format or inapplicable case.
+passes or no longer applies, a format now reached, a case that now applies)
+fails the run too, as does an unlisted unreached format or inapplicable case.
 `--write-expected-failures` rewrites the file from the current results; it
 is the only writer, and it records no cell that leaks, crashes, times out, or
 that the harness could not run; it exits 1 when it leaves one out.
@@ -1989,6 +1989,7 @@ def report(
 
     stale = [f"stale: {f} {c} now passes" for (f, c), s in status.items() if s == "stale"]
     stale += [f"stale: {f} {c} is blocked by its failing baseline" for (f, c) in expected.failures if status.get((f, c)) == "blocked"]
+    stale += [f"stale: {f} {c} no longer applies" for (f, c) in expected.failures if status.get((f, c)) == "not applicable"]
     strict_problems = []
     if not partial:
         stale += [f"stale: {f} {c} no longer runs" for (f, c) in expected.failures if (f, c) not in status]
