@@ -161,7 +161,7 @@ struct CheckArgs {
     #[arg(long, requires = "target")]
     production: bool,
     /// Refuse a project whose check reports any warning.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "file")]
     deny_warnings: bool,
     /// The flag's former spelling, accepted only to name `--deny-warnings`.
     #[arg(long, hide = true)]

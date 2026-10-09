@@ -373,6 +373,19 @@ fn the_retired_project_flag_is_refused() {
 }
 
 #[test]
+fn check_file_refuses_deny_warnings_because_a_single_file_has_no_warnings() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let file = workspace.path().join("any.yaml");
+    std::fs::write(&file, "kind: none\n").expect("write file");
+    let output = evidencectl()
+        .args(["check", "--deny-warnings", "--file"])
+        .arg(&file)
+        .output()
+        .expect("run check");
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
 fn an_undeliverable_report_exits_operational() {
     let workspace = tempfile::tempdir().expect("workspace");
     let keys = workspace.path().join("keys");

@@ -14,6 +14,9 @@
   step, and the old-message-to-code table are in
   `release/notes/config-conventions/evidence.md`, section "Evidence clients
   and OID4VCI".
+- BREAKING: `evidencectl check --file <path> --deny-warnings` is refused as
+  a usage error (exit 2). A single-file check reports no warnings, so the
+  flag silently did nothing. Drop `--deny-warnings` from `--file` invocations.
 - BREAKING: the Evidence client reads its profile and reviewed contracts
   through the shared configuration reader. Their schemas are generated and
   published under `id.registrystack.org`, replacing the hand-written
