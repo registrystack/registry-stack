@@ -14,8 +14,8 @@
 use chrono::{DateTime, Utc};
 use registry_platform_hooks::{validate_hooks, HookDeclaration, HookHandlerSource, HookPhase};
 use registry_platform_yaml::{
-    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, ProjectIdentity, Reader, RemovedKey,
-    Report, RetiredApiVersion,
+    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Identified, ProjectIdentity, Reader,
+    RemovedKey, Report, RetiredApiVersion,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -112,6 +112,12 @@ pub struct ServicePolicy {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub label: String,
+}
+
+impl Identified for ServicePolicy {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 /// How an offering delivers its service.
@@ -306,6 +312,12 @@ pub struct OfferingPolicy {
     pub prerequisites: Vec<String>,
 }
 
+impl Identified for OfferingPolicy {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 /// A bounded weekly opening pattern over local wall-clock time. The timezone
 /// comes from the location record the pattern references.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -337,6 +349,12 @@ pub struct OpeningPatternPolicy {
     pub because: String,
 }
 
+impl Identified for OpeningPatternPolicy {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 /// A named, revisioned set of holiday dates.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -366,6 +384,12 @@ pub struct HolidaySetPolicy {
         )
     )]
     pub dates: Vec<String>,
+}
+
+impl Identified for HolidaySetPolicy {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 /// The authenticated channel a subquota limits.
@@ -521,6 +545,12 @@ pub struct PublishedWindow {
     pub because: String,
 }
 
+impl Identified for PublishedWindow {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 /// The hold policy every offering inherits.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -665,6 +695,12 @@ pub struct HookPolicy {
     pub handler: ObserverHandler,
 }
 
+impl Identified for HookPolicy {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 impl HookPolicy {
     /// The shared declaration the hook runtime reads.
     #[must_use]
@@ -694,13 +730,41 @@ pub struct SchedulingPolicy {
     pub api_version: String,
     pub kind: String,
     pub project: ProjectIdentity,
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    #[serde(deserialize_with = "crate::typed::unique_id_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<ServicePolicy>",
+            length(min = 1, max = 256)
+        )
+    )]
     pub services: Vec<ServicePolicy>,
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    #[serde(deserialize_with = "crate::typed::unique_id_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<OfferingPolicy>",
+            length(min = 1, max = 256)
+        )
+    )]
     pub offerings: Vec<OfferingPolicy>,
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    #[serde(deserialize_with = "crate::typed::unique_id_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<HolidaySetPolicy>",
+            length(min = 1, max = 256)
+        )
+    )]
     pub holiday_sets: Vec<HolidaySetPolicy>,
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    #[serde(deserialize_with = "crate::typed::unique_id_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<OpeningPatternPolicy>",
+            length(min = 1, max = 256)
+        )
+    )]
     pub openings: Vec<OpeningPatternPolicy>,
     /// The channels this deployment serves. The vocabulary is closed by the
     /// `Channel` type itself; the declaration narrows it to the served
@@ -715,8 +779,18 @@ pub struct SchedulingPolicy {
     pub channels: Vec<Channel>,
     pub hold_policy: HoldPolicy,
     /// Observer hooks. A project with none omits the member.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::typed::unique_id_list"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<HookPolicy>",
+            length(max = 256)
+        )
+    )]
     pub hooks: Vec<HookPolicy>,
 }
 
@@ -821,12 +895,10 @@ impl SchedulingPolicy {
             declared_channels.push(*channel);
         }
 
-        let mut service_ids = Vec::new();
         for (index, service) in self.services.iter().enumerate() {
             let path = format!("/services/{index}");
             check_identifier(&service.id, &format!("{path}/id"), &mut findings);
             check_label(&service.label, &format!("{path}/label"), &mut findings);
-            push_unique(&mut service_ids, &service.id, &path, &mut findings);
         }
 
         for (index, set) in self.holiday_sets.iter().enumerate() {
@@ -849,7 +921,6 @@ impl SchedulingPolicy {
                     ));
                 }
             }
-            self.check_unique_id(&set.id, &path, Collection::HolidaySets, &mut findings);
         }
 
         for (index, opening) in self.openings.iter().enumerate() {
@@ -929,7 +1000,6 @@ impl SchedulingPolicy {
                 }
             }
             check_because(&opening.because, &format!("{path}/because"), &mut findings);
-            self.check_unique_id(&opening.id, &path, Collection::Openings, &mut findings);
         }
 
         for (index, offering) in self.offerings.iter().enumerate() {
@@ -965,17 +1035,14 @@ impl SchedulingPolicy {
         }
 
         check_collection_bound(&self.hooks, "/hooks", &mut findings);
-        let mut hook_ids = Vec::new();
         for (index, hook) in self.hooks.iter().enumerate() {
             let path = format!("/hooks/{index}");
             check_identifier(&hook.id, &format!("{path}/id"), &mut findings);
-            push_unique(&mut hook_ids, &hook.id, &path, &mut findings);
             check_scheduling_hook(hook, &path, &mut findings);
         }
         // Every shared rule a Scheduling hook can break is already named
         // above at its own member; the shared validator stays the backstop.
-        if hook_ids.len() == self.hooks.len() && validate_hooks(&self.hook_declarations()).is_err()
-        {
+        if validate_hooks(&self.hook_declarations()).is_err() {
             findings.push(SchedulingDiagnostic::new(
                 "/hooks",
                 PolicyCheckReason::InvalidHookDeclaration,
@@ -1003,7 +1070,6 @@ impl SchedulingPolicy {
         check_identifier(&offering.location, &format!("{path}/location"), findings);
         check_label(&offering.label, &format!("{path}/label"), findings);
         check_because(&offering.because, &format!("{path}/because"), findings);
-        self.check_unique_id(&offering.id, &path, Collection::Offerings, findings);
 
         let (block, block_member) = match offering.mode {
             SchedulingMode::ExactTime => (offering.exact_time.is_some(), "exactTime"),
@@ -1205,16 +1271,6 @@ impl SchedulingPolicy {
             ));
         }
         check_because(&window.because, &format!("{path}/because"), findings);
-        if windows
-            .iter()
-            .take(index)
-            .any(|other| other.id == window.id)
-        {
-            findings.push(SchedulingDiagnostic::new(
-                format!("{path}/id"),
-                PolicyCheckReason::DuplicateIdentifier,
-            ));
-        }
         if window.units == 0 || window.units > MAXIMUM_UNITS {
             findings.push(SchedulingDiagnostic::new(
                 format!("{path}/units"),
@@ -1368,47 +1424,6 @@ impl SchedulingPolicy {
                 .is_some_and(|exact| exact.pool == id)
         })
     }
-
-    fn check_unique_id(
-        &self,
-        id: &str,
-        path: &str,
-        collection: Collection,
-        findings: &mut Vec<SchedulingDiagnostic>,
-    ) {
-        let index = path
-            .rsplit('/')
-            .next()
-            .and_then(|segment| segment.parse::<usize>().ok())
-            .unwrap_or(0);
-        let repeated = match collection {
-            Collection::Offerings => self
-                .offerings
-                .iter()
-                .take(index)
-                .any(|offering| offering.id == id),
-            Collection::Openings => self
-                .openings
-                .iter()
-                .take(index)
-                .any(|opening| opening.id == id),
-            Collection::HolidaySets => self.holiday_sets.iter().take(index).any(|set| set.id == id),
-        };
-        if repeated {
-            findings.push(SchedulingDiagnostic::new(
-                format!("{path}/id"),
-                PolicyCheckReason::DuplicateIdentifier,
-            ));
-        }
-    }
-}
-
-/// A project collection whose entries carry unique ids.
-#[derive(Clone, Copy)]
-enum Collection {
-    Offerings,
-    Openings,
-    HolidaySets,
 }
 
 fn check_scheduling_hook(hook: &HookPolicy, path: &str, findings: &mut Vec<SchedulingDiagnostic>) {
@@ -1635,22 +1650,6 @@ fn units_committed_outside(
 
 fn service_ids_contains(policy: &SchedulingPolicy, id: &str) -> bool {
     policy.services.iter().any(|service| service.id == id)
-}
-
-fn push_unique(
-    seen: &mut Vec<String>,
-    id: &str,
-    path: &str,
-    findings: &mut Vec<SchedulingDiagnostic>,
-) {
-    if seen.iter().any(|known| known == id) {
-        findings.push(SchedulingDiagnostic::new(
-            format!("{path}/id"),
-            PolicyCheckReason::DuplicateIdentifier,
-        ));
-    } else {
-        seen.push(id.to_owned());
-    }
 }
 
 fn check_collection_non_empty<T>(
@@ -2185,19 +2184,26 @@ holdPolicy:
 
     #[test]
     fn duplicate_ids_across_one_collection_are_rejected() {
-        let mut policy = minimal_exact_time_policy();
-        policy.offerings.push(policy.offerings[0].clone());
-        let rendered = rendered(&policy.check());
-        assert_eq!(
-            rendered
-                .iter()
-                .filter(|f| f.ends_with("duplicate-identifier"))
-                .count(),
-            1,
-            "{rendered:?}"
-        );
-        assert!(rendered
-            .contains(&"/offerings/1/id: scheduling.project.duplicate-identifier".to_owned()));
+        let duplicated =
+            |item: &str| MINIMAL_EXACT_TIME_PROJECT.replacen(item, &format!("{item}{item}"), 1);
+        for (section, item, pointer) in [
+            (
+                "services",
+                "  - id: registry-update\n    label: Registry record update\n",
+                "/services/1/id",
+            ),
+            (
+                "holidaySets",
+                "  - id: office-holidays\n    revision: 1\n    because: Public holidays observed by the registry office.\n    dates: [\"2026-12-25\"]\n",
+                "/holidaySets/1/id",
+            ),
+        ] {
+            assert_eq!(
+                refusals(&duplicated(item)),
+                [format!("{pointer} config.duplicate-id")],
+                "{section}"
+            );
+        }
     }
 
     /// Authored reminder offsets are part of the reviewed policy: a zero
@@ -2857,7 +2863,7 @@ holdPolicy:
 
         assert_eq!(
             refusals(&with_hooks(&format!("{OBSERVER}{OBSERVER}"))),
-            ["/hooks/1/id scheduling.project.duplicate-identifier"]
+            ["/hooks/1/id config.duplicate-id"]
         );
 
         // A project built in code is held to the same destination grammar.

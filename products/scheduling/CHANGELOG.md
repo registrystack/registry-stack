@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: a repeated `id` in a project, records, or fixture-facts list is
+  refused with `config.duplicate-id` at the second item's `id`, where the
+  finding was `scheduling.project.duplicate-identifier`,
+  `scheduling.records.duplicate-identifier`, or
+  `scheduling.fixture.duplicate-identifier`. Migration steps are in
+  `release/notes/config-conventions/scheduling.md`.
 - BREAKING: `authentication.oidc.assertionIssuers: {}` is refused: delete the
   member to apply no assertion-issuer rule. The generated runtime schema types
   the client keys as `ExternalId` and requires at least one client.

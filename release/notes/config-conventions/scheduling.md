@@ -287,6 +287,25 @@ and pointer from the error:
   fills them from the current environment and checks every value. Exits: 0
   clean, 1 refused, 2 usage, 3 a file it needs could not be read.
 
+## BREAKING: a repeated `id` is `config.duplicate-id`
+
+A repeated `id` in `services`, `offerings`, `holidaySets`, `openings`, or
+`hooks` of `scheduling.yaml`, or in `locations`, `pools`, `windows`, or
+`exceptions` of `records.yaml` or a fixture's `facts`, is refused by the
+shared reader at the second item's `id`, with the first item as a related
+position. Repeated entries of a set (a channel, a reminder offset, a
+subquota channel) and repeated fixture case names keep their findings.
+
+| Old code | New code |
+|---|---|
+| `scheduling.project.duplicate-identifier` at an `id` | `config.duplicate-id` |
+| `scheduling.records.duplicate-identifier` at an `id` | `config.duplicate-id` |
+| `scheduling.fixture.duplicate-identifier` at a fact `id` | `config.duplicate-id` |
+
+Migration: a script that matched the old code on an `id` path matches
+`config.duplicate-id`. The file is refused as before; give each item its own
+`id`.
+
 ## BREAKING: a database an earlier release wrote is not read
 <!-- upgrade: scheduling-database-restart -->
 

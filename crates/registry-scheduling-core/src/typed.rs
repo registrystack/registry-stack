@@ -8,7 +8,9 @@
 
 use std::hash::Hash;
 
-use registry_platform_yaml::{BoundedU32, BoundedU64, Invalid, LocalId, UniqueList, Url};
+use registry_platform_yaml::{
+    BoundedU32, BoundedU64, Identified, Invalid, LocalId, UniqueIdList, UniqueList, Url,
+};
 use serde::{de, Deserialize, Deserializer};
 
 /// Minutes in one day: the bound of an appointment, a buffer, and a grid.
@@ -105,6 +107,16 @@ where
     T: Deserialize<'de> + Eq + Hash,
 {
     UniqueList::<T>::deserialize(deserializer).map(UniqueList::into_vec)
+}
+
+/// Named items in a list, each with an `id` unique in the list (CFG-ID-5):
+/// a repeated id is refused at the second item's `id`.
+pub fn unique_id_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Identified,
+{
+    UniqueIdList::<T>::deserialize(deserializer).map(UniqueIdList::into_vec)
 }
 
 /// A set of local identifiers (CFG-ID-1, CFG-ID-6), kept as written.

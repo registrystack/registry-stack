@@ -12,7 +12,7 @@ use registry_platform_calendar::{
     CalendarEvaluationError, CalendarException, CalendarExceptionKind,
 };
 use registry_platform_yaml::{
-    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
+    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Identified, Reader, RemovedKey, Report,
 };
 
 use crate::diagnostics::{findings_report, FindingArea, PolicyCheckReason, SchedulingDiagnostic};
@@ -248,6 +248,12 @@ pub struct LocationRecord {
     pub timezone: String,
 }
 
+impl Identified for LocationRecord {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 /// One interchangeable member of a resource pool.
 ///
 /// `available` carries no reason. Why a member is unavailable is private staff
@@ -302,6 +308,12 @@ pub struct ResourcePool {
     pub members: Vec<PoolMember>,
 }
 
+impl Identified for ResourcePool {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 /// An owned dated exception over local wall-clock time, the record form of
 /// `registry_platform_calendar::CalendarException`. An exception is scoped to
 /// one location: a closure at one counter never closes another.
@@ -327,6 +339,12 @@ pub struct CalendarExceptionRecord {
     pub reopens: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority: Option<String>,
+}
+
+impl Identified for CalendarExceptionRecord {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 /// The layer an exception occupies, mirrored for records.
@@ -366,19 +384,59 @@ impl CalendarExceptionRecord {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SchedulingFacts {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::typed::unique_id_list"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<LocationRecord>",
+            length(max = 256)
+        )
+    )]
     pub locations: Vec<LocationRecord>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::typed::unique_id_list"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<ResourcePool>",
+            length(max = 256)
+        )
+    )]
     pub pools: Vec<ResourcePool>,
     /// Published arrival-window supply owned by this deployment's operator
     /// records. The policy references these records by identifier.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::typed::unique_id_list"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<PublishedWindow>",
+            length(max = 256)
+        )
+    )]
     pub windows: Vec<PublishedWindow>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::typed::unique_id_list"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<CalendarExceptionRecord>",
+            length(max = 256)
+        )
+    )]
     pub exceptions: Vec<CalendarExceptionRecord>,
 }
 
@@ -417,14 +475,12 @@ impl SchedulingFacts {
                 findings.push(finding(name.to_owned(), PolicyCheckReason::TooManyEntries));
             }
         }
-        let mut locations = std::collections::BTreeSet::new();
+        let locations: std::collections::BTreeSet<&str> = self
+            .locations
+            .iter()
+            .map(|location| location.id.as_str())
+            .collect();
         for (index, location) in self.locations.iter().enumerate() {
-            if !locations.insert(location.id.as_str()) {
-                findings.push(finding(
-                    format!("/locations/{index}/id"),
-                    PolicyCheckReason::DuplicateIdentifier,
-                ));
-            }
             if location.timezone.parse::<chrono_tz::Tz>().is_err() {
                 findings.push(finding(
                     format!("/locations/{index}/timezone"),
@@ -432,15 +488,10 @@ impl SchedulingFacts {
                 ));
             }
         }
-        let mut pools = std::collections::BTreeSet::new();
+        let pools: std::collections::BTreeSet<&str> =
+            self.pools.iter().map(|pool| pool.id.as_str()).collect();
         let mut resources = std::collections::BTreeSet::new();
         for (index, pool) in self.pools.iter().enumerate() {
-            if !pools.insert(pool.id.as_str()) {
-                findings.push(finding(
-                    format!("/pools/{index}/id"),
-                    PolicyCheckReason::DuplicateIdentifier,
-                ));
-            }
             if pool.members.len() > MAXIMUM_COLLECTION_ENTRIES {
                 findings.push(finding(
                     format!("/pools/{index}/members"),
@@ -479,14 +530,7 @@ impl SchedulingFacts {
                 }
             }
         }
-        let mut exceptions = std::collections::BTreeSet::new();
         for (index, exception) in self.exceptions.iter().enumerate() {
-            if !exceptions.insert(exception.id.as_str()) {
-                findings.push(finding(
-                    format!("/exceptions/{index}/id"),
-                    PolicyCheckReason::DuplicateIdentifier,
-                ));
-            }
             if !locations.contains(exception.location.as_str()) {
                 findings.push(finding(
                     format!("/exceptions/{index}/location"),
@@ -589,17 +633,57 @@ pub struct SchedulingRecords {
     pub api_version: String,
     #[cfg_attr(feature = "schema", schemars(extend("const" = "SchedulingRecords")))]
     pub kind: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::typed::unique_id_list"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<LocationRecord>",
+            length(max = 256)
+        )
+    )]
     pub locations: Vec<LocationRecord>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::typed::unique_id_list"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<ResourcePool>",
+            length(max = 256)
+        )
+    )]
     pub pools: Vec<ResourcePool>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::typed::unique_id_list"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<PublishedWindow>",
+            length(max = 256)
+        )
+    )]
     pub windows: Vec<PublishedWindow>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::typed::unique_id_list"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<CalendarExceptionRecord>",
+            length(max = 256)
+        )
+    )]
     pub exceptions: Vec<CalendarExceptionRecord>,
 }
 
@@ -1296,7 +1380,7 @@ holdPolicy:
                  locations:\n  - id: north-counter\n    timezone: Asia/Bangkok\n\
                  \x20 - id: north-counter\n    timezone: Asia/Bangkok\n"
                     .to_owned(),
-                "/locations/1/id scheduling.records.duplicate-identifier",
+                "/locations/1/id config.duplicate-id",
             ),
             (
                 RECORDS_HEAD.replace("Asia/Bangkok", "Mars/Olympus"),
@@ -1396,7 +1480,7 @@ holdPolicy:
                  \x20 - id: repeated\n    location: north-counter\n    kind: closure\n    date: '2026-10-07'\n    startTime: '09:00'\n    endTime: '10:00'\n\
                  \x20 - id: repeated\n    location: north-counter\n    kind: closure\n    date: '2026-10-07'\n    startTime: '10:00'\n    endTime: '11:00'\n"
             )),
-            ["/exceptions/1/id scheduling.records.duplicate-identifier"]
+            ["/exceptions/1/id config.duplicate-id"]
         );
     }
 
