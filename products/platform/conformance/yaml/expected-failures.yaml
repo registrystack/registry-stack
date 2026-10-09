@@ -14,8 +14,8 @@
 expectedFailures:
 - format: breg/dev-clients
   case: init-modeline
-  reason: the format registers no schema `$id` for the modeline to name
-  digest: 60e5b6a3446c
+  reason: 'the first line of dev-clients.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: e8486e633102
 - format: breg/journeys
   case: init-modeline
   reason: 'the first line of tests/journeys.yaml is not a `# yaml-language-server: $schema=` modeline'
@@ -161,10 +161,6 @@ expectedFailures:
   reason: missing config.duplicate-id at /requirements/3/id 336:9; unexpected evidence.bundle.invalid-requirement at /requirements/3/id 336:9
   digest: b0e46eed6211
 - format: evidence/bundle
-  case: duplicate-set-item
-  reason: missing config.duplicate-item at /requirements/0/purposes/1 229:40; unexpected evidence.bundle.invalid-requirement at /requirements/0 223:5
-  digest: e839bbb514f0
-- format: evidence/bundle
   case: empty-file
   reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
   digest: f6718810f259
@@ -186,12 +182,12 @@ expectedFailures:
   digest: 1d83d2739cbc
 - format: evidence/bundle
   case: oversize
-  reason: missing yaml.too-large at the root (file); unexpected evidence.package.too-large at /package/root 4:9 (and 1 more problem)
-  digest: 53940598ee6b
+  reason: missing yaml.too-large at the root (file); unexpected evidence.package.too-large at the root (file)
+  digest: 1dd16ce1ee8c
 - format: evidence/bundle
   case: path-link-outside-project
-  reason: missing a diagnostic of any code at /sources/registered-birth-date/extractScript 118:20; unexpected evidence.package.unsafe-entry at /package/root 4:9 (and 1 more problem)
-  digest: 509142ffcb38
+  reason: missing a diagnostic of any code at /sources/registered-birth-date/extractScript 118:20; unexpected evidence.package.unsafe-entry at the root (file)
+  digest: c2515e7c797a
 - format: evidence/bundle
   case: wrong-api-version
   reason: exit status 0, expected 1; missing config.unsupported-api-version at /apiVersion 1:13
@@ -226,8 +222,8 @@ expectedFailures:
   digest: 1d83d2739cbc
 - format: evidence/codelist
   case: oversize
-  reason: missing yaml.too-large at the root (file); unexpected evidence.package.too-large at /package/root 4:9 (and 1 more problem)
-  digest: 687fd6f29c07
+  reason: missing yaml.too-large at the root (file); unexpected evidence.package.too-large at the root (file)
+  digest: 1dd16ce1ee8c
 - format: evidence/codelist
   case: wrong-api-version
   reason: exit status 0, expected 1; missing config.unsupported-api-version at /apiVersion 1:13
@@ -246,8 +242,8 @@ expectedFailures:
   digest: ba7fd7872baa
 - format: evidence/fixture
   case: init-modeline
-  reason: the format registers no schema `$id` for the modeline to name
-  digest: 60e5b6a3446c
+  reason: 'the first line of fixtures/record-status.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: 1b624ce92493
 - format: evidence/holder-bound-verification-policy
   case: comments-only-file
   reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
@@ -280,10 +276,10 @@ expectedFailures:
   case: wrong-kind-and-api-version
   reason: exit status 0, expected 1; missing config.wrong-kind at /kind 7:7
   digest: b2b108056a5d
-- format: evidence/question
-  case: duplicate-id
-  reason: missing config.duplicate-id at /answers/1/id 31:9; unexpected evidence.question.answer-concept-unique at /answers/1/concept 30:14
-  digest: e1ff8f7b5a6d
+- format: evidence/mock-plan
+  case: integer-boundary-sweep
+  reason: missing config.out-of-range at /generation/seed 7:9; unexpected evidence.mock-plan.invalid at the root (file) (and 1 more problem)
+  digest: 66dfce70eac2
 - format: evidence/question
   case: too-many-problems
   reason: missing config.too-many-problems at the root (file); unexpected config.too-many-problems at the root 4:1
@@ -575,6 +571,8 @@ unreachedFormats:
   reason: syntax json; the corpus mutates YAML text
 - format: breg/dev-state
   reason: syntax json; the corpus mutates YAML text
+- format: breg/evidence-source-export
+  reason: syntax json; the corpus mutates YAML text
 - format: breg/example-scenarios
   reason: syntax json; the corpus mutates YAML text
 - format: breg/migration-descriptor
@@ -590,6 +588,18 @@ unreachedFormats:
 - format: casework/dev-state
   reason: syntax json; the corpus mutates YAML text
 - format: discovery/index
+  reason: syntax json; the corpus mutates YAML text
+- format: evidence/client-contracts
+  reason: syntax json; the corpus mutates YAML text
+- format: evidence/client-profile
+  reason: syntax json; the corpus mutates YAML text
+- format: evidence/dev-state
+  reason: syntax json; the corpus mutates YAML text
+- format: evidence/source-import-journal
+  reason: syntax json; the corpus mutates YAML text
+- format: evidence/source-import-state
+  reason: syntax json; the corpus mutates YAML text
+- format: evidence/source-resolution
   reason: syntax json; the corpus mutates YAML text
 - format: platform/thunderid-session
   reason: syntax json; the corpus mutates YAML text
