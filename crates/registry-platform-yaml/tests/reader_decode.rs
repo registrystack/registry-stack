@@ -1680,6 +1680,34 @@ fn cfg_diag_5_unknown_keys_past_the_bound_are_counted() {
     assert_eq!(rest.message, "20 more problems in this file are not shown");
 }
 
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct Counts {
+    counts: Vec<u32>,
+}
+
+#[test]
+fn cfg_diag_5_numbers_too_large_to_read_past_the_bound_are_counted() {
+    let items = MAXIMUM_DIAGNOSTICS_PER_FILE + 20;
+    let body = "  - 99999999999999999999999\n".repeat(items);
+    let report = refusal::<Counts>(&format!("counts:\n{body}"));
+    let diagnostics = report.diagnostics();
+    assert_eq!(diagnostics.len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+    for (index, diagnostic) in diagnostics[..MAXIMUM_DIAGNOSTICS_PER_FILE]
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(diagnostic.code, "config.out-of-range");
+        assert_eq!(diagnostic.path, format!("/counts/{index}"));
+        assert_eq!(at(diagnostic), (index + 4, 5));
+    }
+    // The member that read the first one refuses it in its own words.
+    assert_ne!(diagnostics[0].message, diagnostics[1].message);
+    let rest = &diagnostics[MAXIMUM_DIAGNOSTICS_PER_FILE];
+    assert_eq!(rest.code, "config.too-many-problems");
+    assert_eq!(rest.message, "20 more problems in this file are not shown");
+}
+
 #[test]
 fn cfg_diag_5_structural_problems_stop_before_decoding() {
     let report = refusal::<Settings>("nmae: a\nport: &p 1\nport: 2\n");

@@ -191,6 +191,10 @@ pub(crate) struct EnvelopeOutcome {
     pub warnings: Vec<Problem>,
 }
 
+/// The pointers of the envelope's members, the only ones [`check`] asks
+/// `reported` about.
+pub(crate) const MEMBER_POINTERS: [&str; 2] = ["/apiVersion", "/kind"];
+
 /// `reported` says whether a problem was already reported at a pointer.
 pub(crate) fn check(
     root: Option<&Node>,

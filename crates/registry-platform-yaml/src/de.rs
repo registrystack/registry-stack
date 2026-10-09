@@ -16,7 +16,7 @@ use std::rc::Rc;
 use serde::de::{self, DeserializeSeed, Visitor};
 use serde::forward_to_deserialize_any;
 
-use crate::messages::{self, Found, NullPlace, Problem, EXPECT_DATA_LITERAL};
+use crate::messages::{self, Found, NullPlace, Problem, Problems, EXPECT_DATA_LITERAL};
 use crate::node::{
     escape_pointer_segment, Entry, Node, NodeValue, Position, ScalarStyle, Span, Unrepresentable,
 };
@@ -325,7 +325,7 @@ impl de::Error for Error {
 /// State shared by one decode.
 pub(crate) struct Ctx {
     /// Unknown and removed keys, recorded while decoding continues.
-    sink: RefCell<Vec<Problem>>,
+    sink: RefCell<Problems>,
     /// Pointers of keys already reported as removed.
     removed: HashSet<String>,
     /// How many lists and mappings a self-describing visitor has taken
@@ -344,7 +344,7 @@ impl Ctx {
                 .iter()
                 .map(|problem| problem.pointer.clone())
                 .collect(),
-            sink: RefCell::new(removed),
+            sink: RefCell::new(removed.into()),
             buffered: Cell::new(0),
             claims: RefCell::new(Vec::new()),
         }
@@ -354,7 +354,7 @@ impl Ctx {
         self.claims.take()
     }
 
-    pub(crate) fn into_problems(self) -> Vec<Problem> {
+    pub(crate) fn into_problems(self) -> Problems {
         self.sink.into_inner()
     }
 
@@ -2044,7 +2044,32 @@ impl<'de> de::VariantAccess<'de> for ShapeVariant<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::safe_expected;
+    use serde::Deserialize;
+
+    use super::{safe_expected, Ctx, NodeDe, Place};
+    use crate::document::MAXIMUM_DIAGNOSTICS_PER_FILE;
+
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Listener {
+        bind: String,
+    }
+
+    #[test]
+    fn cfg_diag_5_unknown_keys_past_the_bound_are_not_kept() {
+        let unknown: String = (0..2000)
+            .map(|index| format!("unknown{index}: 1\n"))
+            .collect();
+        let built = crate::structure::build(&format!("bind: a\n{unknown}"), None);
+        let root = built.root.expect("the document has a root");
+        let ctx = Ctx::new(Vec::new());
+        let de = NodeDe::new(&root, String::new(), None, None, Place::Root, &ctx);
+        Listener::deserialize(de).expect("unknown keys are recorded, not returned");
+        assert_eq!(
+            ctx.into_problems().kept().len(),
+            MAXIMUM_DIAGNOSTICS_PER_FILE
+        );
+    }
 
     #[test]
     fn cfg_sec_3_expected_text_from_serde_and_the_reader_is_shown() {

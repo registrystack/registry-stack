@@ -896,3 +896,86 @@ fn cfg_diag_5_the_count_of_problems_not_shown_is_exact() {
         .iter()
         .all(|d| d.code == "yaml.duplicate-key"));
 }
+
+#[test]
+fn cfg_diag_5_the_problems_shown_are_the_first_by_position_not_the_first_found() {
+    // A list used as a key is refused where it starts, which the reader
+    // learns only when the list ends, after every problem inside it.
+    let items = MAXIMUM_DIAGNOSTICS_PER_FILE + 50;
+    let key: String = (0..items)
+        .map(|index| {
+            if index == 0 {
+                "? - 0123\n"
+            } else {
+                "  - 0123\n"
+            }
+        })
+        .collect();
+    let report = scan_refusal(&format!("{key}: a\n"));
+    let diagnostics = report.diagnostics();
+    assert_eq!(diagnostics.len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+    assert_eq!(diagnostics[0].code, "yaml.non-string-key");
+    assert_eq!(diagnostics[0].path, "");
+    assert_eq!(at(&diagnostics[0]), (1, 3));
+    let inside = &diagnostics[1..MAXIMUM_DIAGNOSTICS_PER_FILE];
+    for (index, diagnostic) in inside.iter().enumerate() {
+        assert_eq!(diagnostic.code, "yaml.ambiguous-number");
+        assert_eq!(diagnostic.path, format!("/{index}"));
+        assert_eq!(at(diagnostic), (index + 1, 5));
+    }
+    let rest = &diagnostics[MAXIMUM_DIAGNOSTICS_PER_FILE];
+    assert_eq!(rest.code, "config.too-many-problems");
+    assert_eq!(rest.message, "51 more problems in this file are not shown");
+}
+
+#[test]
+fn cfg_diag_5_problems_of_two_kinds_past_the_bound_keep_their_order() {
+    // A number that is not a plain decimal is a structural problem; one too
+    // large to read is kept apart until the read knows it will not decode.
+    let pairs = MAXIMUM_DIAGNOSTICS_PER_FILE / 2 + 30;
+    let report = scan_refusal(&"- 0123\n- 99999999999999999999999\n".repeat(pairs));
+    let diagnostics = report.diagnostics();
+    assert_eq!(diagnostics.len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+    for (index, diagnostic) in diagnostics[..MAXIMUM_DIAGNOSTICS_PER_FILE]
+        .iter()
+        .enumerate()
+    {
+        let code = if index % 2 == 0 {
+            "yaml.ambiguous-number"
+        } else {
+            "config.out-of-range"
+        };
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.path, format!("/{index}"));
+        assert_eq!(at(diagnostic), (index + 1, 3));
+    }
+    let rest = &diagnostics[MAXIMUM_DIAGNOSTICS_PER_FILE];
+    assert_eq!(rest.message, "60 more problems in this file are not shown");
+}
+
+#[test]
+fn cfg_diag_5_an_envelope_member_refused_past_the_bound_is_not_refused_twice() {
+    // The envelope check does not repeat a refusal in other words, whether
+    // the refusal is shown or only counted.
+    let repeats = "name: a\n".repeat(MAXIMUM_DIAGNOSTICS_PER_FILE + 21);
+    let report = read_refusal(&format!("apiVersion: {API_VERSION}\n{repeats}kind: 0123\n"));
+    let diagnostics = report.diagnostics();
+    assert!(diagnostics[..MAXIMUM_DIAGNOSTICS_PER_FILE]
+        .iter()
+        .all(|d| d.code == "yaml.duplicate-key"));
+    let rest = &diagnostics[MAXIMUM_DIAGNOSTICS_PER_FILE];
+    assert_eq!(rest.message, "21 more problems in this file are not shown");
+
+    // A `kind` given twice is refused at its repeat, and the first one is
+    // not matched against the expected formats.
+    let report = read_refusal(&format!(
+        "kind: Other\napiVersion: {API_VERSION}\n{repeats}kind: ExampleRuntimeConfig\n"
+    ));
+    let diagnostics = report.diagnostics();
+    assert_eq!(diagnostics.len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+    assert!(diagnostics[..MAXIMUM_DIAGNOSTICS_PER_FILE]
+        .iter()
+        .all(|d| d.code == "yaml.duplicate-key"));
+    let rest = &diagnostics[MAXIMUM_DIAGNOSTICS_PER_FILE];
+    assert_eq!(rest.message, "21 more problems in this file are not shown");
+}

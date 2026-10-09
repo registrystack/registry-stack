@@ -6,6 +6,8 @@
 //! environment (CFG-SEC-3): the builders below take no value text.
 
 use crate::diagnostic::{clean, Diagnostic, Related, Severity, Source};
+use crate::document::MAXIMUM_DIAGNOSTICS_PER_FILE;
+use crate::envelope;
 use crate::node::Position;
 
 /// One reader code and what it means.
@@ -141,6 +143,159 @@ impl Problem {
                 })
                 .collect(),
         }
+    }
+}
+
+/// The problems found while reading one file, bounded as they are found.
+///
+/// A report shows the first [`MAXIMUM_DIAGNOSTICS_PER_FILE`] problems by
+/// position and counts the rest (CFG-DIAG-5), so those are the only ones
+/// kept. A file can hold far more problems than that, each with a pointer as
+/// long as the keys above it: keeping them all until the report is written
+/// would let one small file hold memory out of all proportion to its size.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Problems {
+    /// At most [`MAXIMUM_DIAGNOSTICS_PER_FILE`], in the order found, so that
+    /// problems at one position are reported in that order.
+    kept: Vec<Problem>,
+    /// How many problems were found past the bound.
+    counted: usize,
+    /// Whether any counted problem is an error.
+    counted_an_error: bool,
+    /// The envelope members a counted problem was reported at, which is all
+    /// a later stage asks about a problem it cannot see (see
+    /// [`Problems::reported_at`]).
+    counted_at: Vec<&'static str>,
+}
+
+impl Problems {
+    /// The longest pointer [`Problems::reported_at`] is asked about.
+    const LONGEST_REMEMBERED_POINTER: usize = {
+        let mut longest = 0;
+        let mut index = 0;
+        while index < envelope::MEMBER_POINTERS.len() {
+            if envelope::MEMBER_POINTERS[index].len() > longest {
+                longest = envelope::MEMBER_POINTERS[index].len();
+            }
+            index += 1;
+        }
+        longest
+    };
+
+    /// Whether a problem at `position` is worth building: it would be kept,
+    /// or its pointer, at least `pointer_length` long, may be one a later
+    /// stage asks about. Otherwise [`Problems::count`] records it without
+    /// its pointer.
+    pub fn wants(&self, position: Option<Position>, pointer_length: usize) -> bool {
+        pointer_length <= Self::LONGEST_REMEMBERED_POINTER
+            || self.kept.len() < MAXIMUM_DIAGNOSTICS_PER_FILE
+            || self
+                .last()
+                .is_some_and(|last| position < self.kept[last].position)
+    }
+
+    /// Keep the problem when it is among the first by position, and count
+    /// it, or the problem it displaces, otherwise.
+    pub fn push(&mut self, problem: Problem) {
+        if self.kept.len() < MAXIMUM_DIAGNOSTICS_PER_FILE {
+            self.kept.push(problem);
+            return;
+        }
+        let counted = match self.last() {
+            Some(last) if problem.position < self.kept[last].position => {
+                let displaced = self.kept.remove(last);
+                self.kept.push(problem);
+                displaced
+            }
+            _ => problem,
+        };
+        self.count(counted.severity);
+        if let Some(member) = envelope::MEMBER_POINTERS
+            .into_iter()
+            .find(|member| *member == counted.pointer)
+        {
+            if !self.counted_at.contains(&member) {
+                self.counted_at.push(member);
+            }
+        }
+    }
+
+    /// Count a problem past the bound that was never built (see
+    /// [`Problems::wants`]).
+    pub fn count(&mut self, severity: Severity) {
+        self.counted += 1;
+        self.counted_an_error |= severity == Severity::Error;
+    }
+
+    /// The kept problem a report would show last: of those at the last
+    /// position, the one found last.
+    fn last(&self) -> Option<usize> {
+        self.kept
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, problem)| problem.position)
+            .map(|(index, _)| index)
+    }
+
+    /// Move every problem of `other` here, after the ones already found.
+    pub fn append(&mut self, other: &mut Problems) {
+        let other = std::mem::take(other);
+        self.extend(other.kept);
+        self.counted += other.counted;
+        self.counted_an_error |= other.counted_an_error;
+        for member in other.counted_at {
+            if !self.counted_at.contains(&member) {
+                self.counted_at.push(member);
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.kept.is_empty()
+    }
+
+    /// Whether a problem was found at one of the envelope's members
+    /// ([`envelope::MEMBER_POINTERS`]), kept or counted.
+    pub fn reported_at(&self, pointer: &str) -> bool {
+        debug_assert!(
+            envelope::MEMBER_POINTERS.contains(&pointer),
+            "counted problems are remembered at the envelope's members only"
+        );
+        self.counted_at.contains(&pointer)
+            || self.kept.iter().any(|problem| problem.pointer == pointer)
+    }
+
+    #[cfg(test)]
+    pub fn kept(&self) -> &[Problem] {
+        &self.kept
+    }
+
+    /// The kept problems, for a caller that rewords one. A problem's
+    /// position decides whether it is kept, so it must not change.
+    pub fn kept_mut(&mut self) -> &mut [Problem] {
+        &mut self.kept
+    }
+
+    /// The kept problems, how many more were counted, and whether any of
+    /// those is an error.
+    pub fn into_parts(self) -> (Vec<Problem>, usize, bool) {
+        (self.kept, self.counted, self.counted_an_error)
+    }
+}
+
+impl Extend<Problem> for Problems {
+    fn extend<I: IntoIterator<Item = Problem>>(&mut self, problems: I) {
+        for problem in problems {
+            self.push(problem);
+        }
+    }
+}
+
+impl From<Vec<Problem>> for Problems {
+    fn from(problems: Vec<Problem>) -> Problems {
+        let mut bounded = Problems::default();
+        bounded.extend(problems);
+        bounded
     }
 }
 
@@ -1133,4 +1288,91 @@ fn edit_distance(left: &str, right: &str) -> usize {
         }
     }
     table[left.len() * width + right.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{developer_misuse, Problem, Problems};
+    use crate::diagnostic::Severity;
+    use crate::document::MAXIMUM_DIAGNOSTICS_PER_FILE;
+    use crate::node::Position;
+
+    /// Problems at positions that repeat and are not in order, each named by
+    /// the order it was found in.
+    fn found(count: usize) -> Vec<Problem> {
+        let mut state: usize = 7;
+        (0..count)
+            .map(|index| {
+                state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+                let position = (!state.is_multiple_of(5)).then_some(Position {
+                    line: 1 + (state >> 8) % 40,
+                    column: 1 + (state >> 4) % 3,
+                });
+                Problem::error(
+                    "config.invalid-value",
+                    format!("/{index}"),
+                    position,
+                    developer_misuse("a test problem"),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cfg_diag_5_the_problems_kept_are_the_ones_a_sort_of_all_of_them_shows() {
+        for count in [0, 1, 99, 100, 101, 150, 1000] {
+            let all = found(count);
+            let mut sorted = all.clone();
+            sorted.sort_by_key(|problem| problem.position);
+            sorted.truncate(MAXIMUM_DIAGNOSTICS_PER_FILE);
+
+            // Found in one stream, and found in two that are then joined.
+            let single = Problems::from(all.clone());
+            let (first, second) = all.split_at(count / 3);
+            let mut joined = Problems::from(first.to_vec());
+            joined.append(&mut Problems::from(second.to_vec()));
+
+            for problems in [single, joined] {
+                let (mut kept, counted, counted_an_error) = problems.into_parts();
+                kept.sort_by_key(|problem| problem.position);
+                let pointers = |problems: &[Problem]| -> Vec<String> {
+                    problems
+                        .iter()
+                        .map(|problem| problem.pointer.clone())
+                        .collect()
+                };
+                assert_eq!(pointers(&kept), pointers(&sorted), "{count} problems");
+                assert_eq!(counted, count.saturating_sub(MAXIMUM_DIAGNOSTICS_PER_FILE));
+                assert_eq!(counted_an_error, counted > 0);
+            }
+        }
+    }
+
+    #[test]
+    fn cfg_diag_5_a_problem_past_the_bound_is_remembered_at_an_envelope_member() {
+        let mut problems = Problems::from(found(MAXIMUM_DIAGNOSTICS_PER_FILE));
+        assert!(!problems.reported_at("/kind"));
+        problems.push(Problem::error(
+            "config.invalid-value",
+            "/kind",
+            Some(Position {
+                line: 900,
+                column: 1,
+            }),
+            developer_misuse("a test problem"),
+        ));
+        assert_eq!(problems.kept().len(), MAXIMUM_DIAGNOSTICS_PER_FILE);
+        assert!(problems.reported_at("/kind"));
+        assert!(!problems.reported_at("/apiVersion"));
+    }
+
+    #[test]
+    fn cfg_diag_5_warnings_past_the_bound_are_not_counted_as_errors() {
+        let mut problems = Problems::from(found(MAXIMUM_DIAGNOSTICS_PER_FILE));
+        problems.count(Severity::Warning);
+        assert_eq!(problems.clone().into_parts().1, 1);
+        assert!(!problems.clone().into_parts().2);
+        problems.count(Severity::Error);
+        assert!(problems.into_parts().2);
+    }
 }

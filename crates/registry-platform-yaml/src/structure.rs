@@ -8,7 +8,8 @@ use std::collections::HashMap;
 
 use saphyr_parser::{Event, Marker, Parser, ScalarStyle as EventStyle, ScanError};
 
-use crate::messages::{self, Problem};
+use crate::diagnostic::Severity;
+use crate::messages::{self, Problem, Problems};
 use crate::node::{
     escape_pointer_segment, Entry, Node, NodeValue, Position, ScalarStyle, Span, Text,
 };
@@ -64,11 +65,11 @@ pub(crate) struct Built {
     /// `None` when the stream holds no document, or when a fatal problem
     /// stopped the build.
     pub root: Option<Node>,
-    pub problems: Vec<Problem>,
+    pub problems: Problems,
     /// Unquoted numbers no tree value can represent, kept in the tree as
     /// their text (see `Node::unrepresentable`). A read that does not decode
     /// reports these with `problems`.
-    pub unrepresentable: Vec<Problem>,
+    pub unrepresentable: Problems,
 }
 
 impl Built {
@@ -76,8 +77,8 @@ impl Built {
     pub(crate) fn refused(problem: Problem) -> Built {
         Built {
             root: None,
-            problems: vec![problem],
-            unrepresentable: Vec::new(),
+            problems: vec![problem].into(),
+            unrepresentable: Problems::default(),
         }
     }
 }
@@ -86,8 +87,8 @@ pub(crate) fn build(text: &str, hook: Option<&mut dyn ScalarHook>) -> Built {
     let mut builder = Builder {
         text,
         stack: Vec::new(),
-        problems: Vec::new(),
-        unrepresentable: Vec::new(),
+        problems: Problems::default(),
+        unrepresentable: Problems::default(),
         hook,
         root: None,
         documents: 0,
@@ -131,8 +132,8 @@ enum MapState {
 struct Builder<'t, 'h> {
     text: &'t str,
     stack: Vec<Frame>,
-    problems: Vec<Problem>,
-    unrepresentable: Vec<Problem>,
+    problems: Problems,
+    unrepresentable: Problems,
     hook: Option<&'h mut dyn ScalarHook>,
     root: Option<Node>,
     documents: usize,
@@ -389,9 +390,13 @@ impl Builder<'_, '_> {
     }
 
     fn problem_here(&mut self, code: &str, at: Position, text: messages::Text) {
-        let pointer = self.pointer();
-        self.problems
-            .push(Problem::error(code, pointer, Some(at), text));
+        if self.problems.wants(Some(at), self.pointer_length()) {
+            let pointer = self.pointer();
+            self.problems
+                .push(Problem::error(code, pointer, Some(at), text));
+        } else {
+            self.problems.count(Severity::Error);
+        }
     }
 
     fn expects_key(&self) -> bool {
@@ -428,6 +433,27 @@ impl Builder<'_, '_> {
             }
         }
         pointer
+    }
+
+    /// At least the length of [`Builder::pointer`], found without building
+    /// it: a problem that is only counted must not cost the length of the
+    /// keys above it.
+    fn pointer_length(&self) -> usize {
+        self.stack
+            .iter()
+            .map(|frame| match frame {
+                Frame::Sequence { .. } => 2,
+                Frame::Mapping {
+                    state:
+                        MapState::ExpectValue {
+                            segment: Some(segment),
+                            ..
+                        },
+                    ..
+                } => 1 + segment.len(),
+                Frame::Mapping { .. } => 0,
+            })
+            .sum()
     }
 
     /// The mapping keys on the way to the node being built now.
@@ -582,12 +608,19 @@ impl Builder<'_, '_> {
                 // Kept as its text: decoding refuses it in the words of the
                 // member that reads it, such as "quote it" in a text member.
                 let integer = resolved == Resolved::IntegerOutOfRange;
-                self.unrepresentable.push(Problem::error(
-                    "config.out-of-range",
-                    self.pointer(),
-                    Some(span.start),
-                    messages::literal_out_of_range(integer),
-                ));
+                if self
+                    .unrepresentable
+                    .wants(Some(span.start), self.pointer_length())
+                {
+                    self.unrepresentable.push(Problem::error(
+                        "config.out-of-range",
+                        self.pointer(),
+                        Some(span.start),
+                        messages::literal_out_of_range(integer),
+                    ));
+                } else {
+                    self.unrepresentable.count(Severity::Error);
+                }
                 NodeValue::String(Text {
                     text: value,
                     style,
@@ -952,5 +985,38 @@ fn refusal_problem(refusal: Refusal, pointer: String, at: Position) -> Problem {
         message: refusal.message,
         action: refusal.suggested_action,
         related: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build;
+    use crate::document::MAXIMUM_DIAGNOSTICS_PER_FILE;
+
+    /// One long key holding a list of `items` copies of `item`: every
+    /// problem in the list carries the key in its pointer. The key is
+    /// written with `?`, since YAML bounds the length of any other.
+    fn list_under_a_long_key(item: &str, items: usize) -> String {
+        let key = "k".repeat(4096);
+        let list = format!("  - {item}\n").repeat(items);
+        format!("? {key}\n:\n{list}")
+    }
+
+    #[test]
+    fn cfg_diag_5_structural_problems_past_the_bound_are_not_kept() {
+        let built = build(&list_under_a_long_key("0123", 2000), None);
+        assert_eq!(built.problems.kept().len(), MAXIMUM_DIAGNOSTICS_PER_FILE);
+    }
+
+    #[test]
+    fn cfg_diag_5_numbers_too_large_to_read_past_the_bound_are_not_kept() {
+        let built = build(
+            &list_under_a_long_key("99999999999999999999999", 2000),
+            None,
+        );
+        assert_eq!(
+            built.unrepresentable.kept().len(),
+            MAXIMUM_DIAGNOSTICS_PER_FILE
+        );
     }
 }

@@ -19,7 +19,7 @@ use serde::de::DeserializeOwned;
 use crate::de::{Ctx, NodeDe, Place};
 use crate::diagnostic::{Diagnostic, Report, Severity};
 use crate::envelope::{self, Envelope, Expect, RemovedKey};
-use crate::messages::{self, Problem};
+use crate::messages::{self, Problem, Problems};
 use crate::node::{escape_pointer_segment, unescape_segment, Node, NodeValue, Position, Span};
 use crate::structure::{self, Built, ScalarHook};
 
@@ -66,9 +66,9 @@ impl<'h> Reader<'h> {
     /// structural problem. `None` is an empty or comment-only stream.
     pub fn scan(self, bytes: &[u8]) -> Result<Option<Node>, Report> {
         let file = self.file;
-        let built = tree(bytes, self.hook);
+        let mut built = tree(bytes, self.hook);
         let mut problems = built.problems;
-        problems.extend(built.unrepresentable);
+        problems.append(&mut built.unrepresentable);
         if problems.is_empty() {
             return Ok(built.root);
         }
@@ -85,7 +85,7 @@ impl<'h> Reader<'h> {
             return Ok(document);
         }
         let artifact = Some(document.envelope.kind.as_str());
-        Err(report(&file, artifact, removed, document.warnings))
+        Err(report(&file, artifact, removed.into(), document.warnings))
     }
 
     /// Read a document and decode it into `T`. Every removed and unknown key
@@ -108,7 +108,7 @@ impl<'h> Reader<'h> {
         bytes: &[u8],
         expect: &Expect<'_>,
         decoding: bool,
-    ) -> Result<(Document, Vec<Problem>, Vec<Problem>), Report> {
+    ) -> Result<(Document, Vec<Problem>, Problems), Report> {
         let file = self.file;
         let Built {
             root,
@@ -130,10 +130,7 @@ impl<'h> Reader<'h> {
             ));
         }
         let outcome = envelope::check(root.as_ref(), expect, |pointer| {
-            problems
-                .iter()
-                .chain(&unrepresentable)
-                .any(|problem| problem.pointer == pointer)
+            problems.reported_at(pointer) || unrepresentable.reported_at(pointer)
         });
         let artifact: Option<String> = outcome
             .matched
@@ -239,7 +236,7 @@ impl Document {
 
     /// Decode the whole document into `T`.
     pub fn decode<T: DeserializeOwned>(&self) -> Result<T, Report> {
-        self.decode_with("", Vec::new(), Vec::new())
+        self.decode_with("", Vec::new(), Problems::default())
     }
 
     /// Decode the node at an RFC 6901 pointer into `T`. Diagnostics carry
@@ -252,16 +249,16 @@ impl Document {
                 None,
                 messages::developer_misuse("the pointer names no node of this document"),
             );
-            return Err(self.report(vec![problem]));
+            return Err(self.report(vec![problem].into()));
         }
-        self.decode_with(pointer, Vec::new(), Vec::new())
+        self.decode_with(pointer, Vec::new(), Problems::default())
     }
 
     fn decode_with<T: DeserializeOwned>(
         &self,
         pointer: &str,
         removed: Vec<Problem>,
-        unrepresentable: Vec<Problem>,
+        mut unrepresentable: Problems,
     ) -> Result<T, Report> {
         let (node, key_span) = self
             .root
@@ -291,17 +288,12 @@ impl Document {
             // member that read it, or out of range where none did.
             drop(result);
             let claims = ctx.take_claims();
-            let problems = unrepresentable
-                .into_iter()
-                .map(|problem| {
-                    claims
-                        .iter()
-                        .find(|claim| claim.pointer == problem.pointer)
-                        .cloned()
-                        .unwrap_or(problem)
-                })
-                .collect();
-            return Err(self.report(problems));
+            for problem in unrepresentable.kept_mut() {
+                if let Some(claim) = claims.iter().find(|claim| claim.pointer == problem.pointer) {
+                    *problem = claim.clone();
+                }
+            }
+            return Err(self.report(unrepresentable));
         }
         let mut problems = Vec::new();
         let value = match result {
@@ -312,14 +304,14 @@ impl Document {
             }
         };
         let mut found = ctx.into_problems();
-        found.append(&mut problems);
+        found.extend(problems);
         match value {
             Some(value) if found.is_empty() => Ok(value),
             _ => Err(self.report(found)),
         }
     }
 
-    fn report(&self, problems: Vec<Problem>) -> Report {
+    fn report(&self, problems: Problems) -> Report {
         report(
             &self.file,
             Some(self.envelope.kind.as_str()),
@@ -450,10 +442,11 @@ fn position_after(text: &str) -> Position {
 fn report(
     file: &str,
     artifact: Option<&str>,
-    problems: Vec<Problem>,
+    problems: Problems,
     warnings: Vec<Diagnostic>,
 ) -> Report {
-    let mut diagnostics: Vec<Diagnostic> = problems
+    let (kept, counted, counted_an_error) = problems.into_parts();
+    let mut diagnostics: Vec<Diagnostic> = kept
         .into_iter()
         .map(|problem| problem.into_diagnostic(file, artifact))
         .collect();
@@ -461,16 +454,17 @@ fn report(
     let mut report = Report::new(diagnostics);
     report.sort_by_position();
     let hidden = report.split_off(MAXIMUM_DIAGNOSTICS_PER_FILE);
-    if !hidden.is_empty() {
+    if !hidden.is_empty() || counted > 0 {
         let mut problem = Problem::error(
             "config.too-many-problems",
             "",
             None,
-            messages::too_many_problems(hidden.len()),
+            messages::too_many_problems(hidden.len() + counted),
         );
-        if hidden
-            .iter()
-            .all(|diagnostic| diagnostic.severity == Severity::Warning)
+        if !counted_an_error
+            && hidden
+                .iter()
+                .all(|diagnostic| diagnostic.severity == Severity::Warning)
         {
             problem.severity = Severity::Warning;
         }
