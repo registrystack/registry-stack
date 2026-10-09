@@ -196,6 +196,9 @@ struct TestArgs {
     /// Include the runtime's structured value-free evaluation trace.
     #[arg(long)]
     explain: bool,
+    /// Refuse a run whose fixture files carry any reader warning.
+    #[arg(long)]
+    deny_warnings: bool,
     #[arg(long, hide = true)]
     evidence_bin: Option<PathBuf>,
 }
@@ -496,6 +499,7 @@ fn run_entry() -> ExitCode {
                     junit,
                     command: "test",
                     explain: args.explain,
+                    deny_warnings: args.deny_warnings,
                 }))
                 .map_err(|error| authored::project_refusal(error, &project, &project)),
                 "evidence.test.failed",

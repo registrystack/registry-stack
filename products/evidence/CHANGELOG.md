@@ -103,6 +103,17 @@
   longer `answers[].id`; a file that keeps `id` under an answer is refused as
   `config.removed-key`. Migration: rename the key in every
   `questions/*.yaml`.
+- BREAKING: `evidencectl test` and `evidencectl fixtures run` read every
+  `fixtures/*.yaml` of an editable project through the shared configuration
+  reader before compiling or running anything, so a file the reader refuses
+  is reported with its own code, pointer, line, and column
+  (`yaml.anchor`, `config.wrong-kind`, `yaml.too-large`, and the rest) and no
+  `evidence` step runs against it; the generic `evidencectl.fixtures.failed`
+  stays for a run whose cases fail. A `fixtures/*.yaml` file that no question
+  references and that is not an `EvidenceFixture` is now refused. Migration:
+  move such a file out of `fixtures/`, or give it the fixture envelope.
+  `evidencectl test --deny-warnings` and `evidencectl fixtures run
+  --deny-warnings` are new and make a reader warning exit 1.
 
 ### Evidence runtime
 

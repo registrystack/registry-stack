@@ -1537,3 +1537,142 @@ fn junit_reports_a_failure_before_any_fixture_is_evaluated() {
         "the human summary stays on stderr"
     );
 }
+
+const FIXTURE_FILE: &str = "fixtures/record-status.yaml";
+
+/// A scaffolded SQLite starter whose fixture file `mutate` rewrites, run
+/// through `evidencectl test --format json` against the stub `evidence`.
+/// Returns the output, the parsed report, and the argv log the stub wrote.
+fn test_with_mutated_fixture(
+    mutate: impl FnOnce(String) -> Vec<u8>,
+    extra_args: &[&str],
+) -> (Output, serde_json::Value, Vec<Vec<String>>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = dir.path().join("sqlite-project");
+    let created = evidencectl()
+        .args(["new"])
+        .arg(&project)
+        .args(["--transport", "sqlite-extract", "--profile", "local"])
+        .output()
+        .expect("create SQLite starter");
+    assert!(created.status.success(), "{}", stderr_of(&created));
+    let fixture = project.join(FIXTURE_FILE);
+    let original = fs::read_to_string(&fixture).expect("read the starter fixture");
+    fs::write(&fixture, mutate(original)).expect("write the mutated fixture");
+
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+    let output = evidencectl()
+        .args(["--format", "json", "test"])
+        .arg(&project)
+        .args(extra_args)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "13")
+        .output()
+        .expect("run evidencectl test");
+    let report = serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
+    (output, report, read_argv_log(&argv_log))
+}
+
+/// The reader refused the fixture file: its own diagnostic is the report's,
+/// and no delegated step ran.
+fn assert_reader_refusal(
+    output: &Output,
+    report: &serde_json::Value,
+    invocations: &[Vec<String>],
+    code: &str,
+    pointer: &str,
+    canary: &str,
+) {
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    let diagnostic = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == code)
+        .unwrap_or_else(|| panic!("no {code} diagnostic in {report}"));
+    assert_eq!(diagnostic["path"], pointer, "{report}");
+    assert!(
+        diagnostic["source"]["file"]
+            .as_str()
+            .is_some_and(|file| file.ends_with(FIXTURE_FILE)),
+        "{report}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic["code"] != "evidencectl.fixtures.failed"),
+        "a file the reader refuses is not a failed case: {report}"
+    );
+    assert!(
+        !stdout_of(output).contains(canary) && !stderr_of(output).contains(canary),
+        "a diagnostic names where and what, never the value"
+    );
+    assert!(
+        invocations
+            .iter()
+            .all(|argv| argv[0] != "bundle-check" && argv[0] != "bundle-evaluate"),
+        "no delegated step runs after the reader refused: {invocations:?}"
+    );
+}
+
+#[test]
+fn a_fixture_with_a_syntax_the_reader_refuses_reports_the_readers_diagnostic() {
+    let (output, report, invocations) = test_with_mutated_fixture(
+        |original| format!("{original}\nconformanceAnchor: &CANARYANCHOR value\n").into_bytes(),
+        &[],
+    );
+    assert_reader_refusal(
+        &output,
+        &report,
+        &invocations,
+        "yaml.anchor",
+        "/conformanceAnchor",
+        "CANARYANCHOR",
+    );
+    let diagnostic = &report["diagnostics"][0];
+    assert!(diagnostic["source"]["line"].as_u64().is_some_and(|l| l > 1));
+    assert!(diagnostic["source"]["column"].as_u64().is_some());
+    assert!(diagnostic["suggestedAction"].as_str().is_some(), "{report}");
+}
+
+#[test]
+fn a_fixture_of_the_wrong_kind_reports_the_envelope_refusal() {
+    let (output, report, invocations) = test_with_mutated_fixture(
+        |original| {
+            original
+                .replace("kind: EvidenceFixture", "kind: CanaryKind")
+                .into_bytes()
+        },
+        &[],
+    );
+    assert_reader_refusal(
+        &output,
+        &report,
+        &invocations,
+        "config.wrong-kind",
+        "/kind",
+        "CanaryKind",
+    );
+}
+
+#[test]
+fn a_fixture_over_the_size_cap_reports_too_large_before_any_step() {
+    let (output, report, invocations) = test_with_mutated_fixture(
+        |original| {
+            let mut bytes = original.into_bytes();
+            bytes.extend(std::iter::repeat_n(b'#', 3 * 1024 * 1024));
+            bytes
+        },
+        &[],
+    );
+    assert_reader_refusal(&output, &report, &invocations, "yaml.too-large", "", "####");
+}
+
+#[test]
+fn deny_warnings_is_accepted_and_a_clean_project_still_passes() {
+    let (output, report, _) = test_with_mutated_fixture(String::into_bytes, &["--deny-warnings"]);
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    assert_eq!(report["passed"], true, "{report}");
+}

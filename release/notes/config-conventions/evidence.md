@@ -803,3 +803,25 @@ and `--out`, and `evidencectl jwks` refuses `--out`. Migration: pass the
 project directory as the positional argument (`evidencectl fixtures run
 <dir>`), and write `--output-dir`, `--public-output`, and `--output` for the
 `keygen` and `jwks` flags.
+
+### BREAKING: a fixture file the reader refuses stops `evidencectl test`
+
+`evidencectl test` and `evidencectl fixtures run` read every
+`fixtures/*.yaml` of an editable project, and every fixture a deployment
+project's bundle references, through the configuration reader before they
+compile the project or run an `evidence` step. A file the reader refuses is
+reported with the reader's own code, pointer, line, column, and fix, as
+report diagnostics that repeat no value from the file, and the run ends with
+exit 1 before any delegated step. The generic `evidencectl.fixtures.failed`
+remains for a run whose cases fail.
+
+Before, a refused fixture surfaced as `evidencectl.fixtures.failed` with the
+reader's refusal only as text in `check.stderr`, and an editable project's
+`fixtures/*.yaml` that no question referenced was never read. Migration: a
+`fixtures/*.yaml` file that is not an `EvidenceFixture` document (a stray
+notes or draft file) is now refused as `config.missing-envelope` or
+`config.wrong-kind`; move it out of `fixtures/`, or give it the fixture
+`apiVersion` and `kind`.
+
+`evidencectl test` and `evidencectl fixtures run` take `--deny-warnings`
+(additive): a warning the reader reports for a fixture file then exits 1.
