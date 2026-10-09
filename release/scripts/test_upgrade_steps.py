@@ -109,6 +109,28 @@ class EditKindsTest(unittest.TestCase):
         self.assertEqual(once, {"steps": [{"kind": "transactional-sql"},
                                           {"kind": "chunked_backfill"}]})
 
+    def test_replace_value_refuses_a_path_whose_value_differs_unless_optional(self) -> None:
+        document = {"api": {"version": "registry.example/v1alpha1-found"}}
+        fields = {"op": "replace-value", "path": "api.version",
+                  "from": "registry.example/v1alpha1", "to": "registry.example/v1"}
+        with self.assertRaisesRegex(Error, r"sample-step.*api\.version.*no value to replace") as raised:
+            upgrade_steps.apply_edit(document, fields, "sample-step")
+        self.assertNotIn("v1alpha1-found", str(raised.exception))
+        self.assertEqual(
+            upgrade_steps.apply_edit(document, {**fields, "optional": True}, "sample-step"),
+            {"api": {"version": "registry.example/v1alpha1-found"}})
+
+    def test_a_replace_value_that_differs_in_a_file_names_step_file_and_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "runtime.yaml"
+            file.write_text("mode: other\n", encoding="utf-8")
+            catalog = {"sample-step": {
+                "id": "sample-step", "kind": "edit", "file": "runtime.yaml", "root": "project",
+                "edits": [{"op": "replace-value", "path": "mode", "from": "old", "to": "new"}]}}
+            with self.assertRaisesRegex(Error, r"sample-step.*runtime\.yaml.*mode") as raised:
+                upgrade_steps.apply_steps(["sample-step"], {"project": Path(directory)}, catalog)
+            self.assertNotIn("other", str(raised.exception))
+
     def test_an_edit_that_matches_nothing_is_refused_unless_optional(self) -> None:
         for fields in (
             {"op": "delete", "path": "version"},

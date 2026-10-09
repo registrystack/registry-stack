@@ -199,6 +199,7 @@ def _apply(document: Any, edit: dict[str, Any]) -> Any:
     holders = [container for container in containers if last in container]
     if not holders and not optional:
         raise _nothing(edit["path"])
+    replaced = 0
     for holder in holders:
         if op == "delete":
             del holder[last]
@@ -217,6 +218,9 @@ def _apply(document: Any, edit: dict[str, Any]) -> Any:
             holder.update(items)
         elif op == "replace-value" and holder[last] == edit["from"]:
             holder[last] = edit["to"]
+            replaced += 1
+    if op == "replace-value" and holders and not replaced and not optional:
+        raise _EditFailure(f"path '{edit['path']}' holds no value to replace")
     return document
 
 
