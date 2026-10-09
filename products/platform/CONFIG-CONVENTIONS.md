@@ -886,7 +886,11 @@ check command reports the deprecated version as a warning.
 
 **CFG-CHANGE-5 (MUST). New formats and new keys comply from their first
 commit.** The exceptions register only shrinks, except for protocol
-constants, external formats, and exchange models.
+constants, external formats, and exchange models. A `stable-move` entry may also be added when its
+location is in the schema of a format that the base commit's registry listed
+without a schema: that is the format's first published schema, and it records
+respellings a correct file already wrote, which no earlier register could
+locate.
 
 ## Exceptions
 
