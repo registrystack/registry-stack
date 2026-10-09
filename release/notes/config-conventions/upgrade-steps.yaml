@@ -228,6 +228,7 @@ steps:
   kind: edit
   file: tests/journeys.yaml
   edits:
+  - {op: expand-aliases}
   - {op: envelope, apiVersion: id.registrystack.org/formats/breg/journeys/v1, kind: BRegJourneys}
   - {op: rename, path: journeys.*.steps.*.request.operation, to: type}
   - {op: rename, path: journeys.*.steps.*.request.items.*.operation, to: type, optional: true}

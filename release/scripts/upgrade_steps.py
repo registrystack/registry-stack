@@ -20,11 +20,21 @@ A catalog entry is one of three kinds:
            the code. The entry names the file and the diagnostic the new
            reader gives, and applying it fails.
 
-The edits are envelope, set, delete, rename, and replace-value. A path is
+The edits are expand-aliases, envelope, set, delete, rename, and
+replace-value. A path is
 dot separated; `*` matches every member of a mapping or item of a list, and
 `**` matches any depth. An edit that matches nothing is refused unless it is
 marked `optional`, so a step written for a shape the file does not have
 fails visibly instead of passing.
+
+`expand-aliases` takes no members and must be a step's first edit. The new
+readers refuse an anchor and an alias, so a file that uses them cannot be
+loaded; a step that lists the edit loads the file with aliases allowed and
+writes each alias out as a full, independent copy of its anchored value, with
+no anchor mark left. A scalar in a copy keeps its source text, tag, and style.
+Comments are not kept: the engine rewrites the whole file, and a comment never
+survives it. A merge key and a duplicate key stay refused. A step without the
+edit refuses an anchor as before.
 """
 
 from __future__ import annotations
@@ -51,6 +61,7 @@ STEP_ID = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 MARKER = re.compile(r"^<!-- upgrade: (.*) -->$")
 
 EDIT_MEMBERS = {
+    "expand-aliases": (set(), set()),
     "envelope": ({"apiVersion", "kind"}, set()),
     "set": ({"path", "value"}, {"ifAbsent", "optional"}),
     "delete": ({"path"}, {"optional"}),
@@ -147,19 +158,27 @@ def _source_loader() -> Any:
     return SourceLoader
 
 
-def _refuse_forms_the_readers_refuse(text: str, path: Path) -> None:
-    """Refuse an anchor, alias, merge key, or duplicate key, naming the line."""
+def _refuse_forms_the_readers_refuse(text: str, path: Path, allow_aliases: bool = False) -> None:
+    """Refuse an anchor, alias, merge key, or duplicate key, naming the line.
+
+    A step that expands aliases passes allow_aliases; the other refusals stand.
+    """
 
     yaml = _yaml()
-    for event in yaml.parse(text, Loader=yaml.SafeLoader):
-        line = event.start_mark.line + 1
-        if isinstance(event, yaml.AliasEvent):
-            raise StepError(f"{path}:{line}: an anchor or alias; write the shared value out in full")
-        if getattr(event, "anchor", None):
-            raise StepError(f"{path}:{line}: an anchor or alias; write the shared value out in full")
+    if not allow_aliases:
+        for event in yaml.parse(text, Loader=yaml.SafeLoader):
+            line = event.start_mark.line + 1
+            if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None):
+                raise StepError(f"{path}:{line}: an anchor or alias; write the shared value out in full")
     stack = [yaml.compose(text, Loader=yaml.SafeLoader)]
+    # An aliased node is visited once per use, so a repeated key is still found
+    # in each copy; track visited ids to keep nested aliases from re-walking.
+    visited: set[int] = set()
     while stack:
         node = stack.pop()
+        if id(node) in visited:
+            continue
+        visited.add(id(node))
         if isinstance(node, yaml.SequenceNode):
             stack.extend(node.value)
         elif isinstance(node, yaml.MappingNode):
@@ -175,12 +194,12 @@ def _refuse_forms_the_readers_refuse(text: str, path: Path) -> None:
                 stack.extend((key, value))
 
 
-def load_document(path: Path) -> Any:
+def load_document(path: Path, expand_aliases: bool = False) -> Any:
     suffix = path.suffix.lower()
     try:
         text = path.read_text(encoding="utf-8")
         if suffix in (".yaml", ".yml"):
-            _refuse_forms_the_readers_refuse(text, path)
+            _refuse_forms_the_readers_refuse(text, path, allow_aliases=expand_aliases)
             document = _yaml().load(text, Loader=_source_loader())
         elif suffix == ".json":
             document = json.loads(text)
@@ -255,9 +274,21 @@ def _nothing(path: str) -> _EditFailure:
     return _EditFailure(f"path '{path}' matches nothing")
 
 
+def _unshared(node: Any) -> Any:
+    """A copy of a loaded document in which no container is shared."""
+
+    if isinstance(node, dict):
+        return {key: _unshared(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_unshared(item) for item in node]
+    return node
+
+
 def _apply(document: Any, edit: dict[str, Any]) -> Any:
     op = edit["op"]
     optional = bool(edit.get("optional"))
+    if op == "expand-aliases":
+        return _unshared(document)
     if op == "envelope":
         if not isinstance(document, dict):
             raise _EditFailure("the document is not a mapping")
@@ -317,6 +348,13 @@ def validate_edit(edit: Any, step_id: str) -> None:
         raise StepError(f"{step_id}: edit '{op}' takes no {', '.join(extra)}")
 
 
+def validate_step_edits(step_id: str, edits: list[Any]) -> None:
+    for position, edit in enumerate(edits):
+        validate_edit(edit, step_id)
+        if edit["op"] == "expand-aliases" and position != 0:
+            raise StepError(f"{step_id}: edit 'expand-aliases' must be the first edit")
+
+
 def apply_edit(document: Any, edit: dict[str, Any], step_id: str) -> Any:
     """Apply one edit to a parsed document; return the edited document."""
 
@@ -359,8 +397,7 @@ def _validate_step(entry: Any) -> dict[str, Any]:
     if kind == "edit":
         if not isinstance(entry["edits"], list) or not entry["edits"]:
             raise StepError(f"{step_id}: a step needs a non-empty list of edits")
-        for edit in entry["edits"]:
-            validate_edit(edit, step_id)
+        validate_step_edits(step_id, entry["edits"])
     return {**entry, "root": root}
 
 
@@ -417,7 +454,8 @@ def apply_steps(ids: list[str], roots: dict[str, Path],
 
 
 def _edit_file(step_id: str, step: dict[str, Any], file: Path) -> None:
-    document = load_document(file)
+    expands = step["edits"][0]["op"] == "expand-aliases"
+    document = load_document(file, expand_aliases=expands)
     for edit in step["edits"]:
         validate_edit(edit, step_id)
         try:

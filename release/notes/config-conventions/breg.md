@@ -1078,7 +1078,7 @@ edits:
 | `recordRef`, `etagRef`, `proposalVersionRef`, `effectDigestRef` in a request | `recordCapture`, `etagCapture`, `proposalVersionCapture`, `effectDigestCapture` |
 | `conditionRef` in a request precondition | `conditionCapture` |
 | `{recordRef: <capture>}` inside request data | `{recordCapture: <capture>}` |
-| a YAML anchor (`&claims`) and its aliases (`*claims`) | the shared mapping written out in full at every step that used the alias |
+| a YAML anchor (`&claims`) and its aliases (`*claims`) | the shared mapping written out in full at every step that used the alias; the `breg-journeys` step does this |
 
 A file with the old header and no `kind` is refused with
 `config.missing-envelope`, whose fix names the new header. Once the header

@@ -153,6 +153,89 @@ class EditKindsTest(unittest.TestCase):
             self.apply({"a": 1, "b": 2}, op="rename", path="a", to="b")
 
 
+class ExpandAliasesTest(unittest.TestCase):
+    """`expand-aliases` writes every alias out in full, when a step asks."""
+
+    STEP = {"id": "sample-expand", "product": "breg", "kind": "edit", "file": "file.yaml"}
+
+    def run_step(self, text: str, *edits: dict[str, Any]) -> str:
+        step = {**self.STEP, "edits": list(edits), "root": "project"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "file.yaml"
+            path.write_text(text, encoding="utf-8")
+            upgrade_steps.apply_steps(
+                ["sample-expand"], {"project": Path(directory)}, {"sample-expand": step})
+            return path.read_text(encoding="utf-8")
+
+    def expand(self, text: str) -> str:
+        return self.run_step(text, {"op": "expand-aliases"})
+
+    def assert_expanded(self, text: str) -> str:
+        import yaml
+        result = self.expand(text)
+        self.assertNotRegex(result, r"(^|[ :\[,-])[&*][A-Za-z]")
+        self.assertEqual(yaml.safe_load(result), yaml.safe_load(text))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "file.yaml"
+            path.write_text(result, encoding="utf-8")
+            upgrade_steps.load_document(path)
+        return result
+
+    def test_a_mapping_anchor_is_written_out_at_every_alias(self) -> None:
+        result = self.assert_expanded("a: &c {x: 1, y: two}\nb: *c\nc:\n  d: *c\n")
+        self.assertEqual(result.count("x: 1"), 3)
+
+    def test_a_sequence_anchor_is_expanded(self) -> None:
+        result = self.assert_expanded("a: &l [1, 2]\nb: *l\n")
+        self.assertEqual(result.count("- 2"), 2)
+
+    def test_a_scalar_anchor_is_expanded(self) -> None:
+        self.assertIn("b: shared\n", self.assert_expanded("a: &s shared\nb: *s\n"))
+
+    def test_nested_aliases_are_expanded(self) -> None:
+        result = self.assert_expanded("a: &inner {k: v}\nb: &outer {i: *inner}\nc: *outer\n")
+        self.assertEqual(result.count("k: v"), 3)
+
+    def test_a_quoted_scalar_in_an_expanded_value_keeps_its_source(self) -> None:
+        result = self.assert_expanded("a: &c {q: 'yes', n: 010, t: \"10:30\"}\nb: *c\n")
+        self.assertEqual(result.count("q: 'yes'"), 2)
+        self.assertEqual(result.count("n: 010"), 2)
+        self.assertEqual(result.count('t: "10:30"'), 2)
+
+    def test_comments_are_not_kept(self) -> None:
+        result = self.expand("# header\na: &c {x: 1}  # note\nb: *c\n")
+        self.assertNotIn("#", result)
+
+    def test_later_edits_see_independent_copies(self) -> None:
+        import yaml
+        result = self.run_step(
+            "a: &c {x: 1}\nb: *c\n",
+            {"op": "expand-aliases"},
+            {"op": "set", "path": "b.x", "value": 2})
+        self.assertEqual(yaml.safe_load(result), {"a": {"x": 1}, "b": {"x": 2}})
+
+    def test_a_step_without_the_op_still_refuses_an_anchor(self) -> None:
+        with self.assertRaisesRegex(Error, r"file\.yaml:1.*anchor or alias"):
+            self.run_step("a: &c {x: 1}\nb: *c\n", {"op": "set", "path": "z", "value": 1})
+
+    def test_a_merge_key_and_a_duplicate_key_stay_refused(self) -> None:
+        with self.assertRaisesRegex(Error, r"merge key"):
+            self.expand("base: &b {x: 1}\nuse:\n  <<: *b\n")
+        with self.assertRaisesRegex(Error, r"duplicate key"):
+            self.expand("a: 1\na: 2\n")
+
+    def test_the_journeys_step_expands_the_aliases_the_previous_starter_wrote(self) -> None:
+        step = upgrade_steps.load_catalog()["breg-journeys"]
+        self.assertEqual(step["edits"][0], {"op": "expand-aliases"})
+
+    def test_the_op_must_come_first_and_takes_no_members(self) -> None:
+        with self.assertRaisesRegex(Error, "first"):
+            upgrade_steps.validate_step_edits(
+                "s", [{"op": "set", "path": "a", "value": 1}, {"op": "expand-aliases"}])
+        with self.assertRaisesRegex(Error, "takes no"):
+            upgrade_steps.validate_edit({"op": "expand-aliases", "path": "a"}, "s")
+
+
 class DocumentFilesTest(unittest.TestCase):
     def test_a_yaml_document_round_trips_without_anchors(self) -> None:
         shared = {"principal": "p"}

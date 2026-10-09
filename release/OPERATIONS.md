@@ -1277,14 +1277,22 @@ The steps have one source of truth,
 `release/notes/config-conventions/upgrade-steps.yaml`, read by
 `release/scripts/upgrade_steps.py`. A step is one of three kinds:
 
-- `edit`: a list of `envelope`, `set`, `delete`, `rename` and
-  `replace-value` operations on the files matching its `file` glob under its
+- `edit`: a list of `expand-aliases`, `envelope`, `set`, `delete`, `rename`
+  and `replace-value` operations on the files matching its `file` glob under its
   `root` (`project`, `target` or `runtime`). Applying it is deterministic.
   A scalar no edit names keeps its text and quoting (`yes`, `10:30`, `010`,
   an unquoted timestamp), and comments in an edited file are lost. The engine
   refuses a YAML file holding a duplicate key, a merge key, an anchor or an
   alias, naming the file and the line, because the readers of the new release
   refuse them too.
+  `expand-aliases` takes no members and must be a step's first edit. A step
+  that lists it loads the file with anchors and aliases allowed, then writes
+  every alias out as a full, independent copy of its anchored value with no
+  anchor mark left, before its other edits run. A scalar in a copy keeps its
+  source text and quoting, and comments are lost as for any edit. A merge key
+  and a duplicate key are still refused, and a step without the edit still
+  refuses an anchor or an alias. Only a file the previous release's starter or
+  example wrote with an anchor needs it (the `breg-journeys` step).
 - `manual`: an instruction the engine reports and never applies, for edits
   that need an operator decision or a recomputed value.
 - `unknown`: a breaking item whose edit is not yet derived. The engine refuses
