@@ -179,15 +179,31 @@ Every pull request should make the review path clear:
   that names what would be lost, and the operator decides the next step. Cover
   the refusal with a test. Every retained domain and operational state table
   requires row preservation, and the release upgrade rehearsal checks it for
-  the products it rehearses.
+  the products it rehearses. The only v0.39-to-v0.40 exceptions are the
+  reviewed retirement of BReg ingestion runs that stored no verified creator
+  and Messaging schema version 3's retirement of pseudonym-scoped idempotency
+  records. The exact predecessor-shape tests
+  `the_upgrade_discards_runs_stored_without_a_verified_creator` and
+  `version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller`
+  prove those losses and the state each migration must preserve. These
+  exceptions permit no other row loss or later-release exception.
 - Before 1.0, a release reads only the state its immediate predecessor wrote,
-  and an operator upgrades one release at a time. Keep everything the previous
-  release could have written to a database, package, configuration file, or
-  local state readable. Do not add code that reads, upgrades, or refuses by
-  name the state of an older release, and remove such code in the release
-  after the one that needed it, with a BREAKING entry in the product
-  changelog. `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py`
-  names the predecessor, and
+  and an operator upgrades one release at a time. The only v0.39-to-v0.40
+  exceptions to full predecessor readability are the two row-loss transitions
+  above, BReg's retained but unreachable legacy idempotency tombstones without
+  their held responses and receipts, and Scheduling migration 12's retained
+  predecessor claims and history without a caller owner. The tests
+  `real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones_spent_rows`
+  and
+  `claim_owner_migration_keeps_existing_claims_and_refuses_a_partial_owner`
+  prove the two retained-row transitions. Outside those four transitions, keep
+  everything the previous release could have written to a database, package,
+  configuration file, or local state readable. Do not add code that reads,
+  upgrades, or refuses by name the state of an older release, and remove such
+  code in the release after the one that needed it, with a BREAKING entry in
+  the product changelog.
+  `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
+  predecessor, and
   [`api-stability.mdx`](docs/site/src/content/docs/reference/api-stability.mdx)
   states the promise for operators.
 

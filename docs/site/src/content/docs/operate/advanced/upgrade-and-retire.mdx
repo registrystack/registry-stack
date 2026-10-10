@@ -1,6 +1,6 @@
 ---
 title: Upgrade and retire a deployment
-description: Upgrade Base Registry Engine, Registry Casework, Evidence, Registry Scheduling, and their clients to a new release in a safe order, and retire a deployment without losing the records it must leave behind.
+description: Upgrade Base Registry Engine, Registry Casework, Evidence, Registry Scheduling, Registry Messaging, and their clients to a new release in a safe order, and retire a deployment without losing the records it must leave behind.
 status: current
 owner: registry-docs
 source_repos:
@@ -12,9 +12,9 @@ standards_referenced: []
 ---
 
 Use this runbook when you move a deployment of Base Registry Engine (BReg), Registry Casework,
-Evidence, and Registry Scheduling to a new release, or take it out of service. Each product's own guide carries its upgrade
-command; this page gives the order across products, the version rule that order enforces, and
-what each product must leave behind when it is retired.
+Evidence, Registry Scheduling, and Registry Messaging to a new release, or take it out of service.
+Each product's own guide carries its upgrade command; this page gives the order across products,
+the version rule that order enforces, and what each product must leave behind when it is retired.
 
 ## Run one release everywhere
 
@@ -51,22 +51,28 @@ for each release before you start the next. See
 ## Upgrade in this order
 
 BReg goes first, because Casework and Evidence both read it. Casework follows because it refuses
-a BReg of another release. Evidence and its wallet-facing front end come next. Scheduling reads
-none of them and upgrades on its own, before the clients. Each release's notes list, per product,
-the project and runtime-file changes its upgrade needs; make them in the step that upgrades that
-product. Rehearse the whole
-sequence on a restored copy first, as
+a BReg of another release. Evidence and its wallet-facing front end come next. Scheduling and
+Messaging read none of them and upgrade independently, before the clients. Read the target
+release's notes for every deployed product. Complete their required drains and outcome
+reconciliation before that product's apply, and make the listed project and runtime-file changes
+in its upgrade step. Rehearse the whole sequence on a restored copy first, as
 [Run a disaster-recovery drill](../back-up-and-restore/#run-a-disaster-recovery-drill) describes.
 
-1. **Back up every database.** Take the BReg and Casework `pg_dump`s, and the Scheduling one
-   when it runs, and copy those products' packages and runtime files. These backups are the only way back; see
-   [Roll back](#roll-back).
+1. **Back up every database.** Take the BReg and Casework `pg_dump`s, and the Scheduling and
+   Messaging ones when they run. Copy those products' packages and runtime files, and keep the
+   previous release's binaries. These backups are the only way back; see [Roll back](#roll-back).
 2. **Stop `evidence-oid4vci`**, when it runs. Its outstanding offers end here; see
    [Operational limits](../../../configure/evidence-oid4vci/#operational-limits).
 3. **Pause and drain Evidence traffic** for every question that reads BReg, or pause the whole
    instance when you cannot drain one question at a time. Keep the previous Evidence candidate.
-4. **Upgrade BReg.** Make the project and runtime-file changes the release notes list, rebuild
-   the deployed project with no model change using the new `bregctl test` and `bregctl package
+4. **Upgrade BReg.** For v0.39.0 to v0.40.0, finish or cancel active ingestion runs before applying,
+   and preserve any run metadata and receipts you need: the upgrade deletes every stored run,
+   chunk, and receipt. Record committed counts and resolve uncertain chunk outcomes before that
+   deletion. An earlier checkpoint cannot resume afterward; import only the uncommitted input
+   under a fresh checkpoint, as
+   [Load a governed entity through an import window](../../breg-data/#load-a-governed-entity-through-an-import-window)
+   describes. Make the project and runtime-file changes the release notes list, rebuild the
+   deployed project with no model change using the new `bregctl test` and `bregctl package
    --test-receipt FILE --output BUILD` (a receipt from the earlier release is not accepted), point
    `package.root` at `BUILD/package` (and `package.expectedDigest`, when set, at the package
    digest it reports, `packageDigest` with `--format json`), check it against the live database with
@@ -98,7 +104,17 @@ sequence on a restored copy first, as
    destination bindings until its hook deliveries drain. Run `schedulingctl plan --runtime-config
    FILE` and `schedulingctl apply --runtime-config FILE` with the new binary, then start
    `scheduling`; `schedulingctl status --runtime-config FILE` confirms what the database activated.
-8. **Resume traffic, and upgrade clients.** Roll out every application that embeds a Registry
+8. **Upgrade Messaging**, when it runs. Stop new submissions, let in-flight senders finish
+   retrying submissions whose answers they lost, then stop every earlier `messaging` runtime. Give
+   graceful shutdown time to finish sends already in flight. After every old runtime stops, refresh
+   the Messaging `pg_dump`; this stopped, pre-apply snapshot includes the old runtime's final sends
+   and is the rollback backup. Run `messagingctl plan --runtime-config FILE`, then `messagingctl
+   apply --runtime-config FILE` with the new binary. Confirm the activation with `messagingctl status
+   --runtime-config FILE`, start the new `messaging`, and require `GET /ready` to answer `200` before
+   you resume submissions. For v0.39.0 to v0.40.0, migration 3 discards earlier idempotency records,
+   so finish this drain before `apply`; a later retry under an earlier key can send its message
+   twice.
+9. **Resume traffic, and upgrade clients.** Roll out every application that embeds a Registry
    Stack client at the same release before it calls the upgraded runtimes.
 
 {/* Evidence: docs/site/src/content/docs/operate/casework.mdx, "Upgrade Casework and BReg in
@@ -108,9 +124,14 @@ sequence on a restored copy first, as
     docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx, "Coordinate a breaking
     update"; crates/registry-casework/src/store.rs, StoreError::AttemptPending;
     crates/registry-breg/src/migration.rs, MigrationError::ResumeRolesDiffer;
+    crates/registry-breg/src/ingestion_store.rs, install() and cancel_run();
+    docs/site/src/content/docs/operate/breg-data.mdx, committedItems and the uncommitted lines;
     crates/registry-bregctl/src/apply_lifecycle.rs, load_active_predecessor_package();
     crates/registry-bregctl/src/lib.rs, PlanSuccessReport, StatusSuccessReport, and
     lifecycle_failure() for ApplyLifecycleError::CurrentPackage;
+    docs/site/src/content/docs/operate/messaging.mdx, "Plan, apply, inspect, and serve";
+    crates/registry-messaging/migrations/0003_idempotency_caller.sql;
+    crates/registry-messaging/src/runtime.rs, shutdown_signal() and Listeners::serve_until();
     release/notes/v0.36.0.md, "Upgrade Scheduling, Relay, and Discovery from v0.35.0"
     (apply before start, hook drain);
     release/scripts/rehearse-upgrade.py rehearses each product alone, not this composition. */}
@@ -137,6 +158,22 @@ its release does not know. To return to the previous release:
   [Restore Registry Casework](../back-up-and-restore/#restore-registry-casework) for what that
   restore loses.
 - **Evidence.** Restart the previous binary with the previous bundle and runtime file.
+- **Messaging.** Stop the upgraded runtime. Before you restore, use the upgraded
+  `messagingctl messages list` and `messages show`, the audit archive, and provider records to
+  record every message effect after the stopped, pre-apply snapshot. Preserve the upgraded database
+  unchanged, and restore that snapshot into a separate fresh database. Point a copy of the previous
+  runtime file at the restored database, and keep both runtimes stopped while you inspect the copy
+  with the previous `messagingctl messages list` and `messages show`. Its supported actions can retry `failed`, settle `unknown`, or cancel
+  `queued` messages; apply one only when the restored dispatch state is eligible and external
+  evidence supports the decision. Start the previous binary with the previous package and runtime
+  file only after every post-snapshot effect is represented in the restored state. Never point the
+  previous runtime at the migrated database: readiness refuses a schema version the binary does
+  not know. Do not start it to inspect restored state: its worker immediately resumes queued
+  dispatch. A new post-snapshot submission is absent from the restore, and a message sent after the
+  snapshot can return as `queued`, which the previous tools cannot mark `submitted`. When either
+  gap exists, keep the upgraded database and fix forward: use the upgraded `messages list`,
+  `messages show`, and eligible operator actions with provider evidence to reconcile its state,
+  correct its package or runtime configuration, and restart a runtime that supports that database.
 - **Scheduling.** Restore the pre-apply database backup, then run the previous binary, package,
   and runtime file copied in step 1. Always restore first: an earlier Scheduling runtime may not
   detect a schema newer than its own.
@@ -150,6 +187,11 @@ every product that must match it: Casework refuses a BReg that went back without
     original's claim; v0.35.0 ships instance-claim adopt);
     crates/registry-platform-audit/src/writer.rs, single-writer lock;
     crates/registry-evidence/src/cli.rs, Check (--runtime-config, --without-audit-lock);
+    crates/registry-messaging/src/store.rs, ready();
+    crates/registry-messaging/tests/postgres_migrate.rs,
+    a_store_carrying_an_unknown_version_is_not_ready;
+    crates/registry-messaging/src/runtime.rs, Assembled and Listeners::serve_until();
+    crates/registry-messagingctl/src/lib.rs, Command and eligible_dispatch();
     crates/registry-breg/src/migration.rs, MigrationError::PackageBinding;
     crates/registry-evidence/src/config.rs, deny_unknown_fields on the runtime file. */}
 
@@ -159,6 +201,49 @@ Retire the products in the reverse of the upgrade order, so nothing still runnin
 you have removed. Retiring a product leaves records behind: signatures others still verify,
 decisions others may challenge, and audit entries your retention policy holds. None of the products
 has a decommission command, so the steps below are yours.
+
+### Retire Messaging
+
+Messaging has no runtime or database dependency on another Registry Stack product, so retire it
+independently after its callers stop submitting.
+
+1. Stop routing new submissions to Messaging. Let the runtime drain queued work. Run
+   `messagingctl messages list --runtime-config FILE --status unknown --limit 500`,
+   [settle each returned message](../../messaging/#settle-an-unknown-outcome) from the provider's
+   record, and repeat until the filtered list is empty. Settling `not-sent` queues another send,
+   so drain that work too. When the metrics listener runs, require the `pending`, `leased`, and
+   `unknown` `messaging_dispatch_jobs` gauges all to reach zero. Without metrics, check that
+   `messages list --status queued`, `--status sending`, and `--status unknown`, each with
+   `--runtime-config FILE`, return empty.
+2. For each callback provider, keep its callback endpoint live through the provider's documented
+   reporting cutoff. Compare the provider's records with `messagingctl messages show`, and record
+   any submitted messages whose delivery report remains unresolved at the cutoff. Empty dispatch
+   gauges prove sends have finished, not that every delivery report has arrived. SMTP has no
+   delivery receipts, so its messages remain `submitted`.
+3. Stop `messaging` gracefully. It claims no more messages and finishes sends already in flight;
+   give it time to finish before the service manager kills it.
+4. After final provider reconciliation and shutdown, remove callback registrations for this
+   deployment and revoke its dedicated outbound provider credentials. When a credential is shared
+   with a system that remains live, rebind that system to another credential before revoking the
+   retired one.
+5. Ship the active file and every sealed segment for both `audit.path` and its `messagingctl`
+   sibling. Keep the secret named by `audit.hashKeyRef` securely through the final archive sweep
+   and for as long as your policy requires correlation with known callers or recipients. Destroying
+   that secret permanently
+   prevents recomputing their audit pseudonyms.
+6. Messaging has no export command. After the process stops, take a final `pg_dump`, and retain
+   the active package, runtime file, and both matching binaries, `messaging` and `messagingctl`,
+   while your policy holds the records. A full dump also holds recipient contacts, rendered parts,
+   and submission receipts; a stopped dump never runs the retention sweep. At each remaining
+   payload or receipt expiry, restore the dump into an isolated database with the runtime stopped.
+   Point a copy of the retained runtime file at that database, keeping its retention values.
+   Preview and apply the matching `messagingctl retention erase-expired --runtime-config FILE
+   --before TIMESTAMP`, using an RFC 3339 cutoff no later than the operator host's or database's
+   clock. Make a replacement dump and destroy the superseded copies. See
+   [Erase expired data on demand](../../messaging/#erase-expired-data-on-demand) for the preview
+   and `--apply` procedure. Ship the tool's active audit file and every sealed segment after each
+   applied sweep. Repeat only through the remaining payload and receipt periods; the content-free
+   archive can then remain for the applicable record period.
 
 ### Retire Scheduling
 
@@ -222,6 +307,14 @@ in this sequence.
 {/* Evidence: crates/registry-evidence/src/config.rs, maximumAssertionValiditySeconds bounds;
     docs/site/src/content/docs/reference/api-stability.mdx, JWKS served by the process;
     products/evidence/OPERATOR-CONTRACT.md, predecessor key retention and audit master retention;
+    docs/site/src/content/docs/operate/messaging.mdx, "Operate messages", "Watch metrics", and
+    "Plan, apply, inspect, and serve"; crates/registry-messagingctl/src/lib.rs, Command,
+    ListArgs, and EraseExpiredArgs; crates/registry-messaging/src/retention.rs, TERMINAL and
+    erase_expired(); crates/registry-messaging/src/receipts.rs, ReceiptOutcome;
+    crates/registry-messaging/src/audit.rs, principal_pseudonym() and recipient_reference();
+    crates/registry-platform-audit/src/writer.rs, for_process();
+    products/messaging/RUNTIME-CONFIG.md, Providers and Provider callbacks;
+    crates/registry-messaging/src/runtime.rs, Listeners::serve_until();
     crates/registry-caseworkctl/src/lib.rs, no export command, RetentionCommand, AttemptCommand;
     crates/registry-schedulingctl/src/lib.rs, no export command; crates/registry-scheduling/src/runtime.rs,
     outbox workers spawned by the runtime; products/scheduling/README.md, the schedulingctl audit file;
