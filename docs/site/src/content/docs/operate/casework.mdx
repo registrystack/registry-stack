@@ -585,9 +585,11 @@ refuses the response entry after the commit, apply exits `3` with
 the audit destination and record the activation `status` names in your audit trail.
 
 `casework migrate` and `caseworkctl db migrate` no longer migrate. Each still parses only to exit
-`2` and name `caseworkctl plan` then `caseworkctl apply`. The first `apply` on a database an
-earlier release migrated adopts it: it migrates to the current schema and records the first
-activation.
+`2` and name `caseworkctl plan` then `caseworkctl apply`. The first `apply` on a fresh database
+installs the current schema and records the first activation. For a release upgrade, follow
+[Upgrade and retire](../advanced/upgrade-and-retire/). The v0.39.0-to-v0.40.0 step requires a new
+database; v0.40.0 supports no in-place upgrade from v0.39.0. From v0.40.0 onward, upgrade one
+release at a time and apply the next release to the database its immediate predecessor wrote.
 
 Run `plan` and `apply` before the first `serve`, before rolling out a release that adds
 migrations, and whenever the package or a source binding changes.
@@ -599,19 +601,19 @@ migrations, and whenever the package or a source binding changes.
     a_refused_audit_request_leaves_the_database_untouched(),
     a_concurrent_apply_waits_for_the_migration_lock(),
     the_same_operator_reference_in_two_activations_is_stored_under_different_hashes(), and
-    moving_to_split_and_rotating_the_runtime_role_reapply_the_active_package(). */}
+    moving_to_split_and_rotating_the_runtime_role_reapply_the_active_package(); CONTRIBUTING.md,
+    schema migration and predecessor-readability policy. */}
 
-The unified review schema arrives in a single migration that replaces the experimental hosted-item
-tables of Casework 0.32.0 and earlier. No data is carried over, and this release has
-no in-place legacy conversion command. When those tables are empty, `apply` replaces them. When
-any of them still holds a row, such as an in-flight hosted item or a retained accountability
-record, `apply` refuses before applying anything and writes nothing, and `plan` reports the same
-refusal. The refusal begins `the Casework database
-holds hosted work that schema migration 15 would drop`, then names each table that holds rows with
-its row count, such as `casework_hosted_items (1 row)`.
+Schema migration 15 protects the experimental hosted-item tables Casework 0.32.0 and earlier wrote.
+If `plan` or `apply` inspects a legacy database where any of those tables still holds a row, such as
+an in-flight hosted item or a retained accountability record, it refuses before applying anything
+and writes nothing. The refusal begins `the Casework database holds hosted work that schema
+migration 15 would drop`, then names each table that holds rows with its row count, such as
+`casework_hosted_items (1 row)`. The migration can replace empty legacy tables, but that behavior is
+not a supported v0.40.0 upgrade path.
 
-Keep that database with the release that wrote it long enough to export the work it holds, take
-the normal backup, and provision a fresh Casework database for the unified review package. Do not
+Keep the legacy database with the release that wrote it long enough to export the work it holds,
+take the normal backup, and provision a fresh Casework database for the v0.40.0 package. Do not
 delete rows, edit the migration ledger, or run migration SQL by hand to get past the refusal. For a
 disposable local session, use `caseworkctl dev stop PROJECT --remove` and start it again.
 
@@ -624,19 +626,18 @@ disposable local session, use `caseworkctl dev stop PROJECT --remove` and start 
     crates/registry-casework/migrations/0015_unified_reviews.sql;
     crates/registry-casework/tests/postgres_transactions.rs,
     migration_refuses_to_drop_retained_hosted_work_and_writes_nothing() and
-    migration_replaces_empty_hosted_tables_through_the_ledger_head(). */}
+    migration_replaces_empty_hosted_tables_through_the_ledger_head(); CONTRIBUTING.md,
+    schema migration and predecessor-readability policy. */}
 
-Upgrading from Casework 0.33.0 or earlier supersedes the open work items of BReg sources once.
-That release also computed the source binding generation from the credential, transport, and
-presentation fields, so the generation stored with each work item differs from the one this release
-computes, and each source's next observation opens fresh work items beside the superseded ones.
-Claims, drafts, and pending attempts on the superseded items do not carry over. Finish or settle
-source-backed work before upgrading.
+If you run Casework 0.33.0 or earlier, upgrade one release at a time using each target release's
+notes. Do not rely on the current runtime to supersede or convert its stored work. At the
+v0.39.0-to-v0.40.0 step, finish or settle source-backed work before the move, then apply the rebuilt
+package to a new database. Stored work items, claims, drafts, and pending attempts do not carry
+into that database. Follow [Upgrade and retire](../advanced/upgrade-and-retire/) for the full
+product order and recovery boundary.
 
-{/* Evidence: crates/registry-casework-breg/src/config.rs, binding_generation();
-    crates/registry-casework/src/runtime.rs, serve_from_path();
-    crates/registry-casework/tests/postgres_transactions.rs,
-    returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence(). */}
+{/* Evidence: CONTRIBUTING.md, schema migration and predecessor-readability policy;
+    release/notes/config-conventions/casework.md; release/notes/config-conventions/stack.md. */}
 
 ### Run plan, apply, and status from the image
 
@@ -1066,7 +1067,8 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | A secret reference is refused | The named file must be a regular file owned by the running user, mode `0400` or `0600`, one link, no symbolic link, non-empty, and free of NUL bytes. |
 | Startup refuses the database or `doctor` stops at it | Check the resolved URL's user and database name, TLS on the server, and the trusted root reference when the server uses a private authority. |
 | Startup refuses the OIDC issuer | Check discovery reachability from the Casework host, or the pinned JWKS document's keys and their distinct `kid` values. |
-| `no Casework package has been applied to this database`, or `the Casework database schema is not current` | No package was applied, or an earlier release migrated the database. Run `caseworkctl plan` then `caseworkctl apply`, as [Plan, apply, and serve](#plan-apply-and-serve) describes, then start the runtime. |
+| `no Casework package has been applied to this database` | On a fresh database, run `caseworkctl plan` then `caseworkctl apply`, as [Plan, apply, and serve](#plan-apply-and-serve) describes, then start the runtime. |
+| `the Casework database schema is not current` | The database belongs to another release or still has pending migrations. Do not assume it can be upgraded in place. v0.40.0 requires a new database when moving from v0.39.0; later releases read only their immediate predecessor's database. Follow [Upgrade and retire](../advanced/upgrade-and-retire/) for the applicable path. |
 | `the active Casework package in this database is X, not the configured package Y`, or `the binding of source ID differs from the one the active package was applied with` | The package or a source binding changed since the last apply. Plan and apply the configured package, then restart. |
 | `the package deployment binding differs from the runtime configuration at identity.databaseId` | The runtime file points at a database that recorded another `databaseId`. Point `database.runtimeUrlRef` and `database.migrationUrlRef` at the database this file belongs to, or correct `identity.databaseId`. |
 | `the active Casework package was applied split-role, but the runtime credential can now write the activation ledger` | The runtime role gained ledger authority, a trigger no Casework migration creates is attached to a Casework table, or the credential now names the migration role. Run the `REASSIGN OWNED`, `REVOKE`, or `DROP TRIGGER` statement the message names and do what it says next, or remove the extra grant or membership, then run `caseworkctl apply` to reissue the grants or record the single-role mode. |

@@ -8,7 +8,7 @@ promised formats to stable. The Messaging `CHANGELOG.md` points here.
 This fragment describes the final v0.40.0 interface. An `Old` or `Before`
 example is a v0.39.0 file, request, response, or value to replace. Reauthor the
 files, build the package with v0.40.0, and apply it to a new database;
-v0.40.0 does not read a v0.39.0 Messaging database in place.
+v0.40.0 supports no in-place upgrade of a v0.39.0 Messaging database.
 The database clean break does not require a new `audit.path`: the runtime
 appends to the configured audit file, and retained v0.39.0 records keep their
 old spellings.
