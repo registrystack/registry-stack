@@ -3,10 +3,12 @@
 //! through the platform audit writer. These tests are the DoD's serve-mode
 //! acceptance coverage.
 
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const API_KEY: &str = "test-key-0123456789abcdef0123456789abcdef";
@@ -52,11 +54,18 @@ fn physical_tempdir() -> (tempfile::TempDir, PathBuf) {
 }
 
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("bind for port discovery")
-        .local_addr()
-        .expect("local addr")
-        .port()
+    // Port discovery releases the socket before the child binds it. Keep every
+    // issued port distinct so parallel fixtures cannot reach each other's server.
+    static ISSUED_PORTS: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
+    let mut issued = ISSUED_PORTS.lock().expect("issued test ports");
+    for _ in 0..1024 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind for port discovery");
+        let port = listener.local_addr().expect("local addr").port();
+        if issued.insert(port) {
+            return port;
+        }
+    }
+    panic!("could not allocate a distinct fixture port");
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -145,11 +154,17 @@ fn spawn_server(runtime_path: &Path, current_dir: Option<&Path>, stdout: Stdio) 
         .expect("port from runtime");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
+        if let Some(status) = child.try_wait().expect("server status") {
+            panic!("server exited early with {status}");
+        }
         if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
             let _ = stream
                 .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
             let mut buf = [0u8; 256];
             if stream.read(&mut buf).is_ok_and(|n| n > 0) {
+                if let Some(status) = child.try_wait().expect("server status") {
+                    panic!("server exited before becoming healthy with {status}");
+                }
                 return Server {
                     child,
                     port,
@@ -160,9 +175,6 @@ fn spawn_server(runtime_path: &Path, current_dir: Option<&Path>, stdout: Stdio) 
         if Instant::now() > deadline {
             let _ = child.kill();
             panic!("server did not become healthy in 30s");
-        }
-        if let Ok(Some(status)) = child.try_wait() {
-            panic!("server exited early with {status}");
         }
         std::thread::sleep(Duration::from_millis(100));
     }
