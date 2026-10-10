@@ -2510,7 +2510,7 @@ mod tests {
             let (exit, diagnostic) = classify_failure(CommandKind::Operational, &error);
             assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
             assert_eq!(diagnostic["code"], code);
-            assert_eq!(diagnostic["artifact"], "dev_session");
+            assert_eq!(diagnostic["artifact"], "dev-session");
             let path = diagnostic["path"].as_str().unwrap();
             assert!(path.starts_with("dev-clients.yaml:/") || path.starts_with("casework.yaml:/"));
             assert!(!diagnostic["suggestedAction"].as_str().unwrap().is_empty());
