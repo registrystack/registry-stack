@@ -289,8 +289,11 @@ authority or the existence of an original-key receipt.
 One deployment admits one active flow definition; retained runs keep their
 original definitions. The list endpoint returns the latest caller-owned runs
 with a default `limit` of 20 and a maximum of 100, without pagination. Use the
-authenticated HTTP API for application integration; `@registrystack/client`
-does not yet export a Coordinator client.
+maintained Rust Coordinator client for application integration. An explicitly
+assembled local `@registrystack/client` candidate with `--include-coordinator`
+also exports the Node `coordinator` namespace for start, status, inspection and
+original-receipt reconciliation. Published package selection is unchanged; see
+[`crates/CLIENTS.md`](../../crates/CLIENTS.md) for candidate assembly and checks.
 
 Settled terminal history remains inspectable with its recorded binding identity
 after an old connection is retired. This requires no runnable/uncertain job or
