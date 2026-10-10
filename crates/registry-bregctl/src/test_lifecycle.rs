@@ -959,39 +959,39 @@ bindings:
         let mut cases = vec![
             (
                 SchemaTestRuntimeSetupError::Authentication,
-                "test.authentication.setup_failed",
+                "test.authentication.setup-failed",
                 "authentication",
             ),
             (
                 SchemaTestRuntimeSetupError::Audit,
-                "test.audit.setup_failed",
+                "test.audit.setup-failed",
                 "audit",
             ),
             (
                 SchemaTestRuntimeSetupError::Cursor,
-                "test.cursor.setup_failed",
+                "test.cursor.setup-failed",
                 "cursor",
             ),
             (
                 SchemaTestRuntimeSetupError::Evidence,
-                "test.evidence_providers.activation_failed",
+                "test.evidence-providers.activation-failed",
                 "evidenceProviders",
             ),
             (
                 SchemaTestRuntimeSetupError::ReviewAuthorities,
-                "test.review_authorities.activation_failed",
+                "test.review-authorities.activation-failed",
                 "reviewAuthorities",
             ),
             (
                 SchemaTestRuntimeSetupError::WasmExecution,
-                "test.wasm_execution.setup_failed",
+                "test.wasm-execution.setup-failed",
                 "wasmExecution",
             ),
             (
                 SchemaTestRuntimeSetupError::EventDestinations(
                     EventDestinationActivationError::InventoryMismatch,
                 ),
-                "test.event_destinations.inventory_mismatch",
+                "test.event-destinations.inventory-mismatch",
                 "eventDestinations",
             ),
         ];
@@ -1004,7 +1004,7 @@ bindings:
         ] {
             cases.push((
                 SchemaTestRuntimeSetupError::EventDestinations(error),
-                "test.event_destinations.activation_failed",
+                "test.event-destinations.activation-failed",
                 "eventDestinations",
             ));
         }
@@ -1067,7 +1067,7 @@ bindings:
         let report = serde_json::to_value(crate::test_lifecycle_failure(error))
             .expect("rehearsal failure report serializes");
         let diagnostic = &report["diagnostics"][0];
-        assert_eq!(diagnostic["code"], "migration.rehearsal.step_failed");
+        assert_eq!(diagnostic["code"], "migration.rehearsal.step-failed");
         assert_eq!(
             diagnostic["path"],
             "reviewedMigrations[rank-backfill].steps[backfill-rank]"
@@ -1091,7 +1091,7 @@ bindings:
         .expect("rehearsal failure report serializes");
         assert_eq!(
             report["diagnostics"][0]["code"],
-            "migration.rehearsal.schema_mismatch"
+            "migration.rehearsal.schema-mismatch"
         );
         assert_eq!(report["diagnostics"][0]["path"], "reviewedMigrations");
     }
@@ -1109,7 +1109,7 @@ bindings:
         let diagnostic = &report["diagnostics"][0];
         assert_eq!(
             diagnostic["code"],
-            "migration.rehearsal.history_step_refused"
+            "migration.rehearsal.history-step-refused"
         );
         assert_eq!(
             diagnostic["path"],

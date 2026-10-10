@@ -54,13 +54,13 @@ enum Kind {
 impl Kind {
     fn name(self) -> &'static str {
         match self {
-            Self::Live => "read_live",
-            Self::List => "list_releases",
-            Self::Series => "read_released_series",
-            Self::Latest => "read_latest_release",
-            Self::Version => "read_release_version",
-            Self::Publish => "publish_release",
-            Self::Withdraw => "withdraw_release",
+            Self::Live => "read-live",
+            Self::List => "list-releases",
+            Self::Series => "read-released-series",
+            Self::Latest => "read-latest-release",
+            Self::Version => "read-release-version",
+            Self::Publish => "publish-release",
+            Self::Withdraw => "withdraw-release",
         }
     }
     fn method(self) -> HttpMethod {

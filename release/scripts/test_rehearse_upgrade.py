@@ -698,7 +698,7 @@ class BregLedgerTest(unittest.TestCase):
         return breg
 
     EMPTY_PLAN = {"ok": False, "command": "plan", "diagnostics": [
-        {"severity": "error", "code": "apply.package.empty_plan", "path": "package"}]}
+        {"severity": "error", "code": "apply.package.empty-plan", "path": "package"}]}
 
     def rehearse_ledger_upgrade(self, root: Path, upgraded_plan: dict[str, Any] | None,
                                 *, upgrade_loses_rows: bool = False):

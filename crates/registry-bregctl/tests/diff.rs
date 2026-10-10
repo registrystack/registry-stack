@@ -96,7 +96,7 @@ fn diff_inventory_is_deterministic_and_classification_direction_is_exact() {
     assert!(first.stderr.is_empty());
     let report = json_stdout(&first);
     assert_eq!(report["profile"], "authoring");
-    assert_eq!(report["baselineAssurance"], "integrity_only");
+    assert_eq!(report["baselineAssurance"], "integrity-only");
     assert_eq!(
         report["baselinePackageRevision"], baseline.digest,
         "the baseline is named by its package digest"
@@ -200,12 +200,12 @@ fn a_removed_field_is_reported_as_retained_in_history_not_erased() {
         .as_array()
         .expect("findings array")
         .iter()
-        .filter(|finding| finding["code"] == "diff.history.removed_values_retained")
+        .filter(|finding| finding["code"] == "diff.history.removed-values-retained")
         .collect();
     assert_eq!(retained.len(), 1, "{report}");
     assert_eq!(retained[0]["path"], "changes.record.code");
-    assert_eq!(retained[0]["artifact"], "compiled_diff");
-    assert_eq!(retained[0]["suggestedAction"], "review_compiled_diff");
+    assert_eq!(retained[0]["artifact"], "compiled-diff");
+    assert_eq!(retained[0]["suggestedAction"], "review-compiled-diff");
     let message = retained[0]["message"].as_str().expect("message is text");
     assert!(message.contains("not erasure"), "{message}");
     assert!(message.contains("bregctl history erase"), "{message}");
@@ -224,7 +224,7 @@ fn a_removed_field_is_reported_as_retained_in_history_not_erased() {
         .as_array()
         .expect("findings array")
         .iter()
-        .any(|finding| finding["code"] == "diff.history.removed_values_retained"));
+        .any(|finding| finding["code"] == "diff.history.removed-values-retained"));
 }
 
 #[test]
@@ -250,12 +250,12 @@ fn package_closure_and_path_disclosure_threats_are_enforced_by_value_free_negati
     assert!(!rendered.contains(path(&baseline.package)));
     assert_eq!(
         json_stdout(&tampered)["diagnostics"][0]["code"],
-        "diff.baseline.integrity_refused"
+        "diff.baseline.integrity-refused"
     );
     assert_tool_diagnostic(
         &json_stdout(&tampered)["diagnostics"][0],
-        "baseline_package",
-        "verify_package_integrity",
+        "baseline-package",
+        "verify-package-integrity",
     );
     let human_refusal = run(&[
         "diff",
@@ -266,7 +266,7 @@ fn package_closure_and_path_disclosure_threats_are_enforced_by_value_free_negati
     assert_eq!(human_refusal.status.code(), Some(1));
     assert!(human_refusal.stdout.is_empty());
     assert!(
-        String::from_utf8_lossy(&human_refusal.stderr).contains("diff.baseline.integrity_refused")
+        String::from_utf8_lossy(&human_refusal.stderr).contains("diff.baseline.integrity-refused")
     );
 
     #[cfg(unix)]
@@ -287,12 +287,12 @@ fn package_closure_and_path_disclosure_threats_are_enforced_by_value_free_negati
         assert_eq!(unsafe_permissions.status.code(), Some(1));
         assert_eq!(
             json_stdout(&unsafe_permissions)["diagnostics"][0]["code"],
-            "diff.baseline.permissions_refused"
+            "diff.baseline.permissions-refused"
         );
         assert_tool_diagnostic(
             &json_stdout(&unsafe_permissions)["diagnostics"][0],
-            "baseline_package",
-            "verify_package_permissions",
+            "baseline-package",
+            "verify-package-permissions",
         );
 
         let linked = directory.path.join(VALUE_CANARY);
@@ -309,12 +309,12 @@ fn package_closure_and_path_disclosure_threats_are_enforced_by_value_free_negati
         assert!(!String::from_utf8_lossy(&symlinked.stdout).contains(VALUE_CANARY));
         assert_eq!(
             json_stdout(&symlinked)["diagnostics"][0]["code"],
-            "diff.baseline.path_refused"
+            "diff.baseline.path-refused"
         );
         assert_tool_diagnostic(
             &json_stdout(&symlinked)["diagnostics"][0],
-            "baseline_package",
-            "verify_package_path",
+            "baseline-package",
+            "verify-package-path",
         );
     }
 }
@@ -351,12 +351,12 @@ fn a_package_under_the_retired_api_version_is_refused_as_a_baseline_too() {
     assert_eq!(integrity_only.status.code(), Some(1), "{integrity_only:?}");
     assert_tool_diagnostic(
         &json_stdout(&integrity_only)["diagnostics"][0],
-        "baseline_package",
-        "correct_package_build",
+        "baseline-package",
+        "correct-package-build",
     );
     assert_eq!(
         json_stdout(&integrity_only)["diagnostics"][0]["code"],
-        "diff.baseline.retired_api_version"
+        "diff.baseline.retired-api-version"
     );
 
     // A runtime file that names the package gives it no other reading: the
@@ -373,12 +373,12 @@ fn a_package_under_the_retired_api_version_is_refused_as_a_baseline_too() {
     assert_eq!(runtime_bound.status.code(), Some(1), "{runtime_bound:?}");
     assert_tool_diagnostic(
         &json_stdout(&runtime_bound)["diagnostics"][0],
-        "baseline_package",
-        "correct_package_build",
+        "baseline-package",
+        "correct-package-build",
     );
     assert_eq!(
         json_stdout(&runtime_bound)["diagnostics"][0]["code"],
-        "diff.baseline.retired_api_version"
+        "diff.baseline.retired-api-version"
     );
 }
 
@@ -400,7 +400,7 @@ fn a_runtime_bound_baseline_is_verified_without_opening_runtime_dependencies() {
     assert!(accepted.status.success(), "{accepted:?}");
     assert!(accepted.stderr.is_empty());
     assert!(!String::from_utf8_lossy(&accepted.stdout).contains(VALUE_CANARY));
-    assert_eq!(json_stdout(&accepted)["baselineAssurance"], "runtime_bound");
+    assert_eq!(json_stdout(&accepted)["baselineAssurance"], "runtime-bound");
 
     // The runtime file's digest pin binds the baseline to the exact package
     // the runtime serves; another package at package.root is refused.
@@ -428,7 +428,7 @@ fn a_runtime_bound_baseline_is_verified_without_opening_runtime_dependencies() {
     assert!(!String::from_utf8_lossy(&refused.stdout).contains(VALUE_CANARY));
     assert_eq!(
         json_stdout(&refused)["diagnostics"][0]["code"],
-        "diff.package.integrity_refused"
+        "diff.package.integrity-refused"
     );
 }
 
@@ -466,8 +466,8 @@ fn diff_help_and_selector_usage_preserve_the_closed_command_inventory_and_exit_c
     );
     assert_tool_diagnostic(
         &json_stdout(&neither)["diagnostics"][0],
-        "command_arguments",
-        "correct_command_usage",
+        "command-arguments",
+        "correct-command-usage",
     );
 
     let both = run(&[
@@ -497,12 +497,12 @@ fn diff_help_and_selector_usage_preserve_the_closed_command_inventory_and_exit_c
     assert!(!String::from_utf8_lossy(&relative_runtime.stdout).contains(VALUE_CANARY));
     assert_eq!(
         json_stdout(&relative_runtime)["diagnostics"][0]["code"],
-        "diff.runtime_config.path_invalid"
+        "diff.runtime-config.path-invalid"
     );
     assert_tool_diagnostic(
         &json_stdout(&relative_runtime)["diagnostics"][0],
-        "runtime_configuration",
-        "correct_runtime_configuration",
+        "runtime-configuration",
+        "correct-runtime-configuration",
     );
 
     let malformed_runtime = directory.path.join(format!("{VALUE_CANARY}.yaml"));
@@ -536,8 +536,8 @@ fn diff_help_and_selector_usage_preserve_the_closed_command_inventory_and_exit_c
     for diagnostic in diagnostics {
         assert_tool_diagnostic(
             diagnostic,
-            "runtime_configuration",
-            "correct_runtime_configuration",
+            "runtime-configuration",
+            "correct-runtime-configuration",
         );
     }
 }

@@ -429,15 +429,15 @@ fn module_add_consent_refuses_an_incomplete_project_without_writing() {
         (
             BASE_PROJECT.to_owned(),
             "citizen",
-            "module.consent.subject_unknown",
+            "module.consent.subject-unknown",
         ),
         (
             BASE_PROJECT.to_owned(),
             "Person",
-            "module.consent.subject_unknown",
+            "module.consent.subject-unknown",
         ),
-        (no_recipients, "person", "module.consent.recipients_missing"),
-        (no_purposes, "person", "module.consent.purposes_missing"),
+        (no_recipients, "person", "module.consent.recipients-missing"),
+        (no_purposes, "person", "module.consent.purposes-missing"),
     ] {
         let project = TestProject::from_registry_source(source.as_bytes());
 
@@ -465,7 +465,7 @@ fn module_add_consent_refuses_a_flow_style_profile_list_it_cannot_extend() {
     assert!(!refused.status.success(), "{refused:?}");
     assert_eq!(
         json_stdout(&refused)["diagnostics"][0]["code"],
-        "module.consent.render_failed"
+        "module.consent.render-failed"
     );
     assert_eq!(registry_source(project.path()), kept);
     assert!(!project.path().join("modules").exists());

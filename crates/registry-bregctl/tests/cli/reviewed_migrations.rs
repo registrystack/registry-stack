@@ -349,12 +349,12 @@ fn apply_reports_an_unchanged_successor_as_nothing_to_apply() {
     assert!(output.stderr.is_empty());
     let report = json_stdout(&output);
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "apply.package.empty_plan");
+    assert_eq!(diagnostic["code"], "apply.package.empty-plan");
     assert_eq!(diagnostic["path"], "package");
     let message = diagnostic["message"].as_str().expect("message is text");
     assert!(message.contains("nothing to apply"), "{message}");
     assert!(message.contains("Nothing was changed"), "{message}");
-    assert_tool_diagnostic(diagnostic, "verified_package", "correct_package_build");
+    assert_tool_diagnostic(diagnostic, "verified-package", "correct-package-build");
     let rendered = String::from_utf8(output.stdout).expect("apply refusal is UTF-8");
     for forbidden in [
         path(&baseline.runtime_config),
@@ -426,7 +426,7 @@ fn reviewed_successor_changed_review_invalidates_the_schema_test_receipt() {
     let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
     assert_eq!(
         diagnostic["code"],
-        "package.test_receipt.candidate_mismatch"
+        "package.test-receipt.candidate-mismatch"
     );
     assert_eq!(diagnostic["path"], "testReceipt.sourceClosureSha256");
     assert!(
@@ -509,12 +509,12 @@ fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io()
     // refusal comes from the binding check rather than from the reader.
     let unbound = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     for (field, code) in [
-        ("priorPackageDigest", "migration.review.evidence_refused"),
+        ("priorPackageDigest", "migration.review.evidence-refused"),
         (
             "priorSchemaFingerprint",
-            "migration.review.evidence_refused",
+            "migration.review.evidence-refused",
         ),
-        ("planDigest", "migration.review.evidence_refused"),
+        ("planDigest", "migration.review.evidence-refused"),
     ] {
         let fixture = ReviewFixture::create();
         fixture.mutate_json("rehearsal.json", |value| value[field] = json!(unbound));
@@ -535,7 +535,7 @@ fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io()
     let output = fixture.run("test", true);
     assert_eq!(
         json_stdout(&output)["diagnostics"][0]["code"],
-        "migration.review.descriptor_refused"
+        "migration.review.descriptor-refused"
     );
 }
 
@@ -676,7 +676,7 @@ fn reviewed_successor_refuses_duplicate_keys_headerless_documents_and_extra_arti
     let output = fixture.run("test", true);
     assert_eq!(
         json_stdout(&output)["diagnostics"][0]["code"],
-        "migration.review.coverage_refused"
+        "migration.review.coverage-refused"
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("private-review-value-canary"));
 }
@@ -810,7 +810,7 @@ fn a_refused_review_names_the_changes_it_has_to_cover() {
     fixture.mutate_json("descriptor.json", |value| value["covers"] = json!([]));
     let output = fixture.run("package", true);
     let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
-    assert_eq!(diagnostic["code"], "migration.review.descriptor_refused");
+    assert_eq!(diagnostic["code"], "migration.review.descriptor-refused");
     let message = diagnostic["message"].as_str().unwrap().to_owned();
     assert!(message.contains("access-profile-changed"), "{message}");
     assert!(message.contains("at record.reader"), "{message}");

@@ -22,8 +22,8 @@ pub(crate) enum MigrationKind {
 impl MigrationKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::CompiledAdditive => "compiled_additive",
-            Self::MetadataOnly => "metadata_only",
+            Self::CompiledAdditive => "compiled-additive",
+            Self::MetadataOnly => "metadata-only",
             Self::Reviewed => "reviewed",
         }
     }
@@ -322,7 +322,7 @@ pub(crate) async fn install_migration_ledger(
                      CHECK (plan_kind IN ('initial', 'successor', 'adopted')),
                  migration_kind text NOT NULL
                      CONSTRAINT registry_migrations_migration_kind_closed
-                     CHECK (migration_kind IN ('compiled_additive', 'metadata_only', 'reviewed')),
+                     CHECK (migration_kind IN ('compiled-additive', 'metadata-only', 'reviewed')),
                  statement_checksums text[] NOT NULL
                      CONSTRAINT registry_migrations_checksums_nonempty
                      CHECK (
@@ -330,9 +330,9 @@ pub(crate) async fn install_migration_ledger(
                          AND cardinality(statement_checksums) BETWEEN 0 AND 1024
                          AND array_position(statement_checksums, '') IS NULL
                          AND (
-                             (migration_kind = 'metadata_only' AND cardinality(statement_checksums) = 0)
+                             (migration_kind = 'metadata-only' AND cardinality(statement_checksums) = 0)
                              OR (migration_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
-                             OR (migration_kind IN ('compiled_additive', 'reviewed')
+                             OR (migration_kind IN ('compiled-additive', 'reviewed')
                                  AND cardinality(statement_checksums) BETWEEN 1 AND 1024)
                          )
                      ),
@@ -370,7 +370,7 @@ pub(crate) async fn install_migration_ledger(
                      AND array_position(artifact_paths, '') IS NULL
                      AND array_position(artifact_checksums, '') IS NULL
                      AND (
-                         (migration_kind IN ('compiled_additive', 'metadata_only')
+                         (migration_kind IN ('compiled-additive', 'metadata-only')
                              AND cardinality(artifact_paths) = 0)
                          OR (migration_kind = 'reviewed' AND cardinality(artifact_paths) > 0)
                      )
@@ -975,6 +975,16 @@ pub(crate) fn statement_checksum(sql: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_migration_kind_words_use_kebab_case() {
+        assert_eq!(
+            MigrationKind::CompiledAdditive.as_str(),
+            "compiled-additive"
+        );
+        assert_eq!(MigrationKind::MetadataOnly.as_str(), "metadata-only");
+        assert_eq!(MigrationKind::Reviewed.as_str(), "reviewed");
+    }
 
     fn entry(migration_kind: MigrationKind) -> MigrationLedgerEntry {
         MigrationLedgerEntry {

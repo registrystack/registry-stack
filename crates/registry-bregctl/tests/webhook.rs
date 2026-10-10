@@ -250,13 +250,13 @@ fn unavailable_sample_event_is_value_free_and_field_addressed() {
     let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "webhook.sample.event_refused"
+        "webhook.sample.event-refused"
     );
     assert_eq!(report["diagnostics"][0]["path"], "event");
-    assert_eq!(report["diagnostics"][0]["artifact"], "webhook_sample");
+    assert_eq!(report["diagnostics"][0]["artifact"], "webhook-sample");
     assert_eq!(
         report["diagnostics"][0]["suggestedAction"],
-        "select_webhook_event"
+        "select-webhook-event"
     );
     let message = report["diagnostics"][0]["message"]
         .as_str()
@@ -280,7 +280,7 @@ fn unavailable_sample_event_is_value_free_and_field_addressed() {
     let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "webhook.sample.event_refused"
+        "webhook.sample.event-refused"
     );
     let message = report["diagnostics"][0]["message"]
         .as_str()
@@ -329,7 +329,7 @@ fn operator_commands_share_one_value_free_refusal() {
             "webhook.operation.refused"
         );
         assert_eq!(report["diagnostics"][0]["path"], "webhook");
-        assert_eq!(report["diagnostics"][0]["artifact"], "webhook_operations");
+        assert_eq!(report["diagnostics"][0]["artifact"], "webhook-operations");
     }
 }
 

@@ -64,7 +64,7 @@ fn refusal(arguments: &[String], code: &str, path: &str) -> Value {
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["code"], code, "{stdout}");
     assert_eq!(diagnostic["path"], path, "{stdout}");
-    assert_eq!(diagnostic["artifact"], "import_authority");
+    assert_eq!(diagnostic["artifact"], "import-authority");
     report
 }
 
@@ -115,7 +115,7 @@ fn a_relative_runtime_configuration_is_refused_for_every_subcommand() {
     for arguments in cases {
         refusal(
             &arguments,
-            "import_authority.runtime_config.invalid",
+            "import-authority.runtime-config.invalid",
             "runtimeConfig",
         );
     }
@@ -126,7 +126,7 @@ fn an_expiry_outside_one_minute_to_thirty_days_is_refused_before_any_dependency(
     for expires_in in ["31d", "0d", "0m", "721h", "7", "7x", "d", "1.5d", "+1d", ""] {
         refusal(
             &open(MISSING_RUNTIME, &["--expires-in", expires_in]),
-            "import_authority.expires_in.invalid",
+            "import-authority.expires-in.invalid",
             "expiresIn",
         );
     }
@@ -139,7 +139,7 @@ fn the_window_bounds_themselves_are_accepted() {
     for expires_in in ["30d", "720h", "1m", "7d"] {
         refusal(
             &open(MISSING_RUNTIME, &["--expires-in", expires_in]),
-            "import_authority.unavailable",
+            "import-authority.unavailable",
             "importAuthority",
         );
     }
@@ -156,7 +156,7 @@ fn a_malformed_or_repeated_pinned_digest_is_refused_before_any_dependency() {
     ] {
         refusal(
             &open(MISSING_RUNTIME, &digests),
-            "import_authority.request.invalid",
+            "import-authority.request.invalid",
             "importAuthority",
         );
     }
@@ -172,7 +172,7 @@ fn an_empty_reason_or_a_volume_below_one_is_refused_before_any_dependency() {
     empty_reason[at] = String::new();
     refusal(
         &empty_reason,
-        "import_authority.request.invalid",
+        "import-authority.request.invalid",
         "importAuthority",
     );
 
@@ -182,7 +182,7 @@ fn an_empty_reason_or_a_volume_below_one_is_refused_before_any_dependency() {
         .position(|argument| argument == "10")
         .expect("max-items argument");
     zero[at] = "0".to_owned();
-    refusal(&zero, "import_authority.request.invalid", "importAuthority");
+    refusal(&zero, "import-authority.request.invalid", "importAuthority");
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn close_refuses_an_authority_identifier_that_is_not_a_uuid() {
     .map(str::to_owned);
     refusal(
         &arguments,
-        "import_authority.authority_id.invalid",
+        "import-authority.authority-id.invalid",
         "authorityId",
     );
 }
@@ -214,7 +214,7 @@ fn close_refuses_an_authority_identifier_that_is_not_a_uuid() {
 fn an_unavailable_runtime_configuration_is_one_value_free_refusal() {
     refusal(
         &open(MISSING_RUNTIME, &["--input-sha256", DIGEST]),
-        "import_authority.unavailable",
+        "import-authority.unavailable",
         "importAuthority",
     );
     for subcommand in ["close-expired", "list"] {
@@ -230,7 +230,7 @@ fn an_unavailable_runtime_configuration_is_one_value_free_refusal() {
         .map(str::to_owned);
         refusal(
             &arguments,
-            "import_authority.unavailable",
+            "import-authority.unavailable",
             "importAuthority",
         );
     }

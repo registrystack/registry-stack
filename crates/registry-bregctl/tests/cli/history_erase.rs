@@ -85,7 +85,7 @@ fn erase_refuses_without_the_irreversibility_acknowledgement() {
         !message.contains("successor") && !message.contains("package"),
         "a recorded erasure does not block successor packages: {message}"
     );
-    assert_tool_diagnostic(diagnostic, "command_arguments", "correct_command_usage");
+    assert_tool_diagnostic(diagnostic, "command-arguments", "correct-command-usage");
     assert!(
         !report
             .to_string()
@@ -109,6 +109,6 @@ fn erase_refuses_before_reading_an_unsafe_request_file_without_acknowledgement()
     let acknowledged = erase_failure(&fixture.runtime_config(), &request, true);
     assert_eq!(
         acknowledged["diagnostics"][0]["code"],
-        "history.erase.request_file.refused"
+        "history.erase.request-file.refused"
     );
 }

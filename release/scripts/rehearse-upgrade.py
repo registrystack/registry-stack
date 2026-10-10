@@ -972,7 +972,7 @@ BREG_CREDENTIALS_ENVELOPE = {
 }
 BREG_ENVIRONMENT = "staging"
 BREG_INSTANCE_ID = "upgrade-rehearsal-instance"
-BREG_EMPTY_PLAN = "apply.package.empty_plan"
+BREG_EMPTY_PLAN = "apply.package.empty-plan"
 
 
 def instance_claim(side: Side, runtime: Path) -> dict[str, Any] | None:

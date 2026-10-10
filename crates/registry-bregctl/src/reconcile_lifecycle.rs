@@ -230,7 +230,7 @@ mod tests {
             target_catalog_finding: None,
             active_catalog_finding: None,
             unresolvable_reason: None,
-            plan_kind: "compiled_additive",
+            plan_kind: "compiled-additive",
             migration_step_count: 0,
             reviewed_plan_closed: None,
             durable_step_progress: None,

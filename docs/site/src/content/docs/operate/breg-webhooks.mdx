@@ -74,7 +74,7 @@ the attempts run out. Automatic retries keep the event id and idempotency key. A
 acknowledges delivery; redirects, timeouts, and other responses follow the bounded retry policy.
 Activation refuses a rebinding that would leave retained pending or dead-lettered deliveries
 without the binding they were captured under. `bregctl doctor` opens every binding before the
-process starts and reports one it cannot open as `startup.event_destinations.refused`, so run it
+process starts and reports one it cannot open as `startup.event-destinations.refused`, so run it
 after every change to this block.
 
 {/* Evidence: crates/registry-breg/src/event_destination.rs, RawEventDestinationConfig;
@@ -173,7 +173,7 @@ check its state before replaying. A replay whose `--expected-generation` no long
 payload has expired, or whose destination is no longer bound is refused with
 `webhook.operation.refused`.
 
-If `doctor` reports `startup.webhook.retained_bindings` after you correct a destination or local
+If `doctor` reports `startup.webhook.retained-bindings` after you correct a destination or local
 handler binding, keep the corrected configuration and use `webhook list`. Rows with
 `bindingActive: false` name the retained work that still pins the earlier binding. Restore that
 exact binding until those rows drain, or stop the runtime and discard each eligible row with the
@@ -213,10 +213,10 @@ authority, set `SSL_CERT_FILE` to its PEM bundle for each command.
 | Symptom | Next move |
 | --- | --- |
 | Activation refuses the package over destinations | Every destination identifier the package names needs one binding, and no binding may name an identifier the package does not. Compare the `eventDestinations` keys with `bregctl explain events`. |
-| `doctor` reports `startup.event_destinations.refused` | Check the key file's owner, mode, and length, the origin against the network profile, and `allowedPrivateCidrs` for a private receiver. |
-| `doctor` reports `startup.webhook.retained_bindings` | Run `webhook list` under the corrected configuration. Restore the exact captured binding until each row drains, or stop the runtime and discard each row where `discardEligible` is true. Wait for a live lease to expire before retrying discard. |
+| `doctor` reports `startup.event-destinations.refused` | Check the key file's owner, mode, and length, the origin against the network profile, and `allowedPrivateCidrs` for a private receiver. |
+| `doctor` reports `startup.webhook.retained-bindings` | Run `webhook list` under the corrected configuration. Restore the exact captured binding until each row drains, or stop the runtime and discard each row where `discardEligible` is true. Wait for a live lease to expire before retrying discard. |
 | The receiver rejects every signature | The runtime signs the raw file bytes. Load the same characters on the receiver without decoding them, and verify against the exact request bytes in the documented signing-input order. |
-| `doctor` reports `startup.instance_id.pending_deliveries` | Pending deliveries were captured under the event source of a previous `identity.instanceId`, and the worker would dead-letter them under the new one. Restore the instance id that ends the stored source the diagnostic names until `webhook list` shows them drained, then change it. |
+| `doctor` reports `startup.instance-id.pending-deliveries` | Pending deliveries were captured under the event source of a previous `identity.instanceId`, and the worker would dead-letter them under the new one. Restore the instance id that ends the stored source the diagnostic names until `webhook list` shows them drained, then change it. |
 | A webhook never fires | Confirm the destination is bound, the receiver returns `2xx`, and the event's condition matched; use `webhook list` for dead letters. |
 | Replay is refused | Refresh the list and check the generation, `replayEligible`, payload expiry, and the destination binding. |
 | `webhook list`, `replay`, or `discard` reports `webhook.package.refused` | The package at `package.root` is not the one `package.expectedDigest` pins; the message names both digests. Deploy the pinned package or update the pin. |

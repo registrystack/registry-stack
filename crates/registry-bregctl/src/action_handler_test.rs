@@ -78,14 +78,14 @@ pub(super) fn run(
         })?;
         if let Some((index, field)) = state.mismatch {
             return Err(planner_test_failure(
-                "planner_test.evidence.mismatch",
+                "planner-test.evidence.mismatch",
                 &format!("expect/evidenceCalls/{index}/{field}"),
                 "the helper call differs from the ordered synthetic transcript",
             ));
         }
         if evaluation.is_ok() && state.next != state.calls.len() {
             return Err(planner_test_failure(
-                "planner_test.evidence.missing",
+                "planner-test.evidence.missing",
                 "expect/evidenceCalls",
                 "the handler omitted an expected helper call",
             ));
@@ -153,7 +153,7 @@ pub(super) fn run(
         normalize(&mut expected);
         if let Some(path) = mismatch_path(&actual, &expected, "expect") {
             return Err(planner_test_failure(
-                "planner_test.expect.mismatch",
+                "planner-test.expect.mismatch",
                 &path,
                 "the computed outcome differs from the expected outcome",
             ));
@@ -221,14 +221,14 @@ fn handler_identity(
 ) -> Result<PlannerTestIdentityReport, FailureReport> {
     if handler.kind != CompiledActionHandlerKind::Rhai {
         return Err(planner_test_failure(
-            "planner_test.handler.backend",
+            "planner-test.handler.backend",
             "action",
             "the local handler test accepts only Rhai-backed actions; run WASM handler fixtures through the handler SDK's admission proof",
         ));
     }
     let script_sha256 = handler.script_sha256.clone().ok_or_else(|| {
         planner_test_failure(
-            "planner_test.handler.identity",
+            "planner-test.handler.identity",
             "action",
             "the compiled Rhai handler carries no script hash",
         )
@@ -305,7 +305,7 @@ fn take_evidence_calls(expected: Option<&mut Value>) -> Result<Vec<SyntheticCall
 fn read_json(path: &Path, location: &str) -> Result<Value, FailureReport> {
     let bytes = read_bounded_regular_file(
         path,
-        "planner_test.file.unavailable",
+        "planner-test.file.unavailable",
         MAX_PLANNER_TEST_REQUEST_BYTES,
     )
     .map_err(|error| {
@@ -327,7 +327,7 @@ fn read_json(path: &Path, location: &str) -> Result<Value, FailureReport> {
 }
 
 fn failure(path: &str, message: &str) -> FailureReport {
-    planner_test_failure("planner_test.action.invalid", path, message)
+    planner_test_failure("planner-test.action.invalid", path, message)
 }
 
 fn exact_effects(effects: &[CompiledActionEffect]) -> Value {
@@ -525,7 +525,7 @@ accessProfiles:
         };
         let failure = run(&args, &compiled).expect_err("a WASM handler is not executed locally");
         let diagnostic = &failure.diagnostics[0];
-        assert_eq!(diagnostic.code, "planner_test.handler.backend");
+        assert_eq!(diagnostic.code, "planner-test.handler.backend");
         assert_eq!(diagnostic.path, "action");
         assert!(diagnostic.message.contains("Rhai"), "{diagnostic:?}");
         let rendered = serde_json::to_string(&failure).unwrap();
@@ -563,12 +563,12 @@ accessProfiles:
 
         handler.script_sha256 = None;
         let failure = handler_identity(&handler).expect_err("a Rhai handler carries its hash");
-        assert_eq!(failure.diagnostics[0].code, "planner_test.handler.identity");
+        assert_eq!(failure.diagnostics[0].code, "planner-test.handler.identity");
 
         handler.kind = CompiledActionHandlerKind::Wasm;
         handler.module_sha256 = Some("sha256:module-digest-canary".into());
         let failure = handler_identity(&handler).expect_err("a WASM handler is not executed here");
-        assert_eq!(failure.diagnostics[0].code, "planner_test.handler.backend");
+        assert_eq!(failure.diagnostics[0].code, "planner-test.handler.backend");
         assert!(!serde_json::to_string(&failure)
             .unwrap()
             .contains("sha256:module-digest-canary"));
@@ -664,9 +664,9 @@ accessProfiles:
         )
         .unwrap();
         for (kind, code) in [
-            ("unexpected", "planner_test.evidence.mismatch"),
-            ("selectors", "planner_test.evidence.mismatch"),
-            ("missing", "planner_test.evidence.missing"),
+            ("unexpected", "planner-test.evidence.mismatch"),
+            ("selectors", "planner-test.evidence.mismatch"),
+            ("missing", "planner-test.evidence.missing"),
         ] {
             let mut fixture = base.clone();
             match kind {
@@ -837,7 +837,7 @@ accessProfiles:
         }
         fs::write(&expect, br#"{"effects":[]}"#).unwrap();
         let failure = run(&args, &compiled).expect_err("omitted expected effect is a mismatch");
-        assert_eq!(failure.diagnostics[0].code, "planner_test.expect.mismatch");
+        assert_eq!(failure.diagnostics[0].code, "planner-test.expect.mismatch");
         fs::write(
             &input,
             br#"{"identifier":"0123456789012","given-name":"   ","family-name":" "}"#,

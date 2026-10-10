@@ -46,9 +46,9 @@ fn adopting_without_acknowledging_the_retired_original_is_refused_before_any_con
             "--runtime-config",
             MISSING_RUNTIME,
         ],
-        "instance_claim.acknowledgement.required",
+        "instance-claim.acknowledgement.required",
         "acknowledgeOriginalRetired",
-        "command_arguments",
+        "command-arguments",
     );
     assert_eq!(report["command"], "instance-claim adopt");
 }
@@ -78,9 +78,9 @@ fn a_relative_runtime_configuration_is_refused_for_every_subcommand() {
     ] {
         refusal(
             &arguments,
-            "instance_claim.runtime_config.invalid",
+            "instance-claim.runtime-config.invalid",
             "runtimeConfig",
-            "command_arguments",
+            "command-arguments",
         );
     }
 }
@@ -110,9 +110,9 @@ fn an_unreadable_runtime_configuration_reports_the_claim_unavailable() {
     ] {
         let report = refusal(
             &arguments,
-            "instance_claim.unavailable",
+            "instance-claim.unavailable",
             "instanceClaim",
-            "instance_claim",
+            "instance-claim",
         );
         let text = report.to_string();
         assert!(!text.contains(MISSING_RUNTIME), "path leaked: {text}");

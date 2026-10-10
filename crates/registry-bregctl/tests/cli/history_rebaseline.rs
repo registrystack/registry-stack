@@ -75,12 +75,12 @@ fn rebaseline_refuses_a_relative_runtime_configuration_path() {
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(
         diagnostic["code"],
-        "history.rebaseline.runtime_config.path_invalid"
+        "history.rebaseline.runtime-config.path-invalid"
     );
     assert_tool_diagnostic(
         diagnostic,
-        "runtime_configuration",
-        "correct_runtime_configuration",
+        "runtime-configuration",
+        "correct-runtime-configuration",
     );
 }
 
@@ -98,12 +98,12 @@ fn rebaseline_refuses_a_request_file_other_accounts_can_read() {
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(
         diagnostic["code"],
-        "history.rebaseline.request_file.refused"
+        "history.rebaseline.request-file.refused"
     );
     assert_tool_diagnostic(
         diagnostic,
-        "history_rebaseline",
-        "prepare_history_rebaseline_request",
+        "history-rebaseline",
+        "prepare-history-rebaseline-request",
     );
 }
 
@@ -126,7 +126,7 @@ fn rebaseline_refuses_a_request_document_carrying_erasure_fields() {
     assert_eq!(diagnostic["code"], "history.rebaseline.request.refused");
     assert_tool_diagnostic(
         diagnostic,
-        "history_rebaseline",
-        "prepare_history_rebaseline_request",
+        "history-rebaseline",
+        "prepare-history-rebaseline-request",
     );
 }

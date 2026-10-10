@@ -1659,7 +1659,7 @@ where
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 enum DiagnosticArtifact {
     CommandArguments,
     RegistryProject,
@@ -1701,7 +1701,7 @@ enum DiagnosticArtifact {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 enum SuggestedAction {
     CorrectCommandUsage,
     CorrectAuthoringSource,
@@ -1775,7 +1775,7 @@ const SINGLE_ROLE_MODE_NOTE: &str = "the runtime serves with the migration role;
 /// change the outcome: doctor passed before they were decided.
 #[derive(Serialize)]
 struct DoctorAdvisory<'a> {
-    code: &'static str,
+    code: String,
     severity: &'static str,
     message: &'static str,
     observed: ObservedNumbers<'a>,
@@ -2146,7 +2146,7 @@ struct VerifiedInventoryReport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 enum BaselineAssurance {
     RuntimeBound,
     IntegrityOnly,
@@ -2966,7 +2966,7 @@ fn evidence_retention_failure(error: registry_breg::mutation::MutationError) -> 
         registry_breg::mutation::MutationError::MigrationLockHeld => source_failure(
             command,
             diagnostic(
-                "evidence_retention.in_progress",
+                "evidence-retention.in-progress",
                 "database",
                 "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was erased. Retry the same erasure once it releases",
             ),
@@ -2975,14 +2975,14 @@ fn evidence_retention_failure(error: registry_breg::mutation::MutationError) -> 
         ),
         registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => package_pin_failure(
             command,
-            "evidence_retention.package.refused",
+            "evidence-retention.package.refused",
             "package",
             &mismatch,
         ),
         _ => source_failure(
             command,
             diagnostic(
-                "evidence_retention.unavailable",
+                "evidence-retention.unavailable",
                 "evidenceRetention",
                 "Verify the absolute runtime configuration, migration authority and nonfuture RFC 3339 cutoff.",
             ),
@@ -2998,7 +2998,7 @@ fn idempotency_retention_failure(error: registry_breg::mutation::MutationError) 
         registry_breg::mutation::MutationError::MigrationLockHeld => source_failure(
             command,
             diagnostic(
-                "idempotency_retention.in_progress",
+                "idempotency-retention.in-progress",
                 "database",
                 "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was dropped. Retry the same sweep once it releases",
             ),
@@ -3007,14 +3007,14 @@ fn idempotency_retention_failure(error: registry_breg::mutation::MutationError) 
         ),
         registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => package_pin_failure(
             command,
-            "idempotency_retention.package.refused",
+            "idempotency-retention.package.refused",
             "package",
             &mismatch,
         ),
         _ => source_failure(
             command,
             diagnostic(
-                "idempotency_retention.unavailable",
+                "idempotency-retention.unavailable",
                 "idempotencyRetention",
                 "Verify the absolute runtime configuration, migration authority and nonfuture RFC 3339 cutoff.",
             ),
@@ -3032,48 +3032,48 @@ fn request_retention_failure(
         RequestRetentionCliError::PackagePinMismatch(mismatch) => {
             return package_pin_failure(
                 command,
-                "request_retention.package.refused",
+                "request-retention.package.refused",
                 "package",
                 &mismatch,
             )
         }
         RequestRetentionCliError::MigrationLockHeld => (
-            "request_retention.in_progress",
+            "request-retention.in-progress",
             "database",
             "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. A detail erasure that committed before the wait stays erased, which `request-retention dry-run` shows. Retry the same operation once it releases",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::RetryAfterMigrationLockReleases,
         ),
         RequestRetentionCliError::Operator => (
-            "request_retention.operation.refused",
+            "request-retention.operation.refused",
             "requestRetention",
             "the request retention operation was refused",
             DiagnosticArtifact::RequestRetentionOperation,
             SuggestedAction::VerifyRequestRetentionOperation,
         ),
         RequestRetentionCliError::ActiveDetailPinned => (
-            "request_retention.detail.pinned",
+            "request-retention.detail.pinned",
             "requestRetention",
             "active request detail is still pinned",
             DiagnosticArtifact::RequestRetentionOperation,
             SuggestedAction::VerifyRequestRetentionOperation,
         ),
         RequestRetentionCliError::RetainMode => (
-            "request_retention.mode.retain",
+            "request-retention.mode.retain",
             "requestRetention",
             "the request retention policy does not permit operator erasure",
             DiagnosticArtifact::RequestRetentionOperation,
             SuggestedAction::VerifyRequestRetentionOperation,
         ),
         RequestRetentionCliError::ErasureUnaudited => (
-            "request_retention.erasure.unaudited",
+            "request-retention.erasure.unaudited",
             "requestRetention",
             "the erasure committed but its audit entry was not recorded; restore the audit destination, then reconcile the erased request against the database",
             DiagnosticArtifact::RequestRetentionOperation,
             SuggestedAction::VerifyRequestRetentionOperation,
         ),
         RequestRetentionCliError::AttachmentStorageBindingMismatch => (
-            "request_retention.attachment_storage.binding_mismatch",
+            "request-retention.attachment-storage.binding-mismatch",
             "requestRetention",
             "restore the original attachment storage binding and verification policy before retrying; the registry pin, retained content, or deletion tombstones still require them",
             DiagnosticArtifact::RequestRetentionOperation,
@@ -3094,11 +3094,11 @@ fn request_retention_failure(
 fn review_recovery_failure(command: &'static str, error: ReviewRecoveryCliError) -> FailureReport {
     let (code, message) = match error {
         ReviewRecoveryCliError::Operator => (
-            "review_recovery.operation.refused",
+            "review-recovery.operation.refused",
             "the review recovery operation was refused; verify the absolute runtime configuration, migration authority, request UUID and positive proposal version".to_owned(),
         ),
         ReviewRecoveryCliError::NotFound => (
-            "review_recovery.submission.not_found",
+            "review-recovery.submission.not-found",
             "no retained review submission or application job exists for this exact request proposal version".to_owned(),
         ),
         ReviewRecoveryCliError::Ineligible {
@@ -3106,14 +3106,14 @@ fn review_recovery_failure(command: &'static str, error: ReviewRecoveryCliError)
             state,
             code,
         } => (
-            "review_recovery.submission.ineligible",
+            "review-recovery.submission.ineligible",
             format!(
                 "the retained review or application does not accept this operation: reason {reason}, state {state}, code {}",
                 code.as_deref().unwrap_or("none")
             ),
         ),
         ReviewRecoveryCliError::RecoveryUnaudited => (
-            "review_recovery.recovery.unaudited",
+            "review-recovery.recovery.unaudited",
             "the review recovery committed but its audit entry was not recorded; restore the audit destination, then read the submission's state from the database before retrying".to_owned(),
         ),
     };
@@ -3136,7 +3136,7 @@ fn import_authority_failure(
     let (failure_diagnostic, artifact, action) = match error {
         ImportAuthorityCliError::RuntimeConfigPath => (
             diagnostic(
-                "import_authority.runtime_config.invalid",
+                "import-authority.runtime-config.invalid",
                 "runtimeConfig",
                 "the runtime configuration must be an absolute path",
             ),
@@ -3145,7 +3145,7 @@ fn import_authority_failure(
         ),
         ImportAuthorityCliError::ExpiresIn => (
             diagnostic(
-                "import_authority.expires_in.invalid",
+                "import-authority.expires-in.invalid",
                 "expiresIn",
                 "the authority window must be a whole number of minutes, hours, or days (for example 90m, 12h, or 7d), from one minute to at most 30 days",
             ),
@@ -3154,7 +3154,7 @@ fn import_authority_failure(
         ),
         ImportAuthorityCliError::AuthorityId => (
             diagnostic(
-                "import_authority.authority_id.invalid",
+                "import-authority.authority-id.invalid",
                 "authorityId",
                 "the authority identifier must be the UUID `import-authority open` or `import-authority list` reported",
             ),
@@ -3163,7 +3163,7 @@ fn import_authority_failure(
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::InvalidInput) => (
             diagnostic(
-                "import_authority.request.invalid",
+                "import-authority.request.invalid",
                 "importAuthority",
                 "the request is out of bounds: the entity, profile, operator reference, and reason must be present and free of control characters, the volume at least one, and each pinned input digest 64 lowercase hexadecimal characters, named once, at most 16",
             ),
@@ -3172,7 +3172,7 @@ fn import_authority_failure(
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::NotImportable) => (
             diagnostic(
-                "import_authority.grant.not_importable",
+                "import-authority.grant.not-importable",
                 "entity",
                 "the entity and profile do not name an `import` grant of the active package; check them with `bregctl explain access`",
             ),
@@ -3181,7 +3181,7 @@ fn import_authority_failure(
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::AlreadyOpen) => (
             diagnostic(
-                "import_authority.already_open",
+                "import-authority.already-open",
                 "entity",
                 "an import authority is already open for this entity; close it with `bregctl import-authority close` before opening another",
             ),
@@ -3190,7 +3190,7 @@ fn import_authority_failure(
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::NotFound) => (
             diagnostic(
-                "import_authority.not_found",
+                "import-authority.not-found",
                 "authorityId",
                 "no import authority has this identifier; `bregctl import-authority list` names the recorded ones",
             ),
@@ -3199,7 +3199,7 @@ fn import_authority_failure(
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::NotReady) => (
             diagnostic(
-                "import_authority.not_ready",
+                "import-authority.not-ready",
                 "importAuthority",
                 "the registry is not ready for import authority maintenance; apply the configured package first",
             ),
@@ -3209,14 +3209,14 @@ fn import_authority_failure(
         ImportAuthorityCliError::Authority(ImportAuthorityError::PackagePinMismatch(mismatch)) => {
             return package_pin_failure(
                 command,
-                "import_authority.package.refused",
+                "import-authority.package.refused",
                 "package",
                 &mismatch,
             )
         }
         ImportAuthorityCliError::Authority(ImportAuthorityError::MigrationLockHeld) => (
             diagnostic(
-                "import_authority.in_progress",
+                "import-authority.in-progress",
                 "database",
                 "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. No authority changed. Retry the same command once it releases",
             ),
@@ -3225,7 +3225,7 @@ fn import_authority_failure(
         ),
         ImportAuthorityCliError::Authority(ImportAuthorityError::Unavailable) => (
             diagnostic(
-                "import_authority.unavailable",
+                "import-authority.unavailable",
                 "importAuthority",
                 "the import authority store is unavailable; verify the runtime configuration, the migration authority, the active package binding, and a keyed audit profile",
             ),
@@ -3246,7 +3246,7 @@ fn instance_claim_acknowledgement_required() -> FailureReport {
         command: "instance-claim adopt",
         diagnostics: vec![tool_diagnostic(
             diagnostic(
-                "instance_claim.acknowledgement.required",
+                "instance-claim.acknowledgement.required",
                 "acknowledgeOriginalRetired",
                 "adopting makes this database the only one that serves the Registry, and two databases serving one Registry become divergent writers of it: stop and retire every other copy, including the database the claim names when it is another one, then pass --acknowledge-original-retired",
             ),
@@ -3261,7 +3261,7 @@ fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -
     let (failure_diagnostic, artifact, action) = match error {
         InstanceClaimCliError::RuntimeConfigPath => (
             diagnostic(
-                "instance_claim.runtime_config.invalid",
+                "instance-claim.runtime-config.invalid",
                 "runtimeConfig",
                 "the runtime configuration must be an absolute path",
             ),
@@ -3270,7 +3270,7 @@ fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -
         ),
         InstanceClaimCliError::Claim(InstanceClaimError::Unavailable) => (
             diagnostic(
-                "instance_claim.unavailable",
+                "instance-claim.unavailable",
                 "instanceClaim",
                 "the instance claim is unavailable; verify the runtime configuration, both database roles, the active package binding, and a keyed audit profile, and apply the package if the claim table is not yet installed",
             ),
@@ -3279,7 +3279,7 @@ fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -
         ),
         InstanceClaimCliError::Claim(InstanceClaimError::MigrationLockHeld) => (
             diagnostic(
-                "instance_claim.in_progress",
+                "instance-claim.in-progress",
                 "database",
                 "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was adopted and no authority was superseded. Retry the same adoption once it releases",
             ),
@@ -3287,7 +3287,7 @@ fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -
             SuggestedAction::RetryAfterMigrationLockReleases,
         ),
         InstanceClaimCliError::Claim(InstanceClaimError::PackageRefused(message)) => (
-            diagnostic("instance_claim.package.refused", "package", &message),
+            diagnostic("instance-claim.package.refused", "package", &message),
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::VerifyPackageBinding,
         ),
@@ -3513,14 +3513,14 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
     };
     let (code, path, message, artifact, action) = match error {
         HistoryErasureLifecycleError::RuntimeConfigPath => (
-            "history.erase.runtime_config.path_invalid",
+            "history.erase.runtime-config.path-invalid",
             "runtimeConfig",
             "the runtime configuration path must be absolute",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         HistoryErasureLifecycleError::RequestFile => (
-            "history.erase.request_file.refused",
+            "history.erase.request-file.refused",
             "requestFile",
             "the history erasure request file must be absolute, owner-only, and bounded",
             DiagnosticArtifact::HistoryErasure,
@@ -3552,7 +3552,7 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
         }
         HistoryErasureLifecycleError::DatabaseConfiguration
         | HistoryErasureLifecycleError::TimeoutConfiguration => (
-            "history.erase.database_configuration.refused",
+            "history.erase.database-configuration.refused",
             "database",
             "the migration database configuration was refused",
             DiagnosticArtifact::DatabaseMigration,
@@ -3582,21 +3582,21 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
                 SuggestedAction::PrepareHistoryErasureRequest,
             ),
             registry_breg::history_erasure::HistoryErasureError::MigrationAuthority => (
-                "history.erase.migration_authority.refused",
+                "history.erase.migration-authority.refused",
                 "database",
                 "history erasure requires the configured migration authority",
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::VerifyMigrationAuthority,
             ),
             registry_breg::history_erasure::HistoryErasureError::CachedResponseUnreadable => (
-                "history.erase.cached_response.invalid",
+                "history.erase.cached-response.invalid",
                 "history",
                 "history erasure found a cached response no JSON reader accepts",
                 DiagnosticArtifact::HistoryErasure,
                 SuggestedAction::VerifyMigrationAuthority,
             ),
             registry_breg::history_erasure::HistoryErasureError::MigrationLockHeld => (
-                "history.erase.in_progress",
+                "history.erase.in-progress",
                 "database",
                 "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was erased. Retry the same erasure once it releases",
                 DiagnosticArtifact::DatabaseMigration,
@@ -3660,14 +3660,14 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
     };
     let (code, path, message, artifact, action) = match error {
         HistoryRebaselineLifecycleError::RuntimeConfigPath => (
-            "history.rebaseline.runtime_config.path_invalid",
+            "history.rebaseline.runtime-config.path-invalid",
             "runtimeConfig",
             "the runtime configuration path must be absolute",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         HistoryRebaselineLifecycleError::RequestFile => (
-            "history.rebaseline.request_file.refused",
+            "history.rebaseline.request-file.refused",
             "requestFile",
             "the history rebaseline request file must be absolute, owner-only, and bounded",
             DiagnosticArtifact::HistoryRebaseline,
@@ -3699,7 +3699,7 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
         }
         HistoryRebaselineLifecycleError::DatabaseConfiguration
         | HistoryRebaselineLifecycleError::TimeoutConfiguration => (
-            "history.rebaseline.database_configuration.refused",
+            "history.rebaseline.database-configuration.refused",
             "database",
             "the migration database configuration was refused",
             DiagnosticArtifact::DatabaseMigration,
@@ -3728,7 +3728,7 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
                 SuggestedAction::PrepareHistoryRebaselineRequest,
             ),
             registry_breg::history_rebaseline::HistoryRebaselineError::MigrationAuthority => (
-                "history.rebaseline.migration_authority.refused",
+                "history.rebaseline.migration-authority.refused",
                 "database",
                 "history rebaseline requires the configured migration authority",
                 DiagnosticArtifact::DatabaseMigration,
@@ -3749,7 +3749,7 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
                 SuggestedAction::ReviewRetainedHistory,
             ),
             registry_breg::history_rebaseline::HistoryRebaselineError::LiveHistoryMismatch => (
-                "history.rebaseline.live_rows.unverified",
+                "history.rebaseline.live-rows.unverified",
                 "history",
                 "history rebaseline requires the retained journal head to reproduce every live row; \
                  the first record that disagrees is not named, so compare the live rows with their \
@@ -3758,7 +3758,7 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
                 SuggestedAction::ReviewRetainedHistory,
             ),
             registry_breg::history_rebaseline::HistoryRebaselineError::MigrationLockHeld => (
-                "history.rebaseline.in_progress",
+                "history.rebaseline.in-progress",
                 "database",
                 "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was changed. Retry the same rebaseline once it releases",
                 DiagnosticArtifact::DatabaseMigration,
@@ -3831,7 +3831,7 @@ fn field_encryption_duplicate_failure(
         .map(|(entity_id, field_id, record_ids)| {
             tool_diagnostic(
                 diagnostic(
-                    "field_encryption.preflight.duplicate_records",
+                    "field-encryption.preflight.duplicate-records",
                     "preflight",
                     &format!(
                         "entity {entity_id} field {field_id}: {} normalize onto one unique \
@@ -3862,7 +3862,7 @@ fn field_encryption_preflight_failure(
         FieldEncryptionPreflightLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure(
                 "field-encryption preflight",
-                "field_encryption.preflight",
+                "field-encryption.preflight",
                 error,
             );
         }
@@ -3871,7 +3871,7 @@ fn field_encryption_preflight_failure(
         ) => {
             return package_pin_failure(
                 "field-encryption preflight",
-                "field_encryption.preflight.predecessor_package.refused",
+                "field-encryption.preflight.predecessor-package.refused",
                 "package",
                 &mismatch,
             );
@@ -3880,21 +3880,21 @@ fn field_encryption_preflight_failure(
     };
     let (code, path, message, artifact, action) = match error {
         FieldEncryptionPreflightLifecycleError::RuntimeConfigPath => (
-            "field_encryption.preflight.runtime_config.path_invalid",
+            "field-encryption.preflight.runtime-config.path-invalid",
             "runtimeConfig",
             "the runtime configuration path must be absolute",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         FieldEncryptionPreflightLifecycleError::PackagePath => (
-            "field_encryption.preflight.package.path_invalid",
+            "field-encryption.preflight.package.path-invalid",
             "package",
             "the successor package path must be absolute",
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::VerifyPackagePath,
         ),
         FieldEncryptionPreflightLifecycleError::NoBackfillSteps => (
-            "field_encryption.preflight.plan.no_backfill",
+            "field-encryption.preflight.plan.no-backfill",
             "package",
             "the package plans no field-encryption backfill step to preflight",
             DiagnosticArtifact::FieldEncryption,
@@ -3910,7 +3910,7 @@ fn field_encryption_preflight_failure(
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
-                "field_encryption.preflight.predecessor_package.refused",
+                "field-encryption.preflight.predecessor-package.refused",
                 "package",
                 "the active runtime package was refused",
                 DiagnosticArtifact::VerifiedPackage,
@@ -3925,7 +3925,7 @@ fn field_encryption_preflight_failure(
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
-                "field_encryption.preflight.package.refused",
+                "field-encryption.preflight.package.refused",
                 "package",
                 "the successor package was refused",
                 DiagnosticArtifact::VerifiedPackage,
@@ -3934,14 +3934,14 @@ fn field_encryption_preflight_failure(
         }
         FieldEncryptionPreflightLifecycleError::DatabaseConfiguration
         | FieldEncryptionPreflightLifecycleError::TimeoutConfiguration => (
-            "field_encryption.preflight.database_configuration.refused",
+            "field-encryption.preflight.database-configuration.refused",
             "database",
             "the migration database configuration was refused",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::VerifyMigrationAuthority,
         ),
         FieldEncryptionPreflightLifecycleError::Runtime => (
-            "field_encryption.preflight.runtime.unavailable",
+            "field-encryption.preflight.runtime.unavailable",
             "runtime",
             "the field-encryption preflight runtime is unavailable",
             DiagnosticArtifact::FieldEncryption,
@@ -3949,21 +3949,21 @@ fn field_encryption_preflight_failure(
         ),
         FieldEncryptionPreflightLifecycleError::Preflight(error) => match error {
             registry_breg::field_encryption_backfill::FieldEncryptionBackfillPreflightError::InvalidInput => (
-                "field_encryption.preflight.request.refused",
+                "field-encryption.preflight.request.refused",
                 "package",
                 "the reviewed plan and the predecessor baseline do not agree on one field-encryption backfill",
                 DiagnosticArtifact::FieldEncryption,
                 SuggestedAction::ReviewFieldEncryptionBackfill,
             ),
             registry_breg::field_encryption_backfill::FieldEncryptionBackfillPreflightError::MigrationAuthority => (
-                "field_encryption.preflight.migration_authority.refused",
+                "field-encryption.preflight.migration-authority.refused",
                 "database",
                 "field-encryption preflight requires the configured migration authority",
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::VerifyMigrationAuthority,
             ),
             registry_breg::field_encryption_backfill::FieldEncryptionBackfillPreflightError::Unavailable => (
-                "field_encryption.preflight.unavailable",
+                "field-encryption.preflight.unavailable",
                 "database",
                 "field-encryption preflight storage is unavailable",
                 DiagnosticArtifact::FieldEncryption,
@@ -4009,7 +4009,7 @@ fn field_encryption_erase_history_failure(
         FieldEncryptionEraseHistoryLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure(
                 "field-encryption erase-history",
-                "field_encryption.erase_history",
+                "field-encryption.erase-history",
                 error,
             );
         }
@@ -4018,7 +4018,7 @@ fn field_encryption_erase_history_failure(
         ) => {
             return package_pin_failure(
                 "field-encryption erase-history",
-                "field_encryption.erase_history.package.refused",
+                "field-encryption.erase-history.package.refused",
                 "package",
                 &mismatch,
             );
@@ -4027,21 +4027,21 @@ fn field_encryption_erase_history_failure(
     };
     let (code, path, message, artifact, action) = match error {
         FieldEncryptionEraseHistoryLifecycleError::RuntimeConfigPath => (
-            "field_encryption.erase_history.runtime_config.path_invalid",
+            "field-encryption.erase-history.runtime-config.path-invalid",
             "runtimeConfig",
             "the runtime configuration path must be absolute",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         FieldEncryptionEraseHistoryLifecycleError::RequestFile => (
-            "field_encryption.erase_history.request_file.refused",
+            "field-encryption.erase-history.request-file.refused",
             "requestFile",
             "the erase-history request file must be absolute, owner-only, and bounded",
             DiagnosticArtifact::FieldEncryption,
             SuggestedAction::PrepareFieldEncryptionEraseRequest,
         ),
         FieldEncryptionEraseHistoryLifecycleError::RequestDocument => (
-            "field_encryption.erase_history.request.refused",
+            "field-encryption.erase-history.request.refused",
             "requestFile",
             "the erase-history request document was refused",
             DiagnosticArtifact::FieldEncryption,
@@ -4057,7 +4057,7 @@ fn field_encryption_erase_history_failure(
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
-                "field_encryption.erase_history.package.refused",
+                "field-encryption.erase-history.package.refused",
                 "package",
                 "the active runtime package was refused",
                 DiagnosticArtifact::VerifiedPackage,
@@ -4066,21 +4066,21 @@ fn field_encryption_erase_history_failure(
         }
         FieldEncryptionEraseHistoryLifecycleError::DatabaseConfiguration
         | FieldEncryptionEraseHistoryLifecycleError::TimeoutConfiguration => (
-            "field_encryption.erase_history.database_configuration.refused",
+            "field-encryption.erase-history.database-configuration.refused",
             "database",
             "the migration database configuration was refused",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::VerifyMigrationAuthority,
         ),
         FieldEncryptionEraseHistoryLifecycleError::Audit => (
-            "field_encryption.erase_history.audit.unavailable",
+            "field-encryption.erase-history.audit.unavailable",
             "audit",
             "the field-encryption erase-history audit destination could not be opened; check the audit path and its directory permissions",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         FieldEncryptionEraseHistoryLifecycleError::Runtime => (
-            "field_encryption.erase_history.runtime.unavailable",
+            "field-encryption.erase-history.runtime.unavailable",
             "runtime",
             "the field-encryption erase-history runtime is unavailable",
             DiagnosticArtifact::FieldEncryption,
@@ -4088,21 +4088,21 @@ fn field_encryption_erase_history_failure(
         ),
         FieldEncryptionEraseHistoryLifecycleError::Erase(error) => match error {
             registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::InvalidInput => (
-                "field_encryption.erase_history.request.refused",
+                "field-encryption.erase-history.request.refused",
                 "requestFile",
                 "the erase-history request document was refused",
                 DiagnosticArtifact::FieldEncryption,
                 SuggestedAction::PrepareFieldEncryptionEraseRequest,
             ),
             registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::MigrationAuthority => (
-                "field_encryption.erase_history.migration_authority.refused",
+                "field-encryption.erase-history.migration-authority.refused",
                 "database",
                 "field-encryption history erasure requires the configured migration authority",
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::VerifyMigrationAuthority,
             ),
             registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::NoPendingPlaintextHistory => (
-                "field_encryption.erase_history.no_pending_plaintext",
+                "field-encryption.erase-history.no-pending-plaintext",
                 "history",
                 "no retained plaintext history matches an erase-and-rebaseline flip, so there is nothing to erase",
                 DiagnosticArtifact::FieldEncryption,
@@ -4113,7 +4113,7 @@ fn field_encryption_erase_history_failure(
             ) => match error {
                 registry_breg::history_erasure::HistoryErasureError::InvalidInput
                 | registry_breg::history_erasure::HistoryErasureError::TargetUnavailable => (
-                    "field_encryption.erase_history.target.refused",
+                    "field-encryption.erase-history.target.refused",
                     "history",
                     "a pending per-record erasure was refused; the record that exceeded a bound \
                      is not named, and already-erased records stay erased, so the lifecycle can \
@@ -4122,21 +4122,21 @@ fn field_encryption_erase_history_failure(
                     SuggestedAction::ReviewRetainedHistory,
                 ),
                 registry_breg::history_erasure::HistoryErasureError::MigrationAuthority => (
-                    "field_encryption.erase_history.migration_authority.refused",
+                    "field-encryption.erase-history.migration-authority.refused",
                     "database",
                     "field-encryption history erasure requires the configured migration authority",
                     DiagnosticArtifact::DatabaseMigration,
                     SuggestedAction::VerifyMigrationAuthority,
                 ),
                 registry_breg::history_erasure::HistoryErasureError::CachedResponseUnreadable => (
-                    "field_encryption.erase_history.cached_response.invalid",
+                    "field-encryption.erase-history.cached-response.invalid",
                     "history",
                     "field-encryption history erasure found a cached response no JSON reader accepts",
                     DiagnosticArtifact::FieldEncryption,
                     SuggestedAction::VerifyMigrationAuthority,
                 ),
                 registry_breg::history_erasure::HistoryErasureError::MigrationLockHeld => (
-                    "field_encryption.erase_history.in_progress",
+                    "field-encryption.erase-history.in-progress",
                     "database",
                     "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Records already erased stay erased. Retry the same erase-history once it releases",
                     DiagnosticArtifact::DatabaseMigration,
@@ -4144,7 +4144,7 @@ fn field_encryption_erase_history_failure(
                 ),
                 registry_breg::history_erasure::HistoryErasureError::HistoryNotReady
                 | registry_breg::history_erasure::HistoryErasureError::Unavailable => (
-                    "field_encryption.erase_history.unavailable",
+                    "field-encryption.erase-history.unavailable",
                     "history",
                     "field-encryption history erasure storage is unavailable",
                     DiagnosticArtifact::FieldEncryption,
@@ -4155,35 +4155,35 @@ fn field_encryption_erase_history_failure(
                 error,
             ) => match error {
                 registry_breg::history_rebaseline::HistoryRebaselineError::InvalidInput => (
-                    "field_encryption.erase_history.request.refused",
+                    "field-encryption.erase-history.request.refused",
                     "requestFile",
                     "the erase-history request document was refused",
                     DiagnosticArtifact::FieldEncryption,
                     SuggestedAction::PrepareFieldEncryptionEraseRequest,
                 ),
                 registry_breg::history_rebaseline::HistoryRebaselineError::MigrationAuthority => (
-                    "field_encryption.erase_history.migration_authority.refused",
+                    "field-encryption.erase-history.migration-authority.refused",
                     "database",
                     "the closing rebaseline requires the configured migration authority",
                     DiagnosticArtifact::DatabaseMigration,
                     SuggestedAction::VerifyMigrationAuthority,
                 ),
                 registry_breg::history_rebaseline::HistoryRebaselineError::CoverageComplete => (
-                    "field_encryption.erase_history.rebaseline.coverage_complete",
+                    "field-encryption.erase-history.rebaseline.coverage-complete",
                     "history",
                     "snapshot coverage was already complete after the erasures, so no rebaseline ran",
                     DiagnosticArtifact::FieldEncryption,
                     SuggestedAction::ReviewRetainedHistory,
                 ),
                 registry_breg::history_rebaseline::HistoryRebaselineError::UnindexedRevisions => (
-                    "field_encryption.erase_history.rebaseline.revisions_unindexed",
+                    "field-encryption.erase-history.rebaseline.revisions-unindexed",
                     "history",
                     "the closing rebaseline requires every retained journal head to be indexed by a commit",
                     DiagnosticArtifact::FieldEncryption,
                     SuggestedAction::ReviewRetainedHistory,
                 ),
                 registry_breg::history_rebaseline::HistoryRebaselineError::LiveHistoryMismatch => (
-                    "field_encryption.erase_history.rebaseline.live_rows_unverified",
+                    "field-encryption.erase-history.rebaseline.live-rows-unverified",
                     "history",
                     "the closing rebaseline requires the retained journal head to reproduce every live \
                      row; the first record that disagrees is not named, so compare the live rows with \
@@ -4192,7 +4192,7 @@ fn field_encryption_erase_history_failure(
                     SuggestedAction::ReviewRetainedHistory,
                 ),
                 registry_breg::history_rebaseline::HistoryRebaselineError::MigrationLockHeld => (
-                    "field_encryption.erase_history.in_progress",
+                    "field-encryption.erase-history.in-progress",
                     "database",
                     "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Records already erased stay erased. Retry the same erase-history once it releases",
                     DiagnosticArtifact::DatabaseMigration,
@@ -4200,7 +4200,7 @@ fn field_encryption_erase_history_failure(
                 ),
                 registry_breg::history_rebaseline::HistoryRebaselineError::HistoryNotReady
                 | registry_breg::history_rebaseline::HistoryRebaselineError::Unavailable => (
-                    "field_encryption.erase_history.rebaseline.unavailable",
+                    "field-encryption.erase-history.rebaseline.unavailable",
                     "history",
                     "the closing rebaseline storage is unavailable",
                     DiagnosticArtifact::FieldEncryption,
@@ -4208,14 +4208,14 @@ fn field_encryption_erase_history_failure(
                 ),
             },
             registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::MigrationLockHeld => (
-                "field_encryption.erase_history.in_progress",
+                "field-encryption.erase-history.in-progress",
                 "database",
                 "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Records already erased stay erased. Retry the same erase-history once it releases",
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::RetryAfterMigrationLockReleases,
             ),
             registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureError::Unavailable => (
-                "field_encryption.erase_history.unavailable",
+                "field-encryption.erase-history.unavailable",
                 "history",
                 "field-encryption history erasure storage is unavailable",
                 DiagnosticArtifact::FieldEncryption,
@@ -4314,7 +4314,7 @@ fn unavailable_webhook_event(compiled: &CompiledRegistry) -> FailureReport {
         ok: false,
         command: "webhook sample",
         diagnostics: vec![tool_diagnostic(
-            diagnostic("webhook.sample.event_refused", "event", &message),
+            diagnostic("webhook.sample.event-refused", "event", &message),
             DiagnosticArtifact::WebhookSample,
             SuggestedAction::SelectWebhookEvent,
         )],
@@ -4327,14 +4327,14 @@ fn webhook_lifecycle_failure(command: &'static str, error: WebhookLifecycleError
             return package_pin_failure(command, "webhook.package.refused", "package", &mismatch)
         }
         WebhookLifecycleError::Event => (
-            "webhook.sample.event_refused",
+            "webhook.sample.event-refused",
             "event",
             "the selected webhook event is unavailable",
             DiagnosticArtifact::WebhookSample,
             SuggestedAction::SelectWebhookEvent,
         ),
         WebhookLifecycleError::Sample => (
-            "webhook.sample.render_refused",
+            "webhook.sample.render-refused",
             "sample",
             "the webhook sample could not be rendered",
             DiagnosticArtifact::WebhookSample,
@@ -4500,7 +4500,7 @@ fn statistics_lifecycle_failure(
             "the access-token file must be an absolute, bounded regular file containing one bearer token",
         ),
         StatisticsLifecycleError::IdempotencyKey => (
-            "statistics.idempotency_key.invalid",
+            "statistics.idempotency-key.invalid",
             "--idempotency-key",
             "the idempotency key must use the bounded visible-ASCII header grammar",
         ),
@@ -4538,19 +4538,19 @@ fn statistics_client_diagnostic(
         } => {
             let (code, message) = match error.refusal_code().map(|reason| reason.as_str()) {
                 Some("period-not-ended") => (
-                    "statistics.release.period_not_ended",
+                    "statistics.release.period-not-ended",
                     "the period has not ended; publish after its end date",
                 ),
                 Some("before-first-period") => (
-                    "statistics.release.before_first_period",
+                    "statistics.release.before-first-period",
                     "the period is before the dataset's first period; select an eligible period",
                 ),
                 Some("provisional-after-final") => (
-                    "statistics.release.provisional_after_final",
+                    "statistics.release.provisional-after-final",
                     "a final release already exists; publish a final revision instead",
                 ),
                 Some("already-withdrawn") => (
-                    "statistics.release.already_withdrawn",
+                    "statistics.release.already-withdrawn",
                     "the version has already been withdrawn",
                 ),
                 _ => (
@@ -4645,7 +4645,7 @@ fn data_lifecycle_failure(
 ) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
         DataLifecycleError::PackagePath => (
-            format!("{prefix}.package.path_invalid"),
+            format!("{prefix}.package.path-invalid"),
             "package",
             "the package path must be absolute",
             DiagnosticArtifact::VerifiedPackage,
@@ -4707,42 +4707,42 @@ fn data_lifecycle_failure(
             SuggestedAction::VerifyDataCheckpoint,
         ),
         DataLifecycleError::ImportRunBlocked(Some(BRegIngestionBlockedReason::ActivePackageChanged)) => (
-            format!("{prefix}.ingestion_run.blocked"),
+            format!("{prefix}.ingestion-run.blocked"),
             "ingestionRun",
             "the ingestion run is blocked because the active package changed; the run stays inspectable, and a new import under the active package needs a fresh checkpoint path",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::VerifyDataCheckpoint,
         ),
         DataLifecycleError::ImportRunBlocked(Some(BRegIngestionBlockedReason::ImportAuthorityClosed)) => (
-            format!("{prefix}.ingestion_run.import_authority_closed"),
+            format!("{prefix}.ingestion-run.import-authority-closed"),
             "ingestionRun",
             "the ingestion run is blocked because its import authority closed, expired, or has too little volume left for the next chunk; the committed chunks stay, and the remaining items need a new authority (bregctl import-authority list, then open) and a fresh checkpoint path",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::VerifyDataCheckpoint,
         ),
         DataLifecycleError::ImportRunBlocked(None) => (
-            format!("{prefix}.ingestion_run.blocked"),
+            format!("{prefix}.ingestion-run.blocked"),
             "ingestionRun",
             "the ingestion run is blocked and refuses further chunks; read the run to see its blockedReason, and continue in a new import with a fresh checkpoint path",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::VerifyDataCheckpoint,
         ),
         DataLifecycleError::IngestionRunPrecondition { through_import: true } => (
-            format!("{prefix}.ingestion_run.import_authority_required"),
+            format!("{prefix}.ingestion-run.import-authority-required"),
             "ingestionRun",
             "the ingestion run was refused because no open import authority admits it: none is open for the entity, it names another profile, it expired, it has too little volume left, or it lists other input digests than the one the run announces; check bregctl import-authority list and open one that covers this input",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::CorrectDataBinding,
         ),
         DataLifecycleError::IngestionRunPrecondition { through_import: false } => (
-            format!("{prefix}.ingestion_run.precondition_failed"),
+            format!("{prefix}.ingestion-run.precondition-failed"),
             "ingestionRun",
             "the ingestion run was refused on a failed precondition",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::CorrectDataBinding,
         ),
         DataLifecycleError::ImportRunCancelled => (
-            format!("{prefix}.ingestion_run.cancelled"),
+            format!("{prefix}.ingestion-run.cancelled"),
             "ingestionRun",
             "the ingestion run was cancelled and refuses new chunks; start a new import with a fresh checkpoint path",
             DiagnosticArtifact::DataOperation,
@@ -4756,14 +4756,14 @@ fn data_lifecycle_failure(
             SuggestedAction::CorrectDataInput,
         ),
         DataLifecycleError::BRegUrl => (
-            format!("{prefix}.breg_url.refused"),
+            format!("{prefix}.breg-url.refused"),
             "bregUrl",
             "the Base Registry Engine URL was refused",
             DiagnosticArtifact::DataTransport,
             SuggestedAction::VerifyDataTransport,
         ),
         DataLifecycleError::Token => (
-            format!("{prefix}.access_token.refused"),
+            format!("{prefix}.access-token.refused"),
             "accessToken",
             "the access token file was refused",
             DiagnosticArtifact::DataTransport,
@@ -4839,7 +4839,7 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
                 )
                 .map_err(|error| match error {
                     RuntimePackageInspectionError::RuntimeConfigPath => diff_failure(
-                        "diff.runtime_config.path_invalid",
+                        "diff.runtime-config.path-invalid",
                         "runtimeConfig",
                         "the runtime configuration path must be absolute",
                     ),
@@ -4848,7 +4848,7 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
                     }
                     RuntimePackageInspectionError::Package(error) => package_diff_failure(error),
                     RuntimePackageInspectionError::SharedPackage(message) => {
-                        diff_failure("diff.package.integrity_refused", "package", &message)
+                        diff_failure("diff.package.integrity-refused", "package", &message)
                     }
                 })?;
                 (
@@ -5019,7 +5019,7 @@ fn measure_schema_fingerprint(args: &TestArgs) -> Result<SchemaFingerprintReport
 fn baseline_fingerprint_drift_finding(drift: &BaselineFingerprintDrift) -> Diagnostic {
     Diagnostic {
         severity: DiagnosticSeverity::Finding,
-        code: "migration.rehearsal.baseline_fingerprint_drift".to_owned(),
+        code: "migration.rehearsal.baseline-fingerprint-drift".to_owned(),
         path: "baselinePackage".to_owned(),
         message: format!(
             "the predecessor schema this bregctl installs measures {}, but its package binds {}; \
@@ -5042,7 +5042,7 @@ fn capture_rehearsal_baseline(
     let unavailable = || {
         candidate_failure(
             command,
-            "migration.rehearsal.baseline_unavailable",
+            "migration.rehearsal.baseline-unavailable",
             "baselinePackage",
             "the current compiler cannot rebuild the verified predecessor registry from its packaged sources, so the successor migration cannot be rehearsed; run test with a bregctl release that compiles the predecessor sources",
             DiagnosticArtifact::VerifiedPackage,
@@ -5260,19 +5260,19 @@ fn capture_candidate(
             // `ReviewedMigrationError`; a reviewed plan refusal names its kind.
             let code = match error {
                 PackageError::ReviewedMigration(ReviewedMigrationError::Descriptor) => {
-                    "migration.review.descriptor_refused"
+                    "migration.review.descriptor-refused"
                 }
                 PackageError::ReviewedMigration(ReviewedMigrationError::Coverage) => {
-                    "migration.review.coverage_refused"
+                    "migration.review.coverage-refused"
                 }
                 PackageError::ReviewedMigration(ReviewedMigrationError::Sql) => {
-                    "migration.review.sql_refused"
+                    "migration.review.sql-refused"
                 }
                 PackageError::ReviewedMigration(ReviewedMigrationError::Evidence) => {
-                    "migration.review.evidence_refused"
+                    "migration.review.evidence-refused"
                 }
                 PackageError::ReviewedMigration(ReviewedMigrationError::Closure) => {
-                    "migration.review.closure_refused"
+                    "migration.review.closure-refused"
                 }
                 _ => "migration.review.refused",
             };
@@ -5388,14 +5388,14 @@ fn status_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             return runtime_config_failure("status", error);
         }
         ApplyLifecycleError::RuntimeConfigPath => (
-            "status.runtime_config.path_invalid",
+            "status.runtime-config.path-invalid",
             "runtimeConfig",
             "the runtime configuration path must be absolute",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         ApplyLifecycleError::DatabaseConfiguration | ApplyLifecycleError::TimeoutConfiguration => (
-            "status.database_configuration.refused",
+            "status.database-configuration.refused",
             "database",
             "the migration database configuration was refused: correct database.migrationUrlRef, its secret, and the migration timeouts in the runtime configuration, then run `bregctl status` again",
             DiagnosticArtifact::DatabaseMigration,
@@ -5477,35 +5477,35 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
             SuggestedAction::ChooseSafeOutputDirectory,
         ),
         PackageLifecycleError::TestReceiptMissing => package_failure(
-            "package.test_receipt.missing",
+            "package.test-receipt.missing",
             "testReceipt",
             "the schema-test receipt is required",
             DiagnosticArtifact::SchemaTestReceipt,
             SuggestedAction::SupplySchemaTestReceipt,
         ),
         PackageLifecycleError::TestReceiptRefused { message } => package_failure(
-            "package.test_receipt.refused",
+            "package.test-receipt.refused",
             "testReceipt",
             &message,
             DiagnosticArtifact::SchemaTestReceipt,
             SuggestedAction::SupplySchemaTestReceipt,
         ),
         PackageLifecycleError::Journeys(_) => package_failure(
-            "package.test_receipt.refused",
+            "package.test-receipt.refused",
             "testReceipt",
             "the packaged journey suite was refused",
             DiagnosticArtifact::SchemaTestReceipt,
             SuggestedAction::SupplySchemaTestReceipt,
         ),
         PackageLifecycleError::ReceiptDocument(_) => package_failure(
-            "package.test_receipt.invalid",
+            "package.test-receipt.invalid",
             "testReceipt",
             "the schema-test receipt was refused",
             DiagnosticArtifact::SchemaTestReceipt,
             SuggestedAction::SupplySchemaTestReceipt,
         ),
         PackageLifecycleError::TestReceiptFingerprint { receipt, supplied } => package_failure(
-            "package.test_receipt.fingerprint_mismatch",
+            "package.test-receipt.fingerprint-mismatch",
             "testReceipt.targetManagedSchemaFingerprint",
             &format!(
                 "--schema-fingerprint is {supplied} but the schema-test receipt was produced for {receipt}"
@@ -5518,7 +5518,7 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
             receipt,
             package,
         } => package_failure(
-            "package.test_receipt.candidate_mismatch",
+            "package.test-receipt.candidate-mismatch",
             &format!("testReceipt.{field}"),
             &format!(
                 "the schema-test receipt records {field} {receipt} but this candidate builds {package}; run test again for this candidate"
@@ -5527,7 +5527,7 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
             SuggestedAction::SupplySchemaTestReceipt,
         ),
         PackageLifecycleError::TestReceiptEvidence { message } => package_failure(
-            "package.test_receipt.evidence_mismatch",
+            "package.test-receipt.evidence-mismatch",
             "testReceipt",
             &message,
             DiagnosticArtifact::SchemaTestReceipt,
@@ -5544,44 +5544,44 @@ fn schema_test_runtime_setup_failure(
 
     let (code, path, recovery) = match &error {
         SchemaTestRuntimeSetupError::Authentication => (
-            "test.authentication.setup_failed",
+            "test.authentication.setup-failed",
             "authentication",
             "check the authentication configuration, OIDC key source availability, and referenced secrets before retrying",
         ),
         SchemaTestRuntimeSetupError::Audit => (
-            "test.audit.setup_failed",
+            "test.audit.setup-failed",
             "audit",
             "check the audit configuration and referenced key material before retrying",
         ),
         SchemaTestRuntimeSetupError::Cursor => (
-            "test.cursor.setup_failed",
+            "test.cursor.setup-failed",
             "cursor",
             "check the cursor configuration and referenced key material before retrying",
         ),
         SchemaTestRuntimeSetupError::EventDestinations(
             EventDestinationActivationError::InventoryMismatch,
         ) => (
-            "test.event_destinations.inventory_mismatch",
+            "test.event-destinations.inventory-mismatch",
             "eventDestinations",
             "configure exactly the logical destination bindings required by the candidate event deliveries before retrying",
         ),
         SchemaTestRuntimeSetupError::EventDestinations(_) => (
-            "test.event_destinations.activation_failed",
+            "test.event-destinations.activation-failed",
             "eventDestinations",
             "check the destination bindings, delivery ceilings, and referenced secret, signing, and TLS material before retrying",
         ),
         SchemaTestRuntimeSetupError::Evidence => (
-            "test.evidence_providers.activation_failed",
+            "test.evidence-providers.activation-failed",
             "evidenceProviders",
             "check the Evidence provider bindings and referenced credentials against the candidate before retrying",
         ),
         SchemaTestRuntimeSetupError::ReviewAuthorities => (
-            "test.review_authorities.activation_failed",
+            "test.review-authorities.activation-failed",
             "reviewAuthorities",
             "bind every review authority the candidate's change requests name, and check the referenced credentials, before retrying",
         ),
         SchemaTestRuntimeSetupError::WasmExecution => (
-            "test.wasm_execution.setup_failed",
+            "test.wasm-execution.setup-failed",
             "wasmExecution",
             "check the WASM execution budgets and backend support before retrying",
         ),
@@ -5653,7 +5653,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
                 command: "test",
                 diagnostics: vec![tool_diagnostic(
                     diagnostic(
-                        "migration.review.fingerprint_mismatch",
+                        "migration.review.fingerprint-mismatch",
                         "reviewedMigrations",
                         &format!(
                             "the reviewed target fingerprint {declared} does not match the schema measured on the disposable database, {measured}; measure the exact candidate with test --fingerprint-only, then correct the review evidence before retrying"
@@ -5679,7 +5679,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
     };
     let (code, path, message, artifact, action) = match error {
         TestLifecycleError::RuntimeConfigPath => (
-            "test.runtime_config.path_invalid",
+            "test.runtime-config.path-invalid",
             "runtimeConfig",
             "the runtime configuration path must be absolute",
             DiagnosticArtifact::RuntimeConfiguration,
@@ -5777,12 +5777,12 @@ fn migration_rehearsal_failure(error: MigrationRehearsalError) -> FailureReport 
             SuggestedAction::CorrectPackageBuild,
         ),
         MigrationRehearsalError::BaselineNotReproducible => (
-            "migration.rehearsal.baseline_not_reproducible",
+            "migration.rehearsal.baseline-not-reproducible",
             "baselinePackage".to_owned(),
             SuggestedAction::VerifyPackageIntegrity,
         ),
         MigrationRehearsalError::CompilerStatement { statement_id, .. } => (
-            "migration.rehearsal.compiler_statement_failed",
+            "migration.rehearsal.compiler-statement-failed",
             format!("migrationPlan.statements[{statement_id}]"),
             SuggestedAction::CorrectPackageBuild,
         ),
@@ -5797,7 +5797,7 @@ fn migration_rehearsal_failure(error: MigrationRehearsalError) -> FailureReport 
             phase,
             assertion_id,
         } => (
-            "migration.rehearsal.assertion_failed",
+            "migration.rehearsal.assertion-failed",
             format!("reviewedMigrations[{migration_id}].{phase}Assertions[{assertion_id}]"),
             SuggestedAction::CorrectPackageBuild,
         ),
@@ -5806,7 +5806,7 @@ fn migration_rehearsal_failure(error: MigrationRehearsalError) -> FailureReport 
             step_id,
             ..
         } => (
-            "migration.rehearsal.step_failed",
+            "migration.rehearsal.step-failed",
             format!("reviewedMigrations[{migration_id}].steps[{step_id}]"),
             SuggestedAction::CorrectPackageBuild,
         ),
@@ -5815,12 +5815,12 @@ fn migration_rehearsal_failure(error: MigrationRehearsalError) -> FailureReport 
             step_id,
             ..
         } => (
-            "migration.rehearsal.history_step_refused",
+            "migration.rehearsal.history-step-refused",
             format!("reviewedMigrations[{migration_id}].steps[{step_id}]"),
             SuggestedAction::CorrectPackageBuild,
         ),
         MigrationRehearsalError::FinalSchemaMismatch => (
-            "migration.rehearsal.schema_mismatch",
+            "migration.rehearsal.schema-mismatch",
             "reviewedMigrations".to_owned(),
             SuggestedAction::CorrectPackageBuild,
         ),
@@ -5886,7 +5886,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 command,
                 diagnostics: vec![tool_diagnostic(
                     diagnostic(
-                        "apply.package.digest_mismatch",
+                        "apply.package.digest-mismatch",
                         "package",
                         &format!(
                             "--expected-digest is {expected} but the package at --package is {found}; nothing was changed. Run `bregctl plan` on the intended package and pass the digest it reports"
@@ -5901,7 +5901,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
     };
     let (code, path, message, artifact, action) = match error {
         ApplyLifecycleError::RuntimeConfigPath => (
-            "apply.runtime_config.path_invalid",
+            "apply.runtime-config.path-invalid",
             "runtimeConfig",
             "the runtime configuration path must be absolute",
             DiagnosticArtifact::RuntimeConfiguration,
@@ -5910,7 +5910,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
         ApplyLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
         ApplyLifecycleError::PackageDigestMismatch { .. } => unreachable!("handled before match"),
         ApplyLifecycleError::TargetPackagePath => (
-            "apply.package.path_invalid",
+            "apply.package.path-invalid",
             "package",
             "the target package path must be absolute",
             DiagnosticArtifact::VerifiedPackage,
@@ -5940,35 +5940,35 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             SuggestedAction::VerifyMigrationAuthority,
         ),
         ApplyLifecycleError::EventDestinations => (
-            "apply.event_destinations.refused",
+            "apply.event-destinations.refused",
             "eventDestinations",
             "the event destination bindings were refused",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         ApplyLifecycleError::FieldEncryptionConfiguration => (
-            "apply.field_encryption.configuration_refused",
+            "apply.field-encryption.configuration-refused",
             "fieldEncryption.provider",
             "the field-encryption key provider is required and must resolve for this package",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         ApplyLifecycleError::FieldEncryptionCustody => (
-            "apply.field_encryption.custody_refused",
+            "apply.field-encryption.custody-refused",
             "fieldEncryption.provider",
             "a local-file field-encryption key is allowed only for local database initialization",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         ApplyLifecycleError::DatabaseConfiguration | ApplyLifecycleError::TimeoutConfiguration => (
-            "apply.database_configuration.refused",
+            "apply.database-configuration.refused",
             "database",
             "the migration database configuration was refused",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::VerifyMigrationAuthority,
         ),
         ApplyLifecycleError::BackupArgument => (
-            "apply.backup_evidence.refused",
+            "apply.backup-evidence.refused",
             "backup",
             "the destructive backup evidence argument was refused",
             DiagnosticArtifact::PackageActivation,
@@ -6026,7 +6026,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 return source_failure(
                     command,
                     diagnostic(
-                        "field_encryption.lookup.collision",
+                        "field-encryption.lookup.collision",
                         &format!("entities[{entity_id}]"),
                         &format!(
                             "Existing records normalize onto one unique blind index, so the \
@@ -6049,7 +6049,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 return source_failure(
                     command,
                     diagnostic(
-                        "field_encryption.history.retained_request_snapshot",
+                        "field-encryption.history.retained-request-snapshot",
                         &format!("entities[{entity_id}].fields[{field_id}].encryption"),
                         "Retained change-request snapshots still contain plaintext for this field. Choose erase-and-rebaseline history handling, or remove the retained snapshots through the documented operator workflow before retrying the exact pinned target.",
                     ),
@@ -6072,14 +6072,14 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 SuggestedAction::CorrectRuntimeConfiguration,
             ),
             registry_breg::migration::MigrationError::OperatorReference => (
-                "apply.operator_reference.refused",
+                "apply.operator-reference.refused",
                 "operatorReference",
                 "--operator-reference must be 1 to 512 bytes without control characters, and the runtime audit profile must be keyed to record its hash: correct the reference or the audit profile and apply again. Nothing was changed",
                 DiagnosticArtifact::RuntimeConfiguration,
                 SuggestedAction::CorrectRuntimeConfiguration,
             ),
             registry_breg::migration::MigrationError::ActivePackageMismatch => (
-                "apply.package.active_mismatch",
+                "apply.package.active-mismatch",
                 "package.root",
                 "package.root names a package the database does not record as its active, ready package: set package.root to the active package directory, which `bregctl status` reports, and apply again; if the database has never been activated, apply it with --initial; if the database is pinned in maintenance, assess it with migration reconcile. Nothing was changed",
                 DiagnosticArtifact::PackageActivation,
@@ -6091,7 +6091,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                     command,
                     diagnostics: vec![tool_diagnostic(
                         diagnostic(
-                            "apply.package.already_active",
+                            "apply.package.already-active",
                             "package",
                             "the database already runs this package with the configured database roles, so there is nothing to apply; run `bregctl status` to see the active package. Nothing was changed",
                         ),
@@ -6101,14 +6101,14 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 };
             }
             registry_breg::migration::MigrationError::DatabaseMismatch => (
-                "apply.database.identity_mismatch",
+                "apply.database.identity-mismatch",
                 "identity.databaseId",
                 "the database records another database id than identity.databaseId: point database.migrationUrlRef at the database identity.databaseId names, or correct identity.databaseId. Nothing was changed",
                 DiagnosticArtifact::RuntimeConfiguration,
                 SuggestedAction::CorrectRuntimeConfiguration,
             ),
             registry_breg::migration::MigrationError::EmptyPlan => (
-                "apply.package.empty_plan",
+                "apply.package.empty-plan",
                 "package",
                 "the successor package has nothing to apply: its migration plan has no schema statement and no reviewed migration, and it is not an access or disclosure change alone; keep the active package until the registry model changes, then build the successor from that change. Nothing was changed",
                 DiagnosticArtifact::VerifiedPackage,
@@ -6123,14 +6123,14 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             ),
             registry_breg::migration::MigrationError::BackupEvidence
             | registry_breg::migration::MigrationError::BackupBindingDocument(_) => (
-                "apply.backup_evidence.refused",
+                "apply.backup-evidence.refused",
                 "backup",
                 "the destructive backup evidence was refused",
                 DiagnosticArtifact::PackageActivation,
                 SuggestedAction::CorrectPackageBuild,
             ),
             registry_breg::migration::MigrationError::HistoryCoverage => (
-                "apply.history.coverage_incomplete",
+                "apply.history.coverage-incomplete",
                 "history",
                 "retained history coverage does not admit a successor package, so maintenance state was not changed: finish a pending field-encryption erase-history run, or run history rebaseline after a history erasure, then apply the same package again; see https://docs.registrystack.org/operate/breg-retention/#restore-snapshot-coverage-after-an-erasure",
                 DiagnosticArtifact::HistoryRebaseline,
@@ -6144,7 +6144,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 SuggestedAction::VerifyMigrationAuthority,
             ),
             registry_breg::migration::MigrationError::MigrationLockHeld => (
-                "apply.database.in_progress",
+                "apply.database.in-progress",
                 "database",
                 "another session held the exclusive migration lock past the lock timeout before maintenance began, so an apply, an adoption, or a migration reconcile is in progress. Nothing was changed. Retry the same apply once it releases",
                 DiagnosticArtifact::DatabaseMigration,
@@ -6154,7 +6154,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 return source_failure(
                     command,
                     diagnostic(
-                        "apply.migration.statement_failed",
+                        "apply.migration.statement-failed",
                         "database",
                         &format!(
                             "PostgreSQL refused an apply statement with {failure}. The exact target remains pinned in maintenance: fix the cause the SQLSTATE and the named objects point at and retry the same target, or assess the pinned target with migration reconcile"
@@ -6172,7 +6172,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 SuggestedAction::ReconcileFailedMigration,
             ),
             registry_breg::migration::MigrationError::ActiveRequestProposals => (
-                "apply.request_proposals.active",
+                "apply.request-proposals.active",
                 "changeRequest",
                 "active request proposals require explicit rebase or cancellation before activating changed request contracts",
                 DiagnosticArtifact::PackageActivation,
@@ -6189,7 +6189,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 return source_failure(
                     command,
                     diagnostic(
-                        "apply.runtime_role.can_write",
+                        "apply.runtime-role.can-write",
                         "database.roles.runtime",
                         &format!("{finding}. Nothing was changed"),
                     ),
@@ -6201,7 +6201,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 return source_failure(
                     "apply",
                     diagnostic(
-                        "apply.resume.roles_differ",
+                        "apply.resume.roles-differ",
                         "database.roles",
                         &format!("{error}. Nothing was changed"),
                     ),
@@ -6213,7 +6213,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 return source_failure(
                     "apply",
                     diagnostic(
-                        "apply.successor.roles_differ",
+                        "apply.successor.roles-differ",
                         "database.roles",
                         &format!("{error}. Nothing was changed"),
                     ),
@@ -6405,7 +6405,7 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
     };
     let (code, path, message, artifact, action) = match error {
         ReconcileLifecycleError::RuntimeConfigPath => (
-            "migration.reconcile.runtime_config.path_invalid",
+            "migration.reconcile.runtime-config.path-invalid",
             "runtimeConfig",
             "the runtime configuration path must be absolute",
             DiagnosticArtifact::RuntimeConfiguration,
@@ -6414,14 +6414,14 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
         ReconcileLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
         ReconcileLifecycleError::ActiveRegistry(_) => unreachable!("handled before match"),
         ReconcileLifecycleError::TargetPackagePath => (
-            "migration.reconcile.package.path_invalid",
+            "migration.reconcile.package.path-invalid",
             "package",
             "the pinned target package path must be absolute",
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::VerifyPackagePath,
         ),
         ReconcileLifecycleError::OperatorReference => (
-            "migration.reconcile.operator_reference.refused",
+            "migration.reconcile.operator-reference.refused",
             "operatorReference",
             "the operator reference must be present, bounded, and free of control characters",
             DiagnosticArtifact::CommandArguments,
@@ -6445,7 +6445,7 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
         }
         ReconcileLifecycleError::DatabaseConfiguration
         | ReconcileLifecycleError::TimeoutConfiguration => (
-            "migration.reconcile.database_configuration.refused",
+            "migration.reconcile.database-configuration.refused",
             "database",
             "the migration database configuration was refused",
             DiagnosticArtifact::DatabaseMigration,
@@ -6474,7 +6474,7 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
                 SuggestedAction::CorrectRuntimeConfiguration,
             ),
             ReconcileError::MigrationAuthority => (
-                "migration.reconcile.migration_authority.refused",
+                "migration.reconcile.migration-authority.refused",
                 "database",
                 "migration reconciliation requires the configured migration authority",
                 DiagnosticArtifact::DatabaseMigration,
@@ -6496,7 +6496,7 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
                     SuggestedAction::CorrectCommandUsage,
                 ),
                 ReconcileOutcome::InProgress => (
-                    "migration.reconcile.outcome.in_progress",
+                    "migration.reconcile.outcome.in-progress",
                     "database",
                     "another session holds the exclusive migration lock; reconcile once it releases",
                     DiagnosticArtifact::DatabaseMigration,
@@ -6549,7 +6549,7 @@ fn inspection_failure(
                 command,
                 diagnostics: vec![tool_diagnostic(
                     diagnostic(
-                        &format!("{prefix}.package.integrity_refused"),
+                        &format!("{prefix}.package.integrity-refused"),
                         "package",
                         &message,
                     ),
@@ -6562,7 +6562,7 @@ fn inspection_failure(
     };
     let (code, path, message, artifact, action) = match error {
         RuntimePackageInspectionError::RuntimeConfigPath => (
-            format!("{prefix}.runtime_config.path_invalid"),
+            format!("{prefix}.runtime-config.path-invalid"),
             "runtimeConfig",
             "the runtime configuration path must be absolute",
             DiagnosticArtifact::RuntimeConfiguration,
@@ -6596,12 +6596,12 @@ fn inspection_failure(
 /// by every command that reads one.
 fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
     match error {
-        PackageError::UnsafePath => ("path_refused", SuggestedAction::VerifyPackagePath),
+        PackageError::UnsafePath => ("path-refused", SuggestedAction::VerifyPackagePath),
         PackageError::Permissions => (
-            "permissions_refused",
+            "permissions-refused",
             SuggestedAction::VerifyPackagePermissions,
         ),
-        PackageError::Binding => ("binding_refused", SuggestedAction::VerifyPackageBinding),
+        PackageError::Binding => ("binding-refused", SuggestedAction::VerifyPackageBinding),
         PackageError::Envelope
         | PackageError::ExpectedDigestMismatch(_)
         | PackageError::Closure
@@ -6610,13 +6610,13 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
         | PackageError::Derivation
         | PackageError::MigrationPlan
         | PackageError::ReviewedMigration(_) => {
-            ("integrity_refused", SuggestedAction::VerifyPackageIntegrity)
+            ("integrity-refused", SuggestedAction::VerifyPackageIntegrity)
         }
         PackageError::Bounds | PackageError::Read => {
-            ("package_refused", SuggestedAction::VerifyPackageIntegrity)
+            ("package-refused", SuggestedAction::VerifyPackageIntegrity)
         }
         PackageError::RetiredApiVersion => {
-            ("retired_api_version", SuggestedAction::CorrectPackageBuild)
+            ("retired-api-version", SuggestedAction::CorrectPackageBuild)
         }
     }
 }
@@ -6667,7 +6667,7 @@ fn active_registry_failure(
             SuggestedAction::VerifyMigrationAuthority,
         ),
         ActiveRegistryError::InProgress => (
-            "in_progress",
+            "in-progress",
             "database",
             "another session holds the exclusive migration lock, so an apply, an adoption, or a migration reconcile is in progress; rerun the command once it releases",
             DiagnosticArtifact::DatabaseMigration,
@@ -6688,14 +6688,14 @@ fn active_registry_failure(
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         ActiveRegistryError::DatabaseMismatch => (
-            "database_mismatch",
+            "database-mismatch",
             "identity.databaseId",
             "the database records another database id than identity.databaseId; point database.migrationUrlRef at the database identity.databaseId names, or correct identity.databaseId",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         ActiveRegistryError::PackageMismatch => (
-            "package_mismatch",
+            "package-mismatch",
             "package.root",
             "package.root names a package the database does not run; set package.root to the active package directory, which `bregctl status` reports",
             DiagnosticArtifact::RuntimeConfiguration,
@@ -6706,7 +6706,7 @@ fn active_registry_failure(
         ok: false,
         command,
         diagnostics: vec![tool_diagnostic(
-            diagnostic(&format!("{prefix}.active_registry.{suffix}"), path, message),
+            diagnostic(&format!("{prefix}.active-registry.{suffix}"), path, message),
             artifact,
             action,
         )],
@@ -6817,7 +6817,7 @@ fn unsupported_diff_findings(diff: &CompiledRegistryDiff) -> Vec<Diagnostic> {
         .collect()
 }
 
-const REMOVED_VALUES_RETAINED_CODE: &str = "diff.history.removed_values_retained";
+const REMOVED_VALUES_RETAINED_CODE: &str = "diff.history.removed-values-retained";
 
 /// Removing a field or an entity drops its live column or table, but every
 /// revision snapshot recorded before the change still holds the values in the
@@ -7274,7 +7274,7 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
     let fail = |message: &str| {
         source_failure(
             "generate",
-            diagnostic("evidence_source.arguments", "arguments", message),
+            diagnostic("evidence-source.arguments", "arguments", message),
             DiagnosticArtifact::CommandArguments,
             SuggestedAction::CorrectCommandUsage,
         )
@@ -7402,35 +7402,35 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
     }
     let entity_id = args.entity.as_deref().ok_or_else(|| {
         planner_test_failure(
-            "planner_test.entity.required",
+            "planner-test.entity.required",
             "entity",
             "select a request entity or action",
         )
     })?;
     let request_path = args.request.as_ref().ok_or_else(|| {
         planner_test_failure(
-            "planner_test.request.required",
+            "planner-test.request.required",
             "request",
             "provide a synthetic request file",
         )
     })?;
     let entity = compiled.entities().get(entity_id).ok_or_else(|| {
         planner_test_failure(
-            "planner_test.entity.not_found",
+            "planner-test.entity.not-found",
             "entity",
             "select one compiled entity",
         )
     })?;
     let request = entity.change_request.as_ref().ok_or_else(|| {
         planner_test_failure(
-            "planner_test.entity.not_request",
+            "planner-test.entity.not-request",
             "entity",
             "select a compiled change-request entity",
         )
     })?;
     let planner = request.planner.as_ref().ok_or_else(|| {
         planner_test_failure(
-            "planner_test.planner.declarative",
+            "planner-test.planner.declarative",
             "entity",
             "the local planner test accepts only Rhai-backed request entities",
         )
@@ -7438,18 +7438,18 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
 
     let input_bytes = read_bounded_regular_file(
         request_path,
-        "planner_test.request.unavailable",
+        "planner-test.request.unavailable",
         MAX_PLANNER_TEST_REQUEST_BYTES,
     )
     .map_err(|diagnostic| {
         let (code, message) = if diagnostic.code == "breg.source.file-bounds" {
             (
-                "planner_test.request.bounds",
+                "planner-test.request.bounds",
                 "the synthetic request exceeds its fixed size bound",
             )
         } else {
             (
-                "planner_test.request.unavailable",
+                "planner-test.request.unavailable",
                 "the synthetic request must be a readable regular file without symbolic links",
             )
         };
@@ -7457,21 +7457,21 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
     })?;
     let input = parse_json_strict(&input_bytes).map_err(|_| {
         planner_test_failure(
-            "planner_test.request.invalid",
+            "planner-test.request.invalid",
             "request",
             "the synthetic request must be strict JSON",
         )
     })?;
     let input = input.as_object().ok_or_else(|| {
         planner_test_failure(
-            "planner_test.request.invalid",
+            "planner-test.request.invalid",
             "request",
             "the synthetic request must be one JSON object",
         )
     })?;
     if !bounded_planner_test_value(&Value::Object(input.clone()), 0) {
         return Err(planner_test_failure(
-            "planner_test.request.bounds",
+            "planner-test.request.bounds",
             "request",
             "the synthetic request exceeds the closed planner value bounds",
         ));
@@ -7479,7 +7479,7 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
     let declared_fields = planner.request_fields.iter().collect::<BTreeSet<_>>();
     if input.keys().any(|field| !declared_fields.contains(field)) {
         return Err(planner_test_failure(
-            "planner_test.request.fields",
+            "planner-test.request.fields",
             "request",
             "the synthetic request may contain only planner-declared request fields",
         ));
@@ -7503,7 +7503,7 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
             != Some(planner.script_sha256.as_str())
     {
         return Err(planner_test_failure(
-            "planner_test.planner.binding",
+            "planner-test.planner.binding",
             "planner",
             "the planner result did not preserve its compiled identity",
         ));
@@ -7548,7 +7548,7 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
                         .cloned()
                         .ok_or_else(|| {
                             planner_test_failure(
-                                "planner_test.planner.binding",
+                                "planner-test.planner.binding",
                                 "planner",
                                 "the planner result contains an unresolved effect dependency",
                             )
@@ -9413,7 +9413,7 @@ fn render_project_with_module_locks(
 ) -> Result<Vec<u8>, Diagnostic> {
     let original = std::str::from_utf8(original).map_err(|_| {
         diagnostic(
-            "module.lock.render_failed",
+            "module.lock.render-failed",
             "registry.yaml",
             "the project module locks could not be rendered",
         )
@@ -9424,7 +9424,7 @@ fn render_project_with_module_locks(
     }
     parse_project_yaml(rendered.as_bytes()).map_err(|_| {
         diagnostic(
-            "module.lock.render_failed",
+            "module.lock.render-failed",
             "registry.yaml",
             "the project module locks could not be rendered",
         )
@@ -9509,7 +9509,7 @@ fn write_project_registry(
 ) -> Result<(), Diagnostic> {
     let write_failed = || {
         diagnostic(
-            "module.lock.write_failed",
+            "module.lock.write-failed",
             "registry.yaml",
             "the project module locks could not be written",
         )
@@ -9519,7 +9519,7 @@ fn write_project_registry(
     let destination = SafeEntry::resolve(&project_path.join("registry.yaml")).map_err(|error| {
         path_diagnostic(
             error,
-            "module.lock.write_failed",
+            "module.lock.write-failed",
             "registry.yaml",
             "the project directory is not available",
             "the project directory must be a directory and must not be a symbolic link",
@@ -9533,7 +9533,7 @@ fn write_project_registry(
     )?;
     if current != original {
         return Err(diagnostic(
-            "module.lock.concurrent_change",
+            "module.lock.concurrent-change",
             "registry.yaml",
             "the project source changed before module locks could be written",
         ));
@@ -10664,7 +10664,7 @@ fn path_diagnostic(
 ) -> Diagnostic {
     match error {
         SafePathError::Unsupported => diagnostic(
-            "path.no_symlink_unsupported",
+            "path.no-symlink-unsupported",
             report_path,
             "this platform offers no kernel-enforced symbolic-link-free path resolution",
         ),
@@ -11080,7 +11080,9 @@ fn tool_diagnostic(
 ) -> ToolDiagnostic {
     ToolDiagnostic {
         severity: diagnostic.severity,
-        code: diagnostic.code,
+        // Borrowed closed client/planner codes use the CLI report spelling;
+        // their decoded variants still decide the condition and recovery.
+        code: diagnostic.code.replace('_', "-"),
         artifact,
         path: diagnostic.path,
         message: diagnostic.message,
@@ -11948,7 +11950,7 @@ fn write_doctor_success(
         advisories: advisories
             .iter()
             .map(|advisory| DoctorAdvisory {
-                code: advisory.code(),
+                code: advisory.code().replace('_', "-"),
                 severity: advisory.severity().as_str(),
                 message: advisory.message(),
                 observed: ObservedNumbers(advisory.observed()),
@@ -12218,22 +12220,22 @@ fn write_field_encryption_erase_history_success(
 fn field_encryption_keygen_failure(error: field_encryption::KeygenError) -> FailureReport {
     let diagnostic = match error {
         field_encryption::KeygenError::RelativeOutput => diagnostic(
-            "field_encryption.keygen.path_invalid",
+            "field-encryption.keygen.path-invalid",
             "--output",
             "the data-key output path must be absolute",
         ),
         field_encryption::KeygenError::OutputExists => diagnostic(
-            "field_encryption.keygen.output_exists",
+            "field-encryption.keygen.output-exists",
             "--output",
             "refusing to overwrite an existing data-key file; choose a new output path",
         ),
         field_encryption::KeygenError::RandomSource => diagnostic(
-            "field_encryption.keygen.random_source_unavailable",
+            "field-encryption.keygen.random-source-unavailable",
             "--output",
             "the random source refused to yield a data key",
         ),
         field_encryption::KeygenError::Write => diagnostic(
-            "field_encryption.keygen.write_refused",
+            "field-encryption.keygen.write-refused",
             "--output",
             "the data-key file could not be written with owner-only permissions",
         ),
@@ -12263,7 +12265,7 @@ fn write_verify_success(
         render_report(
             "Verified the package against the runtime it is bound to.",
             &[
-                ("assurance", "runtime_bound".to_owned()),
+                ("assurance", "runtime-bound".to_owned()),
                 ("package digest", report.package_digest.clone()),
                 ("registry id", report.registry.id.clone()),
                 ("registry version", report.registry.version.clone()),
@@ -13299,7 +13301,7 @@ fn write_migration_explain_human(
         report::counted(plan.reviewed_migrations().len(), "reviewed migration")
     ));
     lines.pairs(&[
-        ("assurance", "runtime_bound".to_owned()),
+        ("assurance", "runtime-bound".to_owned()),
         ("package digest", report.package_digest.clone()),
         ("plan kind", plan_kind_name(plan.plan_kind()).to_owned()),
         ("has predecessor", plan.has_predecessor().to_string()),
@@ -13438,8 +13440,8 @@ fn write_diff_success(
                     (
                         "baseline assurance",
                         match report.baseline_assurance {
-                            BaselineAssurance::RuntimeBound => "runtime_bound",
-                            BaselineAssurance::IntegrityOnly => "integrity_only",
+                            BaselineAssurance::RuntimeBound => "runtime-bound",
+                            BaselineAssurance::IntegrityOnly => "integrity-only",
                         }
                         .to_owned(),
                     ),
@@ -13557,6 +13559,43 @@ mod tests {
     use registry_breg::postgres::RoleMode;
 
     #[test]
+    fn diagnostic_and_assurance_words_use_the_public_kebab_case_contract() {
+        assert_eq!(
+            serde_json::to_value(DiagnosticArtifact::RuntimeConfiguration).unwrap(),
+            "runtime-configuration"
+        );
+        assert_eq!(
+            serde_json::to_value(SuggestedAction::CorrectRuntimeConfiguration).unwrap(),
+            "correct-runtime-configuration"
+        );
+    }
+
+    #[test]
+    fn runtime_path_refusal_uses_a_kebab_case_operation_code() {
+        let report = inspection_failure(
+            "verify",
+            "verify",
+            RuntimePackageInspectionError::RuntimeConfigPath,
+        );
+        assert_eq!(
+            report.diagnostics[0].code,
+            "verify.runtime-config.path-invalid"
+        );
+    }
+
+    #[test]
+    fn baseline_assurance_words_use_the_public_kebab_case_contract() {
+        assert_eq!(
+            serde_json::to_value(BaselineAssurance::RuntimeBound).unwrap(),
+            "runtime-bound"
+        );
+        assert_eq!(
+            serde_json::to_value(BaselineAssurance::IntegrityOnly).unwrap(),
+            "integrity-only"
+        );
+    }
+
+    #[test]
     fn the_initialized_dev_clients_and_journeys_open_with_their_schema_modeline() {
         let files = init_files();
         for (path, schema) in [
@@ -13614,7 +13653,7 @@ mod tests {
             target_catalog_finding: None,
             active_catalog_finding: None,
             unresolvable_reason: None,
-            plan_kind: "compiled_additive",
+            plan_kind: "compiled-additive",
             migration_step_count: 0,
             reviewed_plan_closed: None,
             durable_step_progress: None,
@@ -13821,12 +13860,12 @@ mod tests {
             (
                 Some(BRegProblemCode::StatisticalDatasetReleaseRefused),
                 Some("period-not-ended"),
-                "statistics.release.period_not_ended",
+                "statistics.release.period-not-ended",
             ),
             (
                 Some(BRegProblemCode::StatisticalDatasetVersionConflict),
                 None,
-                "statistical_dataset.version_conflict",
+                "statistical-dataset.version-conflict",
             ),
             (
                 Some(BRegProblemCode::IdempotencyConflict),
@@ -13846,7 +13885,7 @@ mod tests {
             (
                 Some(BRegProblemCode::ResourceNotFound),
                 None,
-                "resource.not_found",
+                "resource.not-found",
             ),
             (
                 Some(BRegProblemCode::AuthenticationRefused),
@@ -14201,7 +14240,7 @@ mod tests {
             },
         );
         let encoded = serde_json::to_string(&report).expect("report encodes");
-        assert!(encoded.contains("review_recovery.submission.ineligible"));
+        assert!(encoded.contains("review-recovery.submission.ineligible"));
         assert!(encoded
             .contains("reason request-erased, state failed, code result-poll-attempts-exhausted"));
     }
@@ -14214,7 +14253,7 @@ mod tests {
         );
         let value = serde_json::to_value(report).unwrap();
         let encoded = value.to_string();
-        assert!(encoded.contains("request_retention.attachment_storage.binding_mismatch"));
+        assert!(encoded.contains("request-retention.attachment-storage.binding-mismatch"));
         assert!(encoded.contains("restore the original attachment storage binding"));
     }
 
@@ -14735,7 +14774,7 @@ mod tests {
             &project,
             "person-name-change-request",
             &request_path,
-            "planner_test.request.invalid",
+            "planner-test.request.invalid",
         );
 
         let canary = "unbounded-secret-canary".repeat(900);
@@ -14748,7 +14787,7 @@ mod tests {
             &project,
             "person-name-change-request",
             &request_path,
-            "planner_test.request.bounds",
+            "planner-test.request.bounds",
         );
 
         fs::write(&request_path, br#"{"undeclared-secret":"canary"}"#).unwrap();
@@ -14756,7 +14795,7 @@ mod tests {
             &project,
             "person-name-change-request",
             &request_path,
-            "planner_test.request.fields",
+            "planner-test.request.fields",
         );
 
         fs::write(&request_path, b"{}").unwrap();
@@ -14764,13 +14803,13 @@ mod tests {
             &project,
             "person",
             &request_path,
-            "planner_test.entity.not_request",
+            "planner-test.entity.not-request",
         );
         assert_planner_test_failure(
             &project,
             "person-name-change-request",
             &request_path,
-            "change_request.planner.execution",
+            "change-request.planner.execution",
         );
 
         let declarative = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -14781,7 +14820,7 @@ mod tests {
             &declarative,
             "name-correction",
             &request_path,
-            "planner_test.planner.declarative",
+            "planner-test.planner.declarative",
         );
     }
 
@@ -14862,33 +14901,33 @@ mod tests {
                 DataLifecycleError::ImportRunBlocked(Some(
                     BRegIngestionBlockedReason::ActivePackageChanged,
                 )),
-                "data.import.ingestion_run.blocked",
+                "data.import.ingestion-run.blocked",
                 "active package changed",
             ),
             (
                 DataLifecycleError::ImportRunBlocked(Some(
                     BRegIngestionBlockedReason::ImportAuthorityClosed,
                 )),
-                "data.import.ingestion_run.import_authority_closed",
+                "data.import.ingestion-run.import-authority-closed",
                 "bregctl import-authority list",
             ),
             (
                 DataLifecycleError::ImportRunBlocked(None),
-                "data.import.ingestion_run.blocked",
+                "data.import.ingestion-run.blocked",
                 "blockedReason",
             ),
             (
                 DataLifecycleError::IngestionRunPrecondition {
                     through_import: true,
                 },
-                "data.import.ingestion_run.import_authority_required",
+                "data.import.ingestion-run.import-authority-required",
                 "bregctl import-authority list",
             ),
             (
                 DataLifecycleError::IngestionRunPrecondition {
                     through_import: false,
                 },
-                "data.import.ingestion_run.precondition_failed",
+                "data.import.ingestion-run.precondition-failed",
                 "precondition",
             ),
         ] {
@@ -15415,7 +15454,7 @@ mod tests {
         assert!(checks.ends_with("roleMode             split"));
         assert_eq!(
             advisory_section,
-            "  warning  postgres.connections.pool_over_half\n\
+            "  warning  postgres.connections.pool-over-half\n\
              \u{20}   one replica's runtime pool may take more than half of the connections PostgreSQL\n\
              \u{20}   leaves for ordinary roles, leaving too few for other replicas, operator tooling, and\n\
              \u{20}   maintenance\n\
@@ -15424,10 +15463,10 @@ mod tests {
              \u{20}   superuserReservedConnections  3\n\
              \u{20}   reservedConnections           1\n\
              \u{20}   usableConnections             16\n\
-             \u{20} warning  postgres.track_counts.off\n\
+             \u{20} warning  postgres.track-counts.off\n\
              \u{20}   track_counts is off, so autovacuum cannot tell which tables need vacuuming or\n\
              \u{20}   analyzing\n\
-             \u{20} information  postgres.pg_stat_statements.unavailable\n\
+             \u{20} information  postgres.pg-stat-statements.unavailable\n\
              \u{20}   pg_stat_statements is not installed in this database, so per-statement timings are\n\
              \u{20}   unavailable when diagnosing load\n"
         );
@@ -15451,7 +15490,7 @@ mod tests {
             report["advisories"],
             json!([
                 {
-                    "code": "postgres.connections.pool_over_half",
+                    "code": "postgres.connections.pool-over-half",
                     "severity": "warning",
                     "message": advisories[0].message(),
                     "observed": {
@@ -15463,13 +15502,13 @@ mod tests {
                     }
                 },
                 {
-                    "code": "postgres.track_counts.off",
+                    "code": "postgres.track-counts.off",
                     "severity": "warning",
                     "message": advisories[1].message(),
                     "observed": {}
                 },
                 {
-                    "code": "postgres.pg_stat_statements.unavailable",
+                    "code": "postgres.pg-stat-statements.unavailable",
                     "severity": "information",
                     "message": advisories[2].message(),
                     "observed": {}
@@ -15635,7 +15674,7 @@ mod tests {
         let finding = &value["diagnostics"][0];
         assert_eq!(
             finding["code"],
-            "migration.rehearsal.baseline_fingerprint_drift"
+            "migration.rehearsal.baseline-fingerprint-drift"
         );
         assert_eq!(finding["severity"], "finding");
         let message = finding["message"].as_str().expect("message is a string");
@@ -15655,7 +15694,7 @@ mod tests {
         let rendered = plain(&human);
         assert!(rendered.starts_with("Fixture run passed."), "{rendered}");
         assert!(
-            rendered.contains("migration.rehearsal.baseline_fingerprint_drift"),
+            rendered.contains("migration.rehearsal.baseline-fingerprint-drift"),
             "{rendered}"
         );
         assert!(stderr.is_empty());
@@ -15763,7 +15802,7 @@ accessProfiles:
             ),
             (
                 HistoryRebaselineError::LiveHistoryMismatch,
-                "history.rebaseline.live_rows.unverified",
+                "history.rebaseline.live-rows.unverified",
             ),
         ] {
             let report = history_rebaseline_lifecycle_failure(
@@ -16182,7 +16221,7 @@ fn apply_reports_an_empty_successor_plan_as_nothing_to_apply() {
         registry_breg::migration::MigrationError::EmptyPlan,
     ));
     let diagnostic = &report.diagnostics[0];
-    assert_eq!(diagnostic.code, "apply.package.empty_plan");
+    assert_eq!(diagnostic.code, "apply.package.empty-plan");
     assert_eq!(diagnostic.path, "package");
     assert_eq!(diagnostic.artifact, DiagnosticArtifact::VerifiedPackage);
     assert_eq!(
@@ -16209,7 +16248,7 @@ fn apply_reports_a_refused_operator_reference_without_repeating_it() {
         registry_breg::migration::MigrationError::OperatorReference,
     ));
     let diagnostic = &report.diagnostics[0];
-    assert_eq!(diagnostic.code, "apply.operator_reference.refused");
+    assert_eq!(diagnostic.code, "apply.operator-reference.refused");
     assert_eq!(diagnostic.path, "operatorReference");
     for fragment in [
         "--operator-reference",
@@ -16232,7 +16271,7 @@ fn apply_reports_a_history_coverage_refusal_with_its_recovery() {
         registry_breg::migration::MigrationError::HistoryCoverage,
     ));
     let diagnostic = &report.diagnostics[0];
-    assert_eq!(diagnostic.code, "apply.history.coverage_incomplete");
+    assert_eq!(diagnostic.code, "apply.history.coverage-incomplete");
     assert_eq!(diagnostic.path, "history");
     assert_eq!(diagnostic.artifact, DiagnosticArtifact::HistoryRebaseline);
     assert_eq!(
@@ -16268,7 +16307,7 @@ fn an_instance_claim_package_refusal_keeps_the_pin_sentence_it_names() {
     assert!(!report.ok);
     assert_eq!(report.command, "instance-claim status");
     let diagnostic = &report.diagnostics[0];
-    assert_eq!(diagnostic.code, "instance_claim.package.refused");
+    assert_eq!(diagnostic.code, "instance-claim.package.refused");
     assert_eq!(diagnostic.path, "package");
     assert_eq!(diagnostic.message, sentence);
 }
@@ -16321,7 +16360,7 @@ fn an_active_package_pin_mismatch_names_both_digests() {
                 FieldEncryptionPreflightLifecycleError::PredecessorPackage(pin()),
             ),
             "field-encryption preflight",
-            "field_encryption.preflight.predecessor_package.refused",
+            "field-encryption.preflight.predecessor-package.refused",
             "package",
         ),
         (
@@ -16329,7 +16368,7 @@ fn an_active_package_pin_mismatch_names_both_digests() {
                 FieldEncryptionEraseHistoryLifecycleError::ActivePackage(pin()),
             ),
             "field-encryption erase-history",
-            "field_encryption.erase_history.package.refused",
+            "field-encryption.erase-history.package.refused",
             "package",
         ),
     ] {
@@ -16361,13 +16400,13 @@ fn apply_chain_refusals_name_the_operators_next_command() {
         ),
         (
             ApplyLifecycleError::Apply(MigrationError::AlreadyActive),
-            "apply.package.already_active",
+            "apply.package.already-active",
             "package",
             "bregctl status",
         ),
         (
             ApplyLifecycleError::Apply(MigrationError::DatabaseMismatch),
-            "apply.database.identity_mismatch",
+            "apply.database.identity-mismatch",
             "identity.databaseId",
             "database.migrationUrlRef",
         ),
@@ -16391,7 +16430,7 @@ fn apply_chain_refusals_name_the_operators_next_command() {
                     object: "SCHEMA registry_data".to_owned(),
                 },
             )),
-            "apply.runtime_role.can_write",
+            "apply.runtime-role.can-write",
             "database.roles.runtime",
             "`REVOKE CREATE ON SCHEMA registry_data FROM PUBLIC`, then rerun the refused command",
         ),
@@ -16400,7 +16439,7 @@ fn apply_chain_refusals_name_the_operators_next_command() {
                 role_mode: "split".to_owned(),
                 runtime_role: "registry_runtime".to_owned(),
             }),
-            "apply.resume.roles_differ",
+            "apply.resume.roles-differ",
             "database.roles",
             "runtime role `registry_runtime`; rerun the apply with the database roles it started with, or, for a new package, assess it with `bregctl migration reconcile`",
         ),
@@ -16409,7 +16448,7 @@ fn apply_chain_refusals_name_the_operators_next_command() {
                 role_mode: "split".to_owned(),
                 runtime_role: "registry_runtime".to_owned(),
             }),
-            "apply.successor.roles_differ",
+            "apply.successor.roles-differ",
             "database.roles",
             "runtime role `registry_runtime`; apply the active package with the new roles first",
         ),
@@ -16439,7 +16478,7 @@ fn apply_refuses_an_already_active_package_the_database_does_not_run() {
         registry_breg::migration::MigrationError::ActivePackageMismatch,
     ));
     let diagnostic = &report.diagnostics[0];
-    assert_eq!(diagnostic.code, "apply.package.active_mismatch");
+    assert_eq!(diagnostic.code, "apply.package.active-mismatch");
     assert_eq!(diagnostic.path, "package.root");
     assert_eq!(diagnostic.artifact, DiagnosticArtifact::PackageActivation);
     assert_eq!(
@@ -16475,7 +16514,7 @@ fn apply_reports_a_refused_statement_with_its_sqlstate_and_objects() {
         ),
     ));
     let diagnostic = &report.diagnostics[0];
-    assert_eq!(diagnostic.code, "apply.migration.statement_failed");
+    assert_eq!(diagnostic.code, "apply.migration.statement-failed");
     assert_eq!(diagnostic.path, "database");
     assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
     assert_eq!(
@@ -16542,7 +16581,7 @@ fn apply_reports_a_held_migration_lock_as_an_activation_in_progress() {
         );
         assert_eq!(report.command, command);
         let diagnostic = &report.diagnostics[0];
-        assert_eq!(diagnostic.code, "apply.database.in_progress");
+        assert_eq!(diagnostic.code, "apply.database.in-progress");
         assert_eq!(diagnostic.path, "database");
         assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
         assert_eq!(
@@ -16583,7 +16622,7 @@ fn an_active_registry_read_reports_a_held_migration_lock_as_in_progress() {
         let diagnostic = &report.diagnostics[0];
         assert_eq!(
             diagnostic.code,
-            format!("{prefix}.active_registry.in_progress")
+            format!("{prefix}.active-registry.in-progress")
         );
         assert_eq!(diagnostic.path, "database");
         assert_eq!(
@@ -16619,12 +16658,12 @@ fn operator_maintenance_reports_a_held_migration_lock_as_in_progress() {
         (
             evidence_retention_failure(MutationError::MigrationLockHeld),
             "evidence-retention erase-expired",
-            "evidence_retention.in_progress",
+            "evidence-retention.in-progress",
         ),
         (
             idempotency_retention_failure(MutationError::MigrationLockHeld),
             "idempotency-retention erase-expired",
-            "idempotency_retention.in_progress",
+            "idempotency-retention.in-progress",
         ),
         (
             request_retention_failure(
@@ -16632,7 +16671,7 @@ fn operator_maintenance_reports_a_held_migration_lock_as_in_progress() {
                 RequestRetentionCliError::MigrationLockHeld,
             ),
             "request-retention erase",
-            "request_retention.in_progress",
+            "request-retention.in-progress",
         ),
         (
             import_authority_failure(
@@ -16640,7 +16679,7 @@ fn operator_maintenance_reports_a_held_migration_lock_as_in_progress() {
                 ImportAuthorityCliError::Authority(ImportAuthorityError::MigrationLockHeld),
             ),
             "import-authority open",
-            "import_authority.in_progress",
+            "import-authority.in-progress",
         ),
         (
             instance_claim_failure(
@@ -16648,7 +16687,7 @@ fn operator_maintenance_reports_a_held_migration_lock_as_in_progress() {
                 InstanceClaimCliError::Claim(InstanceClaimError::MigrationLockHeld),
             ),
             "instance-claim adopt",
-            "instance_claim.in_progress",
+            "instance-claim.in-progress",
         ),
     ] {
         assert_eq!(report.command, command);
@@ -16679,12 +16718,12 @@ fn operator_maintenance_reports_a_held_migration_lock_as_in_progress() {
     let unavailable = evidence_retention_failure(MutationError::Unavailable);
     assert_eq!(
         unavailable.diagnostics[0].code,
-        "evidence_retention.unavailable"
+        "evidence-retention.unavailable"
     );
     let unavailable = idempotency_retention_failure(MutationError::Unavailable);
     assert_eq!(
         unavailable.diagnostics[0].code,
-        "idempotency_retention.unavailable"
+        "idempotency-retention.unavailable"
     );
 }
 
@@ -16704,14 +16743,14 @@ fn history_maintenance_reports_a_held_migration_lock_as_in_progress() {
                 HistoryErasureError::MigrationLockHeld,
             )),
             "history erase",
-            "history.erase.in_progress",
+            "history.erase.in-progress",
         ),
         (
             history_rebaseline_lifecycle_failure(HistoryRebaselineLifecycleError::Rebaseline(
                 HistoryRebaselineError::MigrationLockHeld,
             )),
             "history rebaseline",
-            "history.rebaseline.in_progress",
+            "history.rebaseline.in-progress",
         ),
         (
             field_encryption_erase_history_failure(
@@ -16720,7 +16759,7 @@ fn history_maintenance_reports_a_held_migration_lock_as_in_progress() {
                 ),
             ),
             "field-encryption erase-history",
-            "field_encryption.erase_history.in_progress",
+            "field-encryption.erase-history.in-progress",
         ),
         (
             field_encryption_erase_history_failure(
@@ -16731,7 +16770,7 @@ fn history_maintenance_reports_a_held_migration_lock_as_in_progress() {
                 ),
             ),
             "field-encryption erase-history",
-            "field_encryption.erase_history.in_progress",
+            "field-encryption.erase-history.in-progress",
         ),
         (
             field_encryption_erase_history_failure(
@@ -16742,7 +16781,7 @@ fn history_maintenance_reports_a_held_migration_lock_as_in_progress() {
                 ),
             ),
             "field-encryption erase-history",
-            "field_encryption.erase_history.in_progress",
+            "field-encryption.erase-history.in-progress",
         ),
     ] {
         assert_eq!(report.command, command);
@@ -16778,12 +16817,12 @@ fn apply_reports_actionable_field_encryption_provider_failures() {
     for (error, code, message_fragment) in [
         (
             ApplyLifecycleError::FieldEncryptionConfiguration,
-            "apply.field_encryption.configuration_refused",
+            "apply.field-encryption.configuration-refused",
             "provider is required",
         ),
         (
             ApplyLifecycleError::FieldEncryptionCustody,
-            "apply.field_encryption.custody_refused",
+            "apply.field-encryption.custody-refused",
             "only for local database initialization",
         ),
     ] {
@@ -16837,7 +16876,7 @@ fn review_fingerprint_mismatch_names_the_declared_and_the_measured_fingerprint()
     });
     assert_eq!(report.diagnostics.len(), 1);
     let diagnostic = &report.diagnostics[0];
-    assert_eq!(diagnostic.code, "migration.review.fingerprint_mismatch");
+    assert_eq!(diagnostic.code, "migration.review.fingerprint-mismatch");
     assert_eq!(diagnostic.path, "reviewedMigrations");
     assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
     assert_eq!(
@@ -16963,7 +17002,7 @@ mod field_encryption_keygen_tests {
         );
         let rendered = plain(&stderr);
         assert!(
-            rendered.contains("field_encryption.keygen.output_exists"),
+            rendered.contains("field-encryption.keygen.output-exists"),
             "{rendered}"
         );
         assert!(
@@ -16996,7 +17035,7 @@ mod field_encryption_keygen_tests {
             run_from(keygen_arguments(relative), &mut stdout, &mut stderr),
             ExitCode::from(DOMAIN_REFUSAL_EXIT)
         );
-        assert!(plain(&stderr).contains("field_encryption.keygen.path_invalid"));
+        assert!(plain(&stderr).contains("field-encryption.keygen.path-invalid"));
         assert!(
             !directory.path().join("breg-field-dek").exists(),
             "a refused relative path writes nothing"

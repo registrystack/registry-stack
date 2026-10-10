@@ -2082,7 +2082,7 @@ fn activation(success: bool, report: &[u8]) -> Result<Activation> {
     if diagnostics.iter().all(|entry| {
         entry["code"] == "startup.database.unready"
             || entry["code"] == "startup.database.uninitialized"
-            || entry["code"] == "startup.package.not_active"
+            || entry["code"] == "startup.package.not-active"
     }) {
         return Ok(Activation::NotActivated);
     }

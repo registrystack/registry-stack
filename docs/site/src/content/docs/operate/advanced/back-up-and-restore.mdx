@@ -110,14 +110,14 @@ tell a physical one.
 
 A copy restored from `pg_dump` carries the instance claim of the database it was dumped from, so
 it refuses to serve: `breg` exits at startup with `the Registry database is not the instance its
-claim names`, and `bregctl doctor` reports `startup.instance_claim.mismatch`. A runtime that is
+claim names`, and `bregctl doctor` reports `startup.instance-claim.mismatch`. A runtime that is
 already serving checks the claim on every readiness probe as well, and answers `GET /ready` with
 `503` once the claim no longer names its database.
 
 Point the restored runtime file at the new database and change nothing else in it. Keep
 `identity.instanceId` in particular: the webhook deliveries pending at the backup point were
 captured under the event source it derives, so while any of them remains, `bregctl doctor` refuses
-a changed value with `startup.instance_id.pending_deliveries` and `breg` refuses to start. Change
+a changed value with `startup.instance-id.pending-deliveries` and `breg` refuses to start. Change
 it, if you must, only after those deliveries drain.
 
 Follow
@@ -137,14 +137,14 @@ including one you closed after the backup point. Adopting supersedes every impor
 copy held open, so open again the ones you still need.
 
 {/* Evidence: products/breg/scripts/test-backup-restore.sh, checkpoints "refusing to serve the
-    restored copy before adoption" (startup.instance_claim.mismatch, the startup refusal, the
-    reopened authority, instance_claim.acknowledgement.required), "adopting the restored copy"
+    restored copy before adoption" (startup.instance-claim.mismatch, the startup refusal, the
+    reopened authority, instance-claim.acknowledgement.required), "adopting the restored copy"
     (supersededImportAuthorities), and "refusing a restored runtime file that renames the instance
-    while deliveries are pending" (startup.instance_id.pending_deliveries);
+    while deliveries are pending" (startup.instance-id.pending-deliveries);
     crates/registry-breg/src/instance_claim.rs, module docs (checked at startup and on every
     readiness probe); crates/registry-breg/src/startup.rs, verify_instance_claim() and
     InstanceIdChangedWithPendingDeliveries; crates/registry-bregctl/src/doctor.rs,
-    startup.instance_id.pending_deliveries. */}
+    startup.instance-id.pending-deliveries. */}
 
 ### After a physical restore
 
@@ -167,7 +167,7 @@ supersedes every open import authority in one transaction, and the audit entry r
 {/* Evidence: crates/registry-breg/src/instance_claim.rs, module docs (physical copies are not
     detected), check(), adopt_in(); crates/registry-breg/src/startup.rs, verify_instance_claim()
     and the InstanceClaimMismatch message; crates/registry-bregctl/src/doctor.rs,
-    startup.instance_claim.mismatch; crates/registry-bregctl/src/lib.rs, InstanceClaimCommand and
+    startup.instance-claim.mismatch; crates/registry-bregctl/src/lib.rs, InstanceClaimCommand and
     InstanceClaimAdoptArgs; products/breg/SECURITY-REVIEW-NOTES.md, "Instance claim" (a physical
     restore serves without the adopt that supersedes reopened authorities, an accepted residual). */}
 

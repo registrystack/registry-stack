@@ -87,7 +87,7 @@ pub(crate) fn statistical_dataset_operations(
 ) -> BTreeSet<&'static str> {
     let mut operations = BTreeSet::new();
     if dataset.live_profiles.contains(profile) {
-        operations.insert("read_live");
+        operations.insert("read-live");
     }
     if let Some(releases) = &dataset.releases {
         let can_read = dataset.live_profiles.contains(profile)
@@ -95,14 +95,14 @@ pub(crate) fn statistical_dataset_operations(
             || releases.readers.contains(profile);
         if can_read {
             operations.extend([
-                "list_releases",
-                "read_released_series",
-                "read_latest_release",
-                "read_release_version",
+                "list-releases",
+                "read-released-series",
+                "read-latest-release",
+                "read-release-version",
             ]);
         }
         if releases.publisher == profile {
-            operations.extend(["publish_release", "withdraw_release"]);
+            operations.extend(["publish-release", "withdraw-release"]);
         }
     }
     operations
@@ -183,7 +183,7 @@ pub(crate) fn append_statistics_openapi(
                 operation(
                     dataset,
                     selected,
-                    "read_live",
+                    "read-live",
                     &dataset.live_profiles,
                     &admission_dataset.live_profiles,
                     read_parameters(RangeParameters::Optional, false, false, false),
@@ -205,7 +205,7 @@ pub(crate) fn append_statistics_openapi(
                 operation(
                     dataset,
                     selected,
-                    "list_releases",
+                    "list-releases",
                     &readers,
                     &admission_readers,
                     release_list_parameters(),
@@ -220,7 +220,7 @@ pub(crate) fn append_statistics_openapi(
                 operation(
                     dataset,
                     selected,
-                    "read_released_series",
+                    "read-released-series",
                     &readers,
                     &admission_readers,
                     read_parameters(RangeParameters::Required, true, false, false),
@@ -235,7 +235,7 @@ pub(crate) fn append_statistics_openapi(
                 operation(
                     dataset,
                     selected,
-                    "read_latest_release",
+                    "read-latest-release",
                     &readers,
                     &admission_readers,
                     read_parameters(RangeParameters::None, true, true, false),
@@ -250,7 +250,7 @@ pub(crate) fn append_statistics_openapi(
                 operation(
                     dataset,
                     selected,
-                    "read_release_version",
+                    "read-release-version",
                     &readers,
                     &admission_readers,
                     read_parameters(RangeParameters::None, false, true, true),
@@ -274,7 +274,7 @@ pub(crate) fn append_statistics_openapi(
                 operation(
                     dataset,
                     selected,
-                    "publish_release",
+                    "publish-release",
                     &publisher,
                     &admission_publisher,
                     publish_parameters(false),
@@ -289,7 +289,7 @@ pub(crate) fn append_statistics_openapi(
                 operation(
                     dataset,
                     selected,
-                    "withdraw_release",
+                    "withdraw-release",
                     &publisher,
                     &admission_publisher,
                     publish_parameters(true),

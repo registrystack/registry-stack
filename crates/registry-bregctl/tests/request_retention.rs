@@ -81,16 +81,16 @@ fn operator_commands_share_one_value_free_refusal() {
         let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
         assert_eq!(
             report["diagnostics"][0]["code"],
-            "request_retention.operation.refused"
+            "request-retention.operation.refused"
         );
         assert_eq!(report["diagnostics"][0]["path"], "requestRetention");
         assert_eq!(
             report["diagnostics"][0]["artifact"],
-            "request_retention_operation"
+            "request-retention-operation"
         );
         assert_eq!(
             report["diagnostics"][0]["suggestedAction"],
-            "verify_request_retention_operation"
+            "verify-request-retention-operation"
         );
     }
 }
