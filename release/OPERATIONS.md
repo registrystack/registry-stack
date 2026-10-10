@@ -746,6 +746,10 @@ as `status: released` below the first release of the workspace version's minor
 line.
 Scheduling state is not rehearsed: `PRODUCTS` in the script names no
 Scheduling leg.
+For v0.39.0 to v0.40.0 there is no Scheduling upgrade to rehearse: v0.40.0
+refuses a Scheduling database v0.39.0 wrote as
+`schedulingctl.activation.earlier-release`, and the operator starts from a new
+database.
 
 For v0.39.0 to v0.40.0, BReg's ingestion-run tables do not carry the verified
 creator identity that v0.40.0 requires. The upgrade intentionally discards
@@ -799,7 +803,9 @@ fails when the stream was empty before the upgrade, or holds fewer records
 after it than before plus the number the upgraded binaries must write. That is a
 count, not a comparison of the earlier records. Every record in the Evidence
 stream must also be a valid current envelope. The Evidence target is packaged again with the new `evidencectl` and
-its configuration is carried forward unchanged.
+its configuration is carried forward unchanged, except for the Evidence steps
+of the upgrade steps file, which the rehearsal applies to the project and the
+target first.
 
 Every table remains subject to the row-preservation rule except the
 v0.39.0-to-v0.40.0 predecessor rows in

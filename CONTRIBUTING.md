@@ -179,29 +179,47 @@ Every pull request should make the review path clear:
   that names what would be lost, and the operator decides the next step. Cover
   the refusal with a test. Every retained domain and operational state table
   requires row preservation, and the release upgrade rehearsal checks it for
-  the products it rehearses. The only v0.39-to-v0.40 exceptions are the
+  the products it rehearses. The only v0.39-to-v0.40 row losses are the
   reviewed retirement of BReg ingestion runs that stored no verified creator
   and Messaging schema version 3's retirement of pseudonym-scoped idempotency
   records. The exact predecessor-shape tests
   `the_upgrade_discards_runs_stored_without_a_verified_creator` and
   `version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller`
-  prove those losses and the state each migration must preserve. These
+  prove those losses and the state each migration must preserve.
+  Scheduling is a separate reviewed exception: v0.40 migrates no Scheduling
+  database v0.39 wrote. It refuses one as
+  `schedulingctl.activation.earlier-release`, the operator starts from a new
+  database, and the upgrade rehearsal has no Scheduling leg. These
   exceptions permit no other row loss or later-release exception.
 - Before 1.0, a release reads only the state its immediate predecessor wrote,
   and an operator upgrades one release at a time. The only v0.39-to-v0.40
   exceptions to full predecessor readability are the two row-loss transitions
   above, BReg's retained but unreachable legacy idempotency tombstones without
-  their held responses and receipts, and Scheduling migration 12's retained
-  predecessor claims and history without a caller owner. The tests
+  their held responses and receipts, the Scheduling database refused above,
+  and the configuration conventions' respelling of authored and runtime files.
+  v0.40 refuses a file that keeps a retired key or `apiVersion`, naming the
+  replacement (`config.removed-key`, `config.retired-api-version`). It also
+  refuses packages and local state the earlier release built or wrote, such as
+  a Messaging package and the Casework development session state
+  `.casework/dev/state.json`. The operator edits the files, builds the packages
+  again, and starts the development session again by the steps in
+  `release/notes/config-conventions/` (`upgrade-steps.yaml` and the per-product
+  fragments). The Scheduling and configuration exceptions are reviewed clean
+  breaks, taken because no deployment runs v0.39. The test
   `real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones_spent_rows`
-  and
+  proves the BReg retained-row transition. The test
   `claim_owner_migration_keeps_existing_claims_and_refuses_a_partial_owner`
-  prove the two retained-row transitions. Outside those four transitions, keep
+  proves that Scheduling migration 12 keeps an existing claim, without a caller
+  owner, and refuses a partial owner. Outside those five transitions, keep
   everything the previous release could have written to a database, package,
   configuration file, or local state readable. Do not add code that reads,
   upgrades, or refuses by name the state of an older release, and remove such
   code in the release after the one that needed it, with a BREAKING entry in
   the product changelog.
+  The removed-key and retired-`apiVersion` tables of the configuration
+  conventions are the one standing exception: CFG-CHANGE-2 in
+  [`CONFIG-CONVENTIONS.md`](products/platform/CONFIG-CONVENTIONS.md) keeps
+  each refusal until its format's next stable version.
   `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
   predecessor, and
   [`api-stability.mdx`](docs/site/src/content/docs/reference/api-stability.mdx)
