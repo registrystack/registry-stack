@@ -1151,7 +1151,8 @@ the environment instead: declare `secretProviders.environment` and reference it 
 `secret:env/<NAME>`, as [Write the runtime configuration](#write-the-runtime-configuration)
 describes.
 
-{/* Evidence: release/READINESS.md, the deployment profile item;
+{/* Evidence: release/scripts/check-debian13-images.py, HTTP_PROBE_DOCKERFILES (release checks run
+    images, and none applies a Kubernetes manifest);
     crates/registry-platform-config/src/loader.rs, reject_symlink_components();
     crates/registry-platform-config/src/secrets.rs, validate_file_metadata() and read_environment();
     crates/registry-breg/src/runtime_config.rs, runtime_config_loader(). */}
