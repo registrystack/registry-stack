@@ -1,0 +1,271 @@
+# How products/platform/scripts/run-config-conformance.py stages a format
+# whose check command needs more than a copy of its example's directory.
+# A format not listed here is staged as a copy of its example's directory.
+# The members are documented at the top of the runner.
+formats:
+  breg/module:
+    project: products/breg/examples/minimal
+    init: {command: "bregctl init {directory}", file: modules/record-notes/module.yaml}
+  # Journeys are checked against the project whose routes they call, and a
+  # reviewed migration file at its place in the project tree.
+  breg/journeys:
+    project: products/breg/acceptance/asset-site-placement
+    init: {command: "bregctl init {directory}", file: tests/journeys.yaml}
+  breg/migration-descriptor:
+    project: products/breg/examples/formats/reviewed-migrations
+  breg/migration-rehearsal-receipt:
+    project: products/breg/examples/formats/reviewed-migrations
+  # The removed keys and the retired apiVersion the citizen MCP gateway and
+  # review page runtimes refuse by name; the registry does not declare them yet.
+  breg/mcp-runtime:
+    removedKeys:
+      - /resourceServer/maxTokenLifetimeSeconds
+      - /registry/requestTimeoutMilliseconds
+      - /limits/maxRequestBodyBytes
+      - /audit/retainDays
+    retiredApiVersions:
+      - registry.registrystack.org/breg-mcp-runtime/v1alpha1
+  breg/review-runtime:
+    removedKeys:
+      - /limits
+      - /audit/retainDays
+    retiredApiVersions:
+      - registry.registrystack.org/breg-review-runtime/v1alpha1
+
+  # The retired apiVersion and renamed keys each Casework reader refuses by
+  # name.
+  casework/fixture:
+    project: products/casework/examples/payment-review
+    retiredApiVersions:
+      - registry.registrystack.org/casework-fixture/v1alpha1
+    removedKeys:
+      - /name
+      - /source
+      - /expect/targetElapsed
+    init: {command: "caseworkctl init --template standalone-decision {directory}", file: fixtures/standalone-decision.yaml}
+  casework/simulation:
+    project: products/casework/examples/multi-stage-routing-clocks
+    removedKeys:
+      - /subject/id
+      - /expect/ruleId
+  casework/holiday-set:
+    project: products/casework/examples/multi-stage-routing-clocks
+  casework/dev-clients:
+    removedKeys:
+      - /version
+    init: {command: "caseworkctl init --template standalone-decision {directory}", file: dev-clients.yaml}
+
+  # The retired apiVersions and renamed keys each Scheduling reader refuses by
+  # name.
+  scheduling/project:
+    retiredApiVersions:
+      - registry.registrystack.org/scheduling-policy-package/v1alpha1
+    removedKeys:
+      - /scheduling
+      - /offerings/0/exactTime/maxRecipients
+      - /offerings/0/reminders/0/minutesBefore
+      - /holdPolicy/maxPerCaller
+    init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: scheduling.yaml}
+  scheduling/fixture:
+    project: products/scheduling/examples/standalone-arrival-window
+    retiredApiVersions:
+      - registry.registrystack.org/scheduling-fixture/v1alpha1
+    removedKeys:
+      - /cases/0/expect/outcome
+      - /facts/windows/0/unitsPolicy/kind
+      - /facts/windows/0/unitsPolicy/aboveHighestBand/policy
+    init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: fixtures/counter-stations.yaml}
+  scheduling/runtime:
+    retiredApiVersions:
+      - registry.registrystack.org/scheduling-runtime/v1alpha1
+    removedKeys:
+      - /audit/retainDays
+      - /retention/attemptReceiptDays
+      - /retention/hookPayloadDays
+      - /authentication/oidc/jwksUri
+    init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: runtime.example.yaml}
+
+  # The removed keys and the retired apiVersion the Messaging authoring
+  # readers refuse by name.
+  messaging/project:
+    project: products/messaging/examples/starter
+    removedKeys:
+      - /providers/0/kind
+      - /accessProfiles/0/dailyLimit
+    retiredApiVersions:
+      - registry.registrystack.org/messaging-package/v1alpha1
+    init: {command: "messagingctl init {directory}", file: messaging.yaml}
+  messaging/template:
+    project: products/messaging/examples/starter
+    init: {command: "messagingctl init {directory}", file: templates/appointment-reminder/1/template.yaml}
+  messaging/provider:
+    project: products/messaging/examples/starter
+    removedKeys:
+      - /capabilities/concurrencyLimit
+    init: {command: "messagingctl init {directory}", file: providers/sms-gateway/provider.yaml}
+  # The removed keys and the retired apiVersion the Messaging runtime refuses
+  # by name; the registry does not declare them. The runtime file is checked
+  # against the editable project, with no built package.
+  messaging/runtime:
+    project: products/messaging/examples/starter
+    removedKeys:
+      - /authentication/oidc/jwksUri
+      - /providers/sms-gateway/attemptTimeoutSeconds
+      - /providers/sms-gateway/timeoutMilliseconds
+      - /providers/sms-gateway/concurrencyLimit
+      - /providers/sms-gateway/kind
+      - /providers/sms-gateway/authentication/kind
+      - /providers/sms-gateway/callbackVerifier/kind
+      - /retention/payloadDays
+      - /retention/recordDays
+      - /retention/submissionReceiptDays
+      - /audit/retainDays
+    retiredApiVersions:
+      - registry.registrystack.org/messaging-runtime/v1alpha1
+    init: {command: "messagingctl init {directory}", file: runtime.example.yaml}
+
+  discovery/evidence-mapping:
+    project: products/discovery/fixtures/project
+  # The keys the Discovery runtime loader refuses by name.
+  discovery/runtime:
+    removedKeys:
+      - /schemaVersion
+      - /listener/address
+      - /indexPath
+
+  manifest/profile:
+    project: products/manifest/profiles
+
+  # The maintained bundles are packages, so the staged copy's SHA256SUMS is
+  # refreshed after each mutation. The removed keys and the retired apiVersion
+  # are the ones the bundle and runtime readers refuse by name.
+  render/bundle:
+    digests: SHA256SUMS
+    removedKeys:
+      - /hashes
+      - /documents/0/entry
+      - /documents/0/schema
+    retiredApiVersions:
+      - render.registrystack.org/v1alpha1
+    init: {command: "registry-render init {directory}", file: manifest.yaml}
+  render/labels:
+    project: products/render/bundles/certificate
+    digests: SHA256SUMS
+    init: {command: "registry-render init {directory}", file: labels/en.yaml}
+  render/runtime:
+    removedKeys:
+      - /server
+      - /bundle
+      - /listener/shutdownGraceSeconds
+      - /limits/maxOutputBytes
+      - /limits/maxRequestBodyBytes
+      - /limits/maxConcurrency
+      - /audit/directory
+      - /audit/integrityKeyRef
+      - /audit/maxSegmentBytes
+      - /audit/retainDays
+    retiredApiVersions:
+      - registry.registrystack.org/render-runtime/v1alpha1
+
+  # The removed keys the task connection reader refuses by name, with the
+  # example's one client standing for every client.
+  platform/task-connection:
+    removedKeys:
+      - /version
+      - /clients/task-agent/assertionKeyFile
+
+  # The authoring template ships without the disposable signing key
+  # `evidencectl new` writes, so the copy gets a freshly generated key for the
+  # check to sign fixture answers with.
+  evidence/fixture:
+    project: crates/registry-evidencectl/templates/sqlite-extract
+    prepare:
+      - evidencectl keygen signing --output-dir {project}/secrets
+    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: fixtures/record-status.yaml}
+  evidence/question:
+    project: crates/registry-evidencectl/templates/sqlite-extract
+    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: questions/record-status.yaml}
+  evidence/source:
+    project: crates/registry-evidencectl/templates/sqlite-extract
+    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: sources/record-status.yaml}
+  evidence/selector:
+    project: crates/registry-evidencectl/templates/sqlite-extract
+    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: selectors/record-reference-v1.yaml}
+  evidence/target-governance:
+    project: crates/registry-evidencectl/templates/sqlite-extract
+    copies:
+      target:
+        from: products/evidence/reference/deployment-targets/environments/local/evidence
+  evidence/target-settings:
+    project: products/evidence/reference/authoring-projects/example
+  evidence/access-policy:
+    project: products/evidence/reference/authoring-projects/example
+  evidence/access-client:
+    project: products/evidence/reference/authoring-projects/example
+  evidence/mock-plan:
+    project: products/evidence/reference/authoring-projects/example
+
+  # The bundle is checked through its deployment project's runtime
+  # configuration, pointed at the staged copy, and its SHA256SUMS is refreshed
+  # after each mutation.
+  evidence/bundle:
+    copies:
+      runtime:
+        from: products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/runtime.yaml
+        set:
+          /package/root: "{project}"
+    digests: SHA256SUMS
+
+  # A code list is checked the same way, through the bundle that holds it.
+  evidence/codelist:
+    project: products/evidence/reference/request-adapter/deployment-projects/protected-read-evidence/bundle
+    copies:
+      runtime:
+        from: products/evidence/reference/request-adapter/deployment-projects/protected-read-evidence/runtime.yaml
+        set:
+          /package/root: "{project}"
+    digests: SHA256SUMS
+
+  # The runtime configuration is checked against the bundle its staged
+  # deployment project holds. The removed keys are the ones the Evidence
+  # runtime refuses by name; the registry does not declare them yet.
+  evidence/runtime:
+    set:
+      /package/root: "{project}/bundle"
+    removedKeys:
+      - /version
+      - /bundleDirectory
+      - /listener/bindHost
+      - /listener/port
+      - /metricsListener/bindHost
+      - /metricsListener/port
+
+  # The keys the delivery runtime refuses by name, each naming its
+  # replacement; the registry does not declare them yet.
+  evidence/oid4vci-runtime:
+    removedKeys:
+      - /version
+      - /mint
+      - /listener/address
+      - /listener/port
+      - /metricsListener/address
+      - /metricsListener/port
+      - /tokenClient/privateKeyFile
+
+  # The command each product documents for starting a project, and the file
+  # of the format it writes there (CFG-SCHEMA-7: its first line is the schema
+  # modeline). Formats with an entry above carry their `init` there.
+  breg/project:
+    init: {command: "bregctl init {directory}", file: registry.yaml}
+  breg/runtime:
+    init: {command: "bregctl init {directory}", file: runtime.example.yaml}
+  breg/dev-clients:
+    init: {command: "bregctl init {directory}", file: dev-clients.yaml}
+  casework/project:
+    init: {command: "caseworkctl init --template standalone-decision {directory}", file: casework.yaml}
+  casework/runtime:
+    init: {command: "caseworkctl init --template standalone-decision {directory}", file: runtime.example.yaml}
+  scheduling/records:
+    init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: records.yaml}
+  evidence/authoring-project:
+    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: evidence-project.yaml}

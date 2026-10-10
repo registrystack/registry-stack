@@ -97,7 +97,7 @@ async fn create_run(
     State(service): State<Arc<HttpService>>,
     Extension(binding): Extension<IngestionRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
     body: Body,
@@ -105,9 +105,6 @@ async fn create_run(
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return audited_mutation_concealment(
             mutations,
@@ -201,15 +198,12 @@ async fn list_runs(
     State(service): State<Arc<HttpService>>,
     Extension(binding): Extension<IngestionRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Ok(query) = parse_list_query(raw_query.as_deref()) else {
         return audited_mutation_concealment(
             mutations,
@@ -254,16 +248,13 @@ async fn read_run(
     State(service): State<Arc<HttpService>>,
     Extension(binding): Extension<IngestionRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return audited_mutation_concealment(
             mutations,
@@ -311,7 +302,7 @@ async fn cancel_run(
     State(service): State<Arc<HttpService>>,
     Extension(binding): Extension<IngestionRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
     headers: HeaderMap,
@@ -320,9 +311,6 @@ async fn cancel_run(
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return audited_mutation_concealment(
             mutations,
@@ -422,7 +410,7 @@ async fn submit_chunk(
     State(service): State<Arc<HttpService>>,
     Extension(binding): Extension<IngestionRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
     headers: HeaderMap,
@@ -431,9 +419,6 @@ async fn submit_chunk(
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return audited_mutation_concealment(
             mutations,
@@ -573,16 +558,13 @@ async fn chunk_receipt(
     State(service): State<Arc<HttpService>>,
     Extension(binding): Extension<IngestionRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
         return concealed();
     };
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return audited_mutation_concealment(
             mutations,

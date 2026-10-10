@@ -115,7 +115,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     ).read_bytes(), "same compiled BReg inputs must yield the same export"
     for artifact in manifest["artifacts"]:
         content = (exported / artifact["path"]).read_bytes()
-        assert hashlib.sha256(content).hexdigest() == artifact["sha256"]
+        assert "sha256:" + hashlib.sha256(content).hexdigest() == artifact["digest"]
         assert content == (workspace / "repeated-export" / artifact["path"]).read_bytes()
     run(binaries["evidencectl"], "new", project, "--starter", INPUTS / "starter",
         "--profile", "local", environment=environment)
@@ -227,7 +227,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
             binaries["evidencectl"], "source", command, renamed_export,
             "--project", project, "--target", target, environment=environment,
         )
-        assert 'reads fact "status"' in refused, refused
+        assert 'reads fact `status`' in refused, refused
         assert (project / source["factSchema"]).read_bytes() == installed_facts
     return {
         "exportArtifacts": len(manifest["artifacts"]),
@@ -261,7 +261,7 @@ def verify_default_init(workspace: Path, binaries: dict[str, Path]) -> dict[str,
     assert source["accessProfiles"] == ["evidence-source"]
     assert source["scopes"] == ["registry:evidence:lookup"]
     assert source["claims"]["registry_purpose"] == "evidence-source-read"
-    assert "clientIdFile" not in source and "assertionKeyFile" not in source
+    assert "assertionKeyRef" not in source
     assert len({client["claims"]["registry_principal"] for client in clients}) == len(clients)
     run(binaries["evidencectl"], "new", project, "--starter", INPUTS / "default-starter",
         "--profile", "local", environment=environment)

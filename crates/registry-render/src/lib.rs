@@ -32,11 +32,14 @@ pub mod cli;
 pub mod envelope;
 pub mod hash;
 pub mod init;
+pub mod labels;
 pub mod manifest;
 pub mod openapi;
 pub mod problem;
 pub mod render;
 pub mod runtime;
+#[cfg(feature = "schema")]
+pub mod schema;
 pub mod server;
 pub mod worker;
 pub mod world;

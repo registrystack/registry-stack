@@ -40,10 +40,10 @@ fn fixture_with(effects: Value, customize: impl FnOnce(&mut Value)) -> CompiledR
             ],
             "changeRequest":{"effects":effects,"review":{"authority":"casework-main","policyId":"request-review"}}
         }],
-        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","permissions":[{
+        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":[{
             "entity":"request","operations":["get","submit_request","apply_request"],"readableFields":["one","two","value"],
-            "applyTargets":[{"entity":"target", "rowBoundaries": []}],
-          "rowBoundaries": []
+            "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}],
+          "rowBoundaries": "unrestricted"
         }]}]
     });
     customize(&mut source);
@@ -201,7 +201,7 @@ fn preparation_refuses_a_guard_on_its_own_request_record() {
             permission["applyTargets"]
                 .as_array_mut()
                 .unwrap()
-                .push(json!({"entity":"request","rowBoundaries":[]}));
+                .push(json!({"entity":"request","rowBoundaries":"unrestricted"}));
         },
     );
     let request_entity = &registry.entities()["request"];
@@ -342,11 +342,11 @@ fn declarative_and_rhai_paths_produce_byte_equivalent_canonical_effects() {
                 ],
                 "changeRequest":change_request
             }],
-            "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","permissions":[{
+            "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":[{
                 "entity":"request","operations":["get","submit_request","apply_request"],
                 "readableFields":["one","value"],
-                "applyTargets":[{"entity":"target", "rowBoundaries": []}],
-              "rowBoundaries": []
+                "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]}]
         })
     };
@@ -660,11 +660,11 @@ fn rhai_planner_refuses_authority_ceiling_escape_before_target_locks() {
                 "review":{"authority":"casework-main","policyId":"request-review"}
             }
         }],
-        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","permissions":[{
+        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":[{
             "entity":"request","operations":["get","submit_request","apply_request"],
             "readableFields":["target-ref","value"],
-            "applyTargets":[{"entity":"target", "rowBoundaries": []}],
-          "rowBoundaries": []
+            "applyTargets":[{"entity":"target", "rowBoundaries": "unrestricted"}],
+          "rowBoundaries": "unrestricted"
         }]}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).expect("source serializes"))

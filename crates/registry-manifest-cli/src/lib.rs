@@ -1,165 +1,145 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Registry Manifest's reading of its two authored formats, and the offline
+//! checks `registry-manifest validate` and `registry-manifest
+//! validate-profiles` run (CFG-CHECK-1).
+//!
+//! A metadata manifest and a profile descriptor are exchange models that
+//! name their version in `schema_version`, so neither carries `apiVersion`
+//! and `kind`. Both are read by the shared configuration reader: every
+//! finding is a diagnostic with a stable code, a JSON pointer, a line and
+//! column where the file has one, a message that never repeats a value from
+//! the file, and the action that fixes it.
 
-use std::ffi::CStr;
-use std::mem::MaybeUninit;
+use std::fs;
+use std::io::{self, Read as _};
+use std::path::Path;
 
-use unsafe_libyaml::{
-    yaml_event_delete, yaml_event_t, yaml_parser_delete, yaml_parser_initialize, yaml_parser_parse,
-    yaml_parser_set_input_string, yaml_parser_t, YAML_ALIAS_EVENT, YAML_MAPPING_START_EVENT,
-    YAML_SCALAR_EVENT, YAML_SEQUENCE_START_EVENT, YAML_STREAM_END_EVENT,
+use registry_platform_yaml::{
+    Diagnostic, EnvelopeRule, FormatSpec, Report, Severity, Source, MAXIMUM_DOCUMENT_BYTES,
 };
 
-pub const YAML_MAX_BYTES: u64 = 64 * 1024;
+mod metadata;
+mod profile;
+#[cfg(feature = "schema")]
+pub mod schema;
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum YamlPrepassError {
-    AliasesUnsupported,
-    Parse(String),
+pub use metadata::{
+    check_metadata_file, manifest_digest, metadata_error_diagnostics, read_metadata,
+    validation_pointer, MetadataCheck, ReadManifest,
+};
+pub use profile::{
+    check_profiles, CardinalityExpectation, CheckSeverity, CodelistExpectation, ConceptExpectation,
+    ConformanceCheck, FixtureExpectation, IdentifierExpectation, InputArtifact, ProfileDescriptor,
+    ProfileFixture, ProfileIdentity, ProfileSchemaVersion, ProfilesCheck, UnsupportedMapping,
+};
+
+/// The `apiVersion` of the report `validate --format json` and
+/// `validate-profiles --format json` write.
+pub const CTL_REPORT_API_VERSION: &str =
+    "id.registrystack.org/formats/manifest/ctl-report/v1alpha1";
+/// The `kind` of that report.
+pub const CTL_REPORT_KIND: &str = "ManifestCtlReport";
+/// The artifact name a metadata manifest's diagnostics carry.
+pub const METADATA_KIND: &str = "ManifestMetadata";
+/// The artifact name a profile descriptor's diagnostics carry.
+pub const PROFILE_KIND: &str = "ManifestProfile";
+/// The `schema_version` a metadata manifest declares.
+pub const METADATA_SCHEMA_VERSION: &str = "registry-manifest/v1";
+/// The `schema_version` a profile descriptor declares.
+pub const PROFILE_SCHEMA_VERSION: &str = "registry-manifest-profile/v1";
+/// The file name of a profile descriptor inside its profile's directory.
+pub const PROFILE_FILE_NAME: &str = "profile.yaml";
+
+/// A metadata manifest, as the shared reader reads it.
+pub const METADATA_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: METADATA_KIND,
+    envelope: EnvelopeRule::Exempt {
+        reason: "a metadata manifest is an exchange model that names its version in \
+                 schema_version",
+    },
+    removed_keys: &[],
+};
+
+/// A profile descriptor, as the shared reader reads it.
+pub const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: PROFILE_KIND,
+    envelope: EnvelopeRule::Exempt {
+        reason: "a profile descriptor is an exchange model that names its version in \
+                 schema_version",
+    },
+    removed_keys: &[],
+};
+
+/// What one check found, before it becomes a [`Report`].
+#[derive(Default)]
+struct Findings {
+    diagnostics: Vec<Diagnostic>,
+    files: usize,
+    unavailable: bool,
 }
 
-pub fn reject_yaml_anchors_and_aliases(raw: &str) -> Result<(), YamlPrepassError> {
-    if contains_obvious_yaml_anchor_or_alias(raw) {
-        return Err(YamlPrepassError::AliasesUnsupported);
+impl Findings {
+    fn push(&mut self, diagnostic: Diagnostic) {
+        self.diagnostics.push(diagnostic);
     }
 
-    // SAFETY: The libyaml parser receives a pointer into `raw`, which remains
-    // alive until `yaml_parser_delete` runs through `ParserGuard`.
-    unsafe {
-        let mut parser = MaybeUninit::<yaml_parser_t>::uninit();
-        let parser = parser.as_mut_ptr();
-        if yaml_parser_initialize(parser).fail {
-            return Err(YamlPrepassError::Parse(
-                "could not initialize YAML parser".to_string(),
-            ));
-        }
-        let _guard = ParserGuard(parser);
-        yaml_parser_set_input_string(parser, raw.as_ptr(), raw.len() as u64);
-
-        let mut event = MaybeUninit::<yaml_event_t>::uninit();
-        let event = event.as_mut_ptr();
-        loop {
-            if yaml_parser_parse(parser, event).fail {
-                return Err(YamlPrepassError::Parse(parser_problem(parser)));
-            }
-            let event_type = (*event).type_;
-            let unsupported = match event_type {
-                YAML_ALIAS_EVENT => true,
-                YAML_SCALAR_EVENT => !(*event).data.scalar.anchor.is_null(),
-                YAML_SEQUENCE_START_EVENT => !(*event).data.sequence_start.anchor.is_null(),
-                YAML_MAPPING_START_EVENT => !(*event).data.mapping_start.anchor.is_null(),
-                _ => false,
-            };
-            yaml_event_delete(event);
-
-            if unsupported {
-                return Err(YamlPrepassError::AliasesUnsupported);
-            }
-            if event_type == YAML_STREAM_END_EVENT {
-                return Ok(());
-            }
-        }
+    fn extend(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) {
+        self.diagnostics.extend(diagnostics);
     }
-}
 
-fn contains_obvious_yaml_anchor_or_alias(raw: &str) -> bool {
-    raw.lines()
-        .map(str::trim_start)
-        .filter(|line| !line.starts_with('#'))
-        .any(line_contains_obvious_yaml_anchor_or_alias)
-}
+    fn into_report(self) -> (Report, bool) {
+        let mut report = Report::new(self.diagnostics);
+        report.set_files_checked(self.files);
+        (report, self.unavailable)
+    }
 
-fn line_contains_obvious_yaml_anchor_or_alias(line: &str) -> bool {
-    starts_anchor_or_alias(line)
-        || line
-            .strip_prefix("- ")
-            .is_some_and(|rest| starts_anchor_or_alias(rest.trim_start()))
-}
-
-fn starts_anchor_or_alias(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    matches!(bytes.first(), Some(b'&' | b'*'))
-        && bytes
-            .get(1)
-            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'-')
-}
-
-struct ParserGuard(*mut yaml_parser_t);
-
-impl Drop for ParserGuard {
-    fn drop(&mut self) {
-        // SAFETY: `ParserGuard` is constructed only after successful
-        // `yaml_parser_initialize` and owns parser teardown.
-        unsafe {
-            yaml_parser_delete(self.0);
-        }
+    /// A file or directory that could not be read at all: the check cannot
+    /// finish, and exits 3.
+    fn unreadable(&mut self, code: &str, file: &Path, message: &str, action: &str) {
+        self.unavailable = true;
+        self.push(about(Severity::Error, code, file, message, action));
     }
 }
 
-unsafe fn parser_problem(parser: *mut yaml_parser_t) -> String {
-    let problem = (&*parser).problem;
-    if problem.is_null() {
-        "unknown YAML parse error".to_string()
-    } else {
-        CStr::from_ptr(problem).to_string_lossy().into_owned()
-    }
+/// A diagnostic about a file or directory as a whole, with no line.
+fn about(severity: Severity, code: &str, file: &Path, message: &str, action: &str) -> Diagnostic {
+    let mut diagnostic = match severity {
+        Severity::Error => Diagnostic::error(code, "", message, action),
+        Severity::Warning => Diagnostic::warning(code, "", message, action),
+    };
+    diagnostic.source = Some(Source {
+        file: file.display().to_string(),
+        line: None,
+        column: None,
+    });
+    diagnostic
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{reject_yaml_anchors_and_aliases, YamlPrepassError};
+enum Contents {
+    Bytes(Vec<u8>),
+    Missing,
+    Unreadable,
+}
 
-    #[test]
-    fn yaml_prepass_rejects_scaled_alias_amplification_shape() {
-        let raw = r#"
-amplified_seed: &seed lol
-amplified_1: [*seed, *seed, *seed, *seed, *seed, *seed, *seed, *seed]
-amplified_2: [*seed, *seed, *seed, *seed, *seed, *seed, *seed, *seed]
-schema_version: registry-manifest/v1
-catalog:
-  id: demo
-  base_url: https://metadata.example.test
-  title: Demo
-  publisher:
-    name: Publisher
-datasets:
-  - id: demo
-    title: Demo
-    entities: []
-codelists: []
-"#;
-
-        assert!(matches!(
-            reject_yaml_anchors_and_aliases(raw),
-            Err(YamlPrepassError::AliasesUnsupported)
-        ));
+/// The file's bytes, up to one byte past the reader's size cap so the
+/// reader refuses an oversized file itself. A link is followed; a path
+/// that is not a regular file once followed is unreadable.
+fn contents(path: &Path) -> Contents {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Contents::Missing,
+        Err(_) => return Contents::Unreadable,
+    };
+    if !metadata.is_file() {
+        return Contents::Unreadable;
     }
-
-    #[test]
-    fn yaml_prepass_rejects_nested_anchored_mapping_without_hanging() {
-        let raw = r#"
-schema_version: registry-manifest/v1
-catalog:
-  id: demo
-  base_url: https://metadata.example.test
-  title: Demo
-  publisher:
-    name: Publisher
-datasets:
-  - id: demo
-    title: Demo
-    entities:
-      - name: amplified
-        fields:
-          - &field
-            name: a
-            type: string
-          - *field
-codelists: []
-"#;
-
-        assert!(matches!(
-            reject_yaml_anchors_and_aliases(raw),
-            Err(YamlPrepassError::AliasesUnsupported)
-        ));
+    let Ok(file) = fs::File::open(path) else {
+        return Contents::Unreadable;
+    };
+    let mut bytes = Vec::new();
+    let limit = u64::try_from(MAXIMUM_DOCUMENT_BYTES).map_or(u64::MAX, |bound| bound + 1);
+    match file.take(limit).read_to_end(&mut bytes) {
+        Ok(_) => Contents::Bytes(bytes),
+        Err(_) => Contents::Unreadable,
     }
 }

@@ -249,7 +249,7 @@ test('the Markdown twin resolves regions the way the rendered page does', () => 
 
 // Shared pages keep their Messaging text for the activation change, so every
 // mention must sit inside a region the gate removes.
-for (const page of ['index.mdx', 'reference/client-api.mdx']) {
+for (const page of ['index.mdx', 'reference/client-api.mdx', 'reference/configuration-files.mdx']) {
   test(`${page} mentions Registry Messaging only inside DocsetProduct regions`, () => {
     const source = readFileSync(resolve(docsRoot, page), 'utf8');
     assert.match(source, /<DocsetProduct product="registry-messaging">/);
@@ -262,7 +262,12 @@ for (const page of ['index.mdx', 'reference/client-api.mdx']) {
 
 // The same rule for the Base Registry Engine citizen services: a docset that
 // does not publish them keeps no link to their pages and no description of them.
-for (const page of ['configure/breg.mdx', 'reference/environment-variables.mdx', 'changelog.mdx']) {
+for (const page of [
+  'configure/breg.mdx',
+  'reference/environment-variables.mdx',
+  'reference/configuration-files.mdx',
+  'changelog.mdx',
+]) {
   test(`${page} mentions the citizen services only inside DocsetProduct regions`, () => {
     const source = readFileSync(resolve(docsRoot, page), 'utf8');
     assert.match(source, /<DocsetProduct product="registry-breg-services">/);

@@ -138,8 +138,8 @@ a code change. The provider needs:
 - **A required scope only the provider holds.** `accessProfile` is a request parameter, so the
   profile's name isolates nothing on its own: any authenticated caller whose token satisfies the
   profile's principal claim, purposes, and row boundaries can select it. Give the profile a
-  `requiredScopes` entry, for example `registry:esignet:lookup`. A profile with no required scope
-  raises `access.profile.no_required_scope` when you check the project.
+  `requiredScopes` entry, for example `registry:esignet:lookup`. A profile that requires no scope
+  has to say so with `requiredScopes: unrestricted`, which is the wrong choice for this profile.
 - **A field list that mirrors the profile.** The provider's `provisioned_fields` must match what the
   profile grants, and `account_check_fields` must be a non-empty subset of it that contains the
   selector field. Keep the account check to the identifier and a status field.
@@ -149,7 +149,8 @@ a code change. The provider needs:
 {/* Evidence: crates/registry-breg/src/api/mod.rs, authorize_profile_claims: the selected profile
 admits a request when every entry in required_scopes is present in the verified token, so an empty
 set admits any caller that satisfies the principal claim and the row boundaries.
-crates/registry-breg/src/access.rs raises access.profile.no_required_scope for that case.
+crates/registry-breg/src/contract/sentinel.rs, required_scopes: the authored member is required and
+is read as unrestricted or a list of at least one scope.
 The provider configuration fixes the token resource and scopes for every exchange. */}
 
 Register the provider with your OAuth issuer as a `private_key_jwt` client using an ES256 or RS256

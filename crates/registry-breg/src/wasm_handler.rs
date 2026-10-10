@@ -166,32 +166,34 @@ pub(crate) fn admission_violation(
 
     match error {
         InvokeError::ModuleTooLarge { size, max } => (
-            "action.handler.module_bound",
+            "breg.action.handler-module-bound",
             format!("the handler module is {size} bytes; the ceiling is {max} bytes"),
         ),
         InvokeError::UnsupportedImport { .. } => (
-            "action.handler.module_import_unsupported",
+            "breg.action.handler-module-import-unsupported",
             error.to_string(),
         ),
-        InvokeError::MissingExport { .. } => {
-            ("action.handler.module_export_missing", error.to_string())
-        }
+        InvokeError::MissingExport { .. } => (
+            "breg.action.handler-module-export-missing",
+            error.to_string(),
+        ),
         InvokeError::ExportTypeMismatch { .. } => {
-            ("action.handler.module_export_type", error.to_string())
+            ("breg.action.handler-module-export-type", error.to_string())
         }
-        InvokeError::UnexpectedExport { .. } => {
-            ("action.handler.module_export_unexpected", error.to_string())
-        }
+        InvokeError::UnexpectedExport { .. } => (
+            "breg.action.handler-module-export-unexpected",
+            error.to_string(),
+        ),
         InvokeError::InvalidModule { .. } => (
-            "action.handler.module_invalid",
+            "breg.action.handler-module-invalid",
             format!("the handler module is not a valid WebAssembly binary: {error}"),
         ),
         InvokeError::EngineSetup { .. } => (
-            "action.handler.execution",
+            "breg.action.handler-execution",
             format!("this build cannot validate WASM handler modules: {error}"),
         ),
         error => (
-            "action.handler.module_invalid",
+            "breg.action.handler-module-invalid",
             format!("the handler module was rejected: {error}"),
         ),
     }

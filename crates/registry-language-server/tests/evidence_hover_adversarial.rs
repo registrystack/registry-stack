@@ -114,15 +114,12 @@ fn no_backtick_an_author_writes_reaches_the_card() {
 /// The newline is the one worth naming: it is what would end the code span, end the line, and start
 /// a paragraph of the author's own under a heading the reader trusts. It is a C0 control, so
 /// [`registry_language_server`]'s bound catches it, and this holds that it still does.
+///
+/// Every other control character is refused by the shared reader before a name is read, so the
+/// question that spells one is never indexed and no card is drawn over it.
 #[test]
 fn no_control_character_an_author_writes_reaches_the_card() {
-    for payload in [
-        "is_adult\\n\\n# A heading of my own",
-        "is_adult\\r\\n",
-        "is_adult\\u001b[2J",
-        "is_adult\\u0000",
-        "is_adult\\u0085",
-    ] {
+    for payload in ["is_adult\\n\\n# A heading of my own", "is_adult\\r\\n"] {
         let card = card_over_concept(payload);
         assert!(
             card.lines().count() == 3,
@@ -133,6 +130,34 @@ fn no_control_character_an_author_writes_reaches_the_card() {
                 .chars()
                 .any(|character| character.is_control() && character != '\n'),
             "a control character reached the card: {card:?}"
+        );
+    }
+    for payload in ["is_adult\\u001b[2J", "is_adult\\u0000", "is_adult\\u0085"] {
+        let question = QUESTION
+            .replace("<|concept|>is_adult", &format!("\"<|concept|>{payload}\""))
+            .replace("<|allow|>is_adult", &format!("\"<|allow|>{payload}\""));
+        let project = EvidenceProject::new(&replacing(
+            &adult_status_project(),
+            QUESTION_PATH,
+            &question,
+        ));
+        let index = project.index();
+        assert!(
+            index
+                .hover_at(
+                    &project.path(QUESTION_PATH),
+                    project.cursor(QUESTION_PATH, "allow"),
+                )
+                .is_none(),
+            "a card was drawn over a name holding {payload:?}"
+        );
+        assert!(
+            index.diagnostics().iter().any(|diagnostic| {
+                diagnostic.path == project.path(QUESTION_PATH)
+                    && diagnostic.code.as_deref() == Some("yaml.control-character")
+            }),
+            "the question holding {payload:?} is refused for its control character: {:?}",
+            index.diagnostics()
         );
     }
 }
@@ -476,10 +501,10 @@ fn a_card_draws_two_different_names_differently() {
 #[test]
 fn a_card_cut_at_its_ceiling_closes_every_span_it_opened() {
     let answers =
-        "  - concept: is_adult\n    id: urn:example:concepts:is-adult\n    type: boolean\n"
+        "  - concept: is_adult\n    uri: urn:example:concepts:is-adult\n    type: boolean\n"
             .repeat(140);
     let question = QUESTION.replace(
-        "answers:\n  - concept: <|concept|>is_adult\n    id: urn:example:concepts:is-adult\n    \
+        "answers:\n  - concept: <|concept|>is_adult\n    uri: urn:example:concepts:is-adult\n    \
          type: boolean\n",
         &format!("answers:\n{answers}"),
     );

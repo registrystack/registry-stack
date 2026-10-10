@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 
-use registry_breg_review::{check, command, router, serve, RuntimeConfig, RuntimeConfigError};
+use registry_breg_review::check::{self, CheckRequest, OutputFormat};
+use registry_breg_review::{command, router, serve, RuntimeConfig};
 use tracing::Level;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
@@ -29,13 +31,43 @@ fn operational_log_level(value: Result<String, std::env::VarError>) -> Result<Le
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     let matches = command().get_matches();
+    let path = matches
+        .get_one::<PathBuf>("runtime-config")
+        .expect("clap requires --runtime-config");
+
+    // The offline check writes its own report and reads no log setting.
+    if let Some(("check", arguments)) = matches.subcommand() {
+        let request = CheckRequest {
+            runtime: path,
+            environment: arguments.get_flag("environment"),
+            format: *arguments
+                .get_one::<OutputFormat>("format")
+                .expect("clap defaults --format"),
+            deny_warnings: arguments.get_flag("deny-warnings"),
+        };
+        return ExitCode::from(check::run(
+            &request,
+            &mut std::io::stdout().lock(),
+            &mut std::io::stderr().lock(),
+        ));
+    }
+
     let level = match operational_log_level(std::env::var(LOG_VARIABLE)) {
         Ok(level) => level,
         Err(error) => {
             eprintln!("breg-review: {error}");
-            std::process::exit(2);
+            return ExitCode::from(2);
+        }
+    };
+    // A refused runtime file is reported in the shared human shape on
+    // standard error (CFG-DIAG-2), naming members and never their values.
+    let config = match RuntimeConfig::load(path) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("breg-review: {error}");
+            return ExitCode::FAILURE;
         }
     };
     tracing_subscriber::registry()
@@ -53,38 +85,18 @@ async fn main() {
         )
         .init();
 
-    let path = matches
-        .get_one::<PathBuf>("runtime-config")
-        .expect("clap requires --runtime-config");
-    let outcome = match matches.subcommand_name() {
-        Some("check") => run_check(path),
-        Some("serve") => run_serve(path).await,
-        _ => unreachable!("clap requires the check or serve subcommand"),
-    };
     // Startup refusals go to standard error, apart from the JSON operational
     // log on standard output, and name the failing field without its value.
-    if let Err(error) = outcome {
-        eprintln!("breg-review: {error}");
-        std::process::exit(1);
+    match run_serve(config).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("breg-review: {error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
-fn load(path: &std::path::Path) -> Result<RuntimeConfig, String> {
-    RuntimeConfig::load(path).map_err(|error| match error {
-        RuntimeConfigError::Load(_) => error.to_string(),
-        error => format!("{error} (at {})", error.path()),
-    })
-}
-
-fn run_check(path: &std::path::Path) -> Result<(), String> {
-    let config = load(path)?;
-    check(&config).map_err(|error| error.to_string())?;
-    tracing::info!("the runtime configuration is valid");
-    Ok(())
-}
-
-async fn run_serve(path: &std::path::Path) -> Result<(), String> {
-    let config = load(path)?;
+async fn run_serve(config: RuntimeConfig) -> Result<(), String> {
     let bind = config.listener.bind.socket_addr();
     let router = router(config).await.map_err(|error| error.to_string())?;
     let listener = tokio::net::TcpListener::bind(bind)

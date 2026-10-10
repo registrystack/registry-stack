@@ -1,3 +1,5 @@
+apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1
+kind: CaseworkHolidaySet
 holidaySet: office-holidays
 revision: 7
 dates: [2026-09-07]

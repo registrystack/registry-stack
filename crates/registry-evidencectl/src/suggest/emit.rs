@@ -17,6 +17,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use registry_evidence_authoring::formats::{SOURCE_API_VERSION, SOURCE_KIND};
 use serde_json::Value;
 
 use super::types::{
@@ -1193,6 +1194,8 @@ fn render_authoring_source(inputs: &EmitInputs) -> String {
         request_method(&inputs.operation.method).expect("validated method"),
     );
     let mut out = String::new();
+    push_line(&mut out, 0, &format!("apiVersion: {SOURCE_API_VERSION}"));
+    push_line(&mut out, 0, &format!("kind: {SOURCE_KIND}"));
     for line in mechanical
         .lines()
         .skip(2)

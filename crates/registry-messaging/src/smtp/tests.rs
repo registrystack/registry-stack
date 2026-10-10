@@ -249,7 +249,9 @@ async fn a_timeout_after_the_end_of_data_marker_is_maybe_sent() {
         ..Script::default()
     })
     .await;
-    let provider = loopback_with(&stub, |settings| settings.attempt_timeout_seconds = 1);
+    let provider = loopback_with(&stub, |settings| {
+        settings.attempt_timeout_milliseconds = 1_000
+    });
     let sent = send(&provider).await;
     assert_eq!(sent.outcome, SendOutcome::MaybeSent);
     assert_eq!(sent.detail.failure, Some(SmtpFailure::TimedOut));
@@ -330,7 +332,9 @@ async fn the_attempt_timeout_bounds_a_stalled_relay() {
         ..Script::default()
     })
     .await;
-    let provider = loopback_with(&stub, |settings| settings.attempt_timeout_seconds = 1);
+    let provider = loopback_with(&stub, |settings| {
+        settings.attempt_timeout_milliseconds = 1_000
+    });
     let started = std::time::Instant::now();
     let sent = send(&provider).await;
     let elapsed = started.elapsed();
@@ -739,7 +743,7 @@ fn tls_settings(authentication: Option<SmtpAuthentication>, trusted: bool) -> Sm
         tls: SmtpTlsMode::Starttls,
         trusted_root_certificate_ref: trusted.then(|| "secret:file/relay-root".to_owned()),
         authentication,
-        attempt_timeout_seconds: 5,
+        attempt_timeout_milliseconds: 5_000,
         allowed_private_cidrs: Vec::new(),
     }
 }

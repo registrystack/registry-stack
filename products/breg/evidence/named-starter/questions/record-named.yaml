@@ -1,3 +1,6 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: record-named
 question: Does the registered organization have a name?
 purpose: record-verification
@@ -9,7 +12,7 @@ source:
   ref: registry-name
 answers:
 - concept: named
-  id: urn:example:concept:record-named:named
+  uri: urn:example:concept:record-named:named
   type: boolean
 derivation: derivations/record-named.rhai
 disclosure:

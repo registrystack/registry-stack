@@ -1,0 +1,14 @@
+id: bom-keeps-positions
+rules: [CFG-YAML-6, CFG-DIAG-1]
+summary: A byte-order mark does not count as a column, so a refusal after it keeps its position.
+encoding:
+  byteOrderMark: true
+mutation:
+  append: |
+    conformanceAnchor: &conformance text
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.anchor
+      path: /conformanceAnchor
+      at: {line: 1, column: 20}

@@ -13,6 +13,7 @@ standards_referenced:
 wide: true
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
 import reference from '../../../data/generated/breg-configuration.json';
 
@@ -32,6 +33,8 @@ deployment steps. A schema-valid document still needs the compiler and runtime c
 `bregctl check <project>` validates the combined model;
 `bregctl doctor --runtime-config <absolute-file>` checks deployment configuration.
 Cross-field rules and references to other files cannot all be expressed by these tables.
+[Configuration files](../configuration-files/) describes the YAML rules and environment
+substitution that apply when the runtime reads `runtime.yaml`.
 
 {/* Evidence: crates/registry-breg/src/schema.rs, documents() and runtime_documents();
     crates/registry-breg/src/contract.rs, RegistryProject and RegistryModule;
@@ -59,8 +62,8 @@ declared field type and that the condition is valid for the event trigger.
 `entities[].indexes` declares btree indexes by `id` and ordered `fields`. Every `reference`
 field is indexed automatically unless a declared index or a unique constraint without `when`
 already leads with it. `bregctl check` reports the authoring findings
-`entity.list.unindexed_filter` and `entity.list.unindexed_sort` for a filterable or sortable
-list field that no index leads with. They fail a check only under `--deny-findings`, and are not
+`breg.entity.list-unindexed-filter` and `breg.entity.list-unindexed-sort` for a filterable or sortable
+list field that no index leads with. They fail a check only under `--deny-warnings`, and are not
 raised when a package is built.
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, compile_entities() and
@@ -174,13 +177,21 @@ it generates record schemas for that project's API, not configuration schemas.
 
 ## Statistical dataset declarations
 
-Root `statisticalDatasets` entries name the unit entity, typed population, flow or stock period, closed dimensions, disclosure parameters, and live or release profile grants. `minimumCount` and `roundingBase` are explicit integers of at least two. A publisher needs caller-independent read visibility over the unit and every source read by referenced derived fields. Live grants need a count-capable ordinary list permission; reader grants do not add record access.
+Root `statisticalDatasets` entries name the unit entity, typed population, flow or stock period, closed dimensions, and disclosure parameters. `minimumCount` and `roundingBase` are explicit integers of at least two. Access to a dataset is granted in an access profile's `permissions`, as an entry holding `dataset` and `operations` only, with the operations `read-live`, `publish`, and `read-releases`. Exactly one profile may hold `publish` on a dataset, and the publisher and every `read-live` profile of a published dataset also write `read-releases`. A publisher needs caller-independent read visibility over the unit and every source read by referenced derived fields. A `read-live` or `publish` grant needs a count-capable ordinary list permission; a `read-releases` grant does not add record access.
 
 The generated `registry.yaml` tables include every nested dataset member. Compiler rules additionally reject reserved dimension names and codes, encrypted fields, consent-gated sources, and an unbounded or unauthorized population. See [publish a statistical series](../../configure/breg-statistics/) for the declaration journey.
 
 {/* Evidence: crates/registry-breg/src/contract.rs;
     crates/registry-breg/src/compiler/statistics.rs;
     docs/site/scripts/generate-breg-configuration.mjs. */}
+
+## Check commands
+
+Every file Base Registry Engine reads has a command that checks it offline, with no service running. Each prints
+the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="breg" />
 
 ## Next
 

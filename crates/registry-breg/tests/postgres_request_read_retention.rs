@@ -279,12 +279,13 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         "request GET authority alone does not reveal application target identifiers"
     );
 
-    let public_detail = get_record_anonymous(
+    let public_detail = get_record(
         &app,
         &format!(
             "/v1/records/correction-requests/{}?accessProfile=public-request",
             request.id
         ),
+        claims("public-request", "public-reader"),
     )
     .await;
     assert_eq!(
@@ -292,11 +293,12 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         "applied"
     );
     assert_eq!(public_detail.body["data"]["request"]["proposalVersion"], 1);
-    assert_effect_digests_withheld(&public_detail.body["data"]);
+    assert_effect_digests_without_result_links(&public_detail.body["data"]);
 
-    let public_list = get_record_anonymous(
+    let public_list = get_record(
         &app,
         "/v1/records/correction-requests?accessProfile=public-request",
+        claims("public-request", "public-reader"),
     )
     .await;
     let public_item = public_list.body["items"]
@@ -307,7 +309,7 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         .expect("public list includes created request");
     assert_eq!(public_item["request"]["bregState"], "applied");
     assert_eq!(public_item["request"]["proposalVersion"], 1);
-    assert_effect_digests_withheld(public_item);
+    assert_effect_digests_without_result_links(public_item);
 
     // Seed protected task metadata through the migration authority after the
     // ordinary journey. This proof concerns erasure, not grant admission.
@@ -421,17 +423,18 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         0
     );
 
-    let erased_public = get_record_anonymous(
+    let erased_public = get_record(
         &app,
         &format!(
             "/v1/records/correction-requests/{}?accessProfile=public-request",
             request.id
         ),
+        claims("public-request", "public-reader"),
     )
     .await;
     assert_eq!(erased_public.body["data"]["request"]["detailErased"], true);
     assert_eq!(erased_public.body["data"]["domainData"], json!({}));
-    assert_effect_digests_withheld(&erased_public.body["data"]);
+    assert_effect_digests_without_result_links(&erased_public.body["data"]);
 
     let same_key_replay = send_action(
         &app,
@@ -1349,24 +1352,12 @@ async fn get_record(app: &axum::Router, uri: &str, claims: VerifiedRequestClaims
     response
 }
 
-async fn get_record_anonymous(app: &axum::Router, uri: &str) -> ResponseParts {
-    let response = response_parts(send(app, Method::GET, uri, None, &[], Vec::new()).await).await;
-    assert_eq!(
-        response.status,
-        StatusCode::OK,
-        "anonymous GET {uri} failed with {}",
-        response.body
-    );
-    response
-}
-
-fn assert_effect_digests_withheld(record: &Value) {
-    assert!(record["request"].get("effectDigest").is_none());
-    assert!(record["request"]["application"]
-        .get("effectDigest")
-        .is_none());
+fn assert_effect_digests_without_result_links(record: &Value) {
+    // Request GET authority discloses the effect digests to every
+    // authenticated profile; result links still need target GET authority.
+    assert!(record["request"]["effectDigest"].is_string());
     let proposal = &record["request"]["history"]["proposals"][0];
-    assert!(proposal.get("effectDigest").is_none());
+    assert!(proposal["effectDigest"].is_string());
     assert_eq!(proposal["resultLinkCount"], 0);
     assert_eq!(
         proposal["resultLinks"]
@@ -1586,7 +1577,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           ],
           "accessProfiles":[
             {
-              "id":"operator","default":true,"principalClaim":"registry_principal",
+              "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"site",
                 "operations":["create","get","list"],
@@ -1609,7 +1600,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               }]
             },
             {
-              "id":"request-only","principalClaim":"registry_principal",
+              "id":"request-only","principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get"],
@@ -1618,22 +1609,22 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               }]
             },
             {
-              "id":"public-request","anonymous":true,
+              "id":"public-request","principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
-                "rowBoundaries": []
+                "rowBoundaries": "unrestricted"
               }]
             },
             {
-              "id":"snapshot-reader","principalClaim":"registry_principal",
+              "id":"snapshot-reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["snapshot"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "allowCount":true,
-                "rowBoundaries": []
+                "rowBoundaries": "unrestricted"
               }]
             }
           ]

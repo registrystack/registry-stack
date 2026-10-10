@@ -16,7 +16,7 @@
 //! `subject.selector` names one of that operation's path parameters, each `source.facts[].path`
 //! selects a leaf of its response, and each key of `source.collectionBounds` names a collection some
 //! fact path visits. They are walked in [`IndexBuilder::walk_openapi_edges`], in the order
-//! `compile_question_plan` (`crates/registry-evidencectl/src/authoring.rs:964-1023`) reaches them,
+//! `compile_question_plan` (`crates/registry-evidencectl/src/authoring.rs`) reaches them,
 //! and a rung that reports stops the ones below it: the compiler stops at its first refusal, and an
 //! author whose operation name has a typo needs one sentence about the typo rather than a sentence
 //! about every field that reads the operation it did not find.
@@ -84,19 +84,26 @@ pub(crate) fn build_index(
     if dropped.contains(&marker_path) {
         return empty_index(Vec::new());
     }
+    // A marker the reader refuses stops the build; one it accepts with a warning, such as a
+    // deprecated `apiVersion`, is reported and the project is indexed as usual.
+    let mut marker_warnings = Vec::new();
     if let (Some(source), Some(document)) = (documents.get(&marker_path), parsed.get(&marker_path))
     {
         let diagnostics = read_project_marker(&marker_path, source, document);
-        if !diagnostics.is_empty() {
+        if diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::ERROR)
+        {
             return empty_index(diagnostics);
         }
+        marker_warnings = diagnostics;
     }
 
     let mut builder = IndexBuilder {
         root,
         symbols: Vec::new(),
         references: Vec::new(),
-        diagnostics: Vec::new(),
+        diagnostics: marker_warnings,
         choices: Vec::new(),
         referenced_files: BTreeSet::new(),
         offered: Vec::new(),
@@ -315,7 +322,7 @@ impl IndexBuilder<'_> {
             name,
             written,
             "Question",
-            "evidence/question-file-name",
+            "evidence.question.file-name",
         );
 
         for subject in subjects(value) {
@@ -399,7 +406,7 @@ impl IndexBuilder<'_> {
             .get("governance")
             .and_then(|governance| governance.get_scalar("fixtures"))
         {
-            // `evidence/unknown-fixture-file` is paired with a compiler rule that sits two crates
+            // `evidence.project.unknown-fixture-file` is paired with a compiler rule that sits two crates
             // from here, so it does not read as an editor invention beside the ones it is listed
             // with. `registry-evidencectl`'s check that this pointer is a project-relative
             // `fixtures/<name>.yaml` runs when it validates production inputs; a local compile
@@ -421,7 +428,7 @@ impl IndexBuilder<'_> {
     /// `question` has already been accepted by `registry_evidence_authoring::validate`, which is the
     /// state `compile_question_plan` reads it in: it takes the inline source out with
     /// `.expect("inline source was validated")`
-    /// (`crates/registry-evidencectl/src/authoring.rs:989`). So a question that is malformed reaches
+    /// (`crates/registry-evidencectl/src/authoring.rs`). So a question that is malformed reaches
     /// nothing here, and the malformed field is reported once, by the check that owns it.
     ///
     /// The rungs below run in the compiler's own order and each one stops the rest. That is not
@@ -454,11 +461,11 @@ impl IndexBuilder<'_> {
 
         // Edge 1. Resolution, and the sentence for an identifier that resolves to none or to two,
         // both come from the reference machinery: `unique_operation`
-        // (`crates/registry-evidencectl/src/authoring.rs:1565-1567`) refuses those two cases with one
+        // (`crates/registry-evidencectl/src/authoring.rs`) refuses those two cases with one
         // sentence, and it is the same condition.
         // The offer is narrower than the resolution on purpose. `unique_operation` looks across every
         // method the description publishes, and `question_operation`
-        // (`crates/registry-evidencectl/src/authoring.rs:1543-1551`) then refuses a resolved
+        // (`crates/registry-evidencectl/src/authoring.rs`) then refuses a resolved
         // operation whose method is not `get`, with a sentence about the method. So the editor must
         // keep finding an operation published under `post`, and must not propose one.
         self.refer_offering(
@@ -477,7 +484,7 @@ impl IndexBuilder<'_> {
             return;
         };
 
-        // Edge 2. `exact_path_selectors` (`crates/registry-evidencectl/src/authoring.rs:1575-1646`)
+        // Edge 2. `exact_path_selectors` (`crates/registry-evidencectl/src/authoring.rs`)
         // requires the question's selectors to be exactly the operation's required string path
         // parameters, so a selector outside that set refuses the project: at the count check when
         // there are as many selectors as parameters, and at the comparison otherwise.
@@ -502,12 +509,9 @@ impl IndexBuilder<'_> {
             self.report(
                 path,
                 written.range,
-                "evidence/subject-selector",
-                format!(
-                    "Subject selector '{}' is not a required string path parameter of operation '{}'",
-                    bounded_value(&written.value),
-                    bounded_value(operation_id)
-                ),
+                "evidence.question.subject-selector",
+                "This subject selector is not a required string path parameter of the question's operation"
+                    .to_owned(),
             );
         }
         if reported {
@@ -515,7 +519,7 @@ impl IndexBuilder<'_> {
         }
 
         // Edge 3. The set is the compiler's own: `compile_facts` asks `selectable_leaves` for it at
-        // `crates/registry-evidencectl/src/authoring.rs:1661` and refuses a fact whose path is not in
+        // `crates/registry-evidencectl/src/authoring.rs` and refuses a fact whose path is not in
         // it at :1666-1674. A response that cannot be read or flattened answers `None`, and every
         // fact path is then left alone rather than measured against an empty set.
         let Some(leaves) = description.selectable(&key) else {
@@ -551,12 +555,9 @@ impl IndexBuilder<'_> {
             self.report(
                 path,
                 written.range,
-                "evidence/unselectable-fact-path",
-                format!(
-                    "Fact path '{}' is not a selectable leaf of the 200 application/json response of operation '{}'",
-                    bounded_value(&written.value),
-                    bounded_value(operation_id)
-                ),
+                "evidence.question.unselectable-fact-path",
+                "This fact path is not a selectable leaf of the 200 application/json response of the question's operation"
+                    .to_owned(),
             );
         }
         if reported {
@@ -565,7 +566,7 @@ impl IndexBuilder<'_> {
 
         // Edge 4. `compile_facts` settles `source.collectionBounds` against the collections the fact
         // paths visit and refuses a project where either side names something the other does not
-        // (`crates/registry-evidencectl/src/authoring.rs:1681-1705`).
+        // (`crates/registry-evidencectl/src/authoring.rs`).
         //
         // Both directions rest on knowing every visited collection, so they are only drawn when the
         // paths found in the text are the paths the accepted question holds. A path this reading
@@ -596,17 +597,20 @@ impl IndexBuilder<'_> {
                 path,
                 *range,
             );
-            if question.source.collection_bounds.contains_key(pointer) {
+            if question
+                .source
+                .collection_bounds
+                .keys()
+                .any(|bound| bound.as_str() == pointer.as_str())
+            {
                 continue;
             }
             self.report(
                 path,
                 *range,
-                "evidence/undeclared-collection",
-                format!(
-                    "This path visits the collection '{}', which source.collectionBounds does not bound",
-                    bounded_value(pointer)
-                ),
+                "evidence.question.undeclared-collection",
+                "This path visits a collection that source.collectionBounds does not bound"
+                    .to_owned(),
             );
         }
         // The other direction is the reference machinery's: a bound naming a collection no fact
@@ -693,7 +697,7 @@ impl IndexBuilder<'_> {
             name,
             written,
             "Access policy",
-            "evidence/access-policy-file-name",
+            "evidence.access-policy.file-name",
         );
 
         for question in scalars(value.get("questions")) {
@@ -1043,10 +1047,11 @@ fn read_questions<'a>(
 /// loaded, so this is the set of sources anything checks. A source outside it is loaded, read far
 /// enough to see that it is an object under a usable name, and never opened again.
 ///
-/// A question the form refuses is outside it too, whatever it spells. `read_inputs`
-/// (`crates/registry-evidencectl/src/authoring.rs:464-492`) stops at
-/// `first_finding(validate_question(&question))?` before a source is compiled, so
-/// `compile_referenced_question` (:1127-1144) never reads the artifacts of the source that question
+/// A question the form refuses is outside it too, whatever it spells. `read_inputs` in
+/// `crates/registry-evidencectl/src/authoring.rs` reads the questions through `read_questions`,
+/// which gathers what `check_question` reports for a refused question and leaves that question out
+/// of the ones it returns, and the build stops at the gathered errors before a source is compiled,
+/// so `compile_referenced_question` never reads the artifacts of the source that question
 /// names. Classifying that source as read would answer one malformed document with a second
 /// sentence, in a file the author has not touched and may have nothing wrong with it.
 fn sources_accepted_questions_read<'a>(
@@ -1095,7 +1100,7 @@ fn prerequisite(failure: &DescriptionFailure) -> IndexedDiagnostic {
         path: failure.path().to_path_buf(),
         range: DOCUMENT_START,
         severity: DiagnosticSeverity::ERROR,
-        code: Some("evidence/openapi-prerequisite".to_owned()),
+        code: Some("evidence.openapi.prerequisite".to_owned()),
         message: bounded_message(failure.message()),
     }
 }

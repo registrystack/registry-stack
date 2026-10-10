@@ -1,0 +1,17 @@
+{
+  "ok": false,
+  "command": "dev grant",
+  "status": "operational-failure",
+  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "diagnostics": [
+    {
+      "artifact": "filesystem",
+      "code": "caseworkctl.io-failure",
+      "message": "A required filesystem operation failed.",
+      "path": "filesystem",
+      "severity": "error",
+      "suggestedAction": "Correct the path or permissions, then retry."
+    }
+  ],
+  "kind": "DevGrantReport"
+}

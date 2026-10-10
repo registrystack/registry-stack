@@ -51,22 +51,22 @@ fn change_control_direct_write_grant_identifies_entity_and_profile() {
               "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"asset-operator","principalClaim":"principal","permissions":[{
+            "id":"asset-operator","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"asset","operations":["get","patch"],"readableFields":["label"],"writableFields":["label"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           },{
-            "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
-              "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
-              "rowBoundaries": []
+              "applyTargets":[{"entity":"asset", "rowBoundaries": "unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
     )
     .expect_err("a controlled mutation operation cannot remain directly granted");
     assert_eq!(
-        diagnostic_path(&failure, "change_control.direct_write_grant"),
+        diagnostic_path(&failure, "breg.change-control.direct-write-grant"),
         "entities[id=asset].accessProfiles[id=asset-operator].operations"
     );
 }
@@ -91,17 +91,17 @@ fn change_control_required_for_empty_identifies_entity() {
               "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
-              "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
-              "rowBoundaries": []
+              "applyTargets":[{"entity":"asset", "rowBoundaries": "unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
     )
     .expect_err("change control must name at least one controlled mutation operation");
     assert_eq!(
-        diagnostic_path(&failure, "change_control.required_for.empty"),
+        diagnostic_path(&failure, "breg.change-control.required-for-empty"),
         "entities[id=asset].changeControl.requiredFor"
     );
 }
@@ -126,17 +126,17 @@ fn change_request_review_authority_invalid_identifies_entity_and_binding() {
               "review":{"authority":"Casework","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
-              "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
-              "rowBoundaries": []
+              "applyTargets":[{"entity":"asset", "rowBoundaries": "unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
     )
     .expect_err("review authority must be a bounded logical identifier");
     assert_eq!(
-        diagnostic_path(&failure, "identifier.invalid"),
+        diagnostic_path(&failure, "breg.identifier.invalid"),
         "entities[id=asset-placement-request].changeRequest.review.authority"
     );
 }
@@ -163,21 +163,21 @@ fn change_request_effect_paths_use_index_when_id_missing_and_id_when_present() {
             ],"review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
-              "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
-              "rowBoundaries": []
+              "applyTargets":[{"entity":"asset", "rowBoundaries": "unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
     )
     .expect_err("missing create id and unknown set field must be refused");
     assert_eq!(
-        diagnostic_path(&failure, "change_request.effect.create_id_required"),
+        diagnostic_path(&failure, "breg.change-request.effect-create-id-required"),
         "entities[id=asset-placement-request].changeRequest.effects[0].id"
     );
     assert_eq!(
-        diagnostic_path(&failure, "change_request.effect.field_unknown"),
+        diagnostic_path(&failure, "breg.change-request.effect-field-unknown"),
         "entities[id=asset-placement-request].changeRequest.effects[id=apply-label].set[field=nonexistent-field]"
     );
 }
@@ -202,16 +202,16 @@ fn change_request_submit_operation_missing_identifies_entity() {
               "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"asset-placement-reader","default":true,"principalClaim":"principal","permissions":[{
+            "id":"asset-placement-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"asset-placement-request","operations":["get"],"readableFields":["asset","label"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
     )
     .expect_err("a change-request type requires at least one submit_request grant");
     assert_eq!(
-        diagnostic_path(&failure, "change_request.submit_operation.missing"),
+        diagnostic_path(&failure, "breg.change-request.submit-operation-missing"),
         "entities[id=asset-placement-request].accessProfiles[].operations"
     );
 }

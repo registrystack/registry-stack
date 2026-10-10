@@ -1,0 +1,66 @@
+# The smallest project that sets every member the configuration conformance
+# corpus mutates. `bregctl check` reports no diagnostic on it, so a corpus
+# case's diagnostics are the case's own.
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: minimal
+  canonicalBaseIri: https://registry.example.com
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  sourceRevision: minimal-example-1
+manifestProjection:
+  accessProfile: record-reader
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://registry.example.com
+    title: Minimal example
+    description: Metadata for the minimal example registry.
+    publisher: {id: minimal-authority, name: Example institution}
+  publicService: {id: minimal-service, title: Minimal example}
+  datasets:
+    - {id: minimal, title: Minimal records, owner: Example institution, status: active}
+  dataServices:
+    - id: minimal-data-service
+      title: Minimal example
+      endpointUrl: https://registry.example.com
+      servesDatasets: [minimal]
+  distributions: []
+modules:
+  - id: minimal-core
+    version: 0.1.0
+    digest: "sha256:55913ccbdb8c61e85d7d15291cb2040550bb20a9dafa2b736c2089c0ece12ebb"
+entities:
+  - id: record
+    primaryDataset: minimal
+    route: records
+    mutationMode: mutable
+    classification: internal
+    batch:
+      maximumItems: 4
+      maximumBytes: 16384
+    fields:
+      - {id: code, type: string, required: true, maxLength: 32, classification: internal}
+      - {id: district, type: string, required: true, maxLength: 32, classification: internal}
+    indexes:
+      - {id: by-code, fields: [code]}
+      - {id: by-district, fields: [district]}
+    accessRequirements:
+      requiredScopes: [record:read]
+      allowedPurposes: [record-administration]
+      rowBoundaries:
+        - {field: district, claim: assigned_districts, operator: in}
+accessProfiles:
+  - id: record-reader
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [record:read]
+    requiredPurposes: [record-administration]
+    permissions:
+      - entity: record
+        operations: [get, list]
+        readableFields: [code, district]
+        filterableFields: [code, district]
+        rowBoundaries:
+          - {field: district, claim: assigned_districts, operator: in}

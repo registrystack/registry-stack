@@ -111,7 +111,19 @@ workspace-default-features = "allow"
 external-default-features = "allow"
 allow = []
 allow-workspace = false
-deny = []
+# CFG-YAML-1: YAML is read only through `registry-platform-yaml`. The workspace
+# no longer depends on `serde_yaml_ng`, so its `clippy.toml` entries refuse
+# nothing until it returns; this ban refuses the return itself.
+# `products/platform/scripts/check-yaml-reader-boundary.sh` requires it.
+deny = [
+  { crate = "saphyr-parser", wrappers = ["registry-platform-yaml"], reason = "the YAML subset parser is reached only through registry_platform_yaml (CFG-YAML-1)" },
+  { crate = "serde_yaml", wrappers = ["hayagriva", "typst-library"], reason = "read YAML through registry_platform_yaml; only the Typst bibliography stack may carry serde_yaml (CFG-YAML-1)" },
+  { crate = "yaml-rust", wrappers = ["syntect"], reason = "read YAML through registry_platform_yaml; only syntect's syntax definitions may carry yaml-rust (CFG-YAML-1)" },
+  { crate = "serde_yml", reason = "read YAML through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { crate = "yaml-rust2", reason = "read YAML through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { crate = "saphyr", reason = "read YAML through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { crate = "serde_yaml_ng", reason = "read YAML through registry_platform_yaml::Document::decode or RuntimeConfigLoader, and write it with serde_norway (CFG-YAML-1)" },
+]
 skip = []
 skip-tree = []
 

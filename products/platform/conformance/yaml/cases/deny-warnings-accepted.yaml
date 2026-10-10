@@ -1,0 +1,7 @@
+id: deny-warnings-accepted
+rules: [CFG-DIAG-4]
+summary: Every checking command takes --deny-warnings, and a file with no warning still passes with it.
+args: [--deny-warnings]
+expect:
+  exit: 0
+  diagnostics: []

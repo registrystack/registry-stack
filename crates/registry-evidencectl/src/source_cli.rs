@@ -70,30 +70,17 @@ pub(crate) struct SourceDetachArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", default_value = ".")]
     pub(crate) project: PathBuf,
-    /// Retired spelling of the project directory argument, still accepted.
-    #[arg(
-        long = "project",
-        value_name = "PROJECT",
-        hide = true,
-        conflicts_with = "project"
-    )]
-    pub(crate) legacy_project: Option<PathBuf>,
 }
 
 pub(crate) fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
         SourceCommand::Add(args) => source_add::run(args, format),
         SourceCommand::Suggest(args) => suggest::run(suggest::SourceCommand::Suggest(args), format),
-        SourceCommand::Mock(command) => source_mock::run(command),
+        SourceCommand::Mock(command) => source_mock::run(command, format),
         SourceCommand::Diff(args) => diff(args, format),
         SourceCommand::Import(args) => apply(args, "source import", format),
         SourceCommand::Update(args) => apply(args, "source update", format),
-        SourceCommand::Detach(mut args) => {
-            if let Some(project) = args.legacy_project.take() {
-                args.project = project;
-            }
-            detach(args)
-        }
+        SourceCommand::Detach(args) => detach(args),
     }
 }
 
@@ -330,7 +317,7 @@ mod tests {
     use sha2::{Digest as _, Sha256};
     use std::fs;
 
-    const SOURCE: &str = "transport: http-json\nconnection: remote\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{profile: record-code, fields: [code]}]\n  prepareScript: adapters/lookup-prepare.rhai\n  adapterParametersSchema: schemas/lookup-parameters.yaml\nresponseSchema: schemas/lookup-response.yaml\nfactSchema: schemas/lookup-facts.yaml\nextractScript: adapters/lookup-extract.rhai\n";
+    const SOURCE: &str = "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nconnection: remote\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{profile: record-code, fields: [code]}]\n  prepareScript: adapters/lookup-prepare.rhai\n  adapterParametersSchema: schemas/lookup-parameters.yaml\nresponseSchema: schemas/lookup-response.yaml\nfactSchema: schemas/lookup-facts.yaml\nextractScript: adapters/lookup-extract.rhai\n";
     const EXTRACT_ONE: &str = "fn extract(response, context) { #{outcome: \"no_match\"} } // one\n";
     const EXTRACT_TWO: &str = "fn extract(response, context) { #{outcome: \"no_match\"} } // two\n";
 
@@ -365,7 +352,7 @@ mod tests {
                 ("sources/lookup.yaml", SOURCE),
                 (
                     "selectors/record-code.yaml",
-                    "fields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n",
+                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n",
                 ),
                 (
                     "schemas/lookup-parameters.yaml",
@@ -387,8 +374,9 @@ mod tests {
                 fs::write(root.join(path), text).unwrap();
             }
             fs::write(root.join("source-export.json"), serde_json::to_vec(&json!({
-                "formatVersion": 1, "sourceId": "lookup", "provenance": {"producer": "source-command-test", "revision": name},
-                "artifacts": artifacts.iter().map(|(path, text)| json!({"path": path, "sha256": hex::encode(Sha256::digest(text.as_bytes()))})).collect::<Vec<_>>()
+                "apiVersion": source_import::EXPORT_API_VERSION, "kind": source_import::EXPORT_KIND,
+                "sourceId": "lookup", "provenance": {"producer": "source-command-test", "revision": name},
+                "artifacts": artifacts.iter().map(|(path, text)| json!({"path": path, "digest": format!("sha256:{}", hex::encode(Sha256::digest(text.as_bytes())))})).collect::<Vec<_>>()
             })).unwrap()).unwrap();
             root
         }
@@ -455,7 +443,7 @@ mod tests {
         for (path, text) in [
             (
                 "questions/record-active.yaml",
-                "id: record-active\nquestion: Is the record active?\npurpose: record-verification\nsubject:\n  role: subject\n  profiles: [record-code]\nsource:\n  ref: lookup\nanswers:\n- concept: active\n  type: boolean\nderivation: derivations/record-active.rhai\ndisclosure:\n  allow: [active]\n",
+                "apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\nid: record-active\nquestion: Is the record active?\npurpose: record-verification\nsubject:\n  role: subject\n  profiles: [record-code]\nsource:\n  ref: lookup\nanswers:\n- concept: active\n  type: boolean\nderivation: derivations/record-active.rhai\ndisclosure:\n  allow: [active]\n",
             ),
             (
                 "derivations/record-active.rhai",
@@ -474,7 +462,7 @@ mod tests {
             let error = review_with_revisions(fixture.args(renamed), apply, &mut output, no_target)
                 .expect_err("a renamed fact the derivation still reads");
             assert!(
-                format!("{error:#}").contains("reads fact \"status\""),
+                format!("{error:#}").contains("reads fact `status`"),
                 "error was: {error:#}"
             );
             let report = parsed(&output);
@@ -536,7 +524,7 @@ mod tests {
         );
 
         let resolutions = fixture.root.path().join("resolutions.json");
-        fs::write(&resolutions, serde_json::to_vec(&json!({"formatVersion": 1, "artifacts": {"adapters/lookup-extract.rhai": {"choice": "keep"}}})).unwrap()).unwrap();
+        fs::write(&resolutions, serde_json::to_vec(&json!({"apiVersion": "id.registrystack.org/formats/evidence/source-resolution/v1alpha1", "kind": "EvidenceSourceResolution", "artifacts": {"adapters/lookup-extract.rhai": {"type": "keep"}}})).unwrap()).unwrap();
         let mut args = fixture.args(next);
         args.resolutions = Some(resolutions);
         output.clear();

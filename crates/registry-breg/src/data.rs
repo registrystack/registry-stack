@@ -12,6 +12,9 @@ use std::future::Future;
 use std::io::{BufRead, BufReader, Read};
 
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+use registry_platform_yaml::{
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, Report, RetiredApiVersion,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -28,9 +31,42 @@ use crate::model::{
     HttpMethod,
 };
 
-const DATA_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
-const IMPORT_CHECKPOINT_KIND: &str = "RegistryDataImportCheckpoint";
-const EXPORT_CHECKPOINT_KIND: &str = "RegistryDataExportCheckpoint";
+/// The data import checkpoint apiVersion `bregctl data import` writes.
+pub const IMPORT_CHECKPOINT_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/data-import-checkpoint/v1alpha1";
+/// The data import checkpoint kind.
+pub const IMPORT_CHECKPOINT_KIND: &str = "BRegDataImportCheckpoint";
+/// The data export checkpoint apiVersion `bregctl data export` writes.
+pub const EXPORT_CHECKPOINT_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/data-export-checkpoint/v1alpha1";
+/// The data export checkpoint kind.
+pub const EXPORT_CHECKPOINT_KIND: &str = "BRegDataExportCheckpoint";
+/// The header both checkpoints carried before each had its own format.
+const RETIRED_CHECKPOINT_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
+/// The data import checkpoint format and the header it retired.
+pub const IMPORT_CHECKPOINT_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: IMPORT_CHECKPOINT_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(IMPORT_CHECKPOINT_API_VERSION)],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: RETIRED_CHECKPOINT_API_VERSION,
+            replacement: "Finish this import with the bregctl that wrote the checkpoint; this bregctl reads only the checkpoints it writes.",
+        }],
+    },
+    removed_keys: &[],
+};
+/// The data export checkpoint format and the header it retired.
+pub const EXPORT_CHECKPOINT_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: EXPORT_CHECKPOINT_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(EXPORT_CHECKPOINT_API_VERSION)],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: RETIRED_CHECKPOINT_API_VERSION,
+            replacement: "Finish this export with the bregctl that wrote the checkpoint, or remove the output and its checkpoint and export again.",
+        }],
+    },
+    removed_keys: &[],
+};
 const CHUNK_ALGORITHM_VERSION: &str = "greedy-canonical-http-batch-v1";
 const IDEMPOTENCY_DOMAIN: &str = "registry-data-import-chunk-v1";
 const MAX_BINDING_BYTES: usize = 256;
@@ -313,6 +349,10 @@ pub enum DataError {
     ItemTooLarge,
     #[error("data checkpoint does not match the active binding")]
     CheckpointMismatch,
+    /// The shared reader refused the checkpoint document; the report carries
+    /// its diagnostics unchanged.
+    #[error("the data checkpoint document was refused")]
+    CheckpointDocument(Report),
     #[error("the Registry data transport is unavailable")]
     TransportUnavailable,
     #[error("the Registry data operation was refused")]
@@ -544,12 +584,9 @@ pub(crate) fn ingestion_item_operation_admitted(
             )
     });
     if profile.operations.contains(&Operation::Import) {
-        return !profile.anonymous
-            && compiled == Operation::Create
-            && access_matches(Operation::Import);
+        return compiled == Operation::Create && access_matches(Operation::Import);
     }
-    !profile.anonymous
-        && profile.operations.contains(&Operation::Batch)
+    profile.operations.contains(&Operation::Batch)
         && profile.operations.contains(&compiled)
         && access_matches(Operation::Batch)
         && access_matches(compiled)
@@ -867,10 +904,52 @@ pub(crate) fn ingestion_chunk_idempotency_key(
     Ok(format!("breg-data-v1-{}", sha256_hex(&binding)))
 }
 
+/// Bounded integer members of the checkpoint documents.
+mod members {
+    use registry_platform_yaml::{BoundedU32, BoundedU64, Invalid};
+    use serde::{Deserialize, Deserializer};
+
+    const MAX_INPUT_BYTES: u64 = super::MAX_DATA_IMPORT_INPUT_BYTES as u64;
+    const MAX_INPUT_ITEMS: u64 = super::MAX_INPUT_ITEMS as u64;
+    const MAX_BATCH_ITEMS: u32 = crate::compiler::MAX_BATCH_ITEMS as u32;
+
+    pub(super) fn input_bytes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        BoundedU64::<0, MAX_INPUT_BYTES>::deserialize(deserializer).map(BoundedU64::get)
+    }
+
+    pub(super) fn input_items<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        BoundedU64::<0, MAX_INPUT_ITEMS>::deserialize(deserializer).map(BoundedU64::get)
+    }
+
+    pub(super) fn batch_items<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
+        let items = BoundedU32::<1, MAX_BATCH_ITEMS>::deserialize(deserializer)?;
+        u16::try_from(items.get())
+            .map_err(|_| Invalid::out_of_range(1, MAX_BATCH_ITEMS).into_error())
+    }
+
+    pub(super) fn batch_bytes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+        BoundedU32::<1, { crate::compiler::MAX_BATCH_BYTES }>::deserialize(deserializer)
+            .map(BoundedU32::get)
+    }
+
+    /// An export has no size bound of its own: it grows by one page per
+    /// resumed run.
+    pub(super) fn export_count<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<u64, D::Error> {
+        BoundedU64::<0, { u64::MAX }>::deserialize(deserializer).map(BoundedU64::get)
+    }
+}
+
+/// The checkpoint `bregctl data import` keeps beside its run. The shared
+/// reader checks and removes the header before the members are decoded, so
+/// the header members are written from the format and never read.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DataImportCheckpoint {
+    #[serde(skip_deserializing, default = "import_checkpoint_api_version")]
     api_version: String,
+    #[serde(skip_deserializing, default = "import_checkpoint_kind")]
     kind: String,
     package_revision: String,
     schema_fingerprint: String,
@@ -878,15 +957,22 @@ pub struct DataImportCheckpoint {
     operation: DataImportOperation,
     profile_id: String,
     input_digest: String,
+    #[serde(deserialize_with = "members::input_bytes")]
     input_length: u64,
+    #[serde(deserialize_with = "members::input_items")]
     item_count: u64,
     chunk_algorithm_version: String,
+    #[serde(deserialize_with = "members::batch_items")]
     maximum_items: u16,
+    #[serde(deserialize_with = "members::batch_bytes")]
     maximum_bytes: u32,
     import_id: String,
+    #[serde(deserialize_with = "members::input_items")]
     next_item_index: u64,
+    #[serde(deserialize_with = "members::input_bytes")]
     next_byte_offset: u64,
     committed_prefix_digest: String,
+    #[serde(deserialize_with = "members::input_items")]
     completed_chunk_count: u64,
     complete: bool,
 }
@@ -914,7 +1000,7 @@ impl DataImportCheckpoint {
     ) -> Result<Self, DataError> {
         validate_checkpoint_binding(package_revision, schema_fingerprint)?;
         Ok(Self {
-            api_version: DATA_API_VERSION.to_owned(),
+            api_version: IMPORT_CHECKPOINT_API_VERSION.to_owned(),
             kind: IMPORT_CHECKPOINT_KIND.to_owned(),
             package_revision: package_revision.to_owned(),
             schema_fingerprint: schema_fingerprint.to_owned(),
@@ -936,18 +1022,41 @@ impl DataImportCheckpoint {
         })
     }
 
+    /// Starts a checkpoint for an import whose identity an earlier run
+    /// recorded, so a rebuilt checkpoint keeps the import identity its chunk
+    /// idempotency keys derive from.
+    pub fn start_with_import_id(
+        plan: &DataImportPlan,
+        package_revision: &str,
+        schema_fingerprint: &str,
+        import_id: &str,
+    ) -> Result<Self, DataError> {
+        let mut checkpoint = Self::start(plan, package_revision, schema_fingerprint)?;
+        import_id.clone_into(&mut checkpoint.import_id);
+        checkpoint.validate_resume(plan, package_revision, schema_fingerprint, import_id)?;
+        Ok(checkpoint)
+    }
+
+    /// Reads a checkpoint document through the shared reader, naming it
+    /// `file` in diagnostics. No member is compared with an import here.
+    pub fn read(file: &str, bytes: &[u8]) -> Result<Self, DataError> {
+        Reader::new(file)
+            .decode::<Self>(bytes, &Expect::one(&IMPORT_CHECKPOINT_FORMAT))
+            .map(|decoded| decoded.value)
+            .map_err(DataError::CheckpointDocument)
+    }
+
     /// Restores a checkpoint only when its random import identity matches the
     /// identity retained by the executor for this import.
     pub fn from_json(
+        file: &str,
         bytes: &[u8],
         plan: &DataImportPlan,
         package_revision: &str,
         schema_fingerprint: &str,
         expected_import_id: &str,
     ) -> Result<Self, DataError> {
-        let value = parse_json_strict(bytes).map_err(|_| DataError::CheckpointMismatch)?;
-        let checkpoint: Self =
-            serde_json::from_value(value).map_err(|_| DataError::CheckpointMismatch)?;
+        let checkpoint = Self::read(file, bytes)?;
         checkpoint.validate_resume(
             plan,
             package_revision,
@@ -973,9 +1082,7 @@ impl DataImportCheckpoint {
     ) -> Result<(), DataError> {
         validate_checkpoint_binding(package_revision, schema_fingerprint)
             .map_err(|_| DataError::CheckpointMismatch)?;
-        if self.api_version != DATA_API_VERSION
-            || self.kind != IMPORT_CHECKPOINT_KIND
-            || self.package_revision != package_revision
+        if self.package_revision != package_revision
             || self.schema_fingerprint != schema_fingerprint
             || self.entity_id != plan.entity_id
             || self.operation != plan.operation
@@ -1276,8 +1383,7 @@ impl DataExportPlan {
                         .all(|field| query.projection_fields.contains(field))
             })
         });
-        if profile.anonymous
-            || !profile.allow_data_export
+        if !profile.allow_data_export
             || !profile.operations.contains(&Operation::List)
             || profile.readable_fields.is_empty()
             || !requested.is_subset(&profile.readable_fields)
@@ -1331,10 +1437,15 @@ impl DataExportPlan {
     }
 }
 
+/// The checkpoint `bregctl data export` keeps beside its output. The shared
+/// reader checks and removes the header before the members are decoded, so
+/// the header members are written from the format and never read.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DataExportCheckpoint {
+    #[serde(skip_deserializing, default = "export_checkpoint_api_version")]
     api_version: String,
+    #[serde(skip_deserializing, default = "export_checkpoint_kind")]
     kind: String,
     package_revision: String,
     schema_fingerprint: String,
@@ -1342,10 +1453,14 @@ pub struct DataExportCheckpoint {
     operation: Operation,
     profile_id: String,
     requested_fields: Vec<String>,
+    #[serde(deserialize_with = "members::export_count")]
     output_length: u64,
     output_prefix_digest: String,
+    #[serde(deserialize_with = "members::export_count")]
     record_count: u64,
+    #[serde(deserialize_with = "members::export_count")]
     completed_page_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     next_cursor: Option<String>,
     complete: bool,
 }
@@ -1580,7 +1695,7 @@ impl DataExportCheckpoint {
     ) -> Result<(Self, DataExportResumeState), DataError> {
         validate_checkpoint_binding(package_revision, schema_fingerprint)?;
         let checkpoint = Self {
-            api_version: DATA_API_VERSION.to_owned(),
+            api_version: EXPORT_CHECKPOINT_API_VERSION.to_owned(),
             kind: EXPORT_CHECKPOINT_KIND.to_owned(),
             package_revision: package_revision.to_owned(),
             schema_fingerprint: schema_fingerprint.to_owned(),
@@ -1601,9 +1716,19 @@ impl DataExportCheckpoint {
         ))
     }
 
+    /// Reads a checkpoint document through the shared reader, naming it
+    /// `file` in diagnostics. No member is compared with an export here.
+    pub fn read(file: &str, bytes: &[u8]) -> Result<Self, DataError> {
+        Reader::new(file)
+            .decode::<Self>(bytes, &Expect::one(&EXPORT_CHECKPOINT_FORMAT))
+            .map(|decoded| decoded.value)
+            .map_err(DataError::CheckpointDocument)
+    }
+
     /// Restores a checkpoint only when its complete state matches the opaque
     /// state produced by the executor after the last observed HTTP page.
     pub fn from_json(
+        file: &str,
         bytes: &[u8],
         plan: &DataExportPlan,
         package_revision: &str,
@@ -1612,9 +1737,7 @@ impl DataExportCheckpoint {
         resume_state: &DataExportResumeState,
     ) -> Result<Self, DataError> {
         let output = DataExportOutputState::from_bytes(output_prefix)?;
-        let value = parse_json_strict(bytes).map_err(|_| DataError::CheckpointMismatch)?;
-        let checkpoint: Self =
-            serde_json::from_value(value).map_err(|_| DataError::CheckpointMismatch)?;
+        let checkpoint = Self::read(file, bytes)?;
         checkpoint.validate_resume_state(
             plan,
             package_revision,
@@ -1625,27 +1748,24 @@ impl DataExportCheckpoint {
         Ok(checkpoint)
     }
 
-    /// Restores an operator checkpoint after streaming and validating the
-    /// output file it describes.
-    pub fn resume_from_json(
-        bytes: &[u8],
+    /// Restores a checkpoint `read` returned after streaming and validating
+    /// the output file it describes.
+    pub fn resume(
+        self,
         plan: &DataExportPlan,
         package_revision: &str,
         schema_fingerprint: &str,
         output: &DataExportOutputState,
     ) -> Result<(Self, DataExportResumeState), DataError> {
-        let value = parse_json_strict(bytes).map_err(|_| DataError::CheckpointMismatch)?;
-        let checkpoint: Self =
-            serde_json::from_value(value).map_err(|_| DataError::CheckpointMismatch)?;
-        let resume_state = DataExportResumeState::from_checkpoint(&checkpoint);
-        checkpoint.validate_resume_state(
+        let resume_state = DataExportResumeState::from_checkpoint(&self);
+        self.validate_resume_state(
             plan,
             package_revision,
             schema_fingerprint,
             output,
             &resume_state,
         )?;
-        Ok((checkpoint, resume_state))
+        Ok((self, resume_state))
     }
 
     pub fn canonical_json(&self) -> Result<Vec<u8>, DataError> {
@@ -1684,9 +1804,7 @@ impl DataExportCheckpoint {
         validate_checkpoint_binding(package_revision, schema_fingerprint)
             .map_err(|_| DataError::CheckpointMismatch)?;
         let output_digest = output.digest();
-        if self.api_version != DATA_API_VERSION
-            || self.kind != EXPORT_CHECKPOINT_KIND
-            || self.package_revision != package_revision
+        if self.package_revision != package_revision
             || self.schema_fingerprint != schema_fingerprint
             || self.entity_id != plan.entity_id
             || self.operation != Operation::List
@@ -2170,6 +2288,22 @@ fn canonical_jsonl_record_count(bytes: &[u8]) -> Result<u64, DataError> {
 
 fn valid_binding(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_BINDING_BYTES && !value.chars().any(char::is_control)
+}
+
+fn import_checkpoint_api_version() -> String {
+    IMPORT_CHECKPOINT_API_VERSION.to_owned()
+}
+
+fn import_checkpoint_kind() -> String {
+    IMPORT_CHECKPOINT_KIND.to_owned()
+}
+
+fn export_checkpoint_api_version() -> String {
+    EXPORT_CHECKPOINT_API_VERSION.to_owned()
+}
+
+fn export_checkpoint_kind() -> String {
+    EXPORT_CHECKPOINT_KIND.to_owned()
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

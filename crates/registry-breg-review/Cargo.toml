@@ -19,6 +19,13 @@ default = []
 # dev-dependency only: this feature enables its test features and never places
 # the runtime in the page's normal dependency graph.
 postgres-test = ["registry-breg/postgres-test", "registry-breg/tooling"]
+# Derives the runtime configuration JSON Schema the generator below writes.
+schema = [
+    "dep:schemars",
+    "registry-platform-audit/schema",
+    "registry-platform-config/schema",
+    "registry-platform-yaml/schema",
+]
 
 [lints]
 workspace = true
@@ -41,6 +48,8 @@ registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-ratelimit.workspace = true
+registry-platform-yaml.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -54,6 +63,7 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 registry-breg.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
@@ -65,3 +75,10 @@ tokio-postgres.workspace = true
 name = "postgres_breg"
 path = "tests/postgres_breg.rs"
 required-features = ["postgres-test"]
+
+# Writes the runtime configuration JSON Schema committed under
+# products/breg/generated/review-runtime.
+[[example]]
+name = "review-runtime-schema"
+path = "examples/review-runtime-schema.rs"
+required-features = ["schema"]

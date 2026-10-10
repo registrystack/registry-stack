@@ -66,7 +66,8 @@ use uuid::Uuid;
 const INSTANCE: &str = "instance-under-test";
 const DATABASE: &str = "database-under-test";
 const SOURCE_REVISION: &str = "compiler-source-revision";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: package-read
     steps:
@@ -74,7 +75,7 @@ journeys:
         entity: neutral-record
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -2987,7 +2988,6 @@ fn metadata_only_review_source(
         postgres_major: 16,
         row_assertions: Vec::new(),
         final_schema_fingerprint: final_schema_fingerprint.to_owned(),
-        proofs: None,
     };
     ReviewedMigrationSource {
         module_id: "core".to_owned(),
@@ -3018,7 +3018,7 @@ fn temporal_policy_module_bytes_with(
         r#""get","list""#
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}},{{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_membership_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":[{operations}],"readableFields":["person","valid-from","valid-to"],"filterableFields":["person","valid-from"]{reader_profile_extra}}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}},{{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_membership_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":[{operations}],"readableFields":["person","valid-from","valid-to"],"filterableFields":["person","valid-from"]{reader_profile_extra}}}]}}]}}"#
     )
     .into_bytes()
 }
@@ -3047,14 +3047,14 @@ fn publish_temporal_policy_package(
 
 fn module_bytes(plan: PlanChoice) -> Vec<u8> {
     if matches!(plan, PlanChoice::TemporalSchema) {
-        return br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "rowBoundaries": []}]},{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}],"temporal":{"startField":"valid-from","endField":"valid-to"},"constraints":[{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["person","valid-from","valid-to"], "rowBoundaries": []}]}]}"#
+        return br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]},{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}],"temporal":{"startField":"valid-from","endField":"valid-to"},"constraints":[{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["person","valid-from","valid-to"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
             .to_vec();
     }
     let second = if matches!(
         plan,
         PlanChoice::SecondTable | PlanChoice::ThirdTable | PlanChoice::WebhookSecondTable
     ) {
-        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"writer","principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"], "rowBoundaries": []}]}"#
+        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"writer","principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}"#
     } else {
         ""
     };
@@ -3072,13 +3072,13 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
         ""
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]{events}}}{second}{third}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]{events}}}{second}{third}]}}"#
     )
     .into_bytes()
 }
 
 fn derived_module_bytes() -> Vec<u8> {
-    br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maxLength":64,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "rowBoundaries": []}]}]}"#.to_vec()
+    br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maxLength":64,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#.to_vec()
 }
 
 fn derived_asset_request(sql: &[u8]) -> PackageBuildRequest {

@@ -149,6 +149,24 @@ disallowed-methods = [
   { path = "std::process::abort", reason = "ends the host process" },
   { path = "std::process::id", reason = "asks the operating system about the host" },
   { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "resolves a host name over the network" },
+  # CFG-YAML-1, repeated from the workspace file this one replaces: YAML is
+  # read only through `registry-platform-yaml`.
+  # `products/platform/scripts/check-yaml-reader-boundary.sh` proves every
+  # `clippy.toml` carries these entries.
+  { path = "serde_norway::from_str", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_norway::from_slice", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_norway::from_reader", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_norway::from_value", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_norway::Deserializer::from_str", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_norway::Deserializer::from_slice", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_norway::Deserializer::from_reader", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_yaml_ng::from_str", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_yaml_ng::from_slice", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_yaml_ng::from_reader", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_yaml_ng::from_value", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_yaml_ng::Deserializer::from_str", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_yaml_ng::Deserializer::from_slice", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
+  { path = "serde_yaml_ng::Deserializer::from_reader", reason = "read configuration through registry_platform_yaml::Document::decode or RuntimeConfigLoader (CFG-YAML-1)" },
 ]
 
 disallowed-macros = [

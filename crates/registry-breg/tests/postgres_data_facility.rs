@@ -106,6 +106,7 @@ async fn real_postgres_facility_import_is_authenticated_chunked_resumable_and_ra
         .canonical_json()
         .expect("checkpoint serializes canonically");
     let mut resumed = DataImportCheckpoint::from_json(
+        "import.checkpoint.json",
         &serialized,
         &plan,
         &package_revision,

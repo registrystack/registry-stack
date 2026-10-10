@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Generated documents: the JSON Schema for the Messaging runtime
-//! configuration and the OpenAPI description of the HTTP surface.
+//! Generated documents: the JSON Schemas for the Messaging runtime
+//! configuration and the authored project, template, and provider files,
+//! and the OpenAPI description of the HTTP surface.
 //!
-//! Both are derived, never written by hand. The runtime schema comes from the
-//! strict `RuntimeConfig` types; the OpenAPI document comes from the same
-//! operation table the router serves. Regenerate the committed documents
-//! with:
+//! Every one is derived, never written by hand. The schemas come from the
+//! strict reader types; the OpenAPI document comes from the same operation
+//! table the router serves. Regenerate the committed documents with:
 //!
 //! ```bash
 //! cargo run -p registry-messaging --features schema --example runtime-schema -- \
 //!   --output products/messaging/generated/runtime
+//! cargo run -p registry-messaging --features schema --example authoring-schema -- \
+//!   --output products/messaging/generated/authoring
 //! cargo run -p registry-messaging --features schema --example openapi -- \
 //!   --output products/messaging/generated
 //! ```
@@ -18,33 +20,33 @@
 //! The derived schema states the bounds `RuntimeConfig::check` enforces, so
 //! a document an operator's editor accepts is one the runtime starts on.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Map, Value};
 
+use registry_messaging_core::typed::refuse_null;
 use registry_messaging_core::{
-    type_uri, MessageDispatch, MessageStatus, ProblemCode, IDEMPOTENCY_KEY_HEADER,
-    MAXIMUM_CALLBACK_HEADER_BYTES, MAXIMUM_CALLBACK_URL_BYTES, MAXIMUM_CORRELATION_ID_BYTES,
-    MAXIMUM_IDEMPOTENCY_KEY_BYTES, MAXIMUM_SENDER_BYTES, MESSAGING_RUNTIME_API_VERSION,
-    MESSAGING_RUNTIME_KIND, MESSAGING_RUNTIME_SCHEMA_ID, RUNTIME_SCHEMA_FILE,
+    type_uri, MessageDispatch, MessageStatus, MessagingProject, ProblemCode, TemplateDocument,
+    IDEMPOTENCY_KEY_HEADER, MAXIMUM_CORRELATION_ID_BYTES, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
+    MAXIMUM_SENDER_BYTES, MESSAGING_PROJECT_API_VERSION, MESSAGING_PROJECT_KIND,
+    MESSAGING_PROJECT_SCHEMA_ID, MESSAGING_PROVIDER_API_VERSION, MESSAGING_PROVIDER_KIND,
+    MESSAGING_PROVIDER_SCHEMA_ID, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND,
+    MESSAGING_RUNTIME_SCHEMA_ID, MESSAGING_TEMPLATE_API_VERSION, MESSAGING_TEMPLATE_KIND,
+    MESSAGING_TEMPLATE_SCHEMA_ID, PROJECT_SCHEMA_FILE, PROVIDER_SCHEMA_FILE, RUNTIME_SCHEMA_FILE,
+    TEMPLATE_SCHEMA_FILE,
 };
 
-use crate::config::{
-    RuntimeConfig, MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT, MAXIMUM_ASSERTION_ISSUER_BYTES,
-    MAXIMUM_ASSERTION_ISSUER_CLIENTS, MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES, MAXIMUM_PAYLOAD_DAYS,
-    MAXIMUM_RECORD_DAYS,
-};
+use crate::config::{RuntimeConfig, MAXIMUM_TLS_TRUST_PROFILES};
 use crate::http::{RequestBody, OPERATIONS};
+use crate::http_provider::HttpProviderPackage;
 use crate::messages::MASKED_CONTACT;
 
 /// File name of the generated OpenAPI document.
 pub const OPENAPI_FILE: &str = "registry-messaging.openapi.json";
 
-const SECRET_REFERENCE_SCHEMA_PATTERN: &str =
-    "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$";
-
 pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RuntimeConfig))?;
+    refuse_null_outside_shared_blocks(&mut derived)?;
     set_const(&mut derived, "apiVersion", MESSAGING_RUNTIME_API_VERSION);
     set_const(&mut derived, "kind", MESSAGING_RUNTIME_KIND);
     install_runtime_constraints(&mut derived);
@@ -65,6 +67,60 @@ pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         Value::String("Registry Messaging runtime configuration".to_owned()),
     );
     Ok([(RUNTIME_SCHEMA_FILE, render(&Value::Object(object))?)].into())
+}
+
+/// The schemas of the three authored files a package holds: the project
+/// `messaging.yaml`, each version's `template.yaml`, and each HTTP
+/// provider's `provider.yaml`.
+pub fn authoring_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
+    let entries = [
+        (
+            PROJECT_SCHEMA_FILE,
+            serde_json::to_value(schemars::schema_for!(MessagingProject))?,
+            "Registry Messaging project",
+            MESSAGING_PROJECT_SCHEMA_ID,
+            MESSAGING_PROJECT_API_VERSION,
+            MESSAGING_PROJECT_KIND,
+        ),
+        (
+            TEMPLATE_SCHEMA_FILE,
+            serde_json::to_value(schemars::schema_for!(TemplateDocument))?,
+            "Registry Messaging template version",
+            MESSAGING_TEMPLATE_SCHEMA_ID,
+            MESSAGING_TEMPLATE_API_VERSION,
+            MESSAGING_TEMPLATE_KIND,
+        ),
+        (
+            PROVIDER_SCHEMA_FILE,
+            serde_json::to_value(schemars::schema_for!(HttpProviderPackage))?,
+            "Registry Messaging HTTP provider package",
+            MESSAGING_PROVIDER_SCHEMA_ID,
+            MESSAGING_PROVIDER_API_VERSION,
+            MESSAGING_PROVIDER_KIND,
+        ),
+    ];
+    entries
+        .into_iter()
+        .map(
+            |(file, mut derived, title, identifier, api_version, kind)| {
+                // The reader refuses `null` in every authored member (CFG-EMPTY-1).
+                refuse_null(&mut derived);
+                set_const(&mut derived, "apiVersion", api_version);
+                set_const(&mut derived, "kind", kind);
+                let mut object = match derived {
+                    Value::Object(object) => object,
+                    _ => unreachable!("schemars derives a schema object for a struct"),
+                };
+                object.insert(
+                    "$schema".to_owned(),
+                    Value::String("https://json-schema.org/draft/2020-12/schema".to_owned()),
+                );
+                object.insert("$id".to_owned(), Value::String(identifier.to_owned()));
+                object.insert("title".to_owned(), Value::String(title.to_owned()));
+                Ok((file, render(&Value::Object(object))?))
+            },
+        )
+        .collect()
 }
 
 /// The OpenAPI 3.1 description of every operation the public listener
@@ -396,7 +452,7 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                             "type": "string",
                             "format": "date-time",
                             "description": "The instant an unsent message expires. It must lie \
-                                            within `retention.payloadDays` of acceptance, and \
+                                            within `retention.payloadRetentionDays` of acceptance, and \
                                             defaults to the sender profile's expiry."
                         },
                         "correlationId": {
@@ -580,106 +636,81 @@ fn render(document: &Value) -> Result<String, serde_json::Error> {
     Ok(rendered)
 }
 
-/// State in the schema the bounds `RuntimeConfig::check` enforces at load.
-fn install_runtime_constraints(schema: &mut Value) {
-    for (definition, property) in [
-        ("PackageConfig", "root"),
-        ("FileSecretProviderConfig", "root"),
-        ("AuditConfig", "path"),
-    ] {
-        set_definition_property(schema, definition, property, "pattern", json!("^/"));
-    }
-    for (definition, property) in [
-        ("DatabaseConfig", "runtimeUrlRef"),
-        ("DatabaseConfig", "migrationUrlRef"),
-        ("DatabaseConfig", "trustedRootCertificateRef"),
-        ("AuditConfig", "hashKeyRef"),
-    ] {
-        set_definition_property(
-            schema,
-            definition,
-            property,
-            "pattern",
-            json!("^secret:(?:env|file)/"),
-        );
-    }
-    set_definition_property(
-        schema,
-        "PackageConfig",
-        "expectedDigest",
-        "pattern",
-        json!("^sha256:[0-9a-f]{64}$"),
-    );
-    for (property, minimum, maximum) in [
-        ("payloadDays", 1, MAXIMUM_PAYLOAD_DAYS),
-        ("recordDays", 1, MAXIMUM_RECORD_DAYS),
-        ("submissionReceiptDays", 1, MAXIMUM_RECORD_DAYS),
-    ] {
-        set_definition_property(
-            schema,
-            "RetentionConfig",
-            property,
-            "minimum",
-            json!(minimum),
-        );
-        set_definition_property(
-            schema,
-            "RetentionConfig",
-            property,
-            "maximum",
-            json!(maximum),
-        );
-    }
-    set_definition_property(schema, "OidcConfig", "allowedClients", "minItems", json!(1));
-    set_definition_property(
-        schema,
-        "OidcConfig",
-        "allowedClients",
-        "uniqueItems",
-        json!(true),
-    );
-    if let Some(variants) = schema
-        .pointer_mut("/$defs/OidcJwksSource/oneOf")
-        .and_then(Value::as_array_mut)
-    {
-        for variant in variants {
-            if let Some(document_reference) = variant
-                .pointer_mut("/properties/documentRef")
-                .and_then(Value::as_object_mut)
-            {
-                document_reference
-                    .insert("pattern".to_owned(), json!(SECRET_REFERENCE_SCHEMA_PATTERN));
+/// The reader refuses `null` in every member (CFG-EMPTY-1), so drop the
+/// `null` schemars adds to each optional Messaging member. The shared blocks
+/// are embedded exactly as the platform publishes them.
+fn refuse_null_outside_shared_blocks(schema: &mut Value) -> Result<(), serde_json::Error> {
+    let shared: Value =
+        serde_json::from_str(&registry_platform_config::schema::shared_blocks_document()?)?;
+    let shared: BTreeSet<String> = shared
+        .get("$defs")
+        .and_then(Value::as_object)
+        .map(|definitions| definitions.keys().cloned().collect())
+        .unwrap_or_default();
+    let Some(object) = schema.as_object_mut() else {
+        return Ok(());
+    };
+    for (key, member) in object.iter_mut() {
+        if key != "$defs" {
+            refuse_null(member);
+            continue;
+        }
+        if let Some(definitions) = member.as_object_mut() {
+            for (name, definition) in definitions.iter_mut() {
+                if !shared.contains(name) {
+                    refuse_null(definition);
+                }
             }
         }
     }
-    if let Some(property) = schema
-        .pointer_mut("/$defs/OidcConfig/properties/assertionIssuers")
+    Ok(())
+}
+
+/// State in the schema the rules `RuntimeConfig::check` enforces at load
+/// beyond the reader types and the shared blocks, which carry their own.
+fn install_runtime_constraints(schema: &mut Value) {
+    // `identity` is optional in the Rust type only so that a missing block
+    // gets a refusal naming the key to add; the document requires it.
+    if let Some(required) = schema.get_mut("required").and_then(Value::as_array_mut) {
+        required.push(json!("identity"));
+    }
+    for (definition, property) in [
+        ("PackageConfig", "root"),
+        ("FileSecretProviderConfig", "root"),
+    ] {
+        set_definition_property(schema, definition, property, "pattern", json!("^/"));
+    }
+    // Every access profile resolves its caller from the matched client, so
+    // a Messaging deployment always lists the clients it admits.
+    if let Some(oidc) = schema
+        .pointer_mut("/$defs/OidcConfig")
         .and_then(Value::as_object_mut)
     {
-        property.insert(
-            "maxProperties".to_owned(),
-            json!(MAXIMUM_ASSERTION_ISSUER_CLIENTS),
-        );
-        property.insert(
-            "propertyNames".to_owned(),
-            json!({"minLength": 1, "maxLength": MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES}),
-        );
-        property.insert(
-            "additionalProperties".to_owned(),
-            json!({
-                "type": "array",
-                "minItems": 1,
-                "maxItems": MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT,
-                "uniqueItems": true,
-                "items": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": MAXIMUM_ASSERTION_ISSUER_BYTES
-                }
-            }),
+        if let Some(required) = oidc.get_mut("required").and_then(Value::as_array_mut) {
+            required.push(json!("allowedClients"));
+        }
+    }
+    if let Some(clients) = schema
+        .pointer_mut("/$defs/OidcConfig/properties/allowedClients")
+        .and_then(Value::as_object_mut)
+    {
+        clients.remove("default");
+        clients.insert("minItems".to_owned(), json!(1));
+        clients.insert("uniqueItems".to_owned(), json!(true));
+        clients.insert(
+            "items".to_owned(),
+            json!({"type": "string", "minLength": 1}),
         );
     }
-    install_callback_verifier(schema);
+    if let Some(profiles) = schema
+        .pointer_mut("/properties/tlsTrustProfiles")
+        .and_then(Value::as_object_mut)
+    {
+        profiles.insert(
+            "maxProperties".to_owned(),
+            json!(MAXIMUM_TLS_TRUST_PROFILES),
+        );
+    }
     if let Some(providers) = schema
         .pointer_mut("/$defs/SecretProvidersConfig")
         .and_then(Value::as_object_mut)
@@ -692,82 +723,11 @@ fn install_runtime_constraints(schema: &mut Value) {
             ]),
         );
     }
-}
-
-/// The callback verifier is decoded by the core's closed type, which the
-/// schema feature does not derive; publish its three kinds precisely in
-/// place of the open object the settings type declares.
-fn install_callback_verifier(schema: &mut Value) {
-    let header = json!({
-        "type": "string",
-        "minLength": 1,
-        "maxLength": MAXIMUM_CALLBACK_HEADER_BYTES,
-        "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
-    });
-    let reference = json!({"type": "string", "pattern": SECRET_REFERENCE_SCHEMA_PATTERN});
-    let verifier = json!({
-        "description": "How the provider's delivery callbacks are authenticated, from a closed \
-                        set of algorithms. Required exactly when the package declares \
-                        `receipts: callback`; there is no unauthenticated kind.",
-        "oneOf": [
-            {
-                "type": "object",
-                "additionalProperties": false,
-                "description": "HMAC-SHA1 over `url` and the request's query, followed by the \
-                                form parameters sorted by name, base64 in `header`.",
-                "required": ["kind", "url", "header", "secretRef"],
-                "properties": {
-                    "kind": {"type": "string", "const": "hmac-sha1-url-form"},
-                    "url": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": MAXIMUM_CALLBACK_URL_BYTES,
-                        "pattern": "^https?://[^?#]+$",
-                        "description": "The external callback URL the provider was given and \
-                                        signs, exactly as given, without a query or fragment."
-                    },
-                    "header": header,
-                    "secretRef": reference
-                }
-            },
-            {
-                "type": "object",
-                "additionalProperties": false,
-                "description": "HMAC-SHA256 over the raw request body, in `header` as `encoding`.",
-                "required": ["kind", "header", "encoding", "secretRef"],
-                "properties": {
-                    "kind": {"type": "string", "const": "hmac-sha256-body"},
-                    "header": header,
-                    "encoding": {"type": "string", "enum": ["hex", "base64"]},
-                    "secretRef": reference
-                }
-            },
-            {
-                "type": "object",
-                "additionalProperties": false,
-                "description": "A secret random token as the last segment of the callback path.",
-                "required": ["kind", "tokenRef"],
-                "properties": {
-                    "kind": {"type": "string", "const": "path-token"},
-                    "tokenRef": reference
-                }
-            }
-        ]
-    });
-    if let Some(definitions) = schema.pointer_mut("/$defs").and_then(Value::as_object_mut) {
-        definitions.insert("CallbackVerifierConfig".to_owned(), verifier);
-    }
-    if let Some(variants) = schema
-        .pointer_mut("/$defs/ProviderConnection/oneOf")
-        .and_then(Value::as_array_mut)
-    {
-        for variant in variants {
-            if let Some(member) = variant.pointer_mut("/properties/callbackVerifier") {
-                *member = json!({
-                    "anyOf": [{"$ref": "#/$defs/CallbackVerifierConfig"}, {"type": "null"}]
-                });
-            }
-        }
+    if let Some(object) = schema.as_object_mut() {
+        object.insert(
+            "allOf".to_owned(),
+            registry_platform_config::schema::jwks_document_provider_requirements(),
+        );
     }
 }
 
@@ -798,6 +758,7 @@ fn set_const(schema: &mut Value, property: &str, expected: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MAXIMUM_PAYLOAD_RETENTION_DAYS;
 
     fn product_generated() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/messaging/generated")
@@ -833,26 +794,30 @@ mod tests {
                 "{definition}.{property} must be absolute"
             );
         }
-        for (definition, property) in [
-            ("DatabaseConfig", "runtimeUrlRef"),
-            ("DatabaseConfig", "migrationUrlRef"),
-            ("DatabaseConfig", "trustedRootCertificateRef"),
-            ("AuditConfig", "hashKeyRef"),
+        for property in [
+            "runtimeUrlRef",
+            "migrationUrlRef",
+            "trustedRootCertificateRef",
         ] {
             assert_eq!(
-                document["$defs"][definition]["properties"][property]["pattern"],
-                "^secret:(?:env|file)/",
-                "{definition}.{property} must be a secret reference"
+                document["$defs"]["DatabaseConfig"]["properties"][property]["$ref"],
+                "#/$defs/SecretReference",
+                "DatabaseConfig.{property} must be a secret reference"
             );
         }
         assert_eq!(
-            document["$defs"]["PackageConfig"]["properties"]["expectedDigest"]["pattern"],
-            "^sha256:[0-9a-f]{64}$",
+            document["$defs"]["AuditConfig"]["properties"]["hashKeyRef"]["$ref"],
+            "#/$defs/SecretReference",
+            "AuditConfig.hashKeyRef must be a secret reference"
+        );
+        assert_eq!(
+            document["$defs"]["PackageConfig"]["properties"]["expectedDigest"]["$ref"],
+            "#/$defs/Digest",
             "package.expectedDigest must be a lowercase SHA-256 label"
         );
         assert_eq!(
-            document["$defs"]["RetentionConfig"]["properties"]["payloadDays"]["maximum"],
-            MAXIMUM_PAYLOAD_DAYS
+            document["$defs"]["RetentionConfig"]["properties"]["payloadRetentionDays"]["maximum"],
+            MAXIMUM_PAYLOAD_RETENTION_DAYS
         );
         assert_eq!(
             document["$defs"]["OidcConfig"]["properties"]["allowedClients"]["minItems"],
@@ -901,7 +866,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .map(|variant| variant["properties"]["kind"]["const"].as_str().unwrap())
+            .map(|variant| variant["properties"]["type"]["const"].as_str().unwrap())
             .collect();
         assert_eq!(
             kinds,
@@ -912,7 +877,7 @@ mod tests {
             .unwrap()
             .iter()
             .filter(|variant| {
-                variant["properties"]["callbackVerifier"]["anyOf"][0]["$ref"]
+                variant["properties"]["callbackVerifier"]["$ref"]
                     == "#/$defs/CallbackVerifierConfig"
             })
             .count();
@@ -1172,6 +1137,75 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_examples_satisfy_the_authoring_schemas() {
+        use registry_messaging_core::{MESSAGING_PROJECT_FORMAT, MESSAGING_TEMPLATE_FORMAT};
+        use registry_platform_yaml::{Expect, Reader};
+
+        use crate::http_provider::MESSAGING_PROVIDER_FORMAT;
+
+        let documents = authoring_documents().unwrap();
+        let examples = product_generated().join("../examples");
+        for (schema_file, format, example) in [
+            (
+                PROJECT_SCHEMA_FILE,
+                &MESSAGING_PROJECT_FORMAT,
+                "starter/messaging.yaml",
+            ),
+            (
+                TEMPLATE_SCHEMA_FILE,
+                &MESSAGING_TEMPLATE_FORMAT,
+                "starter/templates/appointment-reminder/1/template.yaml",
+            ),
+            (
+                TEMPLATE_SCHEMA_FILE,
+                &MESSAGING_TEMPLATE_FORMAT,
+                "starter/templates/appointment-reminder-sms/1/template.yaml",
+            ),
+            (
+                PROVIDER_SCHEMA_FILE,
+                &MESSAGING_PROVIDER_FORMAT,
+                "starter/providers/sms-gateway/provider.yaml",
+            ),
+            (
+                PROVIDER_SCHEMA_FILE,
+                &MESSAGING_PROVIDER_FORMAT,
+                "providers/aws-sms/provider.yaml",
+            ),
+            (
+                PROVIDER_SCHEMA_FILE,
+                &MESSAGING_PROVIDER_FORMAT,
+                "providers/form-sms-gateway/provider.yaml",
+            ),
+            (
+                PROVIDER_SCHEMA_FILE,
+                &MESSAGING_PROVIDER_FORMAT,
+                "providers/mock/provider.yaml",
+            ),
+        ] {
+            let schema: Value = serde_json::from_str(&documents[schema_file]).unwrap();
+            let validator = jsonschema::JSONSchema::options()
+                .with_draft(jsonschema::Draft::Draft202012)
+                .compile(&schema)
+                .unwrap_or_else(|error| panic!("{schema_file} compiles: {error}"));
+            let bytes = std::fs::read(examples.join(example)).unwrap();
+            let instance = Reader::new(example)
+                .read(&bytes, &Expect::one(format))
+                .unwrap_or_else(|report| panic!("{example} reads: {report:?}"))
+                .to_json_value();
+            let errors: Vec<String> = match validator.validate(&instance) {
+                Ok(()) => Vec::new(),
+                Err(errors) => errors
+                    .map(|error| format!("{}: {error}", error.instance_path))
+                    .collect(),
+            };
+            assert!(
+                errors.is_empty(),
+                "{example} does not satisfy {schema_file}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
     fn committed_documents_match_generated_bytes() {
         let generated = runtime_documents().unwrap();
         assert_eq!(
@@ -1184,6 +1218,14 @@ mod tests {
             generated[RUNTIME_SCHEMA_FILE],
             "regenerate with the runtime-schema example"
         );
+        for (file, contents) in authoring_documents().unwrap() {
+            assert_eq!(
+                std::fs::read_to_string(product_generated().join("authoring").join(file))
+                    .expect("the committed authoring schema"),
+                contents,
+                "regenerate with the authoring-schema example"
+            );
+        }
         let generated = openapi_documents().unwrap();
         assert_eq!(
             std::fs::read_to_string(product_generated().join(OPENAPI_FILE))

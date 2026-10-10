@@ -75,30 +75,25 @@ yours differ, and that is expected.
 ## Read the production findings
 
 `check --production` compiles the project the way `test` and `package` do. It refuses what the
-production profile forbids and reports findings, which are decisions it wants a person to review
-rather than errors:
+production profile forbids and reports findings as warnings, which are decisions it wants a person to
+review rather than errors:
 
 ```sh
 bregctl check --production tutorial-work/candidate-project
 ```
 
 ```text
-Production check passed.
-  revision  sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
-
-  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
-           this profile can list all rows, subject only to query bounds; caller filters
-           are not authorization. Add a claim-bound row restriction or review this
-           registry-wide access
-  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
-           this profile has no claim-bound row restriction for its granted operations;
-           requestVisibility owner limits request reads only, and other lifecycle rules
-           still apply. Review this registry-wide access
-
-0 errors, 2 findings.
+Production check passed; registry revision sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8.
+warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:141:24 /accessProfiles/0/permissions/1/rowBoundaries
+  this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
+  this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+0 errors, 2 warnings in 4 files
 ```
 
-The generated project ships both findings on purpose: the `operator` profile lists every record because
+The generated project ships both warnings on purpose: the `operator` profile lists every record because
 one operations team runs the whole registry, and the `evidence-source` profile looks a record up by its
 code for any record in the registry. The comment that introduces each profile in `registry.yaml` says
 how to close it (a `rowBoundaries` entry, or removing `list` from the operator's grant).
@@ -106,28 +101,24 @@ Closing them would also change the journeys, so treat them as reviewed and see w
 with them:
 
 ```sh
-bregctl check --production --deny-findings tutorial-work/candidate-project
+bregctl check --production --deny-warnings tutorial-work/candidate-project
 ```
 
 ```text
-bregctl check refused.
-
-  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
-           this profile can list all rows, subject only to query bounds; caller filters
-           are not authorization. Add a claim-bound row restriction or review this
-           registry-wide access
-  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
-           this profile has no claim-bound row restriction for its granted operations;
-           requestVisibility owner limits request reads only, and other lifecycle rules
-           still apply. Review this registry-wide access
-
-refused on 2 findings.
+bregctl check refused the project: --deny-warnings refuses a warning.
+warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:141:24 /accessProfiles/0/permissions/1/rowBoundaries
+  this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
+  this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+0 errors, 2 warnings in 4 files
 ```
 
 The command exits with status 1. That is the gate for a pipeline that must never build a candidate
-with an unreviewed finding; the rest of this tutorial runs without it.
+with an unreviewed warning; the rest of this tutorial runs without it.
 
-{/* Evidence: crates/registry-breg/src/access.rs, access_findings; crates/registry-bregctl/src/lib.rs, CheckArgs, deny_findings. */}
+{/* Evidence: crates/registry-breg/src/access.rs, access_findings; crates/registry-bregctl/src/lib.rs, CheckArgs; crates/registry-bregctl/src/check.rs, deny_warnings. */}
 
 ## Create the issuer key
 
@@ -312,8 +303,8 @@ on the binding.
 
 ```sh
 cat > tutorial-work/candidate/credentials.yaml <<'EOF'
-apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: record-lifecycle
     stepId: create-record-group
@@ -367,11 +358,11 @@ SSL_CERT_FILE="$PWD/tutorial-work/candidate/postgres/ca.pem" bregctl test tutori
 ```text
 Fixture run passed. 1 journey.
   profile              production
-  registry revision    sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
-  schema fingerprint   sha256:c479ff47b061e3c53c6f460e7a897a58e867f7c090c8fd852d8075ab93d9e8e5
+  registry revision    sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8
+  schema fingerprint   sha256:c35b248e14c5fa4b234538625fbe2caf558ff14e4ca36f4dce62af7099ab0295
   successful journeys  record-lifecycle
-  receipt sha256       2345f4e51538a3bc1acb80ebd6f015d77eac1d084e57f706a6a8510005d2435e
-  receipt bytes        746
+  receipt sha256       1dff5f948882b9ac0f497030959305c7e7f953c5073dcd5d3c0d5d8e3df8a40e
+  receipt bytes        752
 ```
 
 `SSL_CERT_FILE` points the TLS client at your certificate authority, and the URL host `localhost`
@@ -393,8 +384,8 @@ bregctl package tutorial-work/candidate-project \
 ```text
 Sealed and published a deployment package.
   profile            production
-  package digest     sha256:f06c407cbddba19a094664d880e69a8935a0d8c7ad5f73d41f15760ef10463f7
-  registry revision  sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
+  package digest     sha256:e2aaf71126ca9b59ad210a6051edae8c0862155fff78666e7080b087ffeb0919
+  registry revision  sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8
   package files      19
 ```
 
@@ -428,10 +419,10 @@ bregctl verify --runtime-config "$PWD/tutorial-work/candidate/runtime.yaml"
 ```text
 Verified the package against the runtime it is bound to.
   assurance            runtime_bound
-  package digest       sha256:f06c407cbddba19a094664d880e69a8935a0d8c7ad5f73d41f15760ef10463f7
+  package digest       sha256:e2aaf71126ca9b59ad210a6051edae8c0862155fff78666e7080b087ffeb0919
   registry id          generic-registry
   registry version     0.1.0
-  registry revision    sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
+  registry revision    sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8
   modules              1
   entities             2
   routes               8
@@ -591,7 +582,7 @@ database is refused with `apply.backup_evidence.refused`.
 
 This project has no successor yet. When a later build changes the schema, it is packaged once and
 promoted the same way, and a destructive change requires one backup per environment. Each
-environment takes its own backup and writes its own binding, which names its `databaseId`, so the
+environment takes its own backup and writes its own binding, which names its `database`, so the
 production apply never accepts the staging backup. For a successor whose reviewed migration names
 `modules/core/migrations/retire-legacy-field/backup.json`, the per-environment step is:
 
@@ -641,7 +632,7 @@ disposable, and the successor step is the one you repeat for every later build.
 | `bregctl test` reports `test.output.refused` | A receipt already exists at `--output`. The command never overwrites one, so delete `test-receipt.json` or name a new file before the rerun. |
 | `bregctl test` reports `test.step.failed` and `the fixture authority reference was refused` | The token bound to that step does not carry the claims the step declares, or it has expired. The message names the step by index, `journeys[0].steps[3]`. Check the binding in `credentials.yaml`, and reissue both tokens with `issue-token.sh` if the run started more than an hour after you issued them. |
 | `bregctl package` reports `package.output.refused` | `--output` already holds a build. `package` never publishes into a used directory, so name a new one, such as `build-2`. |
-| `bregctl verify` reports `verify.runtime_config.environment_identity_conflict` | `identity.environment` and `identity.databaseInitializationEnvironment` in `runtime.yaml` differ. Set both to the same environment. |
+| `bregctl verify` reports `breg.runtime.environment-identity-conflict` | `identity.environment` and `identity.databaseInitializationEnvironment` in `runtime.yaml` differ. Set both to the same environment. |
 | `verify.package.integrity_refused` and `does not match its SHA256SUMS` | A file in the package changed after `package` published it; the message names each changed file. Rebuild with `bregctl package` into a new directory and deploy the whole directory. |
 | `verify.package.integrity_refused` and `package.expectedDigest is` | The pin names a different package than the one at `package.root`. Deploy the pinned package or update `package.expectedDigest`. |
 | The readiness loop never ends | A runtime refused to start. Read `staging.log` or `production.log` for the refusal code, stop the other runtime with `kill`, and rerun the block once the cause is fixed. |

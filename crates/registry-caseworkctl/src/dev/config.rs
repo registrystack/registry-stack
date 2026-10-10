@@ -6,7 +6,12 @@ use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use p256::ecdsa::SigningKey;
 use registry_casework_core::{
-    valid_directory_identifier, valid_profile_identifier, CaseworkProject, CaseworkRole,
+    findings_report, valid_directory_identifier, valid_profile_identifier, CaseworkProject,
+    CaseworkRole, ConfigFinding,
+};
+use registry_platform_yaml::{
+    escape_pointer_segment, ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, LocalId, Reader,
+    Refusal, RemovedKey, Report, ScalarHook, ScalarSite,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -34,43 +39,162 @@ const RESERVED_ACCESS_TOKEN_CLAIMS: [&str; 9] = [
     "scope",
 ];
 
+pub(crate) const DEV_CLIENTS_API_VERSION: &str =
+    "id.registrystack.org/formats/casework/dev-clients/v1alpha1";
+pub(crate) const DEV_CLIENTS_KIND: &str = "CaseworkDevClients";
+
+/// The format of `dev-clients.yaml`, the local teaching clients file
+/// (CFG-ENV-1).
+pub(crate) const DEV_CLIENTS_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: DEV_CLIENTS_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(DEV_CLIENTS_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/version",
+            replacement: "Remove version; apiVersion and kind identify the file.",
+        },
+        RemovedKey {
+            pointer: "/integrations/sources/*/requestTimeoutMilliseconds",
+            replacement: "Remove it; the session uses the runtime default, and a deployed runtime configuration sets it.",
+        },
+        RemovedKey {
+            pointer: "/integrations/sources/*/connectTimeoutMilliseconds",
+            replacement: "Remove it; the session uses the runtime default, and a deployed runtime configuration sets it.",
+        },
+        RemovedKey {
+            pointer: "/integrations/sources/*/reconciliationIntervalMilliseconds",
+            replacement: "Remove it; the session uses the runtime default, and a deployed runtime configuration sets it.",
+        },
+    ],
+};
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Clients {
-    pub version: u8,
+pub(crate) struct Clients {
+    pub api_version: String,
+    pub kind: String,
+    /// One teaching client for each access profile `casework.yaml` declares.
     pub clients: Vec<Client>,
-    #[serde(default)]
+    /// The teams the first start seeds, one for each queue.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub directory: Vec<DirectoryTeam>,
-    #[serde(default)]
+    /// Source-backed development: source bindings, service clients, and the
+    /// local task authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrations: Option<super::integrations::Integrations>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Client {
+pub(crate) struct Client {
+    /// `issuer` is reserved for the local token issuer.
+    #[serde(deserialize_with = "registry_casework_core::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
+    /// The access profile this client binds; each profile binds one client.
     pub access_profile: String,
+    /// 1 to 32 distinct RFC 6749 scope-tokens of at most 256 bytes.
     pub scopes: Vec<String>,
-    #[serde(default)]
+    /// At most 32 token claims; registered access-token claims are reserved.
+    #[serde(
+        default,
+        deserialize_with = "registry_casework_core::typed::external_id_keys",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BTreeMap<registry_platform_yaml::ExternalId, String>")
+    )]
     pub claims: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct DirectoryTeam {
+pub(crate) struct DirectoryTeam {
+    /// A lowercase letter, then at most 63 lowercase letters, digits, `_`,
+    /// or `-`.
     pub team: String,
+    /// The queue this team serves; one team serves each queue.
     pub queue: String,
+    /// 1 to 32 clients bound to a Staff profile.
     pub staff: Vec<String>,
-    #[serde(default)]
+    /// At most 32 clients bound to a Supervisor profile.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supervisors: Vec<String>,
 }
 
+/// Whether `value` is written as a local identifier, the grammar client and
+/// team IDs share (CFG-ID-1).
 pub(super) fn identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+    LocalId::new(value).is_ok()
+}
+
+/// Read a clients file through the shared reader, with every check that
+/// needs no other file. `file` is the name diagnostics carry.
+pub(crate) fn read(file: &str, bytes: &[u8]) -> Result<Decoded<Clients>, Report> {
+    let mut hook = LiteralText;
+    let decoded = Reader::new(file)
+        .with_hook(&mut hook)
+        .decode::<Clients>(bytes, &Expect::one(&DEV_CLIENTS_FORMAT))?;
+    let found = findings(&decoded.value);
+    if found.is_empty() {
+        Ok(decoded)
+    } else {
+        Err(findings_report(&decoded.document, &found))
+    }
+}
+
+/// Read a clients file and check it against the authored project: every
+/// finding of both, placed in the clients file.
+pub(crate) fn read_against(
+    file: &str,
+    bytes: &[u8],
+    project: &CaseworkProject,
+) -> Result<Decoded<Clients>, Report> {
+    let decoded = read(file, bytes)?;
+    match against(&decoded.value, project) {
+        Ok(_) => Ok(decoded),
+        Err(found) => Err(findings_report(&decoded.document, &found)),
+    }
+}
+
+/// Read the session's copy of its clients file, `clients.json`, which the
+/// start wrote from the file it checked.
+pub(super) fn retained(bytes: &[u8]) -> Result<Clients> {
+    Ok(read("clients.json", bytes)?.value)
+}
+
+/// Refuses every `${...}` expression: the clients file names local teaching
+/// identities and is read as written.
+struct LiteralText;
+
+impl LiteralText {
+    fn check(site: &ScalarSite<'_>) -> Result<(), Refusal> {
+        if !registry_platform_config::contains_environment_expression(site.text) {
+            return Ok(());
+        }
+        Err(Refusal {
+            code: "config.substitution-not-allowed".to_owned(),
+            message: "a `${...}` expression is written in the local clients file, which is read as written".to_owned(),
+            suggested_action: "Write the value directly; dev-clients.yaml holds no secret.".to_owned(),
+        })
+    }
+}
+
+impl ScalarHook for LiteralText {
+    fn key(&mut self, site: &ScalarSite<'_>) -> Result<(), Refusal> {
+        Self::check(site)
+    }
+
+    fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
+        Self::check(site).map(|()| None)
+    }
 }
 
 /// Copy one pre-registered owner client into this private Casework session.
@@ -172,93 +296,269 @@ fn valid_authorization_claim_name(value: &str) -> bool {
     !value.is_empty() && value.len() <= 128 && valid_scope_token(value)
 }
 
-/// Parse and check the clients file against the closed local clients v1
-/// format, without reading the authored project. Everything here holds for
-/// any project; `bind` adds the checks that need the authored policy.
-pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
-    let clients: Clients = serde_norway::from_slice(bytes).map_err(|_| {
-        anyhow::anyhow!("clients file must match the closed local clients v1 format")
-    })?;
-    if clients.version != 1 || clients.clients.is_empty() || clients.clients.len() > 32 {
-        bail!("local clients v1 requires 1..32 explicit clients");
+pub(super) const CLIENT_ID_MESSAGE: &str =
+    "expected a lowercase letter, then at most 63 lowercase letters, digits, '_', or '-'";
+
+/// The pointer of `key` below `parent`, escaped (RFC 6901).
+pub(super) fn member(parent: &str, key: &str) -> String {
+    format!("{parent}/{}", escape_pointer_segment(key))
+}
+
+/// Records the first pointer of each value, so a repeat is reported with the
+/// place it repeats.
+#[derive(Default)]
+pub(super) struct FirstSeen<'a> {
+    seen: BTreeMap<&'a str, String>,
+}
+
+impl<'a> FirstSeen<'a> {
+    /// The pointer `value` was first seen at, after recording `pointer` for
+    /// it when it is new.
+    pub fn repeat(&mut self, value: &'a str, pointer: &str) -> Option<String> {
+        match self.seen.get(value) {
+            Some(first) => Some(first.clone()),
+            None => {
+                self.seen.insert(value, pointer.to_owned());
+                None
+            }
+        }
     }
-    let mut ids = BTreeSet::new();
-    let mut profiles = BTreeSet::new();
-    for client in &clients.clients {
-        if client.id == "issuer" || !identifier(&client.id) || !ids.insert(&client.id) {
-            bail!("local clients need unique bounded lowercase IDs, and issuer is reserved for the local token issuer");
+}
+
+/// Every finding of the clients file that needs no other file, in document
+/// order. The checks against the authored project are [`against`]'s.
+pub(super) fn findings(clients: &Clients) -> Vec<ConfigFinding> {
+    let mut found = Vec::new();
+    if clients.clients.is_empty() || clients.clients.len() > 32 {
+        found.push(ConfigFinding::new(
+            "casework.dev-clients.clients-out-of-range",
+            "/clients",
+            "expected 1 to 32 clients",
+            "Declare between 1 and 32 clients, one for each access profile casework.yaml declares.",
+        ));
+    }
+    let mut ids = FirstSeen::default();
+    let mut profiles = FirstSeen::default();
+    for (index, client) in clients.clients.iter().enumerate() {
+        let at = format!("/clients/{index}");
+        let id = format!("{at}/id");
+        if client.id == "issuer" {
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.reserved-id",
+                &id,
+                "the local token issuer reserves this client ID",
+                "Choose another client ID, such as staff.",
+            ));
+        } else if let Some(first) = ids.repeat(&client.id, &id) {
+            found.push(
+                ConfigFinding::new(
+                    "casework.dev-clients.duplicate-id",
+                    &id,
+                    "another client already declares this ID",
+                    "Give each client its own ID.",
+                )
+                .with_related(first, "first declared here"),
+            );
         }
-        if !valid_profile_identifier(&client.access_profile)
-            || !profiles.insert(&client.access_profile)
-        {
-            bail!("each local access profile must bind to exactly one teaching client");
+        let profile = format!("{at}/accessProfile");
+        if !valid_profile_identifier(&client.access_profile) {
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.invalid-access-profile",
+                &profile,
+                "expected 1 to 128 ASCII letters, digits, '-', '_', '.', or ':'",
+                "Write the ID of an access profile casework.yaml declares.",
+            ));
+        } else if let Some(first) = profiles.repeat(&client.access_profile, &profile) {
+            found.push(
+                ConfigFinding::new(
+                    "casework.dev-clients.duplicate-access-profile",
+                    &profile,
+                    "another client already binds this access profile; each binds exactly one client",
+                    "Bind each access profile to one client.",
+                )
+                .with_related(first, "first bound here"),
+            );
         }
-        let unique_scopes = client.scopes.iter().collect::<BTreeSet<_>>();
-        if client.scopes.is_empty()
-            || client.scopes.len() > 32
-            || unique_scopes.len() != client.scopes.len()
-            || client
-                .scopes
-                .iter()
-                .any(|scope| scope.len() > 256 || !valid_scope_token(scope))
-        {
-            bail!("each local client needs 1..32 unique 1..=256 byte RFC 6749 scope-tokens");
-        }
+        scope_findings(
+            &mut found,
+            &format!("{at}/scopes"),
+            &client.scopes,
+            256,
+            "expected an RFC 6749 scope-token of 1 to 256 bytes: printable ASCII without space, '\"', or '\\'",
+        );
         if client.claims.len() > 32 {
-            bail!("a local client may declare at most 32 claims");
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.too-many-claims",
+                format!("{at}/claims"),
+                "expected at most 32 claims",
+                "Keep at most 32 claims on one client.",
+            ));
         }
         for (name, value) in &client.claims {
+            let claim = member(&format!("{at}/claims"), name);
             if !valid_authorization_claim_name(name) {
-                bail!("local client claim names must be 1..=128 byte RFC 6749 scope-tokens");
-            }
-            if RESERVED_ACCESS_TOKEN_CLAIMS.contains(&name.as_str()) {
-                bail!("local client claims may not redefine registered access-token claims");
+                found.push(ConfigFinding::new(
+                    "casework.dev-clients.invalid-claim-name",
+                    &claim,
+                    "expected a claim name of 1 to 128 bytes: printable ASCII without space, '\"', or '\\'",
+                    "Rename the claim, such as registry_principal.",
+                ));
+            } else if RESERVED_ACCESS_TOKEN_CLAIMS.contains(&name.as_str()) {
+                found.push(ConfigFinding::new(
+                    "casework.dev-clients.reserved-claim",
+                    &claim,
+                    "the token issuer sets this registered access-token claim (iss, aud, exp, iat, nbf, jti, client_id, sub, or scope)",
+                    "Remove the claim; the issuer writes it.",
+                ));
             }
             if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
-                bail!("local client claim values must be 1..=256 bytes without control characters");
+                found.push(ConfigFinding::new(
+                    "casework.dev-clients.invalid-claim-value",
+                    &claim,
+                    "expected 1 to 256 bytes without control characters",
+                    "Write the claim value on one line, in at most 256 bytes.",
+                ));
             }
         }
     }
     if clients.directory.len() > 8 {
-        bail!("local directory declares at most 8 teams");
+        found.push(ConfigFinding::new(
+            "casework.dev-clients.too-many-teams",
+            "/directory",
+            "expected at most 8 teams",
+            "Keep at most 8 teams in the local directory.",
+        ));
     }
-    let mut teams = BTreeSet::new();
-    let mut queues = BTreeSet::new();
-    for team in &clients.directory {
-        if !identifier(&team.team)
-            || !teams.insert(&team.team)
-            || !valid_directory_identifier(&team.queue)
-        {
-            bail!("each local directory team needs a unique bounded ID and one bounded queue");
-        }
-        if !queues.insert(&team.queue) {
-            bail!(
-                "local directory queue {} may be assigned to only one team",
-                team.queue
+    let declared = clients
+        .clients
+        .iter()
+        .map(|client| client.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut teams = FirstSeen::default();
+    let mut queues = FirstSeen::default();
+    for (index, team) in clients.directory.iter().enumerate() {
+        let at = format!("/directory/{index}");
+        let team_at = format!("{at}/team");
+        if !identifier(&team.team) {
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.invalid-team",
+                &team_at,
+                CLIENT_ID_MESSAGE,
+                "Write a lowercase team ID, such as decisions-team.",
+            ));
+        } else if let Some(first) = teams.repeat(&team.team, &team_at) {
+            found.push(
+                ConfigFinding::new(
+                    "casework.dev-clients.duplicate-team",
+                    &team_at,
+                    "another team already declares this ID",
+                    "Give each team its own ID.",
+                )
+                .with_related(first, "first declared here"),
             );
         }
-        if team.staff.is_empty() || team.staff.len() > 32 || team.supervisors.len() > 32 {
-            bail!("a local directory team needs 1..32 staff and at most 32 supervisors");
-        }
-        if team.staff.iter().collect::<BTreeSet<_>>().len() != team.staff.len() {
-            bail!(
-                "local directory team {} staff list must name each client at most once",
-                team.team
+        let queue = format!("{at}/queue");
+        if !valid_directory_identifier(&team.queue) {
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.invalid-queue",
+                &queue,
+                "expected 1 to 128 ASCII letters, digits, '-', '_', or '.'",
+                "Write the ID of a queue casework.yaml declares.",
+            ));
+        } else if let Some(first) = queues.repeat(&team.queue, &queue) {
+            found.push(
+                ConfigFinding::new(
+                    "casework.dev-clients.duplicate-queue",
+                    &queue,
+                    "another team already serves this queue; one team serves each queue",
+                    "Serve each queue from one team.",
+                )
+                .with_related(first, "first served here"),
             );
         }
-        if team.supervisors.iter().collect::<BTreeSet<_>>().len() != team.supervisors.len() {
-            bail!(
-                "local directory team {} supervisors list must name each client at most once",
-                team.team
-            );
+        if team.staff.is_empty() || team.staff.len() > 32 {
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.staff-out-of-range",
+                format!("{at}/staff"),
+                "expected 1 to 32 staff",
+                "Name between 1 and 32 staff clients.",
+            ));
         }
-        for member in team.staff.iter().chain(&team.supervisors) {
-            if !clients.clients.iter().any(|client| &client.id == member) {
-                bail!("local directory team {} names client {member}, which the clients file does not declare", team.team);
+        if team.supervisors.len() > 32 {
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.too-many-supervisors",
+                format!("{at}/supervisors"),
+                "expected at most 32 supervisors",
+                "Name at most 32 supervisor clients.",
+            ));
+        }
+        for (list, members) in [("staff", &team.staff), ("supervisors", &team.supervisors)] {
+            let mut seen = FirstSeen::default();
+            for (position, name) in members.iter().enumerate() {
+                let pointer = format!("{at}/{list}/{position}");
+                if !declared.contains(name.as_str()) {
+                    found.push(ConfigFinding::new(
+                        "casework.dev-clients.unknown-client",
+                        &pointer,
+                        "no client in this file declares this ID",
+                        "Name the ID of a client under clients, or declare one.",
+                    ));
+                } else if let Some(first) = seen.repeat(name, &pointer) {
+                    found.push(
+                        ConfigFinding::new(
+                            "casework.dev-clients.duplicate-member",
+                            &pointer,
+                            "this list already names this client",
+                            "Name each client at most once in a list.",
+                        )
+                        .with_related(first, "first named here"),
+                    );
+                }
             }
         }
     }
-    Ok(clients)
+    found
+}
+
+/// Report the scope list at `at`: its size, each scope's syntax, and each
+/// repeat.
+pub(super) fn scope_findings(
+    found: &mut Vec<ConfigFinding>,
+    at: &str,
+    scopes: &[String],
+    maximum_bytes: usize,
+    message: &str,
+) {
+    if scopes.is_empty() || scopes.len() > 32 {
+        found.push(ConfigFinding::new(
+            "casework.dev-clients.scopes-out-of-range",
+            at,
+            "expected 1 to 32 scopes",
+            "Write between 1 and 32 scopes.",
+        ));
+    }
+    let mut seen = FirstSeen::default();
+    for (index, scope) in scopes.iter().enumerate() {
+        let pointer = format!("{at}/{index}");
+        if scope.len() > maximum_bytes || !valid_scope_token(scope) {
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.invalid-scope",
+                &pointer,
+                message,
+                "Write the scope as casework.yaml's requiredScopes spell it, such as casework:staff.",
+            ));
+        } else if let Some(first) = seen.repeat(scope, &pointer) {
+            found.push(
+                ConfigFinding::new(
+                    "casework.dev-clients.duplicate-scope",
+                    &pointer,
+                    "this list already names this scope",
+                    "Write each scope once.",
+                )
+                .with_related(first, "first written here"),
+            );
+        }
+    }
 }
 
 /// One local client resolved against the authored project: the access profile
@@ -270,61 +570,98 @@ pub(super) struct Bound<'a> {
     pub principal: String,
 }
 
+/// Every finding of the clients file against the authored project, its
+/// integrations included, or each client's binding when there is none.
+pub(super) fn against<'a>(
+    clients: &'a Clients,
+    project: &CaseworkProject,
+) -> Result<Vec<Bound<'a>>, Vec<ConfigFinding>> {
+    let mut found = match &clients.integrations {
+        Some(integrations) => integrations.validate(clients, project).err().unwrap_or_default(),
+        None if !project.task_templates.is_empty() => vec![ConfigFinding::new(
+            "casework.dev-clients.missing-integrations",
+            "/integrations",
+            "casework.yaml declares task templates, which need integrations with source bindings and a taskAuthority",
+            "Add integrations with a binding for each source and a taskAuthority.",
+        )],
+        None => Vec::new(),
+    };
+    match bind(clients, project) {
+        Ok(bound) if found.is_empty() => Ok(bound),
+        Ok(_) => Err(found),
+        Err(more) => {
+            found.extend(more);
+            Err(found)
+        }
+    }
+}
+
 /// Check the clients file against the authored policy and resolve each
 /// client's principal. Refusing here, before any container or service starts,
 /// tells the author which binding is missing while the fix is one edit away.
-pub(super) fn bind<'a>(clients: &'a Clients, project: &CaseworkProject) -> Result<Vec<Bound<'a>>> {
+pub(super) fn bind<'a>(
+    clients: &'a Clients,
+    project: &CaseworkProject,
+) -> Result<Vec<Bound<'a>>, Vec<ConfigFinding>> {
+    let mut found = Vec::new();
     let mut bound = Vec::with_capacity(clients.clients.len());
-    for client in &clients.clients {
-        let profile = project
+    for (index, client) in clients.clients.iter().enumerate() {
+        let at = format!("/clients/{index}");
+        let Some(profile) = project
             .access_profiles
             .iter()
             .find(|profile| profile.id == client.access_profile)
-            .with_context(|| {
-                format!(
-                    "client {} binds access profile {}, which casework.yaml does not declare",
-                    client.id, client.access_profile
-                )
-            })?;
+        else {
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.unknown-access-profile",
+                format!("{at}/accessProfile"),
+                "casework.yaml declares no access profile with this ID",
+                "Write the ID of an access profile casework.yaml declares under accessProfiles.",
+            ));
+            continue;
+        };
         if !profile
             .required_scopes
             .iter()
             .all(|scope| client.scopes.contains(scope))
         {
-            bail!(
-                "client {} binds profile {}, so it must carry all of that profile's required scopes",
-                client.id,
-                profile.id
-            );
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.missing-required-scope",
+                format!("{at}/scopes"),
+                "the client lacks a scope its access profile requires",
+                "Add every scope of the access profile's requiredScopes to scopes.",
+            ));
         }
+        let claims = format!("{at}/claims");
         let human = client.claims.get(HUMAN_CLAIM).map(String::as_str);
         match profile.role {
-            CaseworkRole::Requester if human.is_some() => bail!(
-                "client {} binds Requester profile {}, so it must not carry the {HUMAN_CLAIM} claim; a Requester is a calling system, not a person",
-                client.id,
-                profile.id
-            ),
+            CaseworkRole::Requester if human.is_some() => found.push(ConfigFinding::new(
+                "casework.dev-clients.requester-human-claim",
+                member(&claims, HUMAN_CLAIM),
+                "the client binds a Requester profile, a calling system rather than a person, so it carries no registry_actor_kind claim",
+                "Remove registry_actor_kind from this client's claims.",
+            )),
             CaseworkRole::Requester => (),
-            _ if human != Some(HUMAN_VALUE) => bail!(
-                "client {} binds profile {}, which Casework serves only to a person, so it needs the claim {HUMAN_CLAIM}: {HUMAN_VALUE}",
-                client.id,
-                profile.id
-            ),
+            _ if human != Some(HUMAN_VALUE) => found.push(ConfigFinding::new(
+                "casework.dev-clients.missing-human-claim",
+                member(&claims, HUMAN_CLAIM),
+                "Casework serves this client's access profile only to a person, so the client needs the claim registry_actor_kind: human",
+                "Add registry_actor_kind: human to this client's claims.",
+            )),
             _ => (),
         }
         let principal = if profile.principal_claim == "sub" {
             principal(&client.id)
+        } else if let Some(value) = client.claims.get(&profile.principal_claim) {
+            value.clone()
         } else {
-            client
-                .claims
-                .get(&profile.principal_claim)
-                .with_context(|| {
-                    format!(
-                        "client {} binds profile {}, whose principalClaim is {}, so it needs that claim",
-                        client.id, profile.id, profile.principal_claim
-                    )
-                })?
-                .clone()
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.missing-principal-claim",
+                claims,
+                "the client lacks the claim its access profile's principalClaim names",
+                "Add the claim the access profile's principalClaim names to this client's claims.",
+            ));
+            continue;
         };
         bound.push(Bound {
             client,
@@ -332,80 +669,88 @@ pub(super) fn bind<'a>(clients: &'a Clients, project: &CaseworkProject) -> Resul
             principal,
         });
     }
-    for team in &clients.directory {
+    for (index, team) in clients.directory.iter().enumerate() {
+        let at = format!("/directory/{index}");
         if !project.queues.iter().any(|queue| queue.id == team.queue) {
-            bail!(
-                "local directory team {} serves queue {}, which casework.yaml does not declare",
-                team.team,
-                team.queue
-            );
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.unknown-queue",
+                format!("{at}/queue"),
+                "casework.yaml declares no queue with this ID",
+                "Write the ID of a queue casework.yaml declares under queues.",
+            ));
         }
-        let mut staff_principals = BTreeSet::new();
-        for member in &team.staff {
-            let entry = bound
-                .iter()
-                .find(|entry| &entry.client.id == member)
-                .context("directory member must be a declared client")?;
-            if entry.role == CaseworkRole::Requester {
-                bail!(
-                    "local directory team {} names Requester client {member}; only a person serves a queue",
-                    team.team
-                );
-            }
-            if entry.role != CaseworkRole::Staff {
-                bail!(
-                    "local directory team {} names client {member} as staff, but that client does not bind a Staff profile",
-                    team.team
-                );
-            }
-            if !staff_principals.insert(entry.principal.as_str()) {
-                bail!(
-                    "local directory team {} staff clients must resolve to unique principals; client {member} repeats a resolved principal",
-                    team.team
-                );
-            }
-        }
-        let mut supervisor_principals = BTreeSet::new();
-        for member in &team.supervisors {
-            let entry = bound
-                .iter()
-                .find(|entry| &entry.client.id == member)
-                .context("directory member must be a declared client")?;
-            if entry.role == CaseworkRole::Requester {
-                bail!(
-                    "local directory team {} names Requester client {member}; only a person serves a queue",
-                    team.team
-                );
-            }
-            if entry.role != CaseworkRole::Supervisor {
-                bail!(
-                    "local directory team {} names client {member} as a supervisor, but that client does not bind a Supervisor profile",
-                    team.team
-                );
-            }
-            if !supervisor_principals.insert(entry.principal.as_str()) {
-                bail!(
-                    "local directory team {} supervisor clients must resolve to unique principals; client {member} repeats a resolved principal",
-                    team.team
-                );
+        for (list, members, role, name) in [
+            ("staff", &team.staff, CaseworkRole::Staff, "Staff"),
+            (
+                "supervisors",
+                &team.supervisors,
+                CaseworkRole::Supervisor,
+                "Supervisor",
+            ),
+        ] {
+            let mut principals = FirstSeen::default();
+            for (position, member) in members.iter().enumerate() {
+                let pointer = format!("{at}/{list}/{position}");
+                // An undeclared member, or one whose client did not bind, is
+                // already reported.
+                let Some(entry) = bound.iter().find(|entry| &entry.client.id == member) else {
+                    continue;
+                };
+                if entry.role == CaseworkRole::Requester {
+                    found.push(ConfigFinding::new(
+                        "casework.dev-clients.requester-member",
+                        &pointer,
+                        "this client binds a Requester profile; only a person serves a queue",
+                        "Name a client bound to a Staff or Supervisor profile.",
+                    ));
+                } else if entry.role != role {
+                    found.push(ConfigFinding::new(
+                        "casework.dev-clients.member-role-mismatch",
+                        &pointer,
+                        format!("a member of {list} must bind a {name} access profile, and this client does not"),
+                        format!("Name a client bound to a {name} profile, or move this client to the list its role serves."),
+                    ));
+                } else if let Some(first) = principals.repeat(&entry.principal, &pointer) {
+                    found.push(
+                        ConfigFinding::new(
+                            "casework.dev-clients.repeated-principal",
+                            &pointer,
+                            format!("another member of {list} resolves to the same principal; each member is a distinct person"),
+                            "Give each member's client its own principal claim value.",
+                        )
+                        .with_related(first, "first resolved here"),
+                    );
+                }
             }
         }
     }
-    for queue in &project.queues {
+    for (index, queue) in project.queues.iter().enumerate() {
         if !clients.directory.iter().any(|team| team.queue == queue.id) {
-            bail!(
-                "no local directory team serves queue {}; add one to the clients file so the seeded directory satisfies caseworkctl doctor",
-                queue.id
-            );
+            found.push(ConfigFinding::new(
+                "casework.dev-clients.unserved-queue",
+                "/directory",
+                format!("no team serves the queue casework.yaml declares at /queues/{index}, so caseworkctl doctor would not report ready"),
+                "Add a directory team serving that queue.",
+            ));
         }
     }
-    if !bound
-        .iter()
-        .any(|entry| entry.role == CaseworkRole::Administrator)
+    if found.is_empty()
+        && !bound
+            .iter()
+            .any(|entry| entry.role == CaseworkRole::Administrator)
     {
-        bail!("local development needs one client bound to an Administrator profile; it seeds the directory");
+        found.push(ConfigFinding::new(
+            "casework.dev-clients.missing-administrator",
+            "/clients",
+            "no client binds an Administrator profile, and the first start seeds the directory as one",
+            "Add a client bound to an access profile whose role is administrator.",
+        ));
     }
-    Ok(bound)
+    if found.is_empty() {
+        Ok(bound)
+    } else {
+        Err(found)
+    }
 }
 
 /// The native issuer principal a local client speaks as. It is a local teaching

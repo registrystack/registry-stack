@@ -1,0 +1,16 @@
+id: missing-envelope
+rules: [CFG-ENV-1]
+summary: A document with neither apiVersion nor kind is refused before any other member is decoded.
+appliesTo:
+  envelope: true
+mutation:
+  envelope:
+    apiVersion: remove
+    kind: remove
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.missing-envelope
+      path: ""
+      from: root
+      at: {line: 1, column: 1}

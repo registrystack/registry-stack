@@ -1,0 +1,7 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+nul: "a\0b"
+del: "a\x7fb"
+nel: "a\Nb"
+c1: "a\u009fb"
+raw: "ab"

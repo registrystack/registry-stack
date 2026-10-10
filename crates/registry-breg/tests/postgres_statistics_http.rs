@@ -177,26 +177,38 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         None,
     );
 
-    // Anonymous concealment must not depend on the authenticated refusal journal.
-    let before_anonymous = database.audit_records().len();
+    // A request without verified claims is refused before any dataset is
+    // read, and the refusal must not depend on the authenticated refusal
+    // journal. A declared dataset route answers that authentication is
+    // required; an undeclared path keeps the concealed answer.
+    let before_unauthenticated = database.audit_records().len();
     for faulted in [false, true] {
         if faulted {
             database
                 .audit_capture()
                 .fail_on(registry_breg::audit::AUDIT_SCHEMA, "refusal");
         }
-        for path in [
-            "/v1/statistics/records-by-category:live",
-            "/v1/statistics/unknown-id-canary:live",
-            "/v1/statistics/unknown/route/garbage",
+        for (path, status) in [
+            (
+                "/v1/statistics/records-by-category:live",
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "/v1/statistics/unknown-id-canary:live",
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                "/v1/statistics/unknown/route/garbage",
+                StatusCode::NOT_FOUND,
+            ),
         ] {
-            let anonymous = send(&app, Method::GET, path, None, &[], Vec::new()).await;
-            assert_eq!(anonymous.status(), StatusCode::NOT_FOUND, "{path}");
+            let unauthenticated = send(&app, Method::GET, path, None, &[], Vec::new()).await;
+            assert_eq!(unauthenticated.status(), status, "{path}");
         }
-        assert_eq!(database.audit_records().len(), before_anonymous);
+        assert_eq!(database.audit_records().len(), before_unauthenticated);
         assert!(
             trace.lock().unwrap().is_empty(),
-            "anonymous refusal performs no database work"
+            "an unauthenticated refusal performs no database work"
         );
     }
     database.audit_capture().restore();
@@ -4067,7 +4079,8 @@ async fn changing_population_through_package_apply_starts_a_new_release_series()
             modules: Vec::new(),
             fixture_journeys: PackageSourceFile {
                 path: "tests/journeys.yaml".to_owned(),
-                bytes: br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+                bytes: br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: population
     steps:
@@ -4075,7 +4088,7 @@ journeys:
         entity: record
         accessProfile: publisher
         claims: {principal: package-publisher}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#
                 .to_vec(),
@@ -4257,27 +4270,29 @@ fn statistics_registry_source() -> Value {
             ]
         }],
         "accessProfiles":[
-            {"id":"analyst","default":true,"principalClaim":"principal","permissions":[{
+            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                 "entity":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
                 "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,
                 "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
-            }]},
+            },{"dataset":"records-by-category","operations":["read-live","read-releases"]}]},
             {"id":"analyst-wide","principalClaim":"principal","requiredScopes":["statistics.wide"],"permissions":[{
                 "entity":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
-                "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":[]
-            }]},
+                "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":"unrestricted"
+            },{"dataset":"records-by-category","operations":["read-live","read-releases"]}]},
             {"id":"publisher","principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":[{
                 "entity":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
-                "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":[]
-            }]},
-            {"id":"seed","principalClaim":"principal","permissions":[{
+                "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":"unrestricted"
+            },{"dataset":"records-by-category","operations":["publish","read-releases"]}]},
+            {"id":"seed","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                 "entity":"record","operations":["create"],
-                "writableFields":["subject","active","category","event-date","jurisdiction"],"rowBoundaries":[]
+                "writableFields":["subject","active","category","event-date","jurisdiction"],"rowBoundaries":"unrestricted"
             }]},
-            {"id":"reader","principalClaim":"principal","permissions":[]}
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
+                {"dataset":"records-by-category","operations":["read-releases"]}
+            ]}
         ],
         "vocabularies":[
             {"id":"category","values":["a","b"]},
@@ -4285,9 +4300,8 @@ fn statistics_registry_source() -> Value {
         ],
         "statisticalDatasets":[{
             "id":"records-by-category","unit":"record","population":"active eq true",
-            "period":{"kind":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
-            "dimensions":["category"],"disclosure":{"minimumCount":5,"roundingBase":5},
-            "live":["analyst","analyst-wide"],"releases":{"publisher":"publisher","readers":["reader"]}
+            "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
+            "dimensions":["category"],"disclosure":{"minimumCount":5,"roundingBase":5}
         }]
     })
 }
@@ -4315,22 +4329,23 @@ fn cap_registry() -> registry_breg::CompiledRegistry {
             ]
         }],
         "accessProfiles":[
-            {"id":"analyst","default":true,"principalClaim":"principal","permissions":[{
+            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                 "entity":"record","operations":["list"],"readableFields":["active","category","event-date"],
-                "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":[]
-            }]},
+                "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":"unrestricted"
+            },{"dataset":"daily-by-category","operations":["read-live","read-releases"]}]},
             {"id":"publisher","principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":[{
                 "entity":"record","operations":["list"],"readableFields":["active","category","event-date"],
-                "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":[]
-            }]},
-            {"id":"reader","principalClaim":"principal","permissions":[]}
+                "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":"unrestricted"
+            },{"dataset":"daily-by-category","operations":["publish","read-releases"]}]},
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
+                {"dataset":"daily-by-category","operations":["read-releases"]}
+            ]}
         ],
         "vocabularies":[{"id":"category","values":codes}],
         "statisticalDatasets":[{
             "id":"daily-by-category","unit":"record","population":"active eq true",
-            "period":{"kind":"flow","field":"event-date","granularity":"day","firstPeriod":"2025-01-01"},
-            "dimensions":["category"],"disclosure":{"minimumCount":5,"roundingBase":5},
-            "live":["analyst"],"releases":{"publisher":"publisher","readers":["reader"]}
+            "period":{"type":"flow","field":"event-date","granularity":"day","firstPeriod":"2025-01-01"},
+            "dimensions":["category"],"disclosure":{"minimumCount":5,"roundingBase":5}
         }]
     });
     let bytes = serde_json::to_vec(&source).expect("cap fixture serializes");

@@ -240,10 +240,14 @@ entities:
 accessProfiles:
   - id: public-register
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes:
+      - business:public.read
+    requiredPurposes:
+      - public-register
     permissions:
       - entity: legal-entity
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - get
           - list
@@ -259,7 +263,7 @@ accessProfiles:
         sortableFields:
           - legal-name
       - entity: officer-appointment
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - get
           - list
@@ -277,11 +281,12 @@ accessProfiles:
           - effective-from
   - id: business-registrar
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes:
       - business-registry
     permissions:
       - entity: legal-entity
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get
@@ -310,7 +315,7 @@ accessProfiles:
           - registration-number
           - entity-status
       - entity: filing
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get
@@ -339,7 +344,7 @@ accessProfiles:
           - filed-date
           - source-system
       - entity: officer-appointment
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get

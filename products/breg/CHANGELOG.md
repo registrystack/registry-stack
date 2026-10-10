@@ -2,6 +2,175 @@
 
 ## Unreleased
 
+- BREAKING: the access profiles a module writes on an entity
+  (`module.yaml` `/entities/*/accessProfiles` and
+  `/extendEntities/*/accessProfiles`) are read with the same rules as a
+  project profile: `requiredScopes` is required (`unrestricted` or a list of
+  at least one scope), `rowBoundaries`, `applyTargets`, and `requestPresence`
+  take `unrestricted` or a non-empty list, and `[]` is refused. The published
+  module schema states the member, and the project access findings
+  `breg.access.profile-subsumes-narrower` and
+  `breg.access.wildcard-spelled-item` also report a module profile. Migration
+  steps are in `release/notes/config-conventions/breg.md`.
+- BREAKING: an action permission in an access profile no longer accepts
+  `rowBoundaries` (an action has no rows; the row reach of its targets is
+  written on each target), and a statistical dataset permission must name its
+  `dataset` as an identifier. Migration steps are in
+  `release/notes/config-conventions/breg.md`.
+- `bregctl check --format json` reports `status` (`complete`, `domain-refusal`,
+  or `operational-failure`) beside `ok` and `command`, and `bregctl dev grant`
+  JSON carries an empty `diagnostics` list. Both are additive.
+- `runtime.yaml` `database` embeds the shared database block, so it accepts
+  `trustedRootCertificateRef` (a secret reference to PEM root certificates that
+  both the runtime and the migration connection trust in place of the platform
+  roots) and `testOnlyPlaintext` (refused outside test builds as
+  `breg.runtime.plaintext-database`, with the fix named). A malformed secret
+  reference in `database` is now refused as `breg.runtime.invalid-database` at
+  `/database` rather than as `config.invalid-value` at the member.
+- BREAKING: `dev-clients.yaml` has a published JSON Schema, and `bregctl dev`
+  decodes its identifiers, issuer and Evidence provider URLs, and mapping keys
+  through the shared types. `issuer.exchangeIssuers[].mapping` is spelled
+  `institutional-grant` or `first-party` (was `institutional_grant` and
+  `first_party`), an identifier that starts with a digit is refused, and an
+  issuer or `baseUrl` must be an absolute `http` or `https` URL. Migration
+  steps are in `release/notes/config-conventions/breg.md`.
+- `editors/configure.py` maps the JSON formats `*-binding.json` and
+  `examples/scenarios.json` beside the YAML formats for VS Code and Zed.
+- BREAKING: `registry.yaml` and `module.yaml` are read by the shared
+  configuration reader. A file that writes null, an unquoted number where text
+  is expected (`version: 1`), an ambiguous number, or a YAML anchor, alias,
+  merge key, or tag is refused, and source refusals carry the reader's codes
+  in place of `source.yaml.invalid` and `source.environment_expression`. A
+  package whose sealed sources carry such a shape must be rebuilt from a
+  corrected source. A comparison literal (`equals`, `afterEquals`,
+  `beforeEquals`) still accepts `null` as a record value; a list or a mapping
+  there is refused by the reader as `config.invalid-type` rather than at
+  compile time. Migration steps and the code table are in
+  `release/notes/config-conventions/breg.md`.
+- BREAKING: `runtime.yaml` is decoded by the shared reader. `breg` and every
+  `bregctl` command that reads it report every problem in the file with the
+  reader's code, path, line, column, and fix, and `breg` prints those
+  diagnostics on stderr when it refuses to start. Runtime refusal codes the
+  reader now decides (`runtime_config.document`,
+  `runtime_config.governed_member`, `runtime_config.env_expansion`, and the
+  file, envelope, and substitution codes) become reader codes, and
+  `database.url`, `database.password`, and `database.plaintext` are refused as
+  `config.removed-key`. The runtime file may be up to 1 MiB. The code table
+  and migration steps are in `release/notes/config-conventions/breg.md`.
+- BREAKING: `runtime.yaml` secret references and URLs are typed by the shared
+  reader. A `*Ref` member that is not `secret:file/NAME` or `secret:env/NAME`,
+  and a `publicOrigin`, Evidence provider `baseUrl`, or task-grant status
+  `baseUrl` or `sourceIssuer` that is not an absolute `http` or `https` URL,
+  is refused as `config.invalid-value` at the member. A task-grant status
+  `sourceIssuer` written as a `urn:` was accepted and is refused, and
+  `authentication.oidc.assertionIssuers: {}` is refused: delete the member to
+  apply no assertion-issuer rule. Migration steps are in
+  `release/notes/config-conventions/breg.md`.
+- BREAKING: every integer member of `runtime.yaml` is refused outside the
+  minimum and maximum the runtime schema states when the file is read, as
+  `config.out-of-range` at the member, rather than after decoding as
+  `runtime_config.invalid_bounds`, `invalid_oidc`, `invalid_oidc_leeway`,
+  `invalid_audit`, `invalid_wasm_execution`, `invalid_binding`,
+  `invalid_event_destination`, `invalid_attachment_storage`,
+  `invalid_attachment_verification`, or `invalid_field_encryption` at the
+  enclosing block. No value that was accepted is refused. A problem inside an
+  `attachmentStorage`, `attachmentVerification`, or `fieldEncryption.provider`
+  form is reported at its own member. The code table is in
+  `release/notes/config-conventions/breg.md`.
+- BREAKING: `registry.yaml` URLs and module digests are typed by the shared
+  reader. A module lock `digest` that is not `sha256:` and 64 lowercase hex
+  digits, and a `taskGrant.sourceIssuer` that is not an absolute URL, are
+  refused at read as `config.invalid-value` rather than at compile as
+  `module.lock.digest_invalid` and `access_profile.task_grant.invalid`. A
+  Manifest projection `baseUrl`, `endpointUrl`, `accessUrl`, or `downloadUrl`
+  that is not an absolute `http` or `https` URL without user information, or
+  that is empty, is refused as `config.invalid-value`. The code table is in
+  `release/notes/config-conventions/breg.md`.
+- BREAKING: every integer member of `registry.yaml` and `module.yaml` states
+  its minimum and maximum in the published schemas, and a value outside them
+  is refused at read as `config.out-of-range` (or `config.invalid-value` at
+  the field, for a string `maxLength` above 1000000, a decimal `precision` of
+  0, and a CRS84 `precision` above 9) rather than at compile under a field,
+  batch, attachment, statistical disclosure, or action evidence code. No
+  value that compiled before is refused. The code table is in
+  `release/notes/config-conventions/breg.md`.
+- BREAKING: a list member of `registry.yaml` and `module.yaml` that is a set
+  (access profile scopes, purposes, clients, operations, and field lists,
+  read paths, access requirements, trusted intermediaries, change-control
+  operations, effect `clear` lists, and hook projections and conditions)
+  refuses a repeated item as `config.duplicate-item` instead of collapsing
+  it. Delete the repeat to migrate. The member list is in
+  `release/notes/config-conventions/breg.md`.
+- BREAKING: every configuration diagnostic code is named
+  `breg.<area>.<condition>` in kebab segments, such as
+  `breg.access.profile-unrestricted-collection` for
+  `access.profile.unrestricted_collection`. A runtime rule decided after
+  `runtime.yaml` is read is reported as `breg.runtime.<condition>` by every
+  command, with no `startup.`, `verify.`, or other command prefix, and
+  `bregctl check` reports a refused package as `breg.package.<cause>` rather
+  than `check.package.<cause>`. Codes that name a `bregctl` operation, HTTP
+  problem codes, and the reader's `config.*` and `yaml.*` codes are
+  unchanged. Replace each code a script or alert matches; the old-to-new
+  table is in `release/notes/config-conventions/breg.md`.
+- BREAKING: `bregctl check` reports in the diagnostic shape every Registry
+  Stack check command shares. Its JSON report lists every error and warning
+  under `diagnostics[]`, each with `severity`, a JSON Pointer `path`, a
+  `source` naming the file, line, and column, and a `suggestedAction`
+  sentence, in place of `findings[]` and `entities[id=...]` paths, and its
+  human report prints `severity[code] file:line:column path` lines. A finding
+  is a `warning`, `--deny-findings` is `--deny-warnings`, and a project,
+  package, or runtime file the command cannot read exits 3 instead of 1.
+  `bregctl check --runtime-config FILE` also checks a `runtime.yaml` offline.
+  Migration steps are in `release/notes/config-conventions/breg.md`.
+- BREAKING: a package's `package.json` declares `apiVersion:
+  id.registrystack.org/formats/breg/package/v2` and `kind: BRegPackage`.
+  `breg` refuses a package with the retired
+  `registry.registrystack.org/package/v2` header; `bregctl` still reads one as
+  the deployed predecessor named by `--baseline-package`. Rebuild the deployed
+  package with this release against it, then `plan` and `apply` the rebuild,
+  which is recorded as a metadata-only activation. Migration steps are in
+  `release/notes/config-conventions/breg.md`.
+- BREAKING: experimental statistical datasets in `registry.yaml` tag their
+  period with `type: flow` or `type: stock` in place of `kind`, and a
+  dataset `id` outside the local identifier grammar is refused when the
+  project is read, as `config.invalid-value`, rather than by the compiler.
+  Rename `period.kind` to `period.type`. Migration steps are in
+  `release/notes/config-conventions/breg.md`.
+- The project, module, and runtime JSON Schemas admit `null` only in a
+  comparison literal, as the reader does, and declare no `default: null`. The
+  project schema states its `apiVersion` and `kind` as constants, an embedded
+  `schema` member carries `x-registry-foreign: json-schema-2020-12`, and the
+  project and module schemas are published as
+  `https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json`
+  and `https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json`.
+- BREAKING: the files `bregctl` reads and writes beside a registry project
+  (fixture journeys, reviewed migration documents, backup bindings, and the
+  other tool formats) follow the Registry Stack configuration conventions: a
+  current header, kebab-case values, and the shared reader's refusals. A
+  package carrying a reviewed migration that an earlier release built no
+  longer loads; migrate its documents and rebuild it. An Evidence source
+  export an earlier release generated is refused by `evidencectl source`;
+  generate it again. Every change and its migration step is in the "BReg
+  tool and output formats" section of
+  `release/notes/config-conventions/breg.md`.
+- BREAKING: a `${...}` substitution expression in a file `bregctl` reads as
+  written (fixture journeys, schema-test credentials, model selection,
+  development clients, example scenarios, migration descriptors, backup
+  bindings) is refused with `config.substitution-not-allowed`; an earlier
+  release kept it as literal text. Write the value, or in the credentials
+  and development clients a secret reference, in its place. The same
+  fragment section has the details.
+- BREAKING: the nine `bregctl explain` output schemas take identifiers from
+  the Registry Stack identifier catalog in place of their
+  `registrystack.org/breg-explain/v1alpha3/<Kind>.schema.json` identifiers; a
+  consumer that resolves them by `$id` replaces each old identifier with the
+  new one the same fragment section lists. The schemas also state bounds,
+  set uniqueness, and the digest pattern for what `bregctl` already writes;
+  the output and its `apiVersion` are unchanged.
+- `bregctl check --file <FILE>` checks one BReg tool file offline, chosen by
+  its `kind`, without reading a secret, database, or network. It exits 1 on
+  a refusal, or on a warning under `--deny-warnings`, 2 on a usage error, and
+  3 when the file cannot be read.
 - BREAKING: governed read routes refuse `HEAD` (#1902). axum answered `HEAD`
   on every `GET` route by running the whole read, writing a subject access log
   row, and journaling a `GET` the caller did not send. A `HEAD` now receives
@@ -52,6 +221,76 @@
   volume they consumed. Finish or cancel open runs before upgrading. A
   `bregctl data import` whose run was discarded refuses to resume; import
   only the uncommitted lines under a fresh checkpoint path.
+- BREAKING: `breg-mcp` and `breg-review` read `runtime.yaml` through the
+  shared configuration reader, as
+  `id.registrystack.org/formats/breg/mcp-runtime/v1alpha1` and
+  `id.registrystack.org/formats/breg/review-runtime/v1alpha1`; the previous
+  `apiVersion` is refused with its replacement named. In `breg-mcp`,
+  `maxTokenLifetimeSeconds` becomes `maximumTokenLifetimeSeconds` (now at
+  most 86400), `registry.requestTimeoutMilliseconds` becomes
+  `attemptTimeoutMilliseconds`, `limits.maxRequestBodyBytes` becomes
+  `maximumRequestBytes`, and `audit.retainDays` becomes `retentionDays`; in
+  `breg-review`, `limits` becomes `rateLimits` and `audit.retainDays` becomes
+  `retentionDays`. Each old key is refused naming its replacement. `check`
+  reads no secret, takes `--format json` and `--deny-warnings`, and exits 0,
+  1, 2, or 3. Migration steps and the code table are in
+  `release/notes/config-conventions/breg.md`, section "BReg citizen services".
+- BREAKING: a registry serves authenticated callers only. `anonymous` on an
+  access profile in `registry.yaml` or `module.yaml` is refused when the file
+  is read as `config.removed-key`, naming the fix, and every route except the
+  probes and the review completion receiver refuses a request without a
+  verified bearer token with `401 authentication.refused` before any profile,
+  query, or record is read; such a request used to reach the route and could
+  be served by an anonymous profile or answered `404`. The OpenAPI document
+  lists `bearerAuth` only, the `breg_anonymous_refusals_total` metric is
+  removed, the schema-test credentials file refuses `type: anonymous`,
+  `bregctl explain` reports `breg-explain/v1alpha4` without the anonymous
+  members, fifteen anonymous-only diagnostic codes are no longer reported,
+  and a baseline package that granted unauthenticated access is refused.
+  Migration steps are in `release/notes/config-conventions/breg.md`, section
+  "BReg access".
+- BREAKING: an access profile in `registry.yaml` says `unrestricted` or names
+  what it restricts, and an empty list is refused when the file is read.
+  `requiredScopes` is required on every profile and takes `unrestricted` or a
+  list of at least one scope; `rowBoundaries` on an entity permission, an
+  action target, an `applyTargets` entry, and a `requestPresence` entry takes
+  `unrestricted` or a list of at least one row boundary. `requiredPurposes`,
+  `requesterClients`, and the members of `accessRequirements` only narrow:
+  omit one to apply no restriction, and `[]` or `unrestricted` there is
+  refused naming that fix. Enforcement does not change and a rewritten
+  project keeps its compiled revision. The findings
+  `breg.access.profile-no-required-scope` and
+  `breg.access.action-no-required-scope` are removed;
+  `breg.access.profile-subsumes-narrower` and
+  `breg.access.wildcard-spelled-item` are added. A module that declares
+  `accessRequirements` without all three members gets a new digest. Migration
+  steps are in `release/notes/config-conventions/breg.md`, section "BReg
+  access".
+- BREAKING: `authentication.oidc.allowedClients` in `runtime.yaml` is
+  required and takes `unrestricted` or a list of at least one OAuth client.
+  A runtime file that omits the member is refused at startup as
+  `config.missing-key`, and `allowedClients: []` is refused as
+  `config.invalid-value`; both used to accept a token from every client of
+  the issuer, which is now written `allowedClients: unrestricted`. Token
+  verification does not change. Migration steps are in
+  `release/notes/config-conventions/breg.md`, section "BReg access".
+- BREAKING: access to a statistical dataset is granted in each access
+  profile's `permissions`, as `{dataset, operations}` with the operations
+  `read-live`, `publish`, and `read-releases`. `live` and `releases` on a
+  `statisticalDatasets` entry are refused when the file is read as
+  `config.removed-key`, naming the new home. Exactly one profile may hold
+  `publish` on a dataset, and the publisher and every `read-live` profile of
+  a published dataset also write `read-releases`, which the release routes
+  already served them. `breg.access-profile.permission-dataset-unknown`,
+  `breg.statistical-dataset.publisher-multiple`,
+  `breg.statistical-dataset.publisher-missing`, and
+  `breg.statistical-dataset.read-releases-required` are added;
+  `breg.statistical-dataset.profile-unknown` and
+  `breg.statistical-dataset.releases-readers-empty` are removed. Enforcement
+  does not change and a rewritten project keeps its compiled revision.
+  `bregctl explain access` gains `statisticalDatasets`, the profiles holding
+  each operation per dataset, in `breg-explain/v1alpha4`. Migration steps are
+  in `release/notes/config-conventions/breg.md`, section "BReg access".
 
 - `registry-breg-client` resends an idempotency-keyed mutation whose outcome
   is unknown, a timeout or broken exchange after sending or a 5xx answer, up

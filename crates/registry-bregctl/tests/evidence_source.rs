@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
 
 use serde_json::Value;
@@ -90,7 +94,10 @@ fn native_export_refuses_unreadable_facts_without_publishing_partial_files() {
     assert!(!result.status.success());
     let report: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(report["ok"], false);
-    assert_eq!(report["diagnostics"][0]["code"], "evidence_source.refused");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "breg.evidence-source.refused"
+    );
     assert!(!destination.exists());
 }
 
@@ -147,4 +154,33 @@ fn an_initialized_project_exports_an_evidence_source_without_edits() {
         1
     );
     assert!(destination.join("sources/registry-status.yaml").exists());
+}
+
+/// The `breg/evidence-source-export` format's example is the manifest this
+/// export writes, committed as written. Rewrite it from the repository root:
+///
+/// ```text
+/// bregctl generate evidence-source products/breg/evidence/registry \
+///   --access-profile evidence-source --entity record \
+///   --selector by-code --selector by-registration-number --fields status \
+///   --source-id registry-status --connection registry --output "$export"
+/// cp "$export/source-export.json" products/breg/examples/formats/
+/// ```
+#[test]
+fn committed_example_is_the_manifest_bregctl_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    let destination = temp.path().canonicalize().unwrap().join("export");
+    let result = export(&destination, "status");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/examples/formats/source-export.json");
+    assert!(
+        fs::read(destination.join("source-export.json")).unwrap() == fs::read(&example).unwrap(),
+        "{example:?} is not the manifest `bregctl generate evidence-source` writes now; \
+         rewrite it with the command in this test's comment"
+    );
 }

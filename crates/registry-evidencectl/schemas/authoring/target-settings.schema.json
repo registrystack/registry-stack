@@ -1,0 +1,49 @@
+{
+  "$defs": {
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/target-settings/target-settings.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The settings `target new` writes a target from, decoded by the shared\nreader. Governance and runtime are carried as written and held to their\nclosed shapes by `validate_settings_documents`; the format version is the\ndocument's `apiVersion`.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/target-settings/v1alpha1",
+      "type": "string"
+    },
+    "governance": {
+      "x-registry-passthrough": "The governance members of the Evidence bundle grammar; `evidencectl check` validates them against bundle.schema.yaml after the compile."
+    },
+    "kind": {
+      "const": "EvidenceTargetSettings",
+      "type": "string"
+    },
+    "publicKeys": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/ExternalId"
+      },
+      "type": "object"
+    },
+    "runtime": {
+      "x-registry-passthrough": "The runtime document of the Evidence runtime grammar; `target new` checks only its top-level members against the closed runtime key set, and `evidence check`, `doctor` and startup check the contents against runtime.schema.yaml."
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "governance",
+    "runtime"
+  ],
+  "title": "Evidence deployment target settings",
+  "type": "object"
+}

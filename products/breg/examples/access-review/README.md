@@ -5,7 +5,7 @@ tokens, or real records. Run from the repository root after building
 `bregctl`.
 
 ```sh
-target/debug/bregctl check products/breg/examples/access-review --deny-findings
+target/debug/bregctl check products/breg/examples/access-review --deny-warnings
 target/debug/bregctl explain access products/breg/examples/access-review
 ```
 
@@ -40,19 +40,19 @@ are never printed.
 ## Catch an omitted restriction
 
 Copy the project to your own directory. In the copy, replace the grant's
-`rowBoundaries` with `[]`, leaving the entity's `accessRequirements` intact. Run `check`
+`rowBoundaries` with `unrestricted`, leaving the entity's `accessRequirements` intact. Run `check`
 against the copy. Compilation refuses the profile with
-`access.requirements.row_boundary_missing` and identifies the entity, profile,
+`breg.access.requirements-row-boundary-missing` and identifies the entity, profile,
 and field. Restore the exact binding to make the check pass.
 
-Then, in the copy, remove the entity requirements and leave `rowBoundaries: []`. Ordinary `check` accepts the model but reports
-`access.profile.unrestricted_collection`; `check --deny-findings` exits
+Then, in the copy, remove the entity requirements and leave `rowBoundaries: unrestricted`. Ordinary `check` accepts the model but reports
+`breg.access.profile-unrestricted-collection`; `check --deny-warnings` exits
 unsuccessfully. This distinguishes a declared invariant from an intentionally
 reviewable design choice. The flag covers all compiler findings, including
 incomplete package identity, not only access warnings.
 
-Omitting `rowBoundaries` is a configuration error, even without entity requirements.
-Use an explicit empty list to distinguish intentional registry-wide access from a missing restriction.
+Omitting `rowBoundaries` is a configuration error, even without entity requirements, and so is an empty list.
+Write `unrestricted` to distinguish intentional registry-wide access from a missing restriction.
 
 ## Compare task profiles
 

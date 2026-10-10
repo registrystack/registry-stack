@@ -1,0 +1,13 @@
+id: unexpected-end
+rules: [CFG-YAML-8]
+summary: A document that ends inside a flow list is refused at its end.
+mutation:
+  append: |
+    conformanceList: [one, two
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.unexpected-end
+      path: /conformanceList/2
+      at: {line: 2, column: 1}
+      suggestedAction: Complete or remove the unfinished item.

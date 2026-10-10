@@ -38,15 +38,15 @@ fn project(loader_operations: &[&str]) -> Value {
           "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
       }],
       "accessProfiles":[{
-        "id":"loader","principalClaim":"principal","permissions":[{
+        "id":"loader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
           "entity":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],
-          "rowBoundaries": []
+          "rowBoundaries": "unrestricted"
         }]
       },{
-        "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
+        "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
           "entity":"enrollment-change","operations":["get","submit_request","apply_request"],"readableFields":["enrollment","label"],
-          "applyTargets":[{"entity":"enrollment", "rowBoundaries": []}],
-          "rowBoundaries": []
+          "applyTargets":[{"entity":"enrollment", "rowBoundaries": "unrestricted"}],
+          "rowBoundaries": "unrestricted"
         }]
       }]
     })

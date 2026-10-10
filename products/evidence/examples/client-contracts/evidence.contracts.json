@@ -1,0 +1,40 @@
+{
+  "schema": "registry.evidence-client-contracts/v1",
+  "assuranceProfile": "production",
+  "audience": "https://relying-party.example.org",
+  "issuedBy": "https://evidence.example.org",
+  "providedBy": "https://registry.example.org",
+  "definitions": [
+    {
+      "handle": "adult-status",
+      "requirement": "https://example.org/requirements/adult-status",
+      "configurationRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kind": "criterion",
+      "evidenceType": "https://example.org/evidence/adult-status",
+      "purpose": "benefit.eligibility",
+      "responseFormats": ["signed-jws"],
+      "referenceFrameworks": ["https://example.org/frameworks/benefits"],
+      "subjects": [
+        {
+          "role": "applicant",
+          "cardinality": "one",
+          "selector": {
+            "profile": "national-id",
+            "valueOrigin": "request",
+            "fields": [
+              {"type": "string", "name": "id", "minimumBytes": 1, "maximumBytes": 32}
+            ]
+          }
+        }
+      ],
+      "concepts": [
+        {
+          "handle": "adult",
+          "concept": "https://example.org/concepts/adult",
+          "required": true,
+          "form": "boolean"
+        }
+      ]
+    }
+  ]
+}

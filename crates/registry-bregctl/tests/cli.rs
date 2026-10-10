@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::BTreeMap;
@@ -39,6 +43,9 @@ mod reviewed_migration_tests;
 #[path = "cli/module_consent.rs"]
 mod module_consent_tests;
 
+#[path = "cli/file_check.rs"]
+mod file_check_tests;
+
 #[test]
 fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
     let source = String::from_utf8(authoring_fixture().to_vec())
@@ -51,15 +58,29 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
     let output = bregctl(&["--format", "json", "check", path(project.path())]);
     assert!(output.status.success(), "{output:?}");
     let report = json_stdout(&output);
-    let finding = report["findings"]
+    let finding = report["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|finding| finding["code"] == "field.pattern.unverified_offline")
+        .find(|finding| finding["code"] == "breg.field.pattern-unverified-offline")
         .expect("offline success must identify native syntax as unverified");
-    assert_eq!(finding["path"], "entities[record].fields[code].pattern");
-    assert_tool_finding(finding, "registry_project", "run_schema_test");
+    assert_eq!(finding["severity"], "warning");
+    assert_check_diagnostic(finding, Some("RegistryProject"));
+    let pointer = finding["path"].as_str().unwrap();
+    assert!(
+        pointer.starts_with("/entities/") && pointer.ends_with("/pattern"),
+        "{finding}"
+    );
+    assert_eq!(
+        finding["source"]["file"],
+        project.path().join("registry.yaml").display().to_string()
+    );
+    assert!(finding["source"]["line"].as_u64().is_some(), "{finding}");
     assert!(finding["message"]
+        .as_str()
+        .unwrap()
+        .contains("bregctl test"));
+    assert!(finding["suggestedAction"]
         .as_str()
         .unwrap()
         .contains("bregctl test"));
@@ -70,18 +91,18 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
         "json",
         "check",
         path(project.path()),
-        "--deny-findings",
+        "--deny-warnings",
     ]);
     assert_eq!(denied.status.code(), Some(1));
     let denied_report = json_stdout(&denied);
+    assert_eq!(denied_report["ok"], false);
     let denied_finding = denied_report["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|diagnostic| diagnostic["code"] == "field.pattern.unverified_offline")
-        .expect("denied finding remains in the refusal diagnostics");
-    assert_eq!(denied_finding["severity"], "finding");
-    assert_tool_diagnostic(denied_finding, "registry_project", "run_schema_test");
+        .find(|diagnostic| diagnostic["code"] == "breg.field.pattern-unverified-offline")
+        .expect("denied warning remains in the refusal diagnostics");
+    assert_eq!(denied_finding, finding);
 }
 
 #[test]
@@ -118,7 +139,7 @@ fn explain_access_states_consent_gates_recipients_and_the_ungated_client() {
     let human = String::from_utf8(output.stdout).unwrap();
     let aligned = human.split_whitespace().collect::<Vec<_>>().join(" ");
     for expected in [
-        "access.consent.ungated_client entities[id=person].accessProfiles[id=steward].requesterClients",
+        "breg.access.consent-ungated-client entities[id=person].accessProfiles[id=steward].requesterClients",
         "consent required (all) [{\"on\":\"id\",\"record\":\"consent-decision\"}]",
         "Consent:",
         "permission food-targeting over person",
@@ -211,17 +232,17 @@ fn missing_action_script_identifies_action_and_safe_relative_path() {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let report = json_stdout(&output);
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "source.planner_asset.missing");
+    assert_eq!(diagnostic["code"], "breg.source.planner-asset-missing");
+    assert_eq!(diagnostic["path"], "/actions/0/handler/script");
     assert_eq!(
-        diagnostic["path"],
-        "actions[register-person].handler.script"
+        diagnostic["source"]["file"],
+        project.path().join("registry.yaml").display().to_string()
     );
     assert!(diagnostic["message"]
         .as_str()
         .unwrap()
         .contains("scripts/register-person.rhai"));
-    assert_tool_diagnostic(diagnostic, "registry_project", "correct_authoring_source");
-    assert!(!String::from_utf8_lossy(&output.stdout).contains(path(project.path())));
+    assert_check_diagnostic(diagnostic, Some("RegistryProject"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("fn handle"));
 }
 
@@ -231,7 +252,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         "../../../products/breg/examples/access-review/registry.yaml"
     ));
     let path = project.path().to_str().unwrap();
-    let check = bregctl(&["--format", "json", "check", path, "--deny-findings"]);
+    let check = bregctl(&["--format", "json", "check", path, "--deny-warnings"]);
     assert!(check.status.success(), "{check:?}");
     let human = bregctl(&["explain", "access", path]);
     assert!(human.status.success());
@@ -299,7 +320,8 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         "../../../products/breg/examples/access-review/registry.yaml"
     ))
     .unwrap();
-    source["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = serde_json::json!([]);
+    source["accessProfiles"][0]["permissions"][0]["rowBoundaries"] =
+        serde_json::json!("unrestricted");
     fs::write(
         project.path().join("registry.yaml"),
         serde_json::to_vec(&source).unwrap(),
@@ -311,7 +333,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         .as_array()
         .unwrap()
         .iter()
-        .any(|d| d["code"] == "access.requirements.row_boundary_missing"));
+        .any(|d| d["code"] == "breg.access.requirements-row-boundary-missing"));
     source["entities"][0]
         .as_object_mut()
         .unwrap()
@@ -322,7 +344,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
     )
     .unwrap();
     assert!(bregctl(&["check", path]).status.success());
-    assert!(!bregctl(&["check", path, "--deny-findings"])
+    assert!(!bregctl(&["check", path, "--deny-warnings"])
         .status
         .success());
 }
@@ -334,7 +356,9 @@ const VERIFY_RUNTIME_DATABASE_SECRET_CANARY: &str = "VERIFY_RUNTIME_DATABASE_SEC
 const VERIFY_MIGRATION_DATABASE_SECRET_CANARY: &str =
     "VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED";
 const SCHEMA_TEST_AUTHORED_SOURCE_CEILING_BYTES: usize = 1024 * 1024;
-const PACKAGE_FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const PACKAGE_FIXTURE_JOURNEYS: &[u8] =
+    br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: package-record-list
     steps:
@@ -342,10 +366,11 @@ journeys:
         entity: record
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
-const DATA_FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const DATA_FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: data-record-list
     steps:
@@ -353,7 +378,7 @@ journeys:
         entity: record
         accessProfile: operator
         claims: {principal: data-operator}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 
@@ -480,7 +505,7 @@ fn authoring_fixture() -> &'static [u8] {
 kind: RegistryProject
 registry:
   id: cli-authoring-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://cli-authoring-fixture.example.test
 entities:
@@ -501,7 +526,7 @@ fn action_fixture() -> &'static [u8] {
 kind: RegistryProject
 registry:
   id: action-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://action-fixture.example.test
 entities:
@@ -560,9 +585,9 @@ accessProfiles:
       - action: register-household-contact
         operations: [invoke]
         targets:
-          - {entity: household, rowBoundaries: []}
-          - {entity: person, rowBoundaries: []}
-          - {entity: group-membership, rowBoundaries: []}
+          - {entity: household, rowBoundaries: unrestricted}
+          - {entity: person, rowBoundaries: unrestricted}
+          - {entity: group-membership, rowBoundaries: unrestricted}
         results: [person, membership, household]
   - id: contact-auditor
     principalClaim: other_private_claim
@@ -572,9 +597,9 @@ accessProfiles:
       - action: register-household-contact
         operations: [invoke]
         targets:
-          - {entity: household, rowBoundaries: []}
-          - {entity: person, rowBoundaries: []}
-          - {entity: group-membership, rowBoundaries: []}
+          - {entity: household, rowBoundaries: unrestricted}
+          - {entity: person, rowBoundaries: unrestricted}
+          - {entity: group-membership, rowBoundaries: unrestricted}
         results: [household]
 "#
 }
@@ -588,7 +613,7 @@ fn mixed_entity_and_action_route_fixture() -> &'static [u8] {
 kind: RegistryProject
 registry:
   id: mixed-route-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://mixed-route-fixture.example.test
 entities:
@@ -613,21 +638,23 @@ accessProfiles:
   - id: household-reader
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes: [household-read]
     permissions:
       - entity: household
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [household-code]
         writableFields: []
   - id: household-archiver
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes: [household-archive]
     permissions:
       - action: archive-household
         operations: [invoke]
         targets:
-          - {entity: household, rowBoundaries: []}
+          - {entity: household, rowBoundaries: unrestricted}
         results: [household]
 "#
 }
@@ -740,8 +767,8 @@ fn schema_test_receipt_bytes(prepared: &PreparedPackage, journey_ids: &[&str]) -
         }
     }
     let mut receipt = json!({
-        "apiVersion": "registry.registrystack.org/breg-schema-test-receipt/v2",
-        "kind": "SchemaTestReceipt",
+        "apiVersion": "id.registrystack.org/formats/breg/schema-test-receipt/v2",
+        "kind": "BRegSchemaTestReceipt",
         "registryRevision": prepared.registry().revision(),
         "projectSourceRevision": project_identity.source_revision,
         "compilerSourceRevision": manifest.compiler.source_revision,
@@ -854,25 +881,46 @@ fn assert_tool_diagnostic(diagnostic: &Value, artifact: &str, suggested_action: 
     assert_eq!(diagnostic["suggestedAction"], suggested_action);
 }
 
-fn assert_tool_finding(finding: &Value, artifact: &str, suggested_action: &str) {
-    let keys = finding
-        .as_object()
-        .expect("finding is an object")
-        .keys()
-        .map(String::as_str)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        keys,
-        std::collections::BTreeSet::from([
-            "artifact",
-            "code",
-            "message",
-            "path",
-            "suggestedAction",
-        ])
+/// A `bregctl check` diagnostic in the shared shape (CFG-DIAG-1): a JSON
+/// pointer path, an `error` or `warning` severity, the document's kind as
+/// the artifact, and a sentence the reader can act on.
+fn assert_check_diagnostic(diagnostic: &Value, artifact: Option<&str>) {
+    let object = diagnostic.as_object().expect("diagnostic is an object");
+    for key in object.keys() {
+        assert!(
+            [
+                "severity",
+                "code",
+                "artifact",
+                "path",
+                "message",
+                "suggestedAction",
+                "source",
+                "related",
+            ]
+            .contains(&key.as_str()),
+            "{key} in {diagnostic}"
+        );
+    }
+    assert!(
+        matches!(diagnostic["severity"].as_str(), Some("error" | "warning")),
+        "{diagnostic}"
     );
-    assert_eq!(finding["artifact"], artifact);
-    assert_eq!(finding["suggestedAction"], suggested_action);
+    let pointer = diagnostic["path"].as_str().expect("path is a string");
+    assert!(
+        pointer.is_empty() || pointer.starts_with('/'),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.ends_with('.')),
+        "{diagnostic}"
+    );
+    match artifact {
+        Some(artifact) => assert_eq!(diagnostic["artifact"], artifact),
+        None => assert!(diagnostic.get("artifact").is_none(), "{diagnostic}"),
+    }
 }
 
 #[test]
@@ -891,13 +939,15 @@ fn authored_project_findings_use_the_tool_finding_schema() {
     assert_eq!(report["ok"], true);
     assert_eq!(report["command"], "check");
     assert_eq!(report["profile"], "authoring");
-    assert!(report["findings"]
+    let diagnostics = report["diagnostics"]
         .as_array()
-        .expect("findings is an array")
+        .expect("diagnostics is an array");
+    assert!(diagnostics
         .iter()
-        .any(|finding| finding["code"] == "package.identity.missing"));
-    for finding in report["findings"].as_array().expect("findings is an array") {
-        assert_tool_finding(finding, "registry_project", "review_authoring_finding");
+        .any(|finding| finding["code"] == "breg.package.identity-missing"));
+    for finding in diagnostics {
+        assert_eq!(finding["severity"], "warning", "{finding}");
+        assert_check_diagnostic(finding, Some("RegistryProject"));
     }
 }
 
@@ -922,12 +972,12 @@ fn production_profile_refuses_missing_package_closure() {
         .iter()
         .filter_map(|diagnostic| diagnostic["code"].as_str())
         .collect();
-    assert!(codes.contains(&"package.identity.required"));
+    assert!(codes.contains(&"breg.package.identity-required"));
     for diagnostic in report["diagnostics"]
         .as_array()
         .expect("diagnostics is an array")
     {
-        assert_tool_diagnostic(diagnostic, "registry_project", "correct_authoring_source");
+        assert_check_diagnostic(diagnostic, Some("RegistryProject"));
     }
 }
 
@@ -1007,13 +1057,14 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     assert!(registry.contains("hook declares `phase: after`"));
     assert!(registry.contains("{kind: url, destinationId: registry-events}"));
     assert!(!registry.contains("declare `events`"));
+    assert!(registry.contains("`breg.access.profile-writable-row-boundary` follows"));
     let journeys = fs::read_to_string(destination.join("tests/journeys.yaml"))
         .expect("initialized fixture journeys read");
     assert!(journeys.contains("entity: record"));
     assert!(journeys.contains("accessProfile: operator"));
     assert!(journeys.contains("scopes: [registry:generic:operate]"));
     assert!(journeys.contains("purpose: registry-operations"));
-    assert!(journeys.contains("{recordRef: example-group}"));
+    assert!(journeys.contains("{recordCapture: example-group}"));
     assert!(journeys.contains("status: active"));
     assert!(registry.contains("type: reference"));
     assert!(registry.contains("type: vocabulary-code"));
@@ -1063,8 +1114,8 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     assert_eq!(
         findings,
         vec![
-            "access.profile.unrestricted_collection",
-            "access.profile.unrestricted_rows"
+            "breg.access.profile-unrestricted-collection",
+            "breg.access.profile-unrestricted-rows"
         ]
     );
     let artifacts = report["artifacts"]
@@ -1101,13 +1152,13 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     assert!(check.status.success(), "{check:?}");
     let check_report = json_stdout(&check);
     assert_eq!(check_report["ok"], true);
-    assert_eq!(
-        check_report["findings"]
-            .as_array()
-            .expect("findings is an array")
-            .len(),
-        2
-    );
+    let warnings = check_report["diagnostics"]
+        .as_array()
+        .expect("diagnostics is an array");
+    assert_eq!(warnings.len(), 2, "{check_report}");
+    assert!(warnings
+        .iter()
+        .all(|warning| warning["severity"] == "warning"));
 
     let locked = bregctl(&[
         "--format",
@@ -1228,7 +1279,7 @@ fn project_lock_check_refuses_stale_digest_without_rewriting() {
     assert_eq!(stale.status.code(), Some(1), "{stale:?}");
     assert!(stale.stderr.is_empty());
     let report = json_stdout(&stale);
-    assert_eq!(report["diagnostics"][0]["code"], "module.lock.stale");
+    assert_eq!(report["diagnostics"][0]["code"], "breg.module.lock-stale");
     assert_tool_diagnostic(
         &report["diagnostics"][0],
         "registry_project",
@@ -1247,13 +1298,13 @@ fn project_lock_keeps_comments_written_inside_the_modules_block() {
 kind: RegistryProject
 registry:
   id: modular-lock-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-fixture.example.test
 modules:
   # The core module owns the record entity.
   - id: core
-    version: 1
+    version: "1"
     # Refreshed by project lock after every module edit.
     digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
 "#,
@@ -1370,15 +1421,15 @@ fn project_lock_sorts_module_locks_authored_out_of_order() {
 kind: RegistryProject
 registry:
   id: modular-lock-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-fixture.example.test
 modules:
   - id: extra
-    version: 1
+    version: "1"
     digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
   - id: core
-    version: 1
+    version: "1"
     digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
 "#,
     );
@@ -1423,13 +1474,13 @@ modules:
 fn check_refuses_a_deleted_or_renamed_module_source_like_the_lock_check() {
     for (case, break_source) in [
         (
-            "module.lock.source_missing",
+            "breg.module.lock-source-missing",
             Box::new(|module_directory: &Path| {
                 fs::remove_dir_all(module_directory).expect("module directory removes");
             }) as Box<dyn Fn(&Path)>,
         ),
         (
-            "source.module.id_mismatch",
+            "breg.source.module-id-mismatch",
             Box::new(|module_directory: &Path| {
                 fs::write(
                     module_directory.join("module.yaml"),
@@ -1472,12 +1523,21 @@ fn check_refuses_a_deleted_or_renamed_module_source_like_the_lock_check() {
         );
         let report = json_stdout(&checked);
         assert_eq!(report["command"], "check");
-        assert_eq!(report["diagnostics"][0]["code"], case);
-        assert_eq!(
-            report["diagnostics"][0],
-            json_stdout(&lock_checked)["diagnostics"][0],
-            "{case}"
-        );
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], case);
+        // A missing module is a problem of the project's lock; a renamed one
+        // is a problem of the module file.
+        let artifact = if case == "breg.module.lock-source-missing" {
+            "RegistryProject"
+        } else {
+            "BRegModule"
+        };
+        assert_check_diagnostic(diagnostic, Some(artifact));
+        // The check places the lock check's refusal in the source; the code
+        // and the sentence are the lock check's own.
+        let lock_diagnostic = &json_stdout(&lock_checked)["diagnostics"][0];
+        assert_eq!(diagnostic["code"], lock_diagnostic["code"], "{case}");
+        assert_eq!(diagnostic["message"], lock_diagnostic["message"], "{case}");
     }
 }
 
@@ -1490,12 +1550,12 @@ fn project_lock_refuses_missing_locked_source_without_rendering_values() {
 kind: RegistryProject
 registry:
   id: modular-lock-missing
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-missing.example.test
 modules:
   - id: {MODULE_CANARY}
-    version: 1
+    version: "1"
     digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
 "#
         )
@@ -1512,7 +1572,7 @@ modules:
     let report: Value = serde_json::from_str(&rendered).expect("diagnostic JSON parses");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "module.lock.source_missing"
+        "breg.module.lock-source-missing"
     );
     assert_eq!(
         fs::read(project.path().join("registry.yaml")).expect("project rereads"),
@@ -1521,28 +1581,678 @@ modules:
 }
 
 #[test]
-fn deny_findings_refuses_on_the_findings_that_refused_it() {
+fn deny_warnings_refuses_on_the_warnings_that_refused_it() {
     let project = TestProject::asset_fixture();
     let destination = project.path().join("initialized");
     assert!(bregctl(&["init", path(&destination)]).status.success());
 
-    let refused = bregctl(&["check", path(&destination), "--deny-findings"]);
+    let passed = bregctl(&["check", path(&destination)]);
+    assert_eq!(passed.status.code(), Some(0), "{passed:?}");
+    let passed = String::from_utf8(passed.stdout).expect("report is UTF-8");
+    assert!(
+        passed.starts_with("Authoring check passed; registry revision sha256:"),
+        "{passed}"
+    );
+
+    let refused = bregctl(&["check", path(&destination), "--deny-warnings"]);
 
     assert_eq!(refused.status.code(), Some(1), "{refused:?}");
     assert!(refused.stdout.is_empty(), "{refused:?}");
     let rendered = String::from_utf8(refused.stderr).expect("refusal is UTF-8");
     assert!(
-        rendered.starts_with("bregctl check refused.\n"),
+        rendered
+            .starts_with("bregctl check refused the project: --deny-warnings refuses a warning.\n"),
+        "a refusal names what refused it: {rendered}"
+    );
+    let registry = destination.join("registry.yaml");
+    assert!(
+        rendered.contains(&format!(
+            "\nwarning[breg.access.profile-unrestricted-collection] {}:",
+            registry.display()
+        )),
         "{rendered}"
     );
     assert!(
-        rendered.ends_with("\nrefused on 2 findings.\n"),
-        "a refusal names what refused it: {rendered}"
+        rendered.ends_with("\n0 errors, 2 warnings in 4 files\n"),
+        "{rendered}"
+    );
+    // The warnings are the ones the passing check reported, in its words.
+    let warnings = |text: &str| text.lines().skip(1).map(str::to_owned).collect::<Vec<_>>();
+    assert_eq!(warnings(&rendered), warnings(&passed));
+}
+
+/// The committed minimal example: a project and the runtime file that runs it.
+fn minimal_example() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/examples/minimal")
+        .canonicalize()
+        .expect("the minimal example exists")
+}
+
+/// Everything a run wrote, standard output then standard error.
+fn human_output(output: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+/// The minimal example's runtime file with `edit` applied, written into a
+/// scratch directory so the check reads it from a path the test chose.
+fn edited_runtime_config(scratch: &TestProject, edit: impl Fn(&str) -> String) -> PathBuf {
+    let source = fs::read_to_string(minimal_example().join("runtime.yaml"))
+        .expect("the minimal runtime file reads");
+    let edited = edit(&source);
+    assert_ne!(edited, source, "the edit changes the runtime file");
+    let runtime = scratch.path().join("runtime.yaml");
+    fs::write(&runtime, edited).expect("the edited runtime file writes");
+    runtime
+}
+
+#[test]
+fn check_reads_a_runtime_configuration_beside_the_project() {
+    let example = minimal_example();
+    let runtime = example.join("runtime.yaml");
+
+    let human = bregctl(&["check", path(&example), "--runtime-config", path(&runtime)]);
+    assert_eq!(human.status.code(), Some(0), "{human:?}");
+    let rendered = String::from_utf8(human.stdout).expect("report is UTF-8");
+    assert!(
+        rendered.starts_with("Authoring check passed; registry revision sha256:"),
+        "{rendered}"
+    );
+    // The project's two files and the runtime file.
+    assert!(
+        rendered.ends_with("\n0 errors, 0 warnings in 3 files\n"),
+        "{rendered}"
+    );
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&runtime),
+        "--deny-warnings",
+    ]);
+    assert_eq!(json.status.code(), Some(0), "{json:?}");
+    let report = json_stdout(&json);
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["diagnostics"], json!([]));
+}
+
+#[test]
+fn check_refuses_a_runtime_configuration_in_the_reader_words() {
+    let scratch = TestProject::asset_fixture();
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace("listener:\n", "unexpectedSetting: true\nlistener:\n")
+    });
+    let example = minimal_example();
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let report = json_stdout(&json);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["status"], "domain-refusal");
+    assert!(report.get("registryRevision").is_none(), "{report}");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    let diagnostic = &diagnostics[0];
+    assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["code"], "config.unknown-key");
+    assert_eq!(diagnostic["path"], "/unexpectedSetting");
+    assert_eq!(diagnostic["source"]["file"], path(&runtime));
+    assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic}");
+
+    let human = bregctl(&["check", path(&example), "--runtime-config", path(&runtime)]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(human.stdout.is_empty(), "{human:?}");
+    let rendered = String::from_utf8(human.stderr).expect("refusal is UTF-8");
+    assert!(
+        rendered.starts_with(&format!(
+            "bregctl check refused the project or its runtime configuration.\n\
+             error[config.unknown-key] {}:",
+            runtime.display()
+        )),
+        "{rendered}"
     );
     assert!(
-        !rendered.contains("0 errors"),
-        "a refusal never closes on a count of no errors: {rendered}"
+        rendered.ends_with("\n1 error, 0 warnings in 3 files\n"),
+        "{rendered}"
     );
+}
+
+/// The minimal project with its reader profile limited to the client `portal`.
+fn minimal_project_limited_to_portal(scratch: &TestProject) {
+    let example = minimal_example();
+    let registry = fs::read_to_string(example.join("registry.yaml"))
+        .expect("the minimal registry reads")
+        .replace(
+            "    requiredPurposes: [record-administration]\n",
+            "    requiredPurposes: [record-administration]\n    actorKind: service\n    requesterClients: [portal]\n",
+        );
+    assert!(registry.contains("requesterClients: [portal]"));
+    fs::write(scratch.path().join("registry.yaml"), registry).expect("the registry writes");
+    let module = scratch.path().join("modules/minimal-core");
+    fs::create_dir_all(&module).expect("module directory is created");
+    fs::copy(
+        example.join("modules/minimal-core/module.yaml"),
+        module.join("module.yaml"),
+    )
+    .expect("module source is copied");
+}
+
+#[test]
+fn check_refuses_a_runtime_that_lists_none_of_the_clients_a_profile_names() {
+    let scratch = TestProject::from_registry_source(b"");
+    minimal_project_limited_to_portal(&scratch);
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace(
+            "allowedClients: [minimal-client]",
+            "allowedClients: unrestricted",
+        )
+    });
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(scratch.path()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let report = json_stdout(&json);
+    assert_eq!(report["ok"], false);
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    let diagnostic = &diagnostics[0];
+    assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["path"], "/authentication/oidc/allowedClients");
+    assert_eq!(diagnostic["source"]["file"], path(&runtime));
+    assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic}");
+    // The refusal names the member, never a configured client.
+    assert!(!report.to_string().contains("portal"), "{report}");
+
+    let human = bregctl(&[
+        "check",
+        path(scratch.path()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(
+        human_output(&human).contains("breg.runtime.clients-unlisted"),
+        "{human:?}"
+    );
+    assert!(!human_output(&human).contains("portal"), "{human:?}");
+}
+
+#[test]
+fn check_refuses_a_principal_claim_the_access_profiles_do_not_use() {
+    let scratch = TestProject::from_registry_source(b"");
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace(
+            "principal: registry_principal",
+            "principal: other_principal",
+        )
+    });
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&minimal_example()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let report = json_stdout(&json);
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    assert_eq!(
+        diagnostics[0]["path"],
+        "/authentication/authorityClaims/principal"
+    );
+    assert!(!report.to_string().contains("other_principal"), "{report}");
+
+    let human = bregctl(&[
+        "check",
+        path(&minimal_example()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(
+        human_output(&human).contains("breg.runtime.principal-claim-mismatch"),
+        "{human:?}"
+    );
+    assert!(
+        !human_output(&human).contains("other_principal"),
+        "{human:?}"
+    );
+}
+
+#[test]
+fn check_refuses_an_authority_claim_mapping_the_access_profiles_contradict() {
+    let scratch = TestProject::from_registry_source(b"");
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace("    purpose: registry_purpose\n", "")
+    });
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&minimal_example()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let report = json_stdout(&json);
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    assert_eq!(
+        diagnostics[0]["code"],
+        "breg.runtime.invalid-authority-claims"
+    );
+    assert_eq!(diagnostics[0]["path"], "/authentication/authorityClaims");
+    assert!(
+        !report.to_string().contains("registry_principal"),
+        "{report}"
+    );
+
+    let human = bregctl(&[
+        "check",
+        path(&minimal_example()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(
+        human_output(&human).contains("breg.runtime.invalid-authority-claims"),
+        "{human:?}"
+    );
+    assert!(
+        !human_output(&human).contains("registry_principal"),
+        "{human:?}"
+    );
+}
+
+#[test]
+fn check_warns_of_a_wildcard_spelled_allowed_client_and_denies_it_on_request() {
+    let scratch = TestProject::from_registry_source(b"");
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace(
+            "allowedClients: [minimal-client]",
+            "allowedClients: [\"*\"]",
+        )
+    });
+    let example = minimal_example();
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(json.status.code(), Some(0), "{json:?}");
+    let report = json_stdout(&json);
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    let diagnostic = &diagnostics[0];
+    assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
+    assert_eq!(diagnostic["severity"], "warning");
+    assert_eq!(diagnostic["code"], "breg.access.wildcard-spelled-item");
+    assert_eq!(diagnostic["path"], "/authentication/oidc/allowedClients/0");
+    assert_eq!(diagnostic["source"]["file"], path(&runtime));
+    assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic}");
+
+    let denied = bregctl(&[
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&runtime),
+        "--deny-warnings",
+    ]);
+    assert_eq!(denied.status.code(), Some(1), "{denied:?}");
+}
+
+#[test]
+fn check_accepts_a_runtime_that_lists_the_clients_a_profile_names() {
+    let scratch = TestProject::from_registry_source(b"");
+    minimal_project_limited_to_portal(&scratch);
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace(
+            "allowedClients: [minimal-client]",
+            "allowedClients: [portal]",
+        )
+    });
+
+    let output = bregctl(&[
+        "check",
+        path(scratch.path()),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+}
+
+#[test]
+fn check_cannot_read_a_missing_runtime_configuration() {
+    let scratch = TestProject::asset_fixture();
+    let missing = scratch.path().join("missing-runtime.yaml");
+    let example = minimal_example();
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&missing),
+    ]);
+    assert_eq!(json.status.code(), Some(3), "{json:?}");
+    let report = json_stdout(&json);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["status"], "operational-failure");
+    let diagnostic = &report["diagnostics"][0];
+    // A file that cannot be read has no document kind to name.
+    assert_check_diagnostic(diagnostic, None);
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["source"]["file"], path(&missing));
+
+    let human = bregctl(&["check", path(&example), "--runtime-config", path(&missing)]);
+    assert_eq!(human.status.code(), Some(3), "{human:?}");
+    let rendered = String::from_utf8(human.stderr).expect("refusal is UTF-8");
+    assert!(
+        rendered.starts_with(
+            "bregctl check could not read the project or its runtime configuration.\n"
+        ),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn check_substitutes_the_environment_only_when_asked_and_never_repeats_a_value() {
+    const CANARY: &str = "runtime-check-value-canary";
+    let scratch = TestProject::asset_fixture();
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace("bind: 127.0.0.1:8080", "bind: ${BREG_CHECK_TEST_BIND}")
+    });
+    let example = minimal_example();
+    let check = |environment: bool, bind: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+        command.args([
+            "--format",
+            "json",
+            "check",
+            path(&example),
+            "--runtime-config",
+            path(&runtime),
+        ]);
+        if environment {
+            command.arg("--environment");
+        }
+        command.env_remove("BREG_CHECK_TEST_BIND");
+        if let Some(bind) = bind {
+            command.env("BREG_CHECK_TEST_BIND", bind);
+        }
+        command.output().expect("bregctl starts")
+    };
+
+    // Without --environment, the expression is checked by its syntax and
+    // position only, so an unset variable is not a finding.
+    let deferred = check(false, None);
+    assert_eq!(deferred.status.code(), Some(0), "{deferred:?}");
+
+    let unset = check(true, None);
+    assert_eq!(unset.status.code(), Some(1), "{unset:?}");
+    let diagnostic = &json_stdout(&unset)["diagnostics"][0];
+    assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
+    assert_eq!(diagnostic["path"], "/listener/bind");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("BREG_CHECK_TEST_BIND")),
+        "{diagnostic}"
+    );
+
+    let invalid = check(true, Some(CANARY));
+    assert_eq!(invalid.status.code(), Some(1), "{invalid:?}");
+    let diagnostic = &json_stdout(&invalid)["diagnostics"][0];
+    assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
+    assert_eq!(diagnostic["path"], "/listener/bind");
+    for stream in [&invalid.stdout, &invalid.stderr] {
+        assert!(
+            !String::from_utf8_lossy(stream).contains(CANARY),
+            "a diagnostic never repeats a substituted value: {invalid:?}"
+        );
+    }
+
+    let filled = check(true, Some("127.0.0.1:9"));
+    assert_eq!(filled.status.code(), Some(0), "{filled:?}");
+}
+
+/// The minimal runtime file with every block that takes a URL, a URI, or an
+/// absolute path, each such member written as an expression, then `tail`.
+fn runtime_config_with_deferred_locations(scratch: &TestProject, tail: &str) -> PathBuf {
+    const BLOCKS: &str = r"attachmentStorage:
+  kind: s3
+  endpoint: ${BREG_CHECK_TEST_STORAGE}
+  bucket: test-bucket
+  region: us-east-1
+  accessKeyIdRef: secret:file/access
+  secretAccessKeyRef: secret:file/key
+attachmentVerification:
+  kind: http
+  endpoint: ${BREG_CHECK_TEST_VERIFIER}
+  policyId: scanner-rules-v1
+  authorizationRef: secret:file/verifier-token
+fieldEncryption:
+  provider:
+    kind: transit
+    unixSocketPath: ${BREG_CHECK_TEST_TRANSIT_SOCKET}
+    mount: transit
+    keyName: breg-field-dek
+eventDestinations:
+  case-operations:
+    origin: ${BREG_CHECK_TEST_EVENTS_ORIGIN}
+    path: ${BREG_CHECK_TEST_EVENTS_PATH}
+    networkProfile: productionHttps
+    dnsFamily: dualStackStrict
+    allowedPrivateCidrs: []
+    hmacSha256KeyRef: secret:file/event-hmac-key
+    classificationCeiling: restricted
+    deliveryCeilings:
+      attemptTimeoutMilliseconds: 4000
+      maximumAttempts: 4
+evidenceProviders:
+  civil:
+    baseUrl: ${BREG_CHECK_TEST_EVIDENCE_URL}
+    trustBindingId: civil
+    tokenRef: secret:file/evidence-token
+    trustedJwksRef: secret:file/evidence-jwks
+reviewAuthorities:
+  casework:
+    endpoint: ${BREG_CHECK_TEST_REVIEW_URL}
+    profile: producer
+    producerId: registry-producer
+    recoveryDays: 7
+    privateKeyJwt:
+      tokenEndpoint: ${BREG_CHECK_TEST_TOKEN_URL}
+      clientIdRef: secret:file/review-client-id
+      clientAssertionKeyRef: secret:file/review-private-jwk
+      assertionAudience: ${BREG_CHECK_TEST_TOKEN_AUDIENCE}
+      resource: ${BREG_CHECK_TEST_REVIEW_RESOURCE}
+      scopes: [casework:reviews:request]
+reviewExecutors:
+  applier:
+    endpoint: ${BREG_CHECK_TEST_EXECUTOR_URL}
+    registryId: registry-a
+    accessProfile: automatic-applier
+    privateKeyJwt:
+      tokenEndpoint: ${BREG_CHECK_TEST_TOKEN_URL}
+      clientIdRef: secret:file/executor-client-id
+      clientAssertionKeyRef: secret:file/executor-private-jwk
+      assertionAudience: ${BREG_CHECK_TEST_TOKEN_AUDIENCE}
+      resource: ${BREG_CHECK_TEST_EXECUTOR_RESOURCE}
+      scopes: [registry:apply]
+taskGrantStatus:
+  - sourceIssuer: ${BREG_CHECK_TEST_CASEWORK_ISSUER}
+    baseUrl: ${BREG_CHECK_TEST_CASEWORK_URL}
+    tokenEndpoint: ${BREG_CHECK_TEST_TOKEN_URL}
+    clientAssertionAudience: ${BREG_CHECK_TEST_TOKEN_AUDIENCE}
+    clientId: registry
+    privateKeyRef: secret:file/casework-key
+    caseworkResource: ${BREG_CHECK_TEST_CASEWORK_RESOURCE}
+";
+    edited_runtime_config(scratch, |source| {
+        let source = source
+            .replace(
+                "  bind: 127.0.0.1:8080\n",
+                "  bind: 127.0.0.1:8080\n  publicOrigin: ${BREG_CHECK_TEST_ORIGIN}\n",
+            )
+            .replace(
+                "    issuer: https://issuer.example.com\n",
+                "    issuer: ${BREG_CHECK_TEST_ISSUER}\n    jwksSource:\n      kind: uri\n      \
+                 uri: ${BREG_CHECK_TEST_JWKS}\n",
+            )
+            .replace(
+                "  path: /var/log/breg/audit.jsonl\n",
+                "  path: ${BREG_CHECK_TEST_AUDIT_PATH}\n",
+            );
+        for expression in ["ORIGIN", "ISSUER", "JWKS", "AUDIT_PATH"] {
+            assert!(
+                source.contains(&format!("${{BREG_CHECK_TEST_{expression}}}")),
+                "the minimal runtime file takes the {expression} expression"
+            );
+        }
+        format!("{source}{BLOCKS}{tail}")
+    })
+}
+
+/// A URL, URI, or absolute path written as an expression is read through a
+/// stand-in its member and the rules about its block accept, so the check
+/// goes on to everything after it.
+#[test]
+fn check_reads_past_every_location_written_as_an_expression() {
+    let scratch = TestProject::asset_fixture();
+    let example = minimal_example();
+    let check = |tail: &str| {
+        bregctl(&[
+            "--format",
+            "json",
+            "check",
+            path(&example),
+            "--runtime-config",
+            path(&runtime_config_with_deferred_locations(&scratch, tail)),
+            "--deny-warnings",
+        ])
+    };
+
+    let complete = check("");
+    let report = json_stdout(&complete);
+    assert_eq!(report["diagnostics"], json!([]), "{report}");
+    assert_eq!(complete.status.code(), Some(0), "{complete:?}");
+
+    // A refusal after the expressions is still found, whether the reader or
+    // a runtime rule makes it: the check never passes a file it stopped
+    // reading.
+    for (tail, code, pointer) in [
+        (
+            "operationalTimeouts:\n  httpRequestMilliseconds: 0\n",
+            "config.out-of-range",
+            "/operationalTimeouts/httpRequestMilliseconds",
+        ),
+        (
+            "metricsListener:\n  bind: 127.0.0.1:8080\n",
+            "breg.runtime.invalid-metrics-listener",
+            "/metricsListener",
+        ),
+    ] {
+        let refused = check(tail);
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        let report = json_stdout(&refused);
+        let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+        assert_eq!(diagnostics.len(), 1, "{report}");
+        assert_check_diagnostic(&diagnostics[0], Some("BRegRuntimeConfig"));
+        assert_eq!(diagnostics[0]["severity"], "error");
+        assert_eq!(diagnostics[0]["code"], code);
+        assert_eq!(diagnostics[0]["path"], pointer);
+    }
+}
+
+/// A check an expression stopped ends with a warning at the place it stopped,
+/// never with a clean pass: a member that refuses its stand-in stops the
+/// reader, and a rule that needs the value of an expression stops the rules.
+#[test]
+fn check_says_so_when_an_expression_stops_it() {
+    let scratch = TestProject::asset_fixture();
+    let example = minimal_example();
+    let stopped_reader: fn(&str) -> String = |source| {
+        source.replace(
+            "allowedAlgorithm: EdDSA",
+            "allowedAlgorithm: ${BREG_CHECK_TEST_ALGORITHM}",
+        )
+    };
+    // The stand-in of a metrics listener is the address this file gives the
+    // registry listener, so the rule that keeps the two apart cannot decide.
+    let stopped_rules: fn(&str) -> String = |source| {
+        format!(
+            "{}metricsListener:\n  bind: ${{BREG_CHECK_TEST_METRICS_BIND}}\n",
+            source.replace("bind: 127.0.0.1:8080", "bind: 127.0.0.1:9100")
+        )
+    };
+    for (edit, pointer) in [
+        (stopped_reader, "/authentication/oidc/allowedAlgorithm"),
+        (stopped_rules, "/metricsListener"),
+    ] {
+        let runtime = edited_runtime_config(&scratch, edit);
+        let check = |deny_warnings: bool| {
+            let mut arguments = vec![
+                "--format",
+                "json",
+                "check",
+                path(&example),
+                "--runtime-config",
+                path(&runtime),
+            ];
+            if deny_warnings {
+                arguments.push("--deny-warnings");
+            }
+            bregctl(&arguments)
+        };
+
+        let warned = check(false);
+        assert_eq!(warned.status.code(), Some(0), "{warned:?}");
+        let report = json_stdout(&warned);
+        let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+        assert_eq!(diagnostics.len(), 1, "{report}");
+        assert_check_diagnostic(&diagnostics[0], Some("BRegRuntimeConfig"));
+        assert_eq!(diagnostics[0]["severity"], "warning");
+        assert_eq!(
+            diagnostics[0]["code"],
+            "platform.runtime-config.check-incomplete"
+        );
+        assert_eq!(diagnostics[0]["path"], pointer);
+
+        assert_eq!(check(true).status.code(), Some(1), "{pointer}");
+    }
 }
 
 /// One numbered step, read back out of the rendering: the ordinal line and the
@@ -1581,7 +2291,7 @@ fn an_authored_claim_name_cannot_forge_a_line_of_the_access_report() {
 kind: RegistryProject
 registry:
   id: forged-line-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://forged-line-fixture.example.test
 entities:
@@ -1597,11 +2307,12 @@ entities:
 accessProfiles:
   - id: reader
     principalClaim: "registry_principal\n  error  forged.code  forged"
+    requiredScopes: unrestricted
     permissions:
       - entity: record
         operations: [get]
         readableFields: [code]
-        rowBoundaries: []
+        rowBoundaries: unrestricted
 "#,
     );
 
@@ -1685,11 +2396,11 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
         .map(|finding| finding["code"].as_str().expect("code"))
         .collect();
     assert!(
-        codes.contains(&"access.profile.unrestricted_collection"),
+        codes.contains(&"breg.access.profile-unrestricted-collection"),
         "{codes:?}"
     );
     assert!(
-        codes.contains(&"access.profile.higher_classification"),
+        codes.contains(&"breg.access.profile-higher-classification"),
         "{codes:?}"
     );
     let next_steps = report["nextSteps"].as_array().expect("next steps");
@@ -1699,6 +2410,7 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
 
     let registry =
         fs::read_to_string(destination.join("registry.yaml")).expect("derived project reads");
+    assert!(registry.contains("`breg.access.profile-writable-row-boundary` follows"));
     assert!(registry.contains("id: household-registry"));
     assert!(registry.contains("conceptUri: https://publicschema.org/Person"));
     assert!(registry.contains("route: group-memberships"));
@@ -1716,11 +2428,13 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
     let journeys =
         fs::read_to_string(destination.join("tests/journeys.yaml")).expect("derived journeys read");
     assert!(journeys.contains("scopes: [registry:household-registry:operate]"));
-    assert!(journeys.contains("person: {recordRef: example-person}"));
+    assert!(journeys.contains("person: {recordCapture: example-person}"));
     assert!(!journeys.contains("token"));
     let selection =
         fs::read_to_string(destination.join("model/selection.yaml")).expect("selection echo reads");
-    assert!(selection.contains("kind: ModelSelection"));
+    assert!(selection.contains(
+        "\napiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\nkind: BRegModelSelection\n"
+    ));
     assert!(selection.contains("concept: GroupMembership"));
 }
 
@@ -1748,7 +2462,7 @@ fn init_from_publicschema_reports_the_derived_project_in_the_report_shape() {
         "a derived project opens with the report lead sentence: {stdout}"
     );
     assert!(
-        stdout.contains("  finding  access.profile.unrestricted_collection  6 paths\n"),
+        stdout.contains("  finding  breg.access.profile-unrestricted-collection  6 paths\n"),
         "a repeated code counts the paths it collapsed: {stdout}"
     );
     assert!(
@@ -1770,8 +2484,8 @@ fn init_from_publicschema_reads_a_selection_file_and_refuses_a_bad_one() {
     let selection = project.path().join("selection.yaml");
     fs::write(
         &selection,
-        b"apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
-kind: ModelSelection
+        b"apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1
+kind: BRegModelSelection
 model: publicschema
 registry:
   id: places
@@ -1808,8 +2522,8 @@ entities:
 
     fs::write(
         &selection,
-        b"apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
-kind: ModelSelection
+        b"apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1
+kind: BRegModelSelection
 model: publicschema
 registry:
   id: places
@@ -1848,6 +2562,66 @@ entities:
         .as_str()
         .expect("message")
         .contains("location_name"));
+}
+
+#[test]
+fn init_from_publicschema_prints_the_reader_diagnostics_for_a_selection_an_earlier_bregctl_wrote() {
+    let project = TestProject::asset_fixture();
+    let selection = project.path().join("selection.yaml");
+    fs::write(
+        &selection,
+        b"apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
+kind: ModelSelection
+model: publicschema
+registry:
+  id: places
+  title: Places
+entities:
+  - concept: Location
+",
+    )
+    .expect("selection writes");
+    let destination = project.path().join("places");
+    let init = |format: &[&str]| {
+        let mut arguments = format.to_vec();
+        arguments.extend([
+            "init",
+            path(&destination),
+            "--from",
+            "publicschema",
+            "--selection",
+            path(&selection),
+        ]);
+        bregctl(&arguments)
+    };
+
+    let output = init(&["--format", "json"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let report = json_stdout(&output);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "init");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(diagnostics.len(), 2, "{report}");
+    assert_eq!(diagnostics[0]["code"], "config.retired-api-version");
+    assert_eq!(diagnostics[0]["path"], "/apiVersion");
+    assert_eq!(diagnostics[1]["code"], "config.wrong-kind");
+    assert_eq!(diagnostics[1]["path"], "/kind");
+    assert_eq!(diagnostics[1]["source"]["file"], path(&selection));
+    assert_eq!(diagnostics[1]["source"]["line"], 2);
+    assert!(!destination.exists(), "a refused selection writes nothing");
+
+    let output = init(&[]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let rendered = String::from_utf8(output.stderr).expect("refusal is UTF-8");
+    assert!(
+        rendered.starts_with("bregctl init refused the model selection.\n"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("config.wrong-kind"), "{rendered}");
+    assert!(rendered.contains("BRegModelSelection"), "{rendered}");
+    assert!(!destination.exists(), "a refused selection writes nothing");
 }
 
 #[test]
@@ -2380,7 +3154,7 @@ fn module_discovery_ignores_only_regular_finder_metadata() {
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
         json_stdout(&refused)["diagnostics"][0]["code"],
-        "source.modules.invalid"
+        "breg.source.modules-invalid"
     );
 }
 
@@ -2705,7 +3479,7 @@ fn explain_access_includes_action_only_grants_and_target_reach() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|finding| finding["code"] == "access.target.unrestricted_rows"));
+        .any(|finding| finding["code"] == "breg.access.target-unrestricted-rows"));
 }
 
 #[test]
@@ -2822,7 +3596,7 @@ const MINIMAL_ABI_WAT: &str = r#"
 #[cfg(feature = "wasm")]
 fn check_collects_project_and_module_hook_handler_assets() {
     let module_source = br#"id: hook-module
-version: 1
+version: "1"
 extendEntities:
   - entity: record
     hooks:
@@ -2847,12 +3621,12 @@ extendEntities:
 kind: RegistryProject
 registry:
   id: hook-asset-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://hook-asset-fixture.example.test
 modules:
   - id: hook-module
-    version: 1
+    version: "1"
     digest: {}
 entities:
   - id: record
@@ -2910,7 +3684,7 @@ fn wasm_action_fixture() -> &'static [u8] {
 kind: RegistryProject
 registry:
   id: wasm-explain-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://wasm-explain-fixture.example.test
 entities:
@@ -2939,11 +3713,12 @@ accessProfiles:
   - id: registrar
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - action: register-person
         operations: [invoke]
         targets:
-          - {entity: person, rowBoundaries: []}
+          - {entity: person, rowBoundaries: unrestricted}
         results: [person]
 "#
 }
@@ -3070,7 +3845,7 @@ fn explain_query_filter_examples_match_field_types() {
 kind: RegistryProject
 registry:
   id: typed-query-examples
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://typed-query-examples.example.test
 entities:
@@ -3098,9 +3873,10 @@ entities:
 accessProfiles:
   - id: reader
     principalClaim: principal
+    requiredScopes: unrestricted
     permissions:
       - entity: typed-record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [list]
         readableFields: [label, score, enabled, observed-on, observed-at]
         filterableFields: [label, score, enabled, observed-on, observed-at]
@@ -3155,7 +3931,7 @@ fn explain_spatial_queries_maps_the_exact_profile_and_api_geometry() {
     let project = TestProject::from_registry_source(
         br#"apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
-registry: {id: map-explanation, version: 1, defaultLanguage: en, canonicalBaseIri: https://map-explanation.example.test}
+registry: {id: map-explanation, version: "1", defaultLanguage: en, canonicalBaseIri: https://map-explanation.example.test}
 entities:
   - id: service-site
     primaryDataset: test-dataset
@@ -3168,17 +3944,19 @@ accessProfiles:
   - id: map-reader
     default: true
     principalClaim: principal
+    requiredScopes: unrestricted
     permissions:
       - entity: service-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [location]
         spatialQueries:
           bbox: {maximumLongitudeSpanDegrees: 0.5, maximumLatitudeSpanDegrees: 0.25}
   - id: geometry-reader
     principalClaim: principal
+    requiredScopes: unrestricted
     permissions:
-      - {entity: service-site, operations: [get, list], readableFields: [location], rowBoundaries: []}
+      - {entity: service-site, operations: [get, list], readableFields: [location], rowBoundaries: unrestricted}
 "#,
     );
     let output = bregctl(&[
@@ -3223,12 +4001,12 @@ fn check_reports_derived_sql_module_path_without_sql_values() {
 kind: RegistryProject
 registry:
   id: derived-diagnostic-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://derived-diagnostic-fixture.example.test
 modules:
   - id: core
-    version: 1
+    version: "1"
 "#,
     );
     let module_dir = project.path().join("modules/core");
@@ -3236,7 +4014,7 @@ modules:
     fs::write(
         module_dir.join("module.yaml"),
         br#"id: core
-version: 1
+version: "1"
 entities:
   - id: record
     primaryDataset: test-dataset
@@ -3257,7 +4035,8 @@ entities:
             maxLength: 16
             classification: internal
     accessProfiles:
-      - rowBoundaries: []
+      - requiredScopes: unrestricted
+        rowBoundaries: unrestricted
         id: reader
         principalClaim: principal
         operations: [list]
@@ -3279,13 +4058,18 @@ entities:
     assert!(!rendered.contains("SELECT"));
     let report = json_stdout(&check);
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "derived.sql.invalid");
+    assert_eq!(diagnostic["code"], "breg.derived.sql-invalid");
+    assert_eq!(diagnostic["path"], "/entities/0/derived/0/sql");
     assert_eq!(
-        diagnostic["path"],
-        "modules/core/module.yaml:entities[record].derived[summary].sql"
+        diagnostic["source"]["file"],
+        project
+            .path()
+            .join("modules/core/module.yaml")
+            .display()
+            .to_string()
     );
-    assert_eq!(diagnostic["artifact"], "registry_project");
-    assert_eq!(diagnostic["suggestedAction"], "correct_authoring_source");
+    assert!(diagnostic["source"]["line"].as_u64().is_some());
+    assert_check_diagnostic(diagnostic, Some("BRegModule"));
 }
 
 #[test]
@@ -3306,7 +4090,7 @@ fn explain_events_is_empty_for_outbox_only_and_deterministic_for_webhooks() {
 kind: RegistryProject
 registry:
   id: event-explain-outbox
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://event-explain-outbox.example.test
 entities:
@@ -3341,7 +4125,7 @@ entities:
 kind: RegistryProject
 registry:
   id: event-explain-webhook
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://event-explain-webhook.example.test
 entities:
@@ -3540,23 +4324,31 @@ fn package_refuses_missing_noncanonical_and_stale_receipts_before_output() {
     let refused = package_candidate_command(&project, fingerprint, &receipt, &refused_build);
     assert_eq!(refused.status.code(), Some(1), "{refused:?}");
     let refused_report = json_stdout(&refused);
+    assert_eq!(refused_report["ok"], false);
+    assert_eq!(refused_report["command"], "package");
+    let refused_diagnostics = refused_report["diagnostics"]
+        .as_array()
+        .expect("diagnostics are a list");
+    assert_eq!(refused_diagnostics.len(), 1, "{refused_report}");
+    assert_eq!(refused_diagnostics[0]["code"], "breg.receipt.not-canonical");
+    assert_eq!(refused_diagnostics[0]["artifact"], "BRegSchemaTestReceipt");
+    assert_eq!(refused_diagnostics[0]["path"], "");
     assert_eq!(
-        refused_report["diagnostics"][0]["code"],
-        "package.test_receipt.invalid"
+        refused_diagnostics[0]["source"]["file"],
+        path(&receipt),
+        "the receipt is named as the command was given it"
     );
-    assert_tool_diagnostic(
-        &refused_report["diagnostics"][0],
-        "schema_test_receipt",
-        "supply_schema_test_receipt",
-    );
+    assert_eq!(refused_diagnostics[0]["source"]["line"], 1);
+    assert!(refused_diagnostics[0]["suggestedAction"]
+        .as_str()
+        .is_some_and(|action| action.contains("bregctl test")));
     assert!(!refused_build.exists());
 
-    for rendered in [
-        String::from_utf8(missing.stdout).expect("missing diagnostic is UTF-8"),
-        String::from_utf8(refused.stdout).expect("refused diagnostic is UTF-8"),
-    ] {
-        assert!(!rendered.contains(path(project.path())));
-        assert!(!rendered.contains("candidate-receipt"));
+    let missing_rendered = String::from_utf8(missing.stdout).expect("missing diagnostic is UTF-8");
+    assert!(!missing_rendered.contains(path(project.path())));
+    assert!(!missing_rendered.contains("candidate-receipt"));
+    let refused_rendered = String::from_utf8(refused.stdout).expect("refused diagnostic is UTF-8");
+    for rendered in [missing_rendered, refused_rendered] {
         assert!(!rendered.contains(PACKAGE_DATABASE));
     }
 }
@@ -3961,7 +4753,8 @@ fn refused_fixture_journeys_name_the_journey_file_and_the_refusal() {
     .expect("credential fixture writes");
     fs::write(
         project.path().join("tests/journeys.yaml"),
-        br#"apiVersion: registry.registrystack.org/breg-journeys/v0
+        br#"apiVersion: id.registrystack.org/formats/breg/journeys/v0
+kind: BRegJourneys
 journeys:
   - id: package-record-list
     steps:
@@ -3969,7 +4762,7 @@ journeys:
         entity: record
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#,
     )
@@ -3981,12 +4774,30 @@ journeys:
     let rendered = String::from_utf8(result.stdout.clone()).expect("refusal JSON is UTF-8");
     let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
     assert_eq!(result.status.code(), Some(1), "{rendered}");
-    assert_eq!(report["diagnostics"][0]["code"], "test.journeys.refused");
-    assert_eq!(report["diagnostics"][0]["path"], "tests/journeys.yaml");
-    let message = report["diagnostics"][0]["message"]
+    assert_eq!(report["command"], "test");
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics are a list");
+    assert_eq!(diagnostics.len(), 1, "{rendered}");
+    assert_eq!(diagnostics[0]["code"], "config.unsupported-api-version");
+    assert_eq!(diagnostics[0]["artifact"], "BRegJourneys");
+    assert_eq!(diagnostics[0]["path"], "/apiVersion");
+    assert_eq!(
+        diagnostics[0]["source"]["file"],
+        project
+            .path()
+            .join("tests/journeys.yaml")
+            .display()
+            .to_string()
+    );
+    assert_eq!(diagnostics[0]["source"]["line"], 1);
+    let message = diagnostics[0]["message"]
         .as_str()
         .expect("journey message is a string");
-    assert!(message.to_lowercase().contains("version"), "{message}");
+    assert!(
+        message.contains("id.registrystack.org/formats/breg/journeys/v1"),
+        "{message}"
+    );
     assert!(!output.exists());
 }
 
@@ -3998,8 +4809,8 @@ fn refused_credentials_name_the_document_path_and_the_journey() {
     let credentials = project.path().join("unknown-journey-credentials.yaml");
     fs::write(
         &credentials,
-        r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+        r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: package-record-lists
     stepId: list-records
@@ -4016,12 +4827,22 @@ bindings:
     let rendered = String::from_utf8(result.stdout.clone()).expect("refusal JSON is UTF-8");
     let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
     assert_eq!(result.status.code(), Some(1), "{rendered}");
-    assert_eq!(report["diagnostics"][0]["code"], "test.credentials.refused");
-    assert_eq!(report["diagnostics"][0]["path"], "bindings[0].journeyId");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "test");
+    assert_eq!(report["diagnostics"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "breg.credentials.unknown-journey"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/bindings/0/journeyId");
+    assert_eq!(
+        report["diagnostics"][0]["source"],
+        json!({"file": path(&credentials), "line": 4, "column": 16})
+    );
     let message = report["diagnostics"][0]["message"]
         .as_str()
         .expect("credential message is a string");
-    assert!(message.contains("package-record-list"), "{message}");
+    assert!(!message.contains("package-record-list"), "{message}");
     assert!(
         !rendered.contains("secret:file/operator-token"),
         "{rendered}"
@@ -4032,8 +4853,8 @@ bindings:
     let duplicate = project.path().join("duplicate-credentials.yaml");
     fs::write(
         &duplicate,
-        r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+        r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: package-record-list
     stepId: list-records
@@ -4055,13 +4876,17 @@ bindings:
     let rendered = String::from_utf8(result.stdout.clone()).expect("refusal JSON is UTF-8");
     let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
     assert_eq!(result.status.code(), Some(1), "{rendered}");
-    assert_eq!(report["diagnostics"][0]["code"], "test.credentials.refused");
-    assert_eq!(report["diagnostics"][0]["path"], "bindings[1]");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "breg.credentials.duplicate-binding"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/bindings/1");
+    assert_eq!(report["diagnostics"][0]["source"]["line"], 9);
     let message = report["diagnostics"][0]["message"]
         .as_str()
         .expect("credential message is a string");
-    assert!(message.contains("package-record-list"), "{message}");
-    assert!(message.contains("list-records"), "{message}");
+    assert!(!message.contains("package-record-list"), "{message}");
+    assert!(!message.contains("list-records"), "{message}");
     assert!(
         !rendered.contains("secret:file/operator-token"),
         "{rendered}"
@@ -4078,17 +4903,21 @@ fn test_credentials_are_strict_secret_refs_and_preflight_before_database() {
     let cases = [
         (
             "duplicate-field",
-            r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+            "yaml.duplicate-key",
+            "/apiVersion",
+            r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings: []
 "#
             .to_owned(),
         ),
         (
             "unknown-field",
-            r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+            "config.unknown-key",
+            "/literal",
+            r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings: []
 literal: aaa.bbb.ccc
 "#
@@ -4096,37 +4925,56 @@ literal: aaa.bbb.ccc
         ),
         (
             "literal-token",
+            "config.unknown-key",
+            "/bindings/0/credential/token",
             credential_source("type: bearer\n      token: aaa.bbb.ccc\n"),
         ),
-        ("missing-token-ref", credential_source("type: bearer\n")),
         (
-            "extra-token-ref",
+            "missing-token-ref",
+            "config.missing-key",
+            "/bindings/0/credential",
+            credential_source("type: bearer\n"),
+        ),
+        (
+            "anonymous-credential",
+            "config.unknown-variant",
+            "/bindings/0/credential/type",
             credential_source("type: anonymous\n      tokenRef: secret:file/operator-token\n"),
         ),
         (
             "wrong-discriminator",
+            "config.missing-key",
+            "/bindings/0/credential",
             credential_source("mode: bearer\n      tokenRef: secret:file/operator-token\n"),
         ),
         (
             "literal-ref",
+            "config.invalid-value",
+            "/bindings/0/credential/tokenRef",
             credential_source("type: bearer\n      tokenRef: aaa.bbb.ccc\n"),
         ),
         (
             "unknown-provider",
+            "config.invalid-value",
+            "/bindings/0/credential/tokenRef",
             credential_source("type: bearer\n      tokenRef: secret:literal/operator-token\n"),
         ),
         (
             "missing-coverage",
-            r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+            "breg.credentials.incomplete-bindings",
+            "/bindings",
+            r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings: []
 "#
             .to_owned(),
         ),
         (
             "duplicate-binding",
-            r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+            "breg.credentials.duplicate-binding",
+            "/bindings/1",
+            r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: package-record-list
     stepId: list-records
@@ -4143,22 +4991,18 @@ bindings:
         ),
     ];
 
-    for (name, source) in cases {
+    for (name, code, pointer, source) in cases {
         let credentials = project.path().join(format!("credentials-{name}.yaml"));
         fs::write(&credentials, source).expect("credential fixture writes");
         let output = project.path().join(format!("receipt-{name}.json"));
         let result = test_candidate_command(&project, &runtime, &credentials, &output);
-        assert_schema_test_refusal(
+        assert_credentials_document_refusal(
             result,
-            "test.credentials.refused",
-            "schema_test_credentials",
-            "supply_schema_test_credentials",
+            &credentials,
+            code,
+            pointer,
             &output,
-            &[
-                path(&credentials),
-                "aaa.bbb.ccc",
-                "secret:file/operator-token",
-            ],
+            &["aaa.bbb.ccc", "secret:file/operator-token"],
         );
     }
 }
@@ -4167,14 +5011,26 @@ bindings:
 fn test_credentials_secret_value_failures_are_preflight_and_value_free() {
     let project = packaging_project();
     let runtime = test_runtime_config(&project);
-    let cases: Vec<(&str, Vec<u8>)> = vec![
-        ("utf8", vec![0xff, b'.', b'a', b'.', b'b']),
-        ("empty", Vec::new()),
-        ("oversized", vec![b'a'; 65 * 1024]),
-        ("malformed-token", b"not.a-token!".to_vec()),
+    let unresolved = "breg.credentials.unresolved-secret";
+    let token_ref = "/bindings/0/credential/tokenRef";
+    let cases: Vec<(&str, &str, &str, Vec<u8>)> = vec![
+        (
+            "utf8",
+            unresolved,
+            token_ref,
+            vec![0xff, b'.', b'a', b'.', b'b'],
+        ),
+        ("empty", unresolved, token_ref, Vec::new()),
+        ("oversized", unresolved, token_ref, vec![b'a'; 65 * 1024]),
+        (
+            "malformed-token",
+            "breg.credentials.incomplete-bindings",
+            "/bindings",
+            b"not.a-token!".to_vec(),
+        ),
     ];
 
-    for (name, secret) in cases {
+    for (name, code, pointer, secret) in cases {
         let secret_name = format!("operator-token-{name}");
         write_test_secret(&project, &secret_name, &secret);
         let credentials = project
@@ -4189,13 +5045,13 @@ fn test_credentials_secret_value_failures_are_preflight_and_value_free() {
         .expect("credential fixture writes");
         let output = project.path().join(format!("secret-receipt-{name}.json"));
         let result = test_candidate_command(&project, &runtime, &credentials, &output);
-        assert_schema_test_refusal(
+        assert_credentials_document_refusal(
             result,
-            "test.credentials.refused",
-            "schema_test_credentials",
-            "supply_schema_test_credentials",
+            &credentials,
+            code,
+            pointer,
             &output,
-            &[path(&credentials), &secret_name, "not.a-token!"],
+            &[&secret_name, "not.a-token!"],
         );
     }
 }
@@ -4256,11 +5112,11 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     let check_project = bregctl(&["--format", "json", "check", path(project.path())]);
     assert_eq!(check_project.status.code(), Some(1), "{check_project:?}");
     let project_report = json_stdout(&check_project);
+    assert_eq!(project_report["diagnostics"][0]["code"], "yaml.too-large");
     assert_eq!(
-        project_report["diagnostics"][0]["code"],
-        "source.file.bounds"
+        project_report["diagnostics"][0]["source"]["file"],
+        project.path().join("registry.yaml").display().to_string()
     );
-    assert_eq!(project_report["diagnostics"][0]["path"], "registry.yaml");
     let test_project = test_candidate_command(
         &project,
         &project.path().join("unused-runtime.yaml"),
@@ -4269,7 +5125,7 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     );
     assert_schema_test_refusal(
         test_project,
-        "source.file.bounds",
+        "breg.source.file-bounds",
         "registry_project",
         "correct_authoring_source",
         &project.path().join("oversized-project-receipt.json"),
@@ -4285,13 +5141,14 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     let check_module = bregctl(&["--format", "json", "check", path(project.path())]);
     assert_eq!(check_module.status.code(), Some(1), "{check_module:?}");
     let module_report = json_stdout(&check_module);
+    assert_eq!(module_report["diagnostics"][0]["code"], "yaml.too-large");
     assert_eq!(
-        module_report["diagnostics"][0]["code"],
-        "source.file.bounds"
-    );
-    assert_eq!(
-        module_report["diagnostics"][0]["path"],
-        "modules/core/module.yaml"
+        module_report["diagnostics"][0]["source"]["file"],
+        project
+            .path()
+            .join("modules/core/module.yaml")
+            .display()
+            .to_string()
     );
     let test_module = test_candidate_command(
         &project,
@@ -4301,7 +5158,7 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     );
     assert_schema_test_refusal(
         test_module,
-        "source.file.bounds",
+        "breg.source.file-bounds",
         "registry_project",
         "correct_authoring_source",
         &project.path().join("oversized-module-receipt.json"),
@@ -4407,7 +5264,7 @@ fn package_fixture_journey_source_is_required_regular_bounded_and_value_free() {
     let missing_report = json_stdout(&missing);
     assert_eq!(
         missing_report["diagnostics"][0]["code"],
-        "source.fixture_journeys.missing"
+        "breg.source.fixture-journeys-missing"
     );
     assert_eq!(
         missing_report["diagnostics"][0]["path"],
@@ -4422,7 +5279,7 @@ fn package_fixture_journey_source_is_required_regular_bounded_and_value_free() {
     let linked_report = json_stdout(&linked);
     assert_eq!(
         linked_report["diagnostics"][0]["code"],
-        "source.file.invalid"
+        "breg.source.file-invalid"
     );
     assert_eq!(
         linked_report["diagnostics"][0]["path"],
@@ -4440,7 +5297,7 @@ fn package_fixture_journey_source_is_required_regular_bounded_and_value_free() {
     let oversized_report = json_stdout(&oversized);
     assert_eq!(
         oversized_report["diagnostics"][0]["code"],
-        "source.file.bounds"
+        "breg.source.file-bounds"
     );
     assert_eq!(
         oversized_report["diagnostics"][0]["path"],
@@ -4478,7 +5335,7 @@ fn package_always_uses_production_compilation_and_never_offers_a_signing_command
         .as_array()
         .unwrap()
         .iter()
-        .any(|diagnostic| diagnostic["code"] == "package.identity.required"));
+        .any(|diagnostic| diagnostic["code"] == "breg.package.identity-required"));
     assert!(!build.exists());
 
     let help = bregctl(&["--help"]);
@@ -5825,12 +6682,12 @@ fn unknown_source_is_refused_without_echoing_source_values() {
     assert!(output.stderr.is_empty());
     assert!(!String::from_utf8_lossy(&output.stdout).contains(SOURCE_VALUE_CANARY));
     let report = json_stdout(&output);
-    assert_eq!(report["diagnostics"][0]["code"], "source.yaml.invalid");
-    assert_tool_diagnostic(
-        &report["diagnostics"][0],
-        "registry_project",
-        "correct_authoring_source",
-    );
+    assert_eq!(report["diagnostics"][0]["code"], "config.unknown-key");
+    assert_eq!(report["diagnostics"][0]["path"], "/unexpectedSetting");
+    assert!(report["diagnostics"][0]["source"]["line"]
+        .as_u64()
+        .is_some());
+    assert_check_diagnostic(&report["diagnostics"][0], Some("RegistryProject"));
 }
 
 #[test]
@@ -5940,7 +6797,7 @@ fn human_usage_errors_name_the_offending_argument() {
     assert!(missing_argument.stdout.is_empty());
     let rendered = String::from_utf8_lossy(&missing_argument.stderr).into_owned();
     assert!(
-        rendered.contains("<PROJECT|--package <DIRECTORY>>"),
+        rendered.contains("<PROJECT|--package <DIRECTORY>|--file <FILE>>"),
         "{rendered}"
     );
 }
@@ -6006,6 +6863,70 @@ fn data_validate_uses_a_closed_package_plan_and_value_free_usage() {
     );
 }
 
+#[test]
+fn data_export_prints_the_reader_diagnostics_for_a_checkpoint_an_earlier_bregctl_wrote() {
+    let (directory, package) = data_package_fixture();
+    let token = directory.path().join("access-token");
+    fs::write(&token, "data-token-canary\n").expect("token writes");
+    let output_file = directory.path().join("records.jsonl");
+    fs::write(&output_file, b"").expect("export output writes");
+    let checkpoint = directory.path().join("records.checkpoint.json");
+    fs::write(
+        &checkpoint,
+        br#"{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryDataExportCheckpoint"}"#,
+    )
+    .expect("earlier checkpoint writes");
+    let export = |format: &[&str]| {
+        let mut arguments = format.to_vec();
+        arguments.extend([
+            "data",
+            "export",
+            "--package",
+            path(&package),
+            "--breg-url",
+            "http://127.0.0.1:1",
+            "--access-token-file",
+            path(&token),
+            "--entity",
+            "record",
+            "--profile",
+            "operator",
+            "--field",
+            "code",
+            "--output",
+            path(&output_file),
+            "--checkpoint",
+            path(&checkpoint),
+        ]);
+        bregctl(&arguments)
+    };
+
+    let output = export(&["--format", "json"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let report = json_stdout(&output);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "data export");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    let wrong_kind = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "config.wrong-kind")
+        .expect("the earlier kind is refused");
+    assert_eq!(wrong_kind["source"]["file"], path(&checkpoint));
+    assert_eq!(wrong_kind["source"]["line"], 1);
+
+    let output = export(&[]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let rendered = String::from_utf8(output.stderr).expect("refusal is UTF-8");
+    assert!(
+        rendered.starts_with("bregctl data export refused the data export checkpoint.\n"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("config.wrong-kind"), "{rendered}");
+    assert!(!rendered.contains("data-token-canary"));
+}
+
 #[cfg(unix)]
 #[test]
 fn generation_refuses_a_broken_symlink_destination_without_publishing_output() {
@@ -6054,7 +6975,7 @@ fn modular_project_without_locks() -> &'static [u8] {
 kind: RegistryProject
 registry:
   id: modular-lock-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-fixture.example.test
 "#
@@ -6062,7 +6983,7 @@ registry:
 
 fn modular_project_extra_module() -> &'static [u8] {
     br#"id: extra
-version: 1
+version: "1"
 entities:
   - id: extra-record
     primaryDataset: test-dataset
@@ -6074,7 +6995,8 @@ entities:
         maxLength: 16
         classification: internal
     accessProfiles:
-      - rowBoundaries: []
+      - requiredScopes: unrestricted
+        rowBoundaries: unrestricted
         id: reader
         principalClaim: principal
         operations: [get, list]
@@ -6084,7 +7006,7 @@ entities:
 
 fn modular_project_module() -> &'static [u8] {
     br#"id: core
-version: 1
+version: "1"
 entities:
   - id: record
     primaryDataset: test-dataset
@@ -6096,7 +7018,8 @@ entities:
         maxLength: 16
         classification: internal
     accessProfiles:
-      - rowBoundaries: []
+      - requiredScopes: unrestricted
+        rowBoundaries: unrestricted
         id: reader
         principalClaim: principal
         operations: [get, list]
@@ -6105,17 +7028,17 @@ entities:
 }
 
 fn package_module_bytes() -> Vec<u8> {
-    br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "rowBoundaries": []}]}]}"#
+    br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
         .to_vec()
 }
 
 fn encrypted_package_module_bytes() -> Vec<u8> {
-    br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"restricted","encrypted":true}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "rowBoundaries": []}]}]}"#
+    br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"restricted","encrypted":true}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
         .to_vec()
 }
 
 fn data_package_fixture() -> (TestProject, PathBuf) {
-    let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"data-registry","route":"records","mutationMode":"create_only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minLength":2,"maxLength":16,"required":true,"classification":"internal"}],"accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true, "rowBoundaries": []}]}]}"#.to_vec();
+    let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"data-registry","route":"records","mutationMode":"create_only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minLength":2,"maxLength":16,"required":true,"classification":"internal"}],"accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true, "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#.to_vec();
     let module = parse_module_json(&module_bytes).expect("data module parses");
     let module_digest = module_digest(&module);
     let project = TestProject::from_registry_source(
@@ -6248,8 +7171,8 @@ fn test_runtime_config(project: &TestProject) -> PathBuf {
 
 fn credential_source(credential: &str) -> String {
     format!(
-        r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+        r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: package-record-list
     stepId: list-records
@@ -6283,6 +7206,48 @@ fn assert_schema_test_refusal(
     assert_eq!(report["command"], "test");
     assert_eq!(report["diagnostics"][0]["code"], expected_code);
     assert_tool_diagnostic(&report["diagnostics"][0], artifact, action);
+}
+
+/// A refused credentials file is reported in the reader's diagnostic shape,
+/// naming the file as given and never a value it holds (CFG-SEC-3).
+fn assert_credentials_document_refusal(
+    output: Output,
+    credentials: &Path,
+    expected_code: &str,
+    expected_pointer: &str,
+    receipt: &Path,
+    forbidden: &[&str],
+) {
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    assert!(!receipt.exists(), "receipt was not published on refusal");
+    let rendered = String::from_utf8(output.stdout).expect("refusal JSON is UTF-8");
+    for canary in forbidden {
+        assert!(!rendered.contains(canary), "refusal leaked {canary}");
+    }
+    let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "test");
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("refusal diagnostics are a list");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == expected_code && diagnostic["path"] == expected_pointer
+        }),
+        "{rendered}"
+    );
+    for diagnostic in diagnostics {
+        assert_eq!(diagnostic["artifact"], "BRegSchemaTestCredentials");
+        assert_eq!(diagnostic["source"]["file"], path(credentials));
+        assert!(diagnostic["source"]["line"].is_u64(), "{rendered}");
+        assert!(
+            diagnostic["suggestedAction"]
+                .as_str()
+                .is_some_and(|action| !action.is_empty()),
+            "{rendered}"
+        );
+    }
 }
 
 fn assert_inspection_refusal(

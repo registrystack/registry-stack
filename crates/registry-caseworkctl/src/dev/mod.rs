@@ -5,7 +5,7 @@
 //! start or stop is the container whose random ownership label and immutable
 //! Docker ID match its private journal. There is intentionally no reset.
 
-mod config;
+pub(crate) mod config;
 mod integrations;
 mod private;
 mod public_jwks;
@@ -15,7 +15,10 @@ mod tests;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use config::Clients;
-use registry_casework_core::CaseworkRole;
+use registry_casework_core::{findings_report, CaseworkRole};
+use registry_platform_yaml::{
+    ApiVersion, Document, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report, Severity,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -61,6 +64,34 @@ const FIRST_SOURCE_PORT: u16 = 32768;
 /// would claim owned services were stopped when none were ever created.
 const MISSING_SESSION: &str = "no local development session exists in this project; nothing was stopped. Check the project path, or start one with caseworkctl dev";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub(crate) const DEV_STATE_API_VERSION: &str =
+    "id.registrystack.org/formats/casework/dev-state/v1alpha1";
+pub(crate) const DEV_STATE_KIND: &str = "CaseworkDevState";
+/// The session state `caseworkctl dev` retains in `.casework/dev/state.json`
+/// (CFG-ENV-1). Only caseworkctl writes it.
+pub(crate) const DEV_STATE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: DEV_STATE_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(DEV_STATE_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[RemovedKey {
+        pointer: "/version",
+        replacement: "Remove version; apiVersion and kind identify the file.",
+    }],
+};
+/// Refusal for retained state this caseworkctl cannot read, including state
+/// an earlier caseworkctl wrote. Nothing is changed, so the earlier
+/// caseworkctl can still stop and remove what it started.
+const INVALID_STATE: &str = "retained dev state is invalid; preserve it for inspection, or, if an earlier caseworkctl started this session, run caseworkctl dev stop --remove with that caseworkctl, then remove .casework/dev and start again";
+/// Refusal for retained state whose ownership members break the rules every
+/// state caseworkctl writes satisfies.
+const STATE_OWNERSHIP: &str = "retained dev state ownership is invalid; no resources were changed";
+/// The header `bregctl dev` writes on the session state it retains in
+/// `.breg/dev/state.json`. A borrowed issuer owner is read only from state
+/// carrying it; state an earlier bregctl wrote names no ready owner.
+const BREG_DEV_STATE_API_VERSION: &str = "id.registrystack.org/formats/breg/dev-state/v1alpha1";
+const BREG_DEV_STATE_KIND: &str = "BRegDevState";
 /// Longest one supervised prerequisite command may run before the supervisor
 /// stops it and fails the start.
 const CHILD_DEADLINE: Duration = Duration::from_secs(120);
@@ -153,12 +184,12 @@ struct IdentityArgs {
 
 #[derive(Debug, Args)]
 struct GrantArgs {
-    /// Registered agent client ID in the owner-only connection file.
+    /// Registered agent client ID listed under `clients` in the task connection file.
     client: String,
     /// Existing Casework-approved grant UUID; this command does not approve tasks.
     #[arg(long)]
     grant: String,
-    /// Owner-only task connection v1 file with the registered agent key and fixed target.
+    /// Task connection file (`PlatformTaskConnection`) naming the fixed target and each client's assertion key reference.
     #[arg(long, value_name = "FILE")]
     connection: PathBuf,
     /// Existing project whose private directory receives the grant-specific header.
@@ -251,21 +282,26 @@ pub struct ServiceGuardArgs {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct State {
-    version: u8,
+    api_version: String,
+    kind: String,
     project: PathBuf,
     owner: String,
     status: Status,
     casework_port: u16,
     issuer_port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_project: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_owner: Option<String>,
     database_port: u16,
     clients_file: PathBuf,
     source_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     resource: Option<String>,
     /// Every local client with the access profile it binds and that profile's
     /// role, recorded so the report needs no second reading of the project.
     clients: Vec<ReportedClient>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     container_id: Option<String>,
     tls_files_copied: bool,
     database_ready: bool,
@@ -273,8 +309,10 @@ struct State {
     /// Migrations remain idempotent and run again on every start so an upgraded
     /// toolset cannot reuse an older schema.
     migrated: bool,
-    /// Directory teams this session has already seeded, by team identifier.
-    seeded: BTreeSet<String>,
+    /// Directory teams this session has already seeded, by team identifier,
+    /// each once.
+    #[serde(deserialize_with = "registry_casework_core::typed::unique_list")]
+    seeded: Vec<String>,
     directory_revision: i64,
     directory_teams: usize,
     /// Installed prerequisites this session resolved, keyed by command name.
@@ -283,6 +321,7 @@ struct State {
     /// asked for the start can report it. The supervisor writes both its
     /// streams to a private log, so this is the only path a refusal has back
     /// to the owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     failure: Option<String>,
     sources: BTreeMap<String, SourceSession>,
     borrowed_scopes: BTreeMap<String, Vec<String>>,
@@ -292,6 +331,7 @@ struct State {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SourceSession {
     project: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     binding: Option<SourceBinding>,
 }
 
@@ -452,9 +492,11 @@ fn approved_grant(args: GrantArgs) -> Result<Value> {
             &args.client,
             &args.grant,
         ))?;
-    Ok(
-        json!({"ok":true,"command":"dev grant","headerFile":output.header_file,"grantExpiresAt":output.grant_expires_at}),
-    )
+    Ok(grant_report(&output.header_file, output.grant_expires_at))
+}
+
+fn grant_report(header_file: impl Serialize, grant_expires_at: impl Serialize) -> Value {
+    json!({"ok":true,"command":"dev grant","headerFile":header_file,"grantExpiresAt":grant_expires_at,"diagnostics":[]})
 }
 
 fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {
@@ -542,31 +584,69 @@ fn clients_file(
 
 fn read_state(root: &Path) -> Result<State> {
     private::check(root, true)?;
-    let bytes = private::read(&root.join("state.json"), MAX_BYTES)?;
-    let state: State = serde_json::from_slice(&bytes)
-        .context("retained dev state is invalid; preserve it for inspection")?;
-    if state.version != 2
-        || state.root() != root
-        || uuid::Uuid::parse_str(&state.owner).is_err()
-        || state.issuer_project.is_some() != state.issuer_owner.is_some()
-        || state
+    let file = root.join("state.json");
+    let bytes = private::read(&file, MAX_BYTES)?;
+    let state = Reader::new(file.display().to_string())
+        .decode::<State>(&bytes, &Expect::one(&DEV_STATE_FORMAT))
+        .map_err(|_| anyhow::anyhow!(INVALID_STATE))?
+        .value;
+    if state.root() != root || !state_rules(&state) {
+        bail!(STATE_OWNERSHIP);
+    }
+    Ok(state)
+}
+
+/// Check a retained session state `caseworkctl check` found in the project
+/// (CFG-CHECK-1): read through the shared reader, then held to the rules that
+/// hold wherever the state is kept. The rule that binds the state to its
+/// session directory is checked when the session reads its own state.
+pub(crate) fn check_state(file: &str, bytes: &[u8]) -> Report {
+    let decoded = match Reader::new(file).decode::<State>(bytes, &Expect::one(&DEV_STATE_FORMAT)) {
+        Ok(decoded) => decoded,
+        Err(refused) => return refused,
+    };
+    let mut report = decoded.document.warnings();
+    if !state_rules(&decoded.value) {
+        report.push(state_refused(&decoded.document));
+    }
+    report
+}
+
+fn state_refused(document: &Document) -> registry_platform_yaml::Diagnostic {
+    document.diagnostic_at_value(
+        Severity::Error,
+        "casework.dev-state.invalid-ownership",
+        "",
+        "the session state names an owner, issuer owner, resource, directory revision, container, or set of ports caseworkctl never writes",
+        "Only caseworkctl writes this file: stop the session's database container, remove .casework/dev, and start again with caseworkctl dev start.",
+    )
+}
+
+/// The rules every session state caseworkctl writes satisfies, wherever it
+/// is read.
+fn state_rules(state: &State) -> bool {
+    uuid::Uuid::parse_str(&state.owner).is_ok()
+        && state.issuer_project.is_some() == state.issuer_owner.is_some()
+        && state
             .issuer_owner
             .as_ref()
-            .is_some_and(|owner| uuid::Uuid::parse_str(owner).is_err())
-        || state
+            .is_none_or(|owner| uuid::Uuid::parse_str(owner).is_ok())
+        && state
             .resource
             .as_ref()
-            .is_some_and(|resource| !registry_platform_httputil::valid_resource_uri(resource))
-        || state.directory_revision < 0
-        || state
+            .is_none_or(|resource| registry_platform_httputil::valid_resource_uri(resource))
+        && state.directory_revision >= 0
+        && state
             .container_id
             .as_ref()
-            .is_some_and(|id| id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()))
-    {
-        bail!("retained dev state ownership is invalid; no resources were changed");
-    }
-    ports(state.casework_port, state.issuer_port, state.database_port)?;
-    Ok(state)
+            .is_none_or(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        && ports(state.casework_port, state.issuer_port, state.database_port).is_ok()
+}
+
+/// Whether retained BREG state carries the header the current `bregctl dev`
+/// writes.
+fn breg_dev_state(owner: &Value) -> bool {
+    owner["apiVersion"] == BREG_DEV_STATE_API_VERSION && owner["kind"] == BREG_DEV_STATE_KIND
 }
 
 /// Read the exact retained BREG owner; a borrowed Casework session never
@@ -583,7 +663,7 @@ fn borrowed_issuer(state: &State) -> Result<Option<PathBuf>> {
     private::check(&root, true)?;
     let owner: Value =
         serde_json::from_slice(&private::read(&root.join("state.json"), MAX_BYTES)?)?;
-    if owner["version"] != 2
+    if !breg_dev_state(&owner)
         || owner["project"] != canonical.to_string_lossy().as_ref()
         || owner["status"] != "ready"
         || !owner["issuerProject"].is_null()
@@ -679,17 +759,26 @@ impl Drop for StartInterruption {
 
 #[cfg(test)]
 fn capture(project: &Path, client_bytes: &[u8]) -> Result<Captured> {
-    capture_with_sources(project, client_bytes, &[], &BTreeMap::new())
+    capture_with_sources(
+        project,
+        "dev-clients.yaml",
+        client_bytes,
+        &[],
+        &BTreeMap::new(),
+    )
 }
 
+/// Read the clients file, named `file` in diagnostics, against the project.
 fn capture_with_sources(
     project: &Path,
+    file: &str,
     client_bytes: &[u8],
     source_args: &[String],
     retained: &BTreeMap<String, SourceSession>,
 ) -> Result<Captured> {
     let policy = crate::project::load_and_check_policy(project)?;
-    let clients = config::clients(client_bytes)?;
+    let decoded = config::read(file, client_bytes)?;
+    let clients = &decoded.value;
     validate_source_mode(
         !policy.task_templates.is_empty(),
         clients.integrations.is_some(),
@@ -701,21 +790,19 @@ fn capture_with_sources(
         .map(|source| source.id.clone())
         .collect::<Vec<_>>();
     let sources;
-    if let Some(integrations) = &clients.integrations {
+    if clients.integrations.is_some() {
         if !source_args.is_empty() {
             bail!("explicit integrations cannot be combined with --source-project");
         }
         sources = BTreeMap::new();
-        integrations.validate(&clients, &policy)?;
-    } else if !policy.task_templates.is_empty() {
-        bail!("source-backed development requires explicit integrations with source bindings and any task authority in the local clients file");
     } else {
         sources = source_projects(&declared, source_args, retained)?;
         if !sources.is_empty() {
             config::require_stable_borrowed_principals(&policy)?;
         }
     }
-    let bound = config::bind(&clients, &policy)?;
+    let bound = config::against(clients, &policy)
+        .map_err(|found| findings_report(&decoded.document, &found))?;
     let reported = bound
         .iter()
         .map(|entry| ReportedClient {
@@ -747,7 +834,7 @@ fn capture_with_sources(
         }
     }
     Ok(Captured {
-        clients,
+        clients: decoded.value,
         digest: config::hex_lower(&hasher.finalize()),
         reported,
         sources,
@@ -1059,7 +1146,7 @@ fn require_active_source_bindings(bregctl: &Path, state: &State) -> Result<()> {
         .context("creating private active-source check directory")?;
     fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o700))?;
     private::check(scratch.path(), true)?;
-    let clients: Clients = serde_json::from_slice(&private::read(
+    let clients = config::retained(&private::read(
         &state.root().join("clients.json"),
         MAX_BYTES,
     )?)?;
@@ -1176,9 +1263,11 @@ fn export_client(
 /// authored registry.yaml. A package names no deployment, so `bregctl dev`
 /// serves it with its registry id as the runtime `identity.instanceId`.
 fn event_source(registry: &Path) -> Result<String> {
-    let authored: Value =
-        serde_norway::from_slice(&bounded(&registry.join("registry.yaml"), "registry.yaml")?)
-            .context("registry.yaml must parse")?;
+    let authored = Reader::new("registry.yaml")
+        .scan(&bounded(&registry.join("registry.yaml"), "registry.yaml")?)
+        .map_err(|report| anyhow::anyhow!("registry.yaml must parse: {report}"))?
+        .context("registry.yaml is empty")?
+        .to_json_value();
     let id = authored["registry"]["id"]
         .as_str()
         .context("registry.yaml declares no registry.id")?;
@@ -1250,6 +1339,7 @@ fn start(args: StartArgs) -> Result<Value> {
         sources,
     } = capture_with_sources(
         &project,
+        &clients_file.display().to_string(),
         &client_bytes,
         &args.source_project,
         retained_sources,
@@ -1331,7 +1421,7 @@ fn start(args: StartArgs) -> Result<Value> {
             private::check(&owner_root, true)?;
             let owner: Value =
                 serde_json::from_slice(&private::read(&owner_root.join("state.json"), MAX_BYTES)?)?;
-            if owner["version"] != 2
+            if !breg_dev_state(&owner)
                 || owner["status"] != "ready"
                 || !owner["issuerProject"].is_null()
                 || owner["project"] != owner_project.to_string_lossy().as_ref()
@@ -1356,7 +1446,8 @@ fn start(args: StartArgs) -> Result<Value> {
             None
         };
         let state = State {
-            version: 2,
+            api_version: DEV_STATE_API_VERSION.to_owned(),
+            kind: DEV_STATE_KIND.to_owned(),
             project: project.clone(),
             owner: uuid::Uuid::new_v4().to_string(),
             status: Status::Stopped,
@@ -1386,7 +1477,7 @@ fn start(args: StartArgs) -> Result<Value> {
             tls_files_copied: false,
             database_ready: false,
             migrated: false,
-            seeded: BTreeSet::new(),
+            seeded: Vec::new(),
             directory_revision: 0,
             directory_teams: 0,
             binaries: BTreeMap::new(),
@@ -1996,8 +2087,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
     if !matches!(state.status, Status::Starting) {
         bail!("supervisor requires a pending owned start");
     }
-    let clients: Clients =
-        serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
+    let clients = config::retained(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
     let mut children = Children::default();
     let mut public_jwks = None;
     let result = (|| {
@@ -3417,9 +3507,16 @@ fn start_failure(cause: Option<&str>, root: &Path) -> anyhow::Error {
 /// `operator.yaml` derives it, because the source bridge writes that file only
 /// after the start has located its prerequisites.
 fn retained_audit(state: &State) -> Result<()> {
-    let audit: registry_casework::AuditConfig =
-        serde_json::from_value(config::operator(state)["audit"].clone())
-            .context("the development operator configuration has no valid audit section")?;
+    // The audit block embeds a platform block, which only the shared reader
+    // reads, so the whole derived document goes through it.
+    let operator = serde_norway::to_string(&config::operator(state))?;
+    let audit = registry_casework::RuntimeConfig::loader()
+        .parse_str::<registry_casework::RuntimeConfig>(&operator, |_| None)
+        .context(
+            "the development operator configuration is not a valid Casework runtime configuration",
+        )?
+        .config
+        .audit;
     let service = audit.destination()?;
     let operator = service.for_process("caseworkctl")?;
     for destination in [service, operator] {
@@ -4157,8 +4254,7 @@ fn token(state: &State, id: &str, terminate: &AtomicBool) -> Result<()> {
     use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
     ensure_active(terminate)?;
     let root = state.root();
-    let clients: Clients =
-        serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
+    let clients = config::retained(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
     let (resource, scopes) = clients
         .clients
         .iter()
@@ -4355,6 +4451,13 @@ fn ready_with_probe(
     }
 }
 
+/// Record a seeded directory team once.
+fn record_seeded(seeded: &mut Vec<String>, team: &str) {
+    if !seeded.iter().any(|recorded| recorded == team) {
+        seeded.push(team.to_owned());
+    }
+}
+
 /// Seed the directory so `caseworkctl doctor` reports ready and a person can
 /// open the inbox. One authored team per declared queue, created as the
 /// Administrator the clients file binds. A team that already serves its queue
@@ -4402,7 +4505,7 @@ fn seed(state: &mut State, clients: &Clients, terminate: &AtomicBool) -> Result<
             })
         });
         if serving {
-            state.seeded.insert(team.team.clone());
+            record_seeded(&mut state.seeded, &team.team);
             continue;
         }
         let revision = directory["revision"]
@@ -4438,7 +4541,7 @@ fn seed(state: &mut State, clients: &Clients, terminate: &AtomicBool) -> Result<
             bail!("the local Casework directory refused team {} for queue {} (HTTP {status}); inspect the clients file and private logs", team.team, team.queue);
         }
         directory = body;
-        state.seeded.insert(team.team.clone());
+        record_seeded(&mut state.seeded, &team.team);
         state.save()?;
     }
     state.directory_revision = directory["revision"].as_i64().unwrap_or_default();

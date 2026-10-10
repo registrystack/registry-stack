@@ -90,6 +90,21 @@
       "reason": "Manifest profile identifiers in fixtures are not Registry Stack resolver contracts."
     },
     {
+      "glob": "products/platform/config-conventions-exceptions.yaml",
+      "classification": "planned-resolution",
+      "reason": "Exception resolutions name the identifier a deviation moves to; the change that applies a resolution publishes its identifier and deletes the entry."
+    },
+    {
+      "glob": "products/platform/scripts/test_check_config_conventions.py",
+      "classification": "fixture",
+      "reason": "Convention lint tests build throwaway schemas whose identifiers are test inputs, not Registry Stack resolver contracts."
+    },
+    {
+      "glob": "products/platform/scripts/test_run_config_conformance.py",
+      "classification": "fixture",
+      "reason": "Conformance runner tests build throwaway schemas whose identifiers are test inputs, not Registry Stack resolver contracts."
+    },
+    {
       "glob": "release/*.schema.json",
       "classification": "retired-product",
       "reason": "RegistryReleaseLockV1 identifiers belong to retired registryctl release tooling."
@@ -132,12 +147,99 @@
       "description": "Base Registry Engine runtime configuration JSON Schema."
     },
     {
+      "glob": "products/breg/generated/mcp-runtime/*.schema.json",
+      "sourcePath": "crates/registry-breg-mcp/src/schema.rs",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Base Registry Engine citizen MCP gateway runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/breg/generated/review-runtime/*.schema.json",
+      "sourcePath": "crates/registry-breg-review/src/schema.rs",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Base Registry Engine citizen review page runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/breg/generated/tools/*.v1.schema.json",
+      "sourcePath": "crates/registry-bregctl/src/tool_schema.rs",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Base Registry Engine tool-file JSON Schemas at version v1."
+    },
+    {
+      "glob": "products/breg/generated/tools/*.v1alpha1.schema.json",
+      "sourcePath": "crates/registry-bregctl/src/tool_schema.rs",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1."
+    },
+    {
+      "glob": "products/breg/contracts/explain/*.schema.json",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha4",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
+    },
+    {
       "glob": "products/casework/generated/runtime/*.schema.json",
       "sourcePath": "crates/registry-casework/src/schema.rs",
       "owner": "casework",
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Registry Casework runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/casework/generated/project/*.schema.json",
+      "sourcePath": "crates/registry-casework-core/src/schema.rs",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Casework project JSON Schema."
+    },
+    {
+      "glob": "products/casework/generated/fixture/*.schema.json",
+      "sourcePath": "crates/registry-casework-core/src/schema.rs",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Casework fixture JSON Schema."
+    },
+    {
+      "glob": "products/casework/generated/simulation/*.schema.json",
+      "sourcePath": "crates/registry-casework-core/src/schema.rs",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Casework simulation JSON Schema."
+    },
+    {
+      "glob": "products/casework/generated/holiday-set/*.schema.json",
+      "sourcePath": "crates/registry-casework-core/src/schema.rs",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Casework holiday set JSON Schema."
+    },
+    {
+      "glob": "products/casework/generated/dev-clients/*.schema.json",
+      "sourcePath": "crates/registry-caseworkctl/src/schema.rs",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Casework development clients JSON Schema."
+    },
+    {
+      "glob": "products/casework/contracts/cli/*.schema.json",
+      "sourcePath": "products/casework/scripts/generate_cli_schemas.py",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test."
     },
     {
       "glob": "products/scheduling/generated/runtime/*.schema.json",
@@ -148,12 +250,130 @@
       "description": "Registry Scheduling runtime configuration JSON Schema."
     },
     {
+      "glob": "products/scheduling/generated/project/*.schema.json",
+      "sourcePath": "crates/registry-scheduling-core/src/schema.rs",
+      "owner": "scheduling",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Scheduling project JSON Schema."
+    },
+    {
+      "glob": "products/scheduling/generated/records/*.schema.json",
+      "sourcePath": "crates/registry-scheduling-core/src/schema.rs",
+      "owner": "scheduling",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Scheduling records JSON Schema."
+    },
+    {
+      "glob": "products/scheduling/generated/fixture/*.schema.json",
+      "sourcePath": "crates/registry-scheduling-core/src/schema.rs",
+      "owner": "scheduling",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Scheduling fixture JSON Schema."
+    },
+    {
+      "glob": "products/messaging/generated/authoring/*.schema.json",
+      "sourcePath": "crates/registry-messaging/src/schema.rs",
+      "owner": "messaging",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema."
+    },
+    {
       "glob": "products/messaging/generated/runtime/*.schema.json",
       "sourcePath": "crates/registry-messaging/src/schema.rs",
       "owner": "messaging",
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Registry Messaging runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/discovery/schemas/*.schema.json",
+      "owner": "discovery",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Discovery authoring, runtime configuration, and index JSON Schema."
+    },
+    {
+      "glob": "products/render/schemas/*.schema.json",
+      "sourcePath": "crates/registry-render/src/schema.rs",
+      "owner": "render",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/manifest/schemas/*.schema.json",
+      "sourcePath": "crates/registry-manifest-cli/src/schema.rs",
+      "owner": "registry-manifest",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Registry Manifest metadata manifest and profile descriptor JSON Schema."
+    },
+    {
+      "glob": "products/platform/schemas/*.schema.json",
+      "sourcePath": "crates/registry-thunderid-tooling/src/schema.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Stack task connection JSON Schema."
+    },
+    {
+      "glob": "products/evidence/generated/oid4vci-runtime/*.schema.json",
+      "sourcePath": "crates/registry-evidence-oid4vci/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Evidence OID4VCI delivery runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/evidence/generated/client-profile/*.schema.json",
+      "sourcePath": "crates/registry-evidence-client/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Evidence relying-party client profile JSON Schema."
+    },
+    {
+      "glob": "products/evidence/generated/client-contracts/*.schema.json",
+      "sourcePath": "crates/registry-evidence-client/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Reviewed Evidence client contracts JSON Schema."
+    },
+    {
+      "glob": "crates/registry-evidencectl/schemas/authoring/*.schema.json",
+      "sourcePath": "crates/registry-evidence-authoring/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Evidence authoring project marker and question JSON Schema."
+    },
+    {
+      "glob": "products/evidence/generated/codelist/*.schema.json",
+      "sourcePath": "crates/registry-evidence/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Evidence code list JSON Schema."
+    },
+    {
+      "glob": "products/evidence/generated/fixture/*.schema.json",
+      "sourcePath": "crates/registry-evidence/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Evidence fixture JSON Schema."
+    },
+    {
+      "glob": "products/evidence/contracts/*.schema.yaml",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML."
     }
   ],
   "records": [

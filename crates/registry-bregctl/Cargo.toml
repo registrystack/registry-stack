@@ -13,6 +13,10 @@ readme = "README.md"
 name = "bregctl"
 path = "src/main.rs"
 
+[[test]]
+name = "tool_schema"
+required-features = ["schema"]
+
 [lints]
 workspace = true
 
@@ -21,6 +25,14 @@ default = ["wasm"]
 # Forwarded so a `wasm`-feature build of the compiler can also run through
 # bregctl; bregctl itself adds no WASM surface of its own.
 wasm = ["registry-breg/wasm"]
+# Derives the JSON Schemas of the tool files bregctl reads, for the
+# `tool-schema` generator and its drift check.
+schema = [
+    "dep:schemars",
+    "registry-breg/schema",
+    "registry-platform-config/schema",
+    "registry-platform-yaml/schema",
+]
 
 [dependencies]
 anstream.workspace = true
@@ -38,6 +50,7 @@ p256.workspace = true
 rcgen.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true
+registry-platform-yaml.workspace = true
 registry-platform-hooks.workspace = true
 registry-platform-httputil.workspace = true
 registry-thunderid-tooling.workspace = true
@@ -50,6 +63,7 @@ registry-linkml.workspace = true
 registry-manifest-core.workspace = true
 reqwest.workspace = true
 rustix.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true

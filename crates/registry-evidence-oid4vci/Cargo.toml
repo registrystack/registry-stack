@@ -15,6 +15,13 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[features]
+schema = [
+  "dep:schemars",
+  "registry-platform-config/schema",
+  "registry-platform-yaml/schema",
+]
+
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
@@ -26,14 +33,15 @@ jsonwebtoken.workspace = true
 registry-evidence-client.workspace = true
 registry-evidence-verifier.workspace = true
 registry-platform-buildinfo.workspace = true
+registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-sdjwt.workspace = true
-rustix.workspace = true
+registry-platform-yaml.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
-serde_norway.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -45,6 +53,7 @@ zeroize.workspace = true
 [dev-dependencies]
 axum-test.workspace = true
 ed25519-dalek.workspace = true
+jsonschema.workspace = true
 p256.workspace = true
 registry-thunderid-tooling.workspace = true
 reqwest.workspace = true

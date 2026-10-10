@@ -1,34 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The authoring form's own checks, reported at the field each one names.
+//! The authoring form's own checks, reported where the command line reports them.
 //!
 //! Nothing here decides whether a marker, question, or access policy is well formed.
-//! `registry-evidence-authoring` holds those judgements, and this module translates its
-//! position-free [`Finding`](registry_evidence_authoring::finding::Finding) into a place in the
-//! text. An editor that restated those rules would be a second implementation of the authoring
+//! `registry-evidence-authoring` holds those judgements and reads each document through the shared
+//! Registry Stack reader, which places every diagnostic at a line and column. This module only
+//! translates that position into the protocol's UTF-16 range. An editor that restated those rules,
+//! or placed their findings by a walk of its own, would be a second implementation of the authoring
 //! form, and the first day the two disagreed the author would believe the wrong one.
 
 use std::path::Path;
 
 use registry_evidence_authoring::{
-    finding::{FieldPath, FieldStep},
+    formats::{check_access_policy, check_question},
     model::{AccessPolicy, Question},
     parse_project_marker,
-    validate::{validate_access_policy, validate_question},
 };
+use registry_platform_yaml::{Decoded, Diagnostic, Report, Severity};
 use tower_lsp_server::ls_types::{DiagnosticSeverity, Position, Range};
 
 use crate::{
     refs::{bounded_message, IndexedDiagnostic, DOCUMENT_START},
-    yaml::{ParsedDocument, YamlPair, YamlValue},
+    yaml::{ParsedDocument, SourceMap, YamlValue},
 };
 
 /// What one reading of a question document found.
 ///
-/// `validated` is the question itself, and it is `Some` only when `diagnostics` is empty. That is
-/// the condition `registry-evidencectl` compiles under: `compile_question_plan`
-/// (`crates/registry-evidencectl/src/authoring.rs:989`) writes
-/// `.expect("inline source was validated")`, so every cross-file check the compiler performs runs on
-/// a question the form has already accepted. A caller that reads the two fields as the compiler does
+/// `validated` is the question itself, and it is `Some` only when the reading found no error. That
+/// is the condition `registry-evidencectl` compiles under: its compile step expects every inline
+/// source to be validated already, so every cross-file check the compiler performs runs on a
+/// question the form has already accepted. A caller that reads the two fields as the compiler does
 /// says nothing about the operation, the selectors, or the facts of a question that is malformed,
 /// which is where the author is already being told what to fix.
 pub(crate) struct QuestionReading {
@@ -42,357 +42,345 @@ pub(crate) struct AccessPolicyReading {
     pub(crate) validated: Option<AccessPolicy>,
 }
 
-/// Validate a present project marker before any dependent document is walked.
+/// Read a present project marker before any dependent document is walked.
 pub(crate) fn read_project_marker(
     path: &Path,
     source: &str,
     document: &ParsedDocument,
 ) -> Vec<IndexedDiagnostic> {
-    parse_project_marker(source.as_bytes())
-        .err()
-        .map(|finding| finding_diagnostic(path, document, finding))
-        .into_iter()
-        .collect()
+    let (diagnostics, _) = reading(
+        path,
+        source,
+        document,
+        parse_project_marker(&path.to_string_lossy(), source.as_bytes()),
+    );
+    diagnostics
 }
 
-/// Read one access policy with the same closed model and intrinsic checks as the compiler.
+/// Read one access policy with the same reader and intrinsic checks as the compiler.
 pub(crate) fn read_access_policy(
     path: &Path,
     source: &str,
     document: &ParsedDocument,
 ) -> AccessPolicyReading {
-    let policy = match serde_norway::from_str::<AccessPolicy>(source) {
-        Ok(policy) => policy,
-        Err(error) => {
-            return AccessPolicyReading {
-                diagnostics: vec![IndexedDiagnostic {
-                    path: path.to_path_buf(),
-                    range: deserializer_range(source, &error),
-                    severity: DiagnosticSeverity::ERROR,
-                    code: Some("evidence/access-policy-shape".to_owned()),
-                    message: format!(
-                        "This is not the shape of an access policy: {}",
-                        bounded_message(&error.to_string())
-                    ),
-                }],
-                validated: None,
-            };
-        }
-    };
-    let diagnostics = validate_access_policy(&policy)
-        .into_iter()
-        .map(|finding| finding_diagnostic(path, document, finding))
-        .collect::<Vec<_>>();
+    let (diagnostics, validated) = reading(
+        path,
+        source,
+        document,
+        check_access_policy(&path.to_string_lossy(), source.as_bytes()),
+    );
     AccessPolicyReading {
-        validated: diagnostics.is_empty().then_some(policy),
         diagnostics,
+        validated,
     }
 }
 
-/// Every way one question departs from the authoring form, at the field that holds each departure,
-/// and the question itself when it departs from it nowhere.
-///
-/// A question the deserializer cannot read is reported once and not validated: the checks take a
-/// `Question`, and a document that is not one has a single problem worth saying out loud.
+/// Every way one question departs from the authoring form, at the place the command line reports
+/// each departure, and the question itself when it departs from it nowhere.
 pub(crate) fn read_question(
     path: &Path,
     source: &str,
     document: &ParsedDocument,
 ) -> QuestionReading {
-    let question = match serde_norway::from_str::<Question>(source) {
-        Ok(question) => question,
-        Err(error) => {
-            return QuestionReading {
-                diagnostics: vec![IndexedDiagnostic {
-                    path: path.to_path_buf(),
-                    range: deserializer_range(source, &error),
-                    severity: DiagnosticSeverity::ERROR,
-                    code: Some("evidence/question-shape".to_owned()),
-                    message: format!(
-                        "This is not the shape of a question: {}",
-                        bounded_message(&error.to_string())
-                    ),
-                }],
-                validated: None,
-            }
-        }
-    };
-
-    let diagnostics = validate_question(&question)
-        .into_iter()
-        .map(|finding| finding_diagnostic(path, document, finding))
-        .collect::<Vec<_>>();
-
+    let (diagnostics, validated) = reading(
+        path,
+        source,
+        document,
+        check_question(&path.to_string_lossy(), source.as_bytes()),
+    );
     QuestionReading {
-        validated: diagnostics.is_empty().then_some(question),
         diagnostics,
+        validated,
     }
 }
 
-fn finding_diagnostic(
+/// The diagnostics one reading produced, and the value it decoded when it found no error. A
+/// document the reader accepts may still carry warnings, and those are reported beside the value.
+fn reading<T>(
     path: &Path,
+    source: &str,
     document: &ParsedDocument,
-    finding: registry_evidence_authoring::Finding,
-) -> IndexedDiagnostic {
-    IndexedDiagnostic {
-        path: path.to_path_buf(),
-        range: range_at_field_path(document, &finding.field).unwrap_or(DOCUMENT_START),
-        severity: DiagnosticSeverity::ERROR,
-        code: Some(format!("evidence/{}", finding.code)),
-        // The sentence is the authoring library's, so the editor and the compiler say the same
-        // thing about the same document. Bound it because some findings quote authored names.
-        message: bounded_message(&finding.message),
+    read: Result<Decoded<T>, Report>,
+) -> (Vec<IndexedDiagnostic>, Option<T>) {
+    match read {
+        Ok(decoded) => (
+            reader_diagnostics(
+                path,
+                source,
+                document,
+                decoded.document.warnings().diagnostics(),
+            ),
+            Some(decoded.value),
+        ),
+        Err(report) => (
+            reader_diagnostics(path, source, document, report.diagnostics()),
+            None,
+        ),
     }
 }
 
-/// Where in a document a field path points, as far as the document goes.
-///
-/// The walk stops at the first step the document does not have and answers with the deepest place
-/// it did reach, because a check often names a field that is missing: "requires schema" points at a
-/// `schema` that is not written yet, and the author needs to be shown the answer it belongs to
-/// rather than the top of the file. `None` means the document holds nothing the walk could stop on,
-/// and the caller reports against the document itself.
-pub(crate) fn range_at_field_path(document: &ParsedDocument, field: &FieldPath) -> Option<Range> {
-    let mut value = &document.value;
-    let mut anchor = None;
-    for step in field.steps() {
-        let entry = match step {
-            FieldStep::Key(name) => entry_at(value, name),
-            FieldStep::MapKey(name) => entry_at(value, name.as_str()),
-            FieldStep::Index(position) => {
-                let Some(element) = value
-                    .as_sequence()
-                    .and_then(|elements| elements.get(*position))
-                else {
-                    break;
-                };
-                anchor = leading_range(element).or(anchor);
-                value = element;
-                continue;
-            }
-        };
-        let Some(entry) = entry else {
-            break;
-        };
-        anchor = Some(entry.key.range);
-        value = &entry.value;
-    }
-
-    value.as_scalar().map(|scalar| scalar.range).or(anchor)
-}
-
-fn entry_at<'a>(value: &'a YamlValue, name: &str) -> Option<&'a YamlPair> {
-    value
-        .as_mapping()?
+/// The shared reader's diagnostics as the editor shows them: the same code and the same sentence,
+/// at the same line and column, counted in UTF-16 code units.
+pub(crate) fn reader_diagnostics(
+    path: &Path,
+    source: &str,
+    document: &ParsedDocument,
+    diagnostics: &[Diagnostic],
+) -> Vec<IndexedDiagnostic> {
+    let source_map = SourceMap::new(source);
+    diagnostics
         .iter()
-        .find(|entry| entry.key.value == name)
+        .map(|diagnostic| IndexedDiagnostic {
+            path: path.to_path_buf(),
+            range: reader_range(source, &source_map, document, diagnostic),
+            severity: match diagnostic.severity {
+                Severity::Error => DiagnosticSeverity::ERROR,
+                Severity::Warning => DiagnosticSeverity::WARNING,
+            },
+            code: Some(diagnostic.code.clone()),
+            // The sentence is the reader's or the authoring library's, so the editor and the
+            // compiler say the same thing about the same document.
+            message: bounded_message(&diagnostic.message),
+        })
+        .collect()
 }
 
-/// Where a value starts, for the values that begin with something the parser gave a position to.
-/// A mapping is anchored at its first key, which is the first line an author sees of it; a sequence
-/// and an unrecovered value have no position of their own.
-fn leading_range(value: &YamlValue) -> Option<Range> {
-    match value {
-        YamlValue::Scalar(scalar) => Some(scalar.range),
-        YamlValue::Mapping(entries) => entries.first().map(|entry| entry.key.range),
-        YamlValue::Sequence(_) | YamlValue::Other => None,
-    }
-}
-
-/// The line a deserializer stopped reading on, underlined whole.
+/// Where a reader diagnostic points, as a protocol range.
 ///
-/// The deserializer reports a line and a column, and only the line is used: its column counts what
-/// libyaml counted, and the protocol wants UTF-16 code units into the line. Underlining the line the
-/// author has to change is the honest part of that answer.
-fn deserializer_range(source: &str, error: &serde_norway::Error) -> Range {
-    let Some(line) = error
-        .location()
-        .and_then(|location| location.line().checked_sub(1))
-        .and_then(|line| u32::try_from(line).ok())
+/// The reader counts a column in Unicode scalar values and does not count a leading byte-order
+/// mark; the protocol counts UTF-16 code units of the text the editor holds. The range starts at
+/// that place and, when a scalar the editor indexed starts there, ends where that scalar ends, so a
+/// value is underlined whole. A diagnostic about the file as a whole is placed at its start.
+fn reader_range(
+    source: &str,
+    source_map: &SourceMap<'_>,
+    document: &ParsedDocument,
+    diagnostic: &Diagnostic,
+) -> Range {
+    let Some((line, column)) = diagnostic
+        .source
+        .as_ref()
+        .and_then(|place| Some((place.line?, place.column?)))
     else {
         return DOCUMENT_START;
     };
-    let width = source
-        .lines()
-        .nth(line as usize)
-        .map_or(0, |text| text.encode_utf16().count());
-    let Ok(width) = u32::try_from(width) else {
+    let Some(byte) = byte_offset(source, line, column) else {
         return DOCUMENT_START;
     };
-    Range::new(Position::new(line, 0), Position::new(line, width))
+    let start = source_map.position(byte);
+    let end = scalar_end_at(&document.value, start).unwrap_or(start);
+    Range::new(start, end)
+}
+
+/// The byte offset of a 1-based line and a 1-based column counted in Unicode scalar values, with a
+/// leading byte-order mark skipped the way the reader skips it.
+fn byte_offset(source: &str, line: usize, column: usize) -> Option<usize> {
+    let mut line_start = 0;
+    for _ in 1..line {
+        line_start += source.get(line_start..)?.find('\n')? + 1;
+    }
+    if line == 1 && source.starts_with('\u{feff}') {
+        line_start = '\u{feff}'.len_utf8();
+    }
+    let text = source.get(line_start..)?;
+    let within = text
+        .char_indices()
+        .nth(column.checked_sub(1)?)
+        .map_or(text.len(), |(offset, _)| offset);
+    Some(line_start + within)
+}
+
+/// The end of the key or scalar value the editor indexed at `start`. A quoted scalar's range starts
+/// after its opening quote, one code unit past where the reader places it.
+fn scalar_end_at(value: &YamlValue, start: Position) -> Option<Position> {
+    let starts_here = |range: Range| {
+        range.start == start
+            || (range.start.line == start.line && range.start.character == start.character + 1)
+    };
+    match value {
+        YamlValue::Scalar(scalar) => starts_here(scalar.range).then_some(scalar.range.end),
+        YamlValue::Mapping(entries) => entries.iter().find_map(|entry| {
+            if starts_here(entry.key.range) {
+                Some(entry.key.range.end)
+            } else {
+                scalar_end_at(&entry.value, start)
+            }
+        }),
+        YamlValue::Sequence(items) => items.iter().find_map(|item| scalar_end_at(item, start)),
+        YamlValue::Other => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use registry_evidence_authoring::formats::check_question;
+
     use super::*;
     use crate::yaml::parse_yaml;
 
-    const QUESTION: &str = "id: adult-status\n\
+    const ENVELOPE: &str = "apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\n\
+                            kind: EvidenceQuestion\n";
+
+    const ACCEPTED: &str = "id: adult-status\n\
+                            question: Is the person an adult?\n\
+                            purpose: age-gating\n\
+                            subject: {role: person, selector: person_id}\n\
+                            source:\n  \
+                            operation: readPerson\n  \
+                            facts:\n    \
+                            - {name: born, path: /date_of_birth, combine: exactly-one}\n\
                             answers:\n  \
                             - concept: is_adult\n    \
                             type: boolean\n\
-                            governance:\n  \
-                            fixtures: fixtures/adult-status.yaml\n";
+                            derivation: derivations/adult-status.rhai\n\
+                            disclosure: {allow: [is_adult]}\n";
 
-    fn position_at(document: &ParsedDocument, field: FieldPath) -> Option<(u32, u32)> {
-        range_at_field_path(document, &field).map(|range| (range.start.line, range.start.character))
+    fn question(body: &str) -> String {
+        format!("{ENVELOPE}{body}")
     }
 
-    #[test]
-    fn a_path_reaches_the_scalar_it_names() {
-        let document = parse_yaml(QUESTION).unwrap();
-
-        assert_eq!(
-            position_at(&document, FieldPath::root().key("id")),
-            Some((0, 4))
-        );
-        assert_eq!(
-            position_at(
-                &document,
-                FieldPath::root().key("answers").index(0).key("concept")
-            ),
-            Some((2, 13))
-        );
-        assert_eq!(
-            position_at(
-                &document,
-                FieldPath::root().key("governance").key("fixtures")
-            ),
-            Some((5, 12))
-        );
-    }
-
-    #[test]
-    fn a_path_through_a_mapping_key_the_author_chose_reaches_its_value() {
-        let document = parse_yaml("projection:\n  /records: collect\n").unwrap();
-
-        assert_eq!(
-            position_at(
-                &document,
-                FieldPath::root().key("projection").map_key("/records")
-            ),
-            Some((1, 12))
-        );
-    }
-
-    #[test]
-    fn a_path_to_a_field_the_document_does_not_have_stops_at_the_deepest_field_it_does() {
-        let document = parse_yaml(QUESTION).unwrap();
-
-        // The check that asks for a schema names a field the author has not written, so the answer
-        // it belongs to is the closest the document can get.
-        assert_eq!(
-            position_at(
-                &document,
-                FieldPath::root().key("answers").index(0).key("schema")
-            ),
-            Some((2, 4)),
-        );
-        // A sequence position that is not there stops at the sequence's own key.
-        assert_eq!(
-            position_at(&document, FieldPath::root().key("answers").index(7)),
-            Some((1, 0)),
-        );
-    }
-
-    #[test]
-    fn a_path_into_a_document_that_holds_nothing_resolves_nowhere() {
-        let document = parse_yaml("# a question the author has not started writing\n").unwrap();
-
-        assert_eq!(position_at(&document, FieldPath::root().key("id")), None);
-        assert_eq!(position_at(&document, FieldPath::root()), None);
-    }
-
-    /// A document that is one scalar holds no field to point at, so the walk stops on the text that
-    /// is there. It is the deepest, and only, place the path reached.
-    #[test]
-    fn a_path_into_a_document_that_is_not_a_mapping_stops_on_what_is_written() {
-        let document = parse_yaml("a scalar document\n").unwrap();
-
-        assert_eq!(
-            position_at(&document, FieldPath::root().key("id")),
-            Some((0, 0))
-        );
-    }
-
-    #[test]
-    fn a_path_into_a_document_that_stops_parsing_reaches_what_parsed() {
-        let document = parse_yaml("id: adult-status\npurpose: [unclosed\n").unwrap();
-        assert!(
-            document.syntax_error.is_some(),
-            "the fixture must not parse cleanly"
-        );
-
-        assert_eq!(
-            position_at(&document, FieldPath::root().key("id")),
-            Some((0, 4))
-        );
-    }
-
-    #[test]
-    fn a_question_the_deserializer_cannot_read_is_reported_on_the_line_it_stopped_at() {
-        let source = "id: adult-status\nquestion: [1, 2]\n";
-
-        let reading = read_question(
+    fn read(source: &str) -> QuestionReading {
+        read_question(
             Path::new("/questions/adult-status.yaml"),
             source,
             &parse_yaml(source).unwrap(),
-        );
+        )
+    }
 
-        let diagnostics = reading.diagnostics;
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(
-            diagnostics[0].code.as_deref(),
-            Some("evidence/question-shape")
-        );
-        assert_eq!(diagnostics[0].range.start.line, 1);
-        assert!(
-            diagnostics[0]
-                .message
-                .starts_with("This is not the shape of a question: "),
-            "{}",
-            diagnostics[0].message
-        );
+    /// The editor and the command line read the same document through the same reader, so they
+    /// report the same code and sentence at the same line and column.
+    #[test]
+    fn a_question_the_reader_refuses_is_reported_where_the_command_line_reports_it() {
+        let source =
+            question(&ACCEPTED.replace("question: Is the person an adult?", "question: [1, 2]"));
+
+        let reading = read(&source);
+
+        let report = check_question("questions/adult-status.yaml", source.as_bytes())
+            .expect_err("the command line refuses the question");
+        let expected = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                let place = diagnostic.source.as_ref().unwrap();
+                (
+                    Some(diagnostic.code.clone()),
+                    diagnostic.message.clone(),
+                    u32::try_from(place.line.unwrap() - 1).unwrap(),
+                    u32::try_from(place.column.unwrap() - 1).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let reported = reading
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.code.clone(),
+                    diagnostic.message.clone(),
+                    diagnostic.range.start.line,
+                    diagnostic.range.start.character,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reported, expected);
+        assert_eq!(reported[0].2, 3, "{reported:?}");
         assert!(
             reading.validated.is_none(),
             "a document that is not a question hands nothing on"
         );
     }
 
-    /// The other half of the reading: a question the form accepts is handed on, and one it does not
-    /// is not, so the checks that read it against the project's description run on exactly the
-    /// questions the compiler would compile.
+    /// The reader counts Unicode scalar values and the protocol counts UTF-16 code units, so a
+    /// character outside the Basic Multilingual Plane earlier on the line moves the column by two.
+    #[test]
+    fn a_column_after_a_wide_character_is_counted_in_utf16_code_units() {
+        let source = question(&ACCEPTED.replace(
+            "subject: {role: person, selector: person_id}",
+            "subject: {role: \u{1f600}, selektor: person_id}",
+        ));
+
+        let reading = read(&source);
+
+        let unknown = reading
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code.as_deref() == Some("config.unknown-key"))
+            .expect("the misspelled key is reported");
+        // `subject: {role: ` is 16 code units, the emoji two more, and `, ` two more.
+        assert_eq!(unknown.range.start, Position::new(5, 20));
+        assert_eq!(
+            unknown.range.end,
+            Position::new(5, 28),
+            "the key is underlined whole"
+        );
+    }
+
+    /// A question the form accepts is handed on, and one it does not is not, so the checks that
+    /// read it against the project's description run on exactly the questions the compiler would
+    /// compile.
     #[test]
     fn only_a_question_the_form_accepts_is_handed_on() {
-        let accepted = "id: adult-status\n\
-                        question: Is the person an adult?\n\
-                        purpose: age-gating\n\
-                        subject: {role: person, selector: person_id}\n\
-                        source:\n  \
-                        operation: readPerson\n  \
-                        facts:\n    \
-                        - {name: born, path: /date_of_birth, combine: exactly-one}\n\
-                        answers:\n  \
-                        - concept: is_adult\n    \
-                        type: boolean\n\
-                        derivation: derivations/adult-status.rhai\n\
-                        disclosure: {allow: [is_adult]}\n";
+        let accepted = question(ACCEPTED);
         let refused = accepted.replace("operation: readPerson", "operation: ''");
 
-        let path = Path::new("/questions/adult-status.yaml");
-        let reading = read_question(path, accepted, &parse_yaml(accepted).unwrap());
+        let reading = read(&accepted);
         assert!(reading.diagnostics.is_empty(), "{:?}", reading.diagnostics);
         assert!(reading.validated.is_some());
 
-        let reading = read_question(path, &refused, &parse_yaml(&refused).unwrap());
+        let reading = read(&refused);
         assert_eq!(
             reading
                 .diagnostics
                 .iter()
                 .map(|diagnostic| diagnostic.code.as_deref())
                 .collect::<Vec<_>>(),
-            vec![Some("evidence/operation-identifier")]
+            vec![Some("evidence.question.operation-identifier")]
         );
+        assert_eq!(reading.diagnostics[0].range.start, Position::new(7, 13));
         assert!(reading.validated.is_none());
+    }
+
+    /// An authored file is not expanded, and the editor says so where the command line does.
+    #[test]
+    fn an_environment_expression_is_refused_at_the_value_that_holds_it() {
+        let source =
+            question(&ACCEPTED.replace("operation: readPerson", "operation: ${OPERATION}"));
+
+        let reading = read(&source);
+
+        assert_eq!(
+            reading
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.code.as_deref(), diagnostic.range.start))
+                .collect::<Vec<_>>(),
+            vec![(
+                Some("config.substitution-not-allowed"),
+                Position::new(7, 13)
+            )]
+        );
+    }
+
+    #[test]
+    fn a_marker_without_its_envelope_is_reported_with_the_reader_s_codes() {
+        let source = "version: 1\nproject: evidence-authoring\n";
+        let diagnostics = read_project_marker(
+            Path::new("/evidence-project.yaml"),
+            source,
+            &parse_yaml(source).unwrap(),
+        );
+        let codes = diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.code.as_deref())
+            .collect::<Vec<_>>();
+        assert!(codes.contains(&"config.missing-envelope"), "{codes:?}");
+    }
+
+    #[test]
+    fn a_leading_byte_order_mark_is_skipped_the_way_the_reader_skips_it() {
+        assert_eq!(byte_offset("\u{feff}id: x\n", 1, 5), Some(7));
+        assert_eq!(byte_offset("id: x\nkind: y\n", 2, 7), Some(12));
+        assert_eq!(byte_offset("id: x\n", 3, 1), None);
     }
 }

@@ -1,31 +1,21 @@
 {
-  "$defs": {
-    "ProjectKind": {
-      "description": "The one kind of project this crate's marker names today.",
-      "enum": [
-        "evidence-authoring"
-      ],
+  "$id": "https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The marker document a project root carries: its envelope and no other\nmember. An unknown member is a rejection, the same rule the rest of the\nauthoring form holds to.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/authoring-project/v1alpha1",
+      "type": "string"
+    },
+    "kind": {
+      "const": "EvidenceAuthoringProject",
       "type": "string"
     }
   },
-  "$id": "https://registrystack.example/schemas/evidence-authoring/project-marker.v1.json",
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
-  "description": "The marker document a project root carries: nothing but its format\nversion and the kind of project it names. An unknown field is a\nrejection, the same rule the rest of the authoring form holds to.",
-  "properties": {
-    "project": {
-      "$ref": "#/$defs/ProjectKind"
-    },
-    "version": {
-      "format": "uint8",
-      "maximum": 255,
-      "minimum": 0,
-      "type": "integer"
-    }
-  },
   "required": [
-    "version",
-    "project"
+    "apiVersion",
+    "kind"
   ],
   "title": "Evidence authoring project marker",
   "type": "object"

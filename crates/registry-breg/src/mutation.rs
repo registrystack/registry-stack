@@ -3840,7 +3840,6 @@ fn validate_request(
     let submitted_fields = request.body.submitted_fields()?;
     if request.claims.entity_id() != request.plan.entity.id
         || request.claims.principal().is_none()
-        || profile.anonymous
         || request.plan.route.id.is_empty()
         || request.plan.route.id.len() > MAX_LOGICAL_ID_BYTES
         || request.plan.entity.id.is_empty()
@@ -3947,14 +3946,12 @@ fn admit_submitted_names(
     body: &MutationBody,
 ) -> Result<(), MutationError> {
     // A request refused for who is asking, not for what it sent, is refused
-    // unlocated by `validate_request`: a profile without an entry, an
-    // anonymous profile, a missing principal, or a route that does not serve
-    // the profile.
+    // unlocated by `validate_request`: a profile without an entry, a missing
+    // principal, or a route that does not serve the profile.
     let Some(profile) = plan.entity.access_profiles.get(claims.access_profile()) else {
         return Ok(());
     };
-    if profile.anonymous
-        || claims.principal().is_none()
+    if claims.principal().is_none()
         || claims.entity_id() != plan.entity.id
         || !plan
             .route
@@ -4091,7 +4088,6 @@ fn validate_batch_request(
         || request.plan.route.method != HttpMethod::Post
         || request.claims.entity_id() != request.plan.entity.id
         || request.claims.principal().is_none()
-        || profile.anonymous
         || !profile.operations.contains(&request.plan.route.operation)
         || !request
             .plan

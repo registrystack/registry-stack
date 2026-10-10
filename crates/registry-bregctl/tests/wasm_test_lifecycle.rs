@@ -40,7 +40,7 @@ fn public_bregctl_test_executes_fixed_output_wasm_and_emits_receipt() {
     assert_eq!(stdout["command"], "test");
     assert_eq!(stdout["successfulJourneyIds"], json!([JOURNEY_ID]));
     let receipt = receipt.expect("the successful schema test publishes its receipt");
-    assert_eq!(receipt["kind"], "SchemaTestReceipt");
+    assert_eq!(receipt["kind"], "BRegSchemaTestReceipt");
     assert_eq!(receipt["successfulJourneyIds"], json!([JOURNEY_ID]));
 }
 
@@ -252,8 +252,8 @@ impl ProjectFixture {
         fs::write(
             &credentials,
             format!(
-                r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+                r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: {JOURNEY_ID}
     stepId: invoke-fixed-output
@@ -327,14 +327,15 @@ accessProfiles:
     permissions:
       - action: create-fixed-record
         operations: [invoke]
-        targets: [{entity: record, rowBoundaries: []}]
+        targets: [{entity: record, rowBoundaries: unrestricted}]
         results: [record]
-      - {entity: record, operations: [get, list], readableFields: [code], rowBoundaries: []}
+      - {entity: record, operations: [get, list], readableFields: [code], rowBoundaries: unrestricted}
 "#
 }
 
 fn journey_source() -> &'static str {
-    r#"apiVersion: registry.registrystack.org/breg-journeys/v1
+    r#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: wasm-fixed-output
     steps:
@@ -346,7 +347,7 @@ journeys:
           scopes: [registry:wasm-fixture:invoke]
           purpose: fixture-assurance
         request:
-          operation: invoke
+          type: invoke
           idempotencyKey: wasm-fixed-output
           input: {request: ignored-by-fixed-output}
         expect: {outcome: success, status: 200}
@@ -400,6 +401,7 @@ authentication:
     accessTokenType: JWT
     scopeClaim: scope
     scopeSeparator: " "
+    allowedClients: unrestricted
     maxTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksSource: {{kind: static, documentRef: secret:file/oidc-jwks}}

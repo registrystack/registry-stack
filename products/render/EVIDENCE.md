@@ -6,13 +6,35 @@ All hashes below were produced on macOS (aarch64) with the workspace lockfile
 in this tree; the two-OS CI golden job re-proves them on Linux for every
 change.
 
+## Configuration conventions (2026-10-08)
+
+The bundle manifest and the label tables are read by the shared
+configuration reader. The manifest opens with
+`apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1` and names
+its files with `entryFile` and `schemaFile`; each label table opens with
+`apiVersion: id.registrystack.org/formats/render/labels/v1alpha1` and
+`kind: RenderLabels` and holds its keys under `labels`. The template still
+receives each table as the same flat key-to-text map, so every golden PDF
+hash and every request envelope (`dataSha256`) hash is unchanged. The three
+maintained examples were rewritten to the new spellings and repackaged, so
+their package digests moved:
+
+| Package | digest |
+|---|---|
+| receipt | `sha256:e8cb42fe6b0aff240d3968d9022ae7968fa5e35f10c667835af15d37ab47c164` |
+| certificate | `sha256:9d736a3fb21fd02f4e048b5e3782ce4fb710cf63f222aa4c91cc7ac9607ae9d6` |
+| beneficiary-card | `sha256:9c3f33af90d412a189090e5c1d8590174df93f75d943a1441c1692b30eb03577` |
+
+`golden.json` pins these digests; `cargo test -p registry-render --test
+golden` reproduces them with the unchanged PDF and envelope hashes.
+
 ## Shared package migration (2026-09-26)
 
 Render now uses the Registry Stack package envelope instead of embedding
 per-file hashes in `manifest.yaml`. `registry-render package` validates raw
 authoring source, copies the exact validated files into a new directory, and
 writes sorted `SHA256SUMS` plus optional `REVISION`. The three maintained
-examples are current packages. Their package digests are:
+examples were current packages. On that date their package digests were:
 
 | Package | digest |
 |---|---|
@@ -181,6 +203,8 @@ beneficiary-card envelope
 `c595a3670a9b83327a8e16ef403b8253039d6d548b3388875930850d0f41fa18` / package
 `6089a24558875d34a015cd09e207d4b5fd6bec62716fbd5075576398343cd6ac`. The
 per-render dependency closures are unchanged. Every warning list is empty.
+The package digests have moved since; the configuration conventions entry
+above gives the current ones.
 
 The Arabic strings in the rewritten fixtures are plausible modern standard
 Arabic written for this corpus; they want a native read before anything ships

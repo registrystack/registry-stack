@@ -1,0 +1,28 @@
+{
+  "apiVersion": "id.registrystack.org/formats/evidence/source-import-state/v1alpha1",
+  "kind": "EvidenceSourceImportState",
+  "imports": {
+    "registry-status": {
+      "manifest": {
+        "sourceId": "registry-status",
+        "provenance": {
+          "revision": "v1"
+        },
+        "artifacts": [
+          {
+            "path": "sources/registry-status.yaml",
+            "sha256": "640bea5ccfcc997a7b681cb7efab5519712a951ad28371455dbfdb30e34880cc"
+          }
+        ]
+      },
+      "upstream": {
+        "sources/registry-status.yaml": "extractScript: adapters/registry-status.rhai\n"
+      },
+      "retained": {},
+      "detached": false
+    }
+  },
+  "accepted": {
+    "sources/registry-status.yaml": "extractScript: adapters/registry-status.rhai\n"
+  }
+}

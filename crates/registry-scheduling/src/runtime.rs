@@ -143,12 +143,19 @@ fn database_step(stage: &'static str) -> impl Fn(StoreError) -> RuntimeError {
 }
 
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
-    let config = RuntimeConfig::load(path)?;
+    let path = path.as_ref();
+    let config =
+        RuntimeConfig::load(path).map_err(|error| {
+            match crate::config::startup_report(path, &error) {
+                Some(report) => RuntimeError::ConfigurationRefused(report),
+                None => RuntimeError::Config(error),
+            }
+        })?;
     let loaded = config.load_policy()?;
     let package_digest = loaded.package_digest;
     tracing::info!(package_digest = %package_digest, "verified Scheduling package");
     let policy = loaded.policy;
-    let scheduling_id = policy.scheduling.id.clone();
+    let scheduling_id = policy.project.id.to_string();
     let policy_digest = policy.policy_digest();
     let secrets = secret_resolver(&config)?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets)
@@ -220,12 +227,12 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .await
         .map_err(database_step("hook schema discovery"))?;
     let hook_payload_retention =
-        Duration::from_secs(u64::from(config.retention.hook_payload_days) * 24 * 60 * 60);
+        Duration::from_secs(u64::from(config.retention.hook_payload_retention_days) * 24 * 60 * 60);
 
     // Resolve and validate every destination, including its signing material,
     // before the listener binds.
     let hooks = ActivatedHooks::activate(
-        &policy.hooks,
+        &policy.hook_declarations(),
         &config.destinations.hooks,
         &secrets,
         HookRuntimeIdentity {
@@ -274,7 +281,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             policy_digest,
             audit_hasher,
             audit,
-            config.retention.attempt_receipt_days,
+            config.retention.attempt_receipt_retention_days,
         )
         .with_hooks(hooks),
     );
@@ -346,7 +353,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     // The whole of retention, and deliberately not all of retention. This
     // sweep erases two things: idempotency attempt receipts, with the raw
     // caller and key they were filed under, after the configured
-    // `retention.attemptReceiptDays`, and listing cursors, after
+    // `retention.attemptReceiptRetentionDays`, and listing cursors, after
     // the fifteen minutes the listing contract gives them. Appointments,
     // their history, and the delivery outbox are never swept, by decision
     // and not by omission: committed scheduling data has
@@ -395,6 +402,10 @@ pub enum RuntimeError {
     Arguments,
     #[error(transparent)]
     Config(#[from] RuntimeConfigError),
+    /// The runtime file or its packaged policy refused at startup, with
+    /// every finding at its position in the file.
+    #[error("the Scheduling runtime configuration was refused")]
+    ConfigurationRefused(registry_platform_yaml::Report),
     #[error("the Scheduling secret configuration is invalid")]
     SecretConfiguration,
     #[error("the Scheduling audit key could not be derived")]
@@ -442,6 +453,18 @@ impl RuntimeError {
         match self {
             Self::RemovedCommand => 2,
             _ => 1,
+        }
+    }
+
+    /// The reader's report when startup refused the runtime file or the
+    /// packaged policy, so `scheduling` prints its CFG-DIAG-2 lines
+    /// unchanged after its own one-sentence refusal.
+    #[must_use]
+    pub fn configuration_report(&self) -> Option<&registry_platform_yaml::Report> {
+        match self {
+            Self::ConfigurationRefused(report)
+            | Self::Config(RuntimeConfigError::Policy(report)) => Some(report),
+            _ => None,
         }
     }
 }
@@ -960,9 +983,10 @@ mod tests {
 
     #[test]
     fn the_offering_pool_anchors_are_collected_without_duplicates() {
+        use registry_platform_yaml::{LocalId, ProjectIdentity};
         use registry_scheduling_core::{
-            ArrivalOffering, ExactTimeOffering, HoldPolicy, OfferingPolicy, PolicyIdentity,
-            SchedulingMode, SchedulingPolicy, ServicePolicy,
+            ArrivalOffering, ExactTimeOffering, HoldPolicy, OfferingPolicy, SchedulingMode,
+            SchedulingPolicy, ServicePolicy,
         };
         let exact_time = || {
             Some(ExactTimeOffering {
@@ -973,7 +997,7 @@ mod tests {
                 horizon_days: 30,
                 pool: "north".to_owned(),
                 start_increment_minutes: 30,
-                max_recipients: 1,
+                maximum_recipients: 1,
             })
         };
         let offering =
@@ -1001,9 +1025,9 @@ mod tests {
         let policy = SchedulingPolicy {
             api_version: "test".to_owned(),
             kind: "test".to_owned(),
-            scheduling: PolicyIdentity {
-                id: "standalone".to_owned(),
-                version: 1,
+            project: ProjectIdentity {
+                id: LocalId::new("standalone").unwrap(),
+                version: "1".to_owned(),
             },
             services: vec![ServicePolicy {
                 id: "s1".to_owned(),
@@ -1028,7 +1052,7 @@ mod tests {
             channels: Vec::new(),
             hold_policy: HoldPolicy {
                 ttl_minutes: 10,
-                max_per_caller: 2,
+                maximum_per_caller: 2,
                 because: "test".to_owned(),
             },
             hooks: Vec::new(),

@@ -1,16 +1,17 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: household-contact-registration-result-capture
     steps:
       - id: create-household
         entity: household
         accessProfile: household-operator
-        claims: &operator_claims
+        claims:
           principal: household-operator
           scopes: [registry:household:operate]
           purpose: household-administration
         request:
-          operation: create
+          type: create
           data:
             household-code: hh-001
             local-household-number: 1001
@@ -24,14 +25,14 @@ journeys:
       - id: create-contact-request
         entity: register-household-contact-request
         accessProfile: household-contact-submitter
-        claims: &submitter_claims
+        claims:
           principal: household-contact-submitter
           scopes: [registry:household-contact:submit]
           purpose: household-contact-registration
         request:
-          operation: create
+          type: create
           data:
-            household: {recordRef: household}
+            household: {recordCapture: household}
             person-code: person-001
             legal-name: Ana Ortega
             family-name: Ortega
@@ -47,39 +48,48 @@ journeys:
       - id: get-before-submit
         entity: register-household-contact-request
         accessProfile: household-contact-submitter
-        claims: *submitter_claims
-        request: {operation: get, recordRef: contact-request}
+        claims:
+          principal: household-contact-submitter
+          scopes: [registry:household-contact:submit]
+          purpose: household-contact-registration
+        request: {type: get, recordCapture: contact-request}
         expect: {outcome: success, status: 200}
         capture: contact-before-submit
       - id: submit-contact-request
         entity: register-household-contact-request
         accessProfile: household-contact-submitter
-        claims: *submitter_claims
+        claims:
+          principal: household-contact-submitter
+          scopes: [registry:household-contact:submit]
+          purpose: household-contact-registration
         request:
-          operation: submit_request
-          recordRef: contact-before-submit
-          etagRef: contact-before-submit
+          type: submit-request
+          recordCapture: contact-before-submit
+          etagCapture: contact-before-submit
         expect: {outcome: success, status: 200}
       - id: get-before-apply
         entity: register-household-contact-request
         accessProfile: household-contact-applier
-        claims: &applier_claims
+        claims:
           principal: household-contact-applier
           scopes: [registry:household-contact:apply]
           purpose: household-contact-apply
-        request: {operation: get, recordRef: contact-request}
+        request: {type: get, recordCapture: contact-request}
         expect: {outcome: success, status: 200}
         capture: contact-before-apply
       - id: apply-contact-request
         entity: register-household-contact-request
         accessProfile: household-contact-applier
-        claims: *applier_claims
+        claims:
+          principal: household-contact-applier
+          scopes: [registry:household-contact:apply]
+          purpose: household-contact-apply
         request:
-          operation: apply_request
-          recordRef: contact-before-apply
-          etagRef: contact-before-apply
-          proposalVersionRef: contact-before-apply
-          effectDigestRef: contact-before-apply
+          type: apply-request
+          recordCapture: contact-before-apply
+          etagCapture: contact-before-apply
+          proposalVersionCapture: contact-before-apply
+          effectDigestCapture: contact-before-apply
         expect: {outcome: success, status: 200}
         captureResults:
           person: contact-person
@@ -87,8 +97,11 @@ journeys:
       - id: get-created-contact
         entity: person
         accessProfile: household-operator
-        claims: *operator_claims
-        request: {operation: get, recordRef: contact-person}
+        claims:
+          principal: household-operator
+          scopes: [registry:household:operate]
+          purpose: household-administration
+        request: {type: get, recordCapture: contact-person}
         expect:
           outcome: success
           status: 200
@@ -101,8 +114,11 @@ journeys:
       - id: get-created-membership
         entity: group-membership
         accessProfile: household-operator
-        claims: *operator_claims
-        request: {operation: get, recordRef: contact-membership}
+        claims:
+          principal: household-operator
+          scopes: [registry:household:operate]
+          purpose: household-administration
+        request: {type: get, recordCapture: contact-membership}
         expect:
           outcome: success
           status: 200

@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "command": "check",
+  "status": "complete",
+  "apiVersion": "id.registrystack.org/formats/render/ctl-report/v1alpha1",
+  "kind": "RenderCtlReport",
+  "filesChecked": 4,
+  "errors": 0,
+  "warnings": 0,
+  "bundle": {
+    "bundleVersion": 1,
+    "bundleHash": "e8cb42fe6b0aff240d3968d9022ae7968fa5e35f10c667835af15d37ab47c164",
+    "fonts": 21,
+    "governedFiles": 17,
+    "documents": [
+      {
+        "id": "receipt",
+        "version": 3,
+        "entryFile": "templates/receipt.typ",
+        "labels": [
+          "ar",
+          "fr"
+        ]
+      }
+    ]
+  },
+  "diagnostics": []
+}

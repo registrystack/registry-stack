@@ -47,13 +47,13 @@ fn registry() -> registry_breg::CompiledRegistry {
         "constraints":[{"kind":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
       }],
       "accessProfiles":[{
-        "id":"operator","default":true,"principalClaim":"registry_principal",
+        "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["case-management"],
         "permissions":[{"entity":"entry","operations":["create","get","list","patch","batch","tombstone","revisions","snapshot"],
           "readableFields":["code","label","valid-from","valid-to"],"writableFields":["code","label","valid-from","valid-to"],
-          "filterableFields":["code"],"sortableFields":["valid-from"],"allowCount":true,"revisionAccess":true,"rowBoundaries":[]
+          "filterableFields":["code"],"sortableFields":["valid-from"],"allowCount":true,"revisionAccess":true,"rowBoundaries":"unrestricted"
         },{"entity":"timestamp-entry","operations":["snapshot"],
-          "readableFields":["code","valid-from","valid-to"],"writableFields":[],"rowBoundaries":[]
+          "readableFields":["code","valid-from","valid-to"],"writableFields":[],"rowBoundaries":"unrestricted"
         }]
       }]
     }"#).expect("SDK fixture follows ordinary authoring contract");

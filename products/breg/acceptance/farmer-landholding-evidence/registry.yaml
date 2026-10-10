@@ -209,7 +209,7 @@ accessProfiles:
     - invoke
     targets:
     - entity: landholding
-      rowBoundaries: []
+      rowBoundaries: unrestricted
     results:
     - landholding
   - action: check-procedure
@@ -217,7 +217,7 @@ accessProfiles:
     - invoke
     targets:
     - entity: procedure-check
-      rowBoundaries: []
+      rowBoundaries: unrestricted
     results:
     - procedure-check
 - id: landholding-reader
@@ -235,13 +235,13 @@ accessProfiles:
     - farmer-number
     - parcel-code
     - farmer-category
-    rowBoundaries: []
+    rowBoundaries: unrestricted
   - entity: procedure-check
     operations:
     - get
     readableFields:
     - checked
-    rowBoundaries: []
+    rowBoundaries: unrestricted
 evidenceProviders:
 - id: farmer-registry
   contracts: evidence/farmer-contracts.json

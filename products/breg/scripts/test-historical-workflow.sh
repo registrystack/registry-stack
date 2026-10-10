@@ -764,8 +764,8 @@ write_jwt "$temporary_root/oidc-signer.pem" "history-oidc-key" "synthetic-eligib
   "eligibility-read" "household-001,household-002,household-003,household-journey-schema-test" "$temporary_root/secrets/consumer-no-purpose-token"
 
 cat >"$temporary_root/schema-test-credentials.yaml" <<'EOF'
-apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - {journeyId: household-history-caller-surfaces, stepId: create-initial-membership, credential: {type: bearer, tokenRef: secret:file/operator-token}}
   - {journeyId: household-history-caller-surfaces, stepId: get-initial-membership, credential: {type: bearer, tokenRef: secret:file/operator-token}}

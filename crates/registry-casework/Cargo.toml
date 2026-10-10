@@ -17,9 +17,11 @@ default = []
 postgres-test = ["dep:registry-breg", "registry-breg/postgres-test"]
 schema = [
     "dep:schemars",
+    "registry-casework-core/schema",
     "registry-casework-breg/schema",
     "registry-platform-audit/schema",
     "registry-platform-config/schema",
+    "registry-platform-yaml/schema",
 ]
 
 [lints]
@@ -47,6 +49,7 @@ registry-platform-config.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-oidc.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-yaml.workspace = true
 reqwest.workspace = true
 registry-breg = { workspace = true, optional = true }
 rustls.workspace = true

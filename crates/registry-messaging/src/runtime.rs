@@ -33,6 +33,7 @@ use clap::{Arg, Command};
 use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_config::{ProtectedSecret, SecretResolver};
 use registry_platform_dispatch::postgres::{DispatchWorker, WorkerConfig};
+use registry_platform_yaml::Report;
 use serde::Serialize;
 use thiserror::Error;
 use tracing_subscriber::filter::LevelFilter;
@@ -40,7 +41,9 @@ use tracing_subscriber::filter::LevelFilter;
 use crate::activation::{self, ActivationError, ApplyRequest};
 use crate::audit::MessagingAudit;
 use crate::auth::MessagingAuthenticator;
-use crate::config::{describe_secret_failure, RetentionConfig, RuntimeConfig, RuntimeConfigError};
+use crate::config::{
+    describe_secret_failure, startup_report, RetentionConfig, RuntimeConfig, RuntimeConfigError,
+};
 use crate::dispatch::{dispatcher, MessageDispatcher, MessageSender, Transports};
 use crate::http::{metrics_router, router, HttpState, Readiness};
 use crate::limits::{CallbackLimits, CallerLimits, CALLBACK_BURST, CALLBACK_REQUESTS_PER_MINUTE};
@@ -129,6 +132,15 @@ fn shutdown_signal() -> Result<impl std::future::Future<Output = ()>, RuntimeErr
     })
 }
 
+/// The runtime document at `path`, or a refusal that reports every rule it
+/// breaks, each at its position, rather than only the first.
+fn load_config(path: &Path) -> Result<RuntimeConfig, RuntimeError> {
+    RuntimeConfig::load(path).map_err(|error| match startup_report(path, &error) {
+        Some(report) => RuntimeError::ConfigurationRefused(report),
+        None => RuntimeError::Config(error),
+    })
+}
+
 /// Name the provisioning or startup act a store failure happened in.
 fn database_step(stage: &'static str) -> impl Fn(StoreError) -> RuntimeError {
     move |source| RuntimeError::Database { stage, source }
@@ -136,7 +148,7 @@ fn database_step(stage: &'static str) -> impl Fn(StoreError) -> RuntimeError {
 
 #[cfg(feature = "postgres-test")]
 pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
-    let config = RuntimeConfig::load(path)?;
+    let config = load_config(path.as_ref())?;
     let secrets = config.secret_resolver()?;
     let store = PostgresStore::connect_migration(&config.database, &secrets)
         .map_err(database_step("migration database configuration"))?;
@@ -359,7 +371,7 @@ pub async fn serve_from_path_until(
     transports: Transports,
     shutdown: impl std::future::Future<Output = ()>,
 ) -> Result<(), RuntimeError> {
-    let config = RuntimeConfig::load(path)?;
+    let config = load_config(path.as_ref())?;
     let listeners = Listeners::bind(&config).await?;
     let app = assemble(&config, transports).await?;
     tracing::info!(
@@ -598,7 +610,7 @@ struct RuntimeStarted {
     event: &'static str,
     runtime_version: &'static str,
     package_digest: String,
-    retention: RetentionConfig,
+    retention: serde_json::Value,
 }
 
 impl RuntimeStarted {
@@ -607,7 +619,7 @@ impl RuntimeStarted {
             event: RUNTIME_STARTED_EVENT,
             runtime_version: registry_platform_buildinfo::DISPLAY_VERSION,
             package_digest,
-            retention,
+            retention: retention.report(),
         }
     }
 }
@@ -659,6 +671,9 @@ pub enum RuntimeError {
     Logging,
     #[error(transparent)]
     Config(#[from] RuntimeConfigError),
+    /// The runtime document was refused, with every rule it breaks.
+    #[error("the Messaging runtime configuration was refused\n{}", .0.render_human().trim_end())]
+    ConfigurationRefused(Report),
     #[error("the Messaging audit destination could not be opened or extended: {0}")]
     AuditJournal(String),
     /// The action was committed, and its outcome record could not be
@@ -740,6 +755,43 @@ mod tests {
                 "{refused} was accepted"
             );
         }
+    }
+
+    #[test]
+    fn a_refused_runtime_document_is_reported_with_every_finding_at_its_position() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("runtime.yaml");
+        std::fs::write(
+            &path,
+            format!(
+                "apiVersion: {}\nkind: {}\nlistenr: {{}}\ndatabse: {{}}\n",
+                registry_messaging_core::MESSAGING_RUNTIME_API_VERSION,
+                registry_messaging_core::MESSAGING_RUNTIME_KIND,
+            ),
+        )
+        .unwrap();
+        let Err(RuntimeError::ConfigurationRefused(report)) = load_config(&path) else {
+            panic!("the document was not refused with a report");
+        };
+        let unknown: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "config.unknown-key")
+            .map(|diagnostic| {
+                let source = diagnostic.source.as_ref().unwrap();
+                (diagnostic.path.as_str(), source.line, source.column)
+            })
+            .collect();
+        assert_eq!(
+            unknown,
+            [
+                ("/listenr", Some(3), Some(1)),
+                ("/databse", Some(4), Some(1))
+            ]
+        );
+        let rendered = RuntimeError::ConfigurationRefused(report).to_string();
+        assert!(rendered.contains("runtime.yaml:3:1"), "{rendered}");
+        assert!(rendered.contains("runtime.yaml:4:1"), "{rendered}");
     }
 
     #[test]

@@ -53,6 +53,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import release_roster  # noqa: E402
+import upgrade_steps  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -107,6 +108,78 @@ HTTP_TIMEOUT_SECONDS = 30
 
 class RehearsalError(RuntimeError):
     """The rehearsal cannot continue, or the upgraded state is not intact."""
+
+
+# Documented operator steps (release/notes/config-conventions/upgrade-steps.yaml)
+# the rehearsal applies on disk after the previous release wrote state and
+# before the new binaries run. Each id must name an `edit` step.
+BREG_UPGRADE_STEPS = (
+    "breg-journeys",
+    "breg-access-unrestricted",
+)
+# The runtime file is rewritten by the rehearsal for every package build and
+# serve, so these steps follow each write instead of running once.
+BREG_RUNTIME_UPGRADE_STEPS = ("breg-runtime-allowed-clients",)
+CASEWORK_UPGRADE_STEPS = ("casework-fixture-spelling", "casework-dev-clients-envelope")
+EVIDENCE_UPGRADE_STEPS = (
+    "evidence-project-envelope",
+    "evidence-question-envelope",
+    "evidence-question-answer-uri",
+    "evidence-source-envelope",
+    "evidence-selector-envelope",
+    "evidence-fixture-envelope",
+    "evidence-target-governance-envelope",
+)
+# The project steps change the package digest, so the Messaging leg builds the
+# package again and applies it as the successor of the one the previous
+# release activated. The manual step `messaging-project-envelope` goes with
+# them: `write_messaging_project_envelope` performs it.
+MESSAGING_UPGRADE_STEPS = (
+    "messaging-template-envelope",
+    "messaging-provider-envelope",
+    "messaging-project-renames",
+    "messaging-provider-capabilities",
+)
+MESSAGING_RUNTIME_UPGRADE_STEPS = ("messaging-runtime-keys",)
+
+
+# Catalog `edit` steps no rehearsal leg applies, each with the reason. A unit
+# test in test_upgrade_steps.py holds every other edit step to a leg list above
+# and holds this list to steps that exist and are not in a leg.
+UNIT_TESTED_ONLY_STEPS = {
+    "casework-simulation-spelling": "the Casework starter writes no simulation file",
+    "casework-holiday-set-envelope": "the Casework starter writes no holiday set",
+    "evidence-access-policy-envelope": "the Evidence starter writes no access policy file",
+    "evidence-access-client-envelope": "the Evidence starter writes no access client file",
+    "evidence-target-settings-envelope": "the Evidence starter writes no target settings file",
+    "evidence-source-resolution-envelope": "the Evidence starter writes no source resolution file",
+    "evidence-mock-plan-envelope": "the Evidence starter writes no mock plan",
+    "messaging-required-scopes": "the Messaging starter gives every access profile a non-empty requiredScopes list",
+    "breg-example-inputs": "the BReg starter writes no example input file",
+    "breg-schema-test-credentials": "the BReg starter writes no schema test credentials file",
+    "breg-model-selection": "the BReg starter writes no model selection file",
+    "breg-example-scenarios": "the BReg starter writes no example scenarios file",
+    "breg-statistical-period": "the BReg starter registry declares no statistical period",
+    "breg-module-access-unrestricted": "the BReg starter module contributes no access profile",
+    "scheduling-project-keys": "no Scheduling leg for the previous release",
+    "scheduling-records-envelope": "no Scheduling leg for the previous release",
+    "scheduling-fixture-keys": "no Scheduling leg for the previous release",
+    "scheduling-runtime-keys": "no Scheduling leg for the previous release",
+    "render-manifest-keys": "no Render leg for the previous release",
+    "render-runtime-keys": "no Render leg for the previous release",
+    "platform-task-connection-envelope": "no product starter writes a task connection file",
+}
+
+
+def apply_upgrade_steps(product: str, ids: tuple[str, ...], **roots: Path) -> None:
+    """Apply the documented steps to the on-disk roots; report manual ones."""
+
+    try:
+        manual = upgrade_steps.apply_steps(list(ids), roots)
+    except upgrade_steps.StepError as error:
+        raise RehearsalError(f"{product} upgrade step failed: {error}") from error
+    for instruction in manual:
+        print(f"{product} manual upgrade step (not applied): {instruction}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -399,12 +472,84 @@ def audit_record_count(directory: Path, name: str, *, schema: str | None = None)
 
 def audit_stream_losses(product: str, before: int, after: int, written: int) -> list[str]:
     """Name an audit stream that lost the previous release's records, or that
-    the upgraded runtime did not continue with at least `written` records."""
+    the upgraded binaries did not continue with at least `written` records."""
 
     if before == 0 or after < before + written:
         return [f"the {product} audit stream held {before} records before the upgrade and "
-                f"{after} after it, where the upgraded runtime writes at least {written}"]
+                f"{after} after it, where the upgraded binaries write at least {written}"]
     return []
+
+
+def audit_event_count(directory: Path, name: str, event: str) -> int:
+    """Count the records of one stream whose `record.event` is `event`."""
+
+    count = 0
+    for path in audit_paths(directory, name):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise RehearsalError("audit stream contains an invalid JSON line") from error
+            record = entry.get("record") if isinstance(entry, dict) else None
+            if isinstance(record, dict) and record.get("event") == event:
+                count += 1
+    return count
+
+
+def ledger_plan_differences(activated: str | None, planned: dict[str, Any]) -> list[str]:
+    """Name what keeps a `messagingctl plan` report from describing the upgrade
+    of the previous release's activation. `activated` is the package digest
+    the previous release's `messagingctl status` reported active: the plan
+    must name it as active, and must name another package on disk, the one
+    built again from the upgraded project."""
+
+    if not activated:
+        return ["the previous release's ledger recorded no active package"]
+    differences = []
+    if planned.get("activeDigest") != activated:
+        differences.append("the ledger activeDigest is not the package the previous "
+                           "release activated")
+    if not planned.get("packageDigest"):
+        differences.append("the plan names no packageDigest")
+    elif planned["packageDigest"] == activated:
+        differences.append("the plan's packageDigest is the package the previous release "
+                           "activated, not one built again from the upgraded project")
+    return differences
+
+
+def ledger_activation_differences(activated: str, planned: dict[str, Any],
+                                  settled: dict[str, Any],
+                                  active: dict[str, Any]) -> list[str]:
+    """Name what keeps the ledger from recording the planned package as the
+    successor of the one the previous release activated. `planned` and
+    `settled` are the `messagingctl plan` reports before and after the apply,
+    and `active` is the activation `messagingctl status` reports after it."""
+
+    differences = []
+    package = planned.get("packageDigest")
+    if settled.get("packageDigest") != package:
+        differences.append("the ledger packageDigest changed across the apply")
+    if settled.get("change") != "none" or settled.get("activeDigest") != settled.get(
+            "packageDigest"):
+        differences.append("the package ledger does not name the applied package")
+    if active.get("packageDigest") != package:
+        differences.append("the ledger's active activation is not the planned package")
+    if active.get("predecessorPackageDigest") != activated:
+        differences.append("the ledger's active activation does not name the package the "
+                           "previous release activated as its predecessor")
+    return differences
+
+
+def retention_audit_losses(requested_before: int, erased_before: int,
+                           requested_after: int, erased_after: int) -> list[str]:
+    """Name each retention event an operator erase run did not add to the stream."""
+
+    losses = []
+    if requested_after <= requested_before:
+        losses.append("the retention erase wrote no messaging.retention.requested record")
+    if erased_after <= erased_before:
+        losses.append("the retention erase wrote no messaging.retention.erased record")
+    return losses
 
 
 def breg_view_differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
@@ -904,6 +1049,15 @@ BREG_AUDIENCE = "breg"
 BREG_CLIENT = "upgrade-rehearsal"
 BREG_KID = "upgrade-rehearsal-issuer"
 BREG_DATABASE_ID = "upgrade-rehearsal-db"
+# The schema-test credentials envelope each side reads. `from` is the envelope
+# the release at FORWARD_PATH_FLOOR reads; `to` is the one the format registry
+# (products/platform/config-formats.yaml) records for this source.
+BREG_CREDENTIALS_ENVELOPE = {
+    "from": {"apiVersion": "registry.registrystack.org/breg-schema-test-credentials/v1",
+             "kind": "SchemaTestCredentials"},
+    "to": {"apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1",
+           "kind": "BRegSchemaTestCredentials"},
+}
 BREG_ENVIRONMENT = "staging"
 BREG_INSTANCE_ID = "upgrade-rehearsal-instance"
 BREG_EMPTY_PLAN = "apply.package.empty_plan"
@@ -963,6 +1117,9 @@ class Breg:
         self.runtime = work / "runtime.yaml"
         self.port = free_port()
         self.operator: dict[str, Any] = {}
+        # Set once the documented steps ran: runtime files written from then
+        # on carry the steps' edits, as an upgraded operator's file would.
+        self.upgraded = False
 
     def provision(self) -> None:
         passwords = {role: secrets.token_hex(16)
@@ -1064,27 +1221,33 @@ class Breg:
                       "path": str(private_directory(path.parent / "audit") / "breg.jsonl")},
             "cursor": {"secretRef": "secret:file/cursor-key"},
         })
+        if self.upgraded:
+            for step_id in BREG_RUNTIME_UPGRADE_STEPS:
+                try:
+                    upgrade_steps.apply_step_to_file(step_id, path)
+                except upgrade_steps.StepError as error:
+                    raise RehearsalError(f"BReg upgrade step failed: {error}") from error
 
-    def credentials(self, path: Path) -> None:
+    def credentials(self, path: Path, side: Side) -> None:
         journeys = load_yaml(self.project / "tests" / "journeys.yaml")
         bindings = []
         for journey in journeys["journeys"]:
             for step in journey["steps"]:
                 claims = step.get("claims")
                 if claims is None:
-                    credential: dict[str, Any] = {"type": "anonymous"}
-                else:
-                    name = f"journey-token-{journey['id']}-{step['id']}"
-                    write_secret(self.secrets / name, self.keys.mint(
-                        "EdDSA", BREG_KID, self.claims(claims), lifetime=280))
-                    credential = {"type": "bearer", "tokenRef": f"secret:file/{name}"}
+                    # A registry serves authenticated callers only, so every
+                    # journey step is bound to a bearer token.
+                    raise RehearsalError("a BReg starter journey step names no claims")
+                name = f"journey-token-{journey['id']}-{step['id']}"
+                write_secret(self.secrets / name, self.keys.mint(
+                    "EdDSA", BREG_KID, self.claims(claims), lifetime=280))
+                credential = {"type": "bearer", "tokenRef": f"secret:file/{name}"}
                 bindings.append({"journeyId": journey["id"], "stepId": step["id"],
                                  "credential": credential})
-        path.write_text(json.dumps({
-            "apiVersion": "registry.registrystack.org/breg-schema-test-credentials/v1",
-            "kind": "SchemaTestCredentials", "bindings": bindings}, indent=1))
+        path.write_text(json.dumps({**BREG_CREDENTIALS_ENVELOPE[side.label],
+                                    "bindings": bindings}, indent=1))
 
-    def test_runtime(self, build: Path) -> tuple[Path, Path]:
+    def test_runtime(self, side: Side, build: Path) -> tuple[Path, Path]:
         """Prepare an empty schema-test database; return its runtime and credentials."""
 
         private_directory(build)
@@ -1093,7 +1256,7 @@ class Breg:
         test_runtime = build / "runtime-test.yaml"
         self.write_runtime(test_runtime, "schematest", empty, free_port())
         credentials = build / "credentials.json"
-        self.credentials(credentials)
+        self.credentials(credentials, side)
         return test_runtime, credentials
 
     def package(self, side: Side, build: Path, baseline: Path | None = None) -> tuple[Path, str]:
@@ -1102,7 +1265,7 @@ class Breg:
         `baseline` is the active package this one succeeds.
         """
 
-        test_runtime, credentials = self.test_runtime(build)
+        test_runtime, credentials = self.test_runtime(side, build)
         baseline_args = ["--baseline-package", str(baseline)] if baseline else []
         side.run_json("bregctl", "--format", "json", "test", str(self.project),
                       "--runtime-config", str(test_runtime), "--credentials",
@@ -1234,6 +1397,8 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     # digest, so an unchanged registry shows only as bregctl refusing the
     # rebuild as an empty plan; the operator then keeps the active package.
     predecessor_activation = "initial"
+    apply_upgrade_steps("BReg", BREG_UPGRADE_STEPS, project=breg.project)
+    breg.upgraded = True
     upgraded, upgraded_digest = breg.package(new, work / "build-upgraded", baseline=package)
     if breg_rebuild_changes(new, breg.runtime, upgraded):
         apply(upgraded, upgraded_digest)
@@ -1522,6 +1687,7 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
     before_counts = postgres.row_counts("casework")
     records_before = audit_record_count(casework.audit, "casework.ndjson")
 
+    apply_upgrade_steps("Casework", CASEWORK_UPGRADE_STEPS, project=casework.project)
     activation = casework.activate(new, seeded)
     losses = row_count_losses(before_counts, postgres.row_counts("casework"))
     service = Service(new, "casework", [*runtime, "serve"], work / "casework-new.log", ready)
@@ -1569,10 +1735,47 @@ MESSAGING_RECIPIENTS = {"email": {"email": "upgrade-rehearsal@example.invalid"},
                         "sms": {"phone": "+15555550100"}}
 MESSAGING_SENDER_PROFILES = {"email": "transactional", "sms": "reminders-sms"}
 MESSAGING_IDEMPOTENCY = "public.messaging_idempotency"
+MESSAGING_AUDIT = "messaging.ndjson"
+# `messagingctl` writes its audit records to a companion stream beside the
+# runtime's: the configured file name with `messagingctl` before its extension.
+MESSAGING_OPERATOR_AUDIT = "messaging.messagingctl.ndjson"
+MESSAGING_RETENTION_REQUESTED = "messaging.retention.requested"
+MESSAGING_RETENTION_ERASED = "messaging.retention.erased"
+# The records the upgraded binaries append to each audit stream in
+# `rehearse_messaging`, at the least. The runtime writes its start record, and
+# a request record and an outcome record each for the idempotent resubmission,
+# the cancellation, and the new submission; a key the upgrade freed sends once
+# more and adds two. `messagingctl` writes the successor activation's requested
+# and finished records and the retention erase run's requested and erased
+# records.
+MESSAGING_UPGRADED_AUDIT_RECORDS = {MESSAGING_AUDIT: 7, MESSAGING_OPERATOR_AUDIT: 4}
+# The manual catalog step `messaging-project-envelope` leaves the project id
+# and its version label to the operator. These are the rehearsal's choice.
+MESSAGING_PROJECT_API_VERSION = "id.registrystack.org/formats/messaging/project/v1alpha1"
+MESSAGING_PROJECT_KIND = "MessagingProject"
+MESSAGING_PROJECT_ID = "upgrade-rehearsal"
+MESSAGING_PROJECT_VERSION = "1"
 # The table each Messaging schema version empties by design. Version 3
 # discards the idempotency records keyed by the caller's audit pseudonym, so
 # every key spent before it can be used again.
 MESSAGING_EMPTYING_SCHEMA_VERSIONS = {3: MESSAGING_IDEMPOTENCY}
+
+
+def write_messaging_project_envelope(project: Path) -> None:
+    """Perform the manual catalog step `messaging-project-envelope` on a
+    project directory: replace the apiVersion and kind of messaging.yaml and
+    add the project id and version label. No `edit` step can, because the
+    operator chooses both."""
+
+    path = project / "messaging.yaml"
+    document = load_yaml(path)
+    if not isinstance(document, dict):
+        raise RehearsalError(f"Messaging upgrade step messaging-project-envelope failed: "
+                             f"{path} is not a mapping")
+    envelope = {"apiVersion": MESSAGING_PROJECT_API_VERSION, "kind": MESSAGING_PROJECT_KIND,
+                "project": {"id": MESSAGING_PROJECT_ID, "version": MESSAGING_PROJECT_VERSION}}
+    dump_yaml(path, {**envelope, **{key: value for key, value in document.items()
+                                    if key not in envelope}})
 
 
 class Messaging:
@@ -1584,6 +1787,10 @@ class Messaging:
         self.audit = private_directory(work / "audit")
         self.project = work / "project"
         self.package = work / "package"
+        # `messagingctl package` writes into a new directory, so the package
+        # built again from the upgraded project sits beside the one the
+        # previous release built.
+        self.upgraded_package = work / "package-upgraded"
         self.runtime = work / "runtime.yaml"
         self.port = free_port()
         # Every message is scheduled a day out, so no dispatch attempt can
@@ -1638,7 +1845,7 @@ class Messaging:
                 "issuer": MESSAGING_ISSUER, "audience": MESSAGING_AUDIENCE,
                 "allowedClients": ["case-system", "operations-console"],
                 "jwksSource": {"kind": "static", "documentRef": "secret:file/jwks.json"}}},
-            "audit": {"path": str(self.audit / "messaging.ndjson"),
+            "audit": {"path": str(self.audit / MESSAGING_AUDIT),
                       "hashKeyRef": "secret:file/messaging-audit-key"},
         })
 
@@ -1679,23 +1886,46 @@ class Messaging:
             views[f"message/{message_id}"] = body
         return views
 
-    def upgrade(self, side: Side) -> tuple[dict[str, Any], set[str]]:
-        """Plan with `side` and, when the package already active only has
-        schema versions pending, apply them with the migration credential, the
-        upgrade step the Messaging changelog names. Returns the plan after any
-        apply, which names the package on disk with nothing left to change
-        when the upgrade kept the activation, and the tables the applied
-        versions empty by design."""
+    def repackage(self, side: Side) -> None:
+        """Carry the files the previous release wrote to a package `side`
+        reads, the way the release notes tell an operator to: apply the
+        documented steps to the runtime file and the project, check the
+        project, build the package into a new directory, check it, and point
+        the runtime file at it."""
+        apply_upgrade_steps("Messaging", MESSAGING_RUNTIME_UPGRADE_STEPS, runtime=self.work)
+        apply_upgrade_steps("Messaging", MESSAGING_UPGRADE_STEPS, project=self.project)
+        write_messaging_project_envelope(self.project)
+        side.run("messagingctl", "check", "--project", str(self.project))
+        side.run("messagingctl", "package", str(self.project),
+                 "--output", str(self.upgraded_package))
+        side.run("messagingctl", "check", "--package", str(self.upgraded_package))
+        runtime = load_yaml(self.runtime)
+        runtime["package"]["root"] = str(self.upgraded_package)
+        dump_yaml(self.runtime, runtime)
+        side.run("messagingctl", "check", "--runtime-config", str(self.runtime))
+
+    def upgrade(self, side: Side, activated: str | None) -> tuple[list[str], set[str]]:
+        """Plan with `side` and apply the package on disk with the migration
+        credential, the upgrade step the Messaging changelog names. `activated`
+        is the package digest the previous release reported active. A plan
+        that does not name that activation as active and another package on
+        disk is never applied over. Returns every difference between the
+        ledger after the apply and the plan before it, and the tables the
+        applied schema versions empty by design."""
         config = ["--runtime-config", str(self.runtime)]
         planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        emptied: set[str] = set()
-        pending = planned.get("pendingSchemaVersions")
-        if pending and planned.get("activeDigest") == planned.get("packageDigest"):
-            side.run("messagingctl", "apply", *config)
-            emptied = {MESSAGING_EMPTYING_SCHEMA_VERSIONS[version] for version in pending
-                       if version in MESSAGING_EMPTYING_SCHEMA_VERSIONS}
-            planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        return planned, emptied
+        differences = ledger_plan_differences(activated, planned)
+        if differences:
+            raise RehearsalError("messagingctl plan does not describe the upgrade of the "
+                                 "previous release's activation: " + "; ".join(differences))
+        side.run("messagingctl", "apply", *config)
+        emptied = {MESSAGING_EMPTYING_SCHEMA_VERSIONS[version]
+                   for version in planned.get("pendingSchemaVersions") or []
+                   if version in MESSAGING_EMPTYING_SCHEMA_VERSIONS}
+        settled = side.run_json("messagingctl", "--format", "json", "plan", *config)
+        status = side.run_json("messagingctl", "--format", "json", "status", *config)
+        return ledger_activation_differences(activated, planned, settled,
+                                             status.get("active") or {}), emptied
 
 
 def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
@@ -1704,9 +1934,10 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     messaging.provision()
     messaging.author(old)
     runtime = ["--runtime-config", str(messaging.runtime)]
-    old.run("messagingctl", "plan", "--runtime-config", str(messaging.runtime))
-    old.run("messagingctl", "apply", "--runtime-config", str(messaging.runtime))
-    old.run("messagingctl", "status", "--runtime-config", str(messaging.runtime))
+    old.run("messagingctl", "plan", *runtime)
+    old.run("messagingctl", "apply", *runtime)
+    status = old.run_json("messagingctl", "--format", "json", "status", *runtime)
+    activated = (status.get("active") or {}).get("packageDigest")
     ready = f"http://127.0.0.1:{messaging.port}/ready"
     service = Service(old, "messaging", [*runtime, "serve"], work / "messaging-old.log", ready)
     try:
@@ -1721,16 +1952,15 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     finally:
         service.stop()
     before_counts = postgres.row_counts("messaging")
+    records_before = {stream: audit_record_count(messaging.audit, stream)
+                      for stream in MESSAGING_UPGRADED_AUDIT_RECORDS}
 
-    new.run("messagingctl", "check", "--runtime-config", str(messaging.runtime))
-    # The ledger must still name the package on disk: a plan that reports a
-    # change once any new schema versions are applied means the upgrade lost
-    # the activation.
-    ledger, emptied = messaging.upgrade(new)
-    differences = []
-    if ledger.get("change") != "none" or ledger.get("activeDigest") != ledger.get(
-            "packageDigest"):
-        differences.append("the package ledger no longer names the applied package")
+    # The new binaries read neither the runtime file nor the package the
+    # previous release wrote, so the operator steps and a package built again
+    # come before the plan. The ledger must then record that package as the
+    # successor of the one the previous release activated.
+    messaging.repackage(new)
+    differences, emptied = messaging.upgrade(new, activated)
     losses = row_count_losses(before_counts, postgres.row_counts("messaging"),
                               emptied=emptied)
     service = Service(new, "messaging", [*runtime, "serve"], work / "messaging-new.log", ready)
@@ -1751,12 +1981,31 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
         messaging.submit(str(uuid.uuid4()), messaging.submission("sms", "after-upgrade"))
     finally:
         service.stop()
+    # The operator erase run is audited even when nothing has expired, so the
+    # operator stream must gain its requested and erased records.
+    events = (MESSAGING_RETENTION_REQUESTED, MESSAGING_RETENTION_ERASED)
+    counts_before = [audit_event_count(messaging.audit, MESSAGING_OPERATOR_AUDIT, event)
+                     for event in events]
+    new.run("messagingctl", "retention", "erase-expired", *runtime,
+            "--before", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60)),
+            "--apply")
+    counts_after = [audit_event_count(messaging.audit, MESSAGING_OPERATOR_AUDIT, event)
+                    for event in events]
+    losses += retention_audit_losses(counts_before[0], counts_before[1], *counts_after)
+    records_after = {stream: audit_record_count(messaging.audit, stream)
+                     for stream in MESSAGING_UPGRADED_AUDIT_RECORDS}
+    for stream, written in MESSAGING_UPGRADED_AUDIT_RECORDS.items():
+        product = "Messaging operator" if stream == MESSAGING_OPERATOR_AUDIT else "Messaging"
+        losses += audit_stream_losses(product, records_before[stream], records_after[stream],
+                                      written)
     losses += row_count_losses(before_counts, postgres.row_counts("messaging"),
                                emptied=emptied)
 
     report["messaging"] = {
         "messages": len(message_ids),
         "tables": len(before_counts),
+        "auditRecordsBefore": records_before,
+        "auditRecordsAfter": records_after,
         "viewDifferences": differences,
         "rowLosses": losses,
     }
@@ -1901,8 +2150,11 @@ class Evidence:
         """Package the unchanged target with this side's evidencectl, install
         the package, and point the operative runtime at it, the documented
         upgrade step. The audit stream, secrets, and keys stay where they are.
+        The documented authoring-file steps are applied first.
         """
 
+        apply_upgrade_steps("Evidence", EVIDENCE_UPGRADE_STEPS,
+                            project=self.project, target=self.target)
         self.package(side, self.work / "candidate-upgraded")
 
     def extract(self) -> Path:

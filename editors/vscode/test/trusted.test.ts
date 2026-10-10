@@ -49,15 +49,42 @@ suite('Registry Stack extension', () => {
     await assertWorkspaceSymbol('beta-registry');
     await assertWorkspaceSymbol('smoke');
 
+    // A complete delivery runtime document, the form the current reader accepts.
+    const oid4vciRuntime = [
+      'apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1',
+      'kind: EvidenceOid4vciRuntimeConfig',
+      'credentialIssuer: https://wallet.example.org',
+      'listener:',
+      '  bind: 127.0.0.1:8090',
+      'secretProviders:',
+      '  file:',
+      '    root: /run/secrets/evidence-oid4vci',
+      'evidence:',
+      '  baseUrl: https://evidence.example.org',
+      'tokenClient:',
+      '  tokenEndpoint: https://mint.example.org/token',
+      '  clientId: evidence-oid4vci',
+      '  privateKeyRef: secret:file/delivery-client.jwk.json',
+      '  resource: https://evidence.example.org',
+      'offers:',
+      '  issuer: https://mint.example.org',
+      '  jwksUri: https://mint.example.org/.well-known/jwks.json',
+      '  audiences: ["https://wallet.example.org"]',
+      '  authorizedClients: [adopter-front-end]',
+      '  requiredScopes: [oid4vci:offer]',
+      'store:',
+      '  maximumOffers: 4096',
+      '',
+    ].join('\n');
     const productFixtures = [
       ['breg', 'registry.yaml', 'kind: RegistryProject\nentities:\n  - id: host-person\n', 'host-person'],
       ['casework', 'casework.yaml', 'kind: CaseworkProject\nqueues:\n  - id: host-queue\n', 'host-queue'],
-      ['scheduling', 'scheduling.yaml', 'kind: SchedulingPolicyPackage\nservices:\n  - id: host-service\n', 'host-service'],
-      ['messaging', 'messaging.yaml', 'kind: MessagingPackage\nproviders:\n  - id: host-provider\n', 'host-provider'],
+      ['scheduling', 'scheduling.yaml', 'kind: SchedulingProject\nservices:\n  - id: host-service\n', 'host-service'],
+      ['messaging', 'messaging.yaml', 'kind: MessagingProject\nproviders:\n  - id: host-provider\n', 'host-provider'],
       ['discovery', 'origins.yaml', 'schemaVersion: registry-discovery/origins/v1alpha1\norigins:\n  - originId: host-origin\n', 'host-origin'],
       ['render', 'manifest.yaml', 'kind: RenderBundle\ndocuments:\n  - id: host-document\n', 'host-document'],
       ['manifest', 'custom.yaml', 'schema_version: registry-manifest/v1\ncatalog:\n  id: host-catalog\n', 'host-catalog'],
-      ['evidence-oid4vci', 'wallet-config.yml', 'issuer:\n  publicUrl: https://issuer.example.invalid\n', 'issuer'],
+      ['evidence-oid4vci', 'wallet-config.yml', oid4vciRuntime, 'credentialIssuer'],
     ];
     const initialFolder = vscode.workspace.workspaceFolders?.[0];
     assert.ok(initialFolder);
@@ -190,7 +217,7 @@ suite('Registry Stack extension', () => {
     fs.mkdirSync(nestedSelectorsPath, { recursive: true });
     fs.writeFileSync(
       path.join(nestedEvidencePath, 'evidence-project.yaml'),
-      'version: 1\nproject: evidence-authoring\n',
+      'apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1\nkind: EvidenceAuthoringProject\n',
     );
     fs.writeFileSync(
       path.join(nestedEvidencePath, 'source.openapi.yaml'),

@@ -1,8 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha3/CheckReport.schema.json",
+  "$id": "https://id.registrystack.org/schemas/casework/check-report/check-report.v1alpha3.schema.json",
   "title": "CheckReport",
   "description": "Versioned JSON report emitted by caseworkctl for check.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+    },
+    "kind": {
+      "const": "CheckReport"
+    }
+  },
+  "unevaluatedProperties": false,
   "oneOf": [
     {
       "type": "object",
@@ -16,7 +30,8 @@
         "project",
         "effective",
         "profile",
-        "findings",
+        "filesChecked",
+        "diagnostics",
         "networkAccess",
         "databaseAccess"
       ],
@@ -43,7 +58,7 @@
           "type": "string"
         },
         "effective": {
-          "type": "object"
+          "$ref": "#/$defs/effective"
         },
         "profile": {
           "enum": [
@@ -51,14 +66,22 @@
             "production"
           ]
         },
-        "findings": {
-          "$ref": "#/$defs/findings"
+        "filesChecked": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3140
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/warnings"
         },
         "networkAccess": {
           "const": false
         },
         "databaseAccess": {
           "const": false
+        },
+        "runtimeConfig": {
+          "type": "string"
         },
         "bregPackage": {
           "type": "object",
@@ -76,8 +99,7 @@
               "type": "string"
             },
             "packageDigest": {
-              "type": "string",
-              "pattern": "^sha256:[0-9a-f]{64}$"
+              "$ref": "#/$defs/Digest"
             },
             "registryRevision": {
               "type": "string"
@@ -145,7 +167,6 @@
       "required": [
         "severity",
         "code",
-        "artifact",
         "path",
         "message",
         "suggestedAction"
@@ -168,14 +189,249 @@
         },
         "suggestedAction": {
           "type": "string"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ],
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048577
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048577
+            }
+          }
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "path",
+              "message"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048577
+              },
+              "column": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048577
+              },
+              "path": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     },
-    "findings": {
+    "warnings": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/diagnostic"
+        "allOf": [
+          {
+            "$ref": "#/$defs/diagnostic"
+          },
+          {
+            "properties": {
+              "severity": {
+                "const": "warning"
+              }
+            }
+          }
+        ],
+        "unevaluatedProperties": false
       }
+    },
+    "effective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectId",
+        "inbox",
+        "reviewKinds",
+        "reviewProducers"
+      ],
+      "properties": {
+        "projectId": {
+          "type": "string"
+        },
+        "mode": {
+          "const": "standalone"
+        },
+        "queues": {
+          "type": "array",
+          "items": {
+            "$ref": "../project/project.v1alpha1.schema.json#/$defs/QueuePolicy"
+          }
+        },
+        "reviewKinds": {
+          "type": "array",
+          "items": {
+            "$ref": "../project/project.v1alpha1.schema.json#/$defs/ReviewKindPolicy"
+          }
+        },
+        "reviewProducers": {
+          "type": "array",
+          "items": {
+            "$ref": "../project/project.v1alpha1.schema.json#/$defs/ReviewProducerPolicy"
+          }
+        },
+        "inbox": {
+          "$ref": "../project/project.v1alpha1.schema.json#/$defs/InboxPolicy"
+        },
+        "sourceConnections": {
+          "const": 0
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/checkedSource"
+          }
+        },
+        "sourceDescription": {
+          "type": "string"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sources",
+            "queues"
+          ],
+          "properties": {
+            "sources": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 64
+            },
+            "queues": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        }
+      }
+    },
+    "checkedSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceId",
+        "sourceAdapter",
+        "requests"
+      ],
+      "properties": {
+        "sourceId": {
+          "type": "string"
+        },
+        "sourceAdapter": {
+          "type": "string"
+        },
+        "requests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/checkedRequest"
+          }
+        }
+      }
+    },
+    "checkedRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity",
+        "queue",
+        "queueMode",
+        "routingRules",
+        "applicationMode",
+        "clock",
+        "target"
+      ],
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "queue": {
+          "type": "string"
+        },
+        "queueMode": {
+          "type": "string"
+        },
+        "routingRules": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "applicationMode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clock": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "elapsed"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "elapsed": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
     }
   }
 }

@@ -313,7 +313,7 @@ pub struct Document<'a> {
 
 pub fn document(values: &Document<'_>) -> String {
     format!(
-        r#"apiVersion: registry.registrystack.org/breg-mcp-runtime/v1alpha1
+        r#"apiVersion: id.registrystack.org/formats/breg/mcp-runtime/v1alpha1
 kind: BRegMcpRuntimeConfig
 listener:
   bind: {listen}
@@ -335,7 +335,7 @@ registry:
   accessProfile: citizen-agent
   audience: {AUDIENCE}
   scopes: [{SCOPE}]
-  requestTimeoutMilliseconds: 5000
+  attemptTimeoutMilliseconds: 5000
 exchange:
   tokenEndpoint: {token_endpoint}
   clientId: {GATEWAY}

@@ -26,6 +26,7 @@
 //! tooling, examples, and CI all read that one pin.
 
 pub mod bootstrap;
+pub mod check;
 pub mod container;
 pub mod description;
 pub mod grant;
@@ -34,6 +35,9 @@ pub mod issuer;
 pub mod local;
 mod local_session;
 pub mod render;
+#[cfg(feature = "schema")]
+pub mod schema;
+pub mod task_connection;
 pub mod version;
 
 /// Test-only fixture support. Never used by, or reachable from, any runtime
@@ -67,4 +71,22 @@ pub enum ToolingError {
     PortOccupied { detail: String },
     #[error("the filesystem refused this session: {reason}")]
     Filesystem { reason: &'static str },
+    /// A file this crate reads was refused. Its report places every finding
+    /// and repeats no value it read (CFG-SEC-3).
+    #[error("{what} was refused: {fix}\n{}", .report.render_human().trim_end())]
+    FileRefused {
+        what: &'static str,
+        fix: &'static str,
+        report: Box<registry_platform_yaml::Report>,
+    },
+}
+
+impl ToolingError {
+    /// The findings of a refused file, for a caller that prints them as JSON.
+    pub fn report(&self) -> Option<&registry_platform_yaml::Report> {
+        match self {
+            ToolingError::FileRefused { report, .. } => Some(report),
+            _ => None,
+        }
+    }
 }

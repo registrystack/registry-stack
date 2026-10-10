@@ -1,0 +1,40 @@
+# Local callers for `caseworkctl dev`. The pinned local token issuer
+# that `dev` starts beside Casework, registers each client below and issues it
+# short-lived tokens carrying these claims. One client binds each access
+# profile `casework.yaml` declares, so a first start serves every role in the
+# tutorial without another file. `registry_actor_kind: human` is the claim
+# Casework requires of a person; a Requester is a calling system, so it carries
+# no such claim.
+#
+# `dev` generates a fresh private key per client under
+# `.casework/dev/credentials/`; nothing here is a credential, and none of it
+# belongs in a deployment.
+apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
+kind: CaseworkDevClients
+clients:
+  - id: administrator
+    accessProfile: administrator
+    scopes: [casework:admin]
+    claims:
+      registry_actor_kind: human
+  - id: supervisor
+    accessProfile: supervisor
+    scopes: [casework:supervisor]
+    claims:
+      registry_actor_kind: human
+  - id: staff
+    accessProfile: staff
+    scopes: [casework:staff]
+    claims:
+      registry_actor_kind: human
+  - id: requester
+    accessProfile: requester
+    scopes: [casework:request]
+# The directory `dev` seeds as an Administrator on the first start, so
+# `caseworkctl doctor` reports ready and the inbox opens. Every queue
+# `casework.yaml` declares needs a team serving it.
+directory:
+  - team: decisions-team
+    queue: decisions
+    staff: [staff]
+    supervisors: [supervisor]

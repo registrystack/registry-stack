@@ -5,6 +5,10 @@
 //! starts services and requires `python3` and `openssl` on the host. The pinned
 //! stock-issuer journey lives in the Evidence client acceptance suite; this
 //! suite keeps the strict production HTTPS, signing, and audit handoff proof.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 
 use std::{
     collections::BTreeMap,
@@ -617,7 +621,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
     fixture.stage_local_project_without_governance();
     assert_success(
         evidencectl()
-            .args(["keygen", "token", "--out"])
+            .args(["keygen", "token", "--output"])
             .arg(fixture.project.join("secrets/source-token"))
             .output()
             .expect("local source token keygen starts"),
@@ -674,7 +678,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
     let governed_question = fs::read_to_string(fixture.project.join("questions/adult-status.yaml"))
         .expect("governed question");
     assert!(governed_question.contains(&format!("  requirement: {REQUIREMENT}")));
-    assert!(governed_question.contains(&format!("    id: {CONCEPT}")));
+    assert!(governed_question.contains(&format!("    uri: {CONCEPT}")));
     assert!(fixture.project.join("fixtures/adult-status.yaml").is_file());
 
     let local_source_token =
@@ -879,12 +883,16 @@ impl Fixture {
         let source_files = [
             (
                 "selectors/person-reference-v1.yaml",
-                "maximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n".to_owned(),
+                "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 200\nfields:\n  person_id: {type: string, minimumBytes: 1, maximumBytes: 200}\n".to_owned(),
             ),
             (
                 "sources/people.yaml",
                 format!(
-                    r#"transport: http-json
+                    r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: {source_origin}
 posture: field-projected
 authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}
@@ -974,7 +982,7 @@ source:
   ref: people
 answers:
   - concept: is_adult
-    id: {CONCEPT}
+    uri: {CONCEPT}
     type: boolean
 derivation: derivations/adult-status.rhai
 disclosure:
@@ -996,7 +1004,8 @@ governance:
 }
 "#;
         let fixture = format!(
-            r#"fixture: registry.evidence.acceptance.production-handoff/v1
+            r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
 coequal_acceptance_definition: true
 synthetic_only: true
 common:
@@ -1051,7 +1060,7 @@ privacy_expectation:
         let governance = question
             .find("governance:\n")
             .expect("adult question governance block");
-        let question = question[..governance].replace(&format!("    id: {CONCEPT}\n"), "");
+        let question = question[..governance].replace(&format!("    uri: {CONCEPT}\n"), "");
         fs::write(&question_path, question).expect("governance-free local question");
         fs::remove_file(self.project.join("fixtures/adult-status.yaml"))
             .expect("withhold production fixture during local dev");
@@ -1071,7 +1080,9 @@ privacy_expectation:
             fs::write(
                 self.project.join(format!("selectors/{profile}.yaml")),
                 format!(
-                    "maximumAggregateBytes: 200\nfields:\n  {field}: {{type: string, minimumBytes: 1, maximumBytes: 200}}\n"
+                    "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 200\nfields:\n  {field}: {{type: string, minimumBytes: 1, maximumBytes: 200}}\n"
                 ),
             )
             .expect("role-bound selector");
@@ -1081,7 +1092,9 @@ privacy_expectation:
         fs::write(
             self.project.join("sources/immunizations.yaml"),
             format!(
-                r#"transport: http-json
+                r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: {source_origin}
 posture: field-projected
 authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}
@@ -1112,7 +1125,9 @@ factSchema: schemas/immunizations-facts.schema.yaml
         fs::write(
             self.project.join("sources/relationships.yaml"),
             format!(
-                r#"transport: http-json
+                r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+transport: http-json
 baseUrl: {source_origin}
 posture: field-projected
 authentication: {{kind: static-authorization, tokenRef: 'secret:file/source-token'}}
@@ -1250,7 +1265,7 @@ source:
   ref: people
 answers:
   - concept: age_bracket
-    id: {AGE_CONCEPT}
+    uri: {AGE_CONCEPT}
     type: controlled-category
     values: [under-18, 18-to-24, 25-to-64, 65-or-older]
 derivation: derivations/age-bracket.rhai
@@ -1282,10 +1297,10 @@ source:
   ref: immunizations
 answers:
   - concept: schedule_complete
-    id: {SCHEDULE_CONCEPT}
+    uri: {SCHEDULE_CONCEPT}
     type: boolean
   - concept: dose_count
-    id: {DOSE_COUNT_CONCEPT}
+    uri: {DOSE_COUNT_CONCEPT}
     type: bounded-integer
     minimum: 0
     maximum: 20
@@ -1321,7 +1336,7 @@ source:
   ref: relationships
 answers:
   - concept: relationship_confirmed
-    id: {RELATIONSHIP_CONCEPT}
+    uri: {RELATIONSHIP_CONCEPT}
     type: boolean
 derivation: derivations/parent-relationship.rhai
 disclosure:
@@ -1382,7 +1397,8 @@ governance:
         fs::write(
             self.project.join("fixtures/age-bracket.yaml"),
             format!(
-                r#"fixture: registry.evidence.acceptance.production-age-bracket/v1
+                r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
 coequal_acceptance_definition: true
 synthetic_only: true
 common:
@@ -1419,7 +1435,8 @@ privacy_expectation:
         fs::write(
             self.project.join("fixtures/immunization-summary.yaml"),
             format!(
-                r#"fixture: registry.evidence.acceptance.production-immunization-summary/v1
+                r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
 coequal_acceptance_definition: true
 synthetic_only: true
 common:
@@ -1474,7 +1491,8 @@ privacy_expectation:
         fs::write(
             self.project.join("fixtures/parent-relationship.yaml"),
             format!(
-                r#"fixture: registry.evidence.acceptance.production-parent-relationship/v1
+                r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
 coequal_acceptance_definition: true
 synthetic_only: true
 common:
@@ -1576,9 +1594,9 @@ privacy_expectation:
         let public = self.root.join("oidc-public.jwk.json");
         assert_success(
             evidencectl()
-                .args(["keygen", "signing", "--out-dir"])
+                .args(["keygen", "signing", "--output-dir"])
                 .arg(self.oidc_private.parent().expect("OIDC private directory"))
-                .arg("--public-out")
+                .arg("--public-output")
                 .arg(&public)
                 .output()
                 .expect("OIDC keygen starts"),
@@ -1586,7 +1604,7 @@ privacy_expectation:
         );
         assert_success(
             evidencectl()
-                .args(["jwks", "--out"])
+                .args(["jwks", "--output"])
                 .arg(&self.oidc_jwks)
                 .arg(&public)
                 .output()
@@ -1601,9 +1619,9 @@ privacy_expectation:
         let generated_public = self.root.join("evidence-transit-public.jwk.json");
         assert_success(
             evidencectl()
-                .args(["keygen", "signing", "--out-dir"])
+                .args(["keygen", "signing", "--output-dir"])
                 .arg(self.root.join("transit-evidence-key"))
-                .arg("--public-out")
+                .arg("--public-output")
                 .arg(&generated_public)
                 .output()
                 .expect("Evidence Transit fixture keygen starts"),
@@ -1749,7 +1767,7 @@ authorityProfiles:
         for name in ["audit-hmac-key", "subject-binding-hmac-key"] {
             assert_success(
                 evidencectl()
-                    .args(["keygen", "secret", "--out"])
+                    .args(["keygen", "secret", "--output"])
                     .arg(self.secrets.join(name))
                     .output()
                     .expect("HMAC keygen starts"),
@@ -1758,7 +1776,7 @@ authorityProfiles:
         }
         assert_success(
             evidencectl()
-                .args(["keygen", "token", "--out"])
+                .args(["keygen", "token", "--output"])
                 .arg(&self.source_token)
                 .output()
                 .expect("source token keygen starts"),
@@ -1766,7 +1784,7 @@ authorityProfiles:
         );
         assert_success(
             evidencectl()
-                .args(["jwks", "--out"])
+                .args(["jwks", "--output"])
                 .arg(&self.evidence_jwks)
                 .arg(self.active_evidence_public_jwk())
                 .output()

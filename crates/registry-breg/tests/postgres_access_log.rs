@@ -51,7 +51,7 @@ impl ReadinessProbe for Ready {
 fn compiled() -> CompiledRegistry {
     let permission = json!({"entity":"entry", "operations":["get","list","lookup"],
         "readableFields":["label"], "lookups":[{"selector":"by-subject","valueOrigin":"request"}],
-        "rowBoundaries":[]});
+        "rowBoundaries":"unrestricted"});
     let source = json!({
         "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
         "registry":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
@@ -62,8 +62,8 @@ fn compiled() -> CompiledRegistry {
             "accessLog":{"subjectField":"subject","trustedIntermediaries":["evidence-service"],
                 "exemptions":{"investigator":{"reason":"investigation-policy-canary","delayDays":7}}}}],
         "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredPurposes":[PURPOSE],"permissions":[permission.clone()]},
-            {"id":"investigator","principalClaim":"sub","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":[permission]}
+            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":[permission.clone()]},
+            {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":[permission]}
         ]
     });
     compile_project(
@@ -95,14 +95,14 @@ fn compiled_relationships() -> CompiledRegistry {
                     "relationship-investigator":{"sourceEntity":"case","reason":"relationship-policy-canary","delayDays":7}}}}
         ],
         "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredPurposes":[PURPOSE],"permissions":[
-                {"entity":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":[]}]},
-            {"id":"investigator","principalClaim":"sub","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":[
-                {"entity":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":[],
+            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":[
+                {"entity":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}]},
+            {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":[
+                {"entity":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
                     "readPaths":[{"path":"people","readableFields":["label"]}]},
-                {"entity":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":[]}]},
-            {"id":"relationship-investigator","principalClaim":"sub","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":[
-                {"entity":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":[],
+                {"entity":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}]},
+            {"id":"relationship-investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":[
+                {"entity":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
                     "readPaths":[{"path":"people","readableFields":["label"]}]}]}
         ]
     });
@@ -847,12 +847,12 @@ fn compiled_with_history() -> CompiledRegistry {
                 {"id":"label","type":"string","maxLength":128,"required":true,"classification":"restricted"}],
             "accessLog":{"subjectField":"subject"}}],
         "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredPurposes":[PURPOSE],"permissions":[
+            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":[
                 {"entity":"entry","operations":["get","snapshot","revisions"],"readableFields":["label"],
-                    "revisionAccess":true,"rowBoundaries":[]}]},
-            {"id":"steward","principalClaim":"sub","requiredPurposes":[PURPOSE],"permissions":[
+                    "revisionAccess":true,"rowBoundaries":"unrestricted"}]},
+            {"id":"steward","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":[
                 {"entity":"entry","operations":["create"],"readableFields":["subject","label"],
-                    "writableFields":["subject","label"],"rowBoundaries":[]}]}
+                    "writableFields":["subject","label"],"rowBoundaries":"unrestricted"}]}
         ]
     });
     compile_project(

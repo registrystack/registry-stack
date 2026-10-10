@@ -1,0 +1,13 @@
+id: anchor
+rules: [CFG-YAML-3, CFG-SEC-3]
+summary: An anchor is refused at the anchor, and the anchored value is not repeated.
+mutation:
+  append: |
+    conformanceAnchor: &conformance {marker}
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.anchor
+      path: /conformanceAnchor
+      at: {line: 1, column: 20}
+      suggestedAction: Remove the anchor and write the value in full where it is used.

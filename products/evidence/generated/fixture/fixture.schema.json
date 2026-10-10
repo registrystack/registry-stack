@@ -1,0 +1,56 @@
+{
+  "$defs": {
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/fixture/fixture.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/fixture/v1alpha1"
+    },
+    "cases": {
+      "description": "The cases, which together cover every required category.",
+      "items": {
+        "additionalProperties": true,
+        "properties": {
+          "declaredUnresolved": {
+            "const": true
+          },
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object",
+        "x-registry-passthrough": "the offline runner reads the members of the replay mode it runs and refuses what that mode does not know"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "common": {
+      "description": "What every case starts from.",
+      "type": "object",
+      "x-registry-passthrough": "the offline runner reads the members of the replay mode it runs and refuses what that mode does not know"
+    },
+    "kind": {
+      "const": "EvidenceFixture"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "synthetic_only",
+    "cases"
+  ],
+  "title": "Evidence fixture set",
+  "type": "object",
+  "x-registry-passthrough": "the offline runner reads the members of the replay mode it runs and refuses what that mode does not know"
+}

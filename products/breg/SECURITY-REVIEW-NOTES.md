@@ -230,7 +230,7 @@ attempted.
 
 ### Accepted deviations from the design
 
-- The `bregctl test` receipt (`breg-schema-test-receipt/v2`) binds the
+- The `bregctl test` receipt (`schema-test-receipt/v2`) binds the
   project source closure, including every reviewed migration file by path and
   SHA-256, in place of the retired `signingInputSha256`. A changed review
   invalidates the receipt. Tests:
@@ -1399,14 +1399,13 @@ equalled what the descriptor already fixed.
 ### Enforcement and defaults
 
 - Before a migration's assertions and before each reviewed step, the rehearsal
-  sets the descriptor's `lockTimeoutMs` and `statementTimeoutMs`, or a
-  backfill step's own, through the same bounded setter activation uses, and
+  sets the descriptor's `lockTimeoutMilliseconds` and
+  `statementTimeoutMilliseconds`, or a backfill step's own, through the same bounded setter activation uses, and
   restores the compiler's bound for the generated statements.
-- A newly captured receipt that carries `proofs` is refused by `bregctl`
-  with `migration.review.receipt_proofs_retired`. A package the previous
-  release built with one keeps loading, with the member ignored, so an
-  active package survives the upgrade; nothing reads its values, and that
-  acceptance is removed in the next release.
+- A receipt that carries `proofs` is refused with `config.removed-key` at
+  that member, by `bregctl` when it captures the receipt and by the runtime
+  when it loads a package that carries one (see "Reviewed migration documents
+  read through the shared reader").
 - The mismatch refusal and the `--fingerprint-only` report carry schema
   fingerprints only, which are catalog digests and already appear in `test`
   reports and package manifests. `--fingerprint-only` takes no credentials,
@@ -1420,7 +1419,7 @@ equalled what the descriptor already fixed.
 `crates/registry-bregctl/tests/cli/reviewed_migrations.rs`:
 `reviewed_successor_refuses_a_receipt_that_carries_retired_proofs`.
 `crates/registry-breg/tests/migration_plan.rs`:
-`reviewed_package_whose_receipt_carries_the_previous_release_proofs_still_loads`.
+`reviewed_package_whose_receipt_carries_the_retired_proofs_is_refused`.
 `crates/registry-bregctl/src/lib.rs`:
 `review_fingerprint_mismatch_names_the_declared_and_the_measured_fingerprint`.
 `crates/registry-bregctl/tests/wasm_test_lifecycle.rs`:
@@ -1592,8 +1591,7 @@ set and includes it in the definition digest. The digest also binds the types
 and mappings of processing fields and the source columns read by their derived
 SQL, so an unchanged expression cannot keep old releases visible after its
 input definitions change. Unrelated field definitions do not enter the digest.
-Anonymous profiles, encrypted
-processing fields, and consent-gated count grants are refused.
+Encrypted processing fields and consent-gated count grants are refused.
 
 Publication computes one ended period under the current package binding and
 one statement snapshot, retaining its shared history head for the freshness
@@ -1643,8 +1641,9 @@ reads its operator-supplied token file before calling the Rust client. Release l
 clients accept the complete envelope the server's
 cursor codec can issue, while retaining a fixed size bound.
 
-Anonymous refusals return before authenticated refusal auditing, preventing
-unauthenticated requests from filling that journal or observing sink health.
+A request without a verified bearer token is refused with 401 before
+authenticated refusal auditing, preventing unauthenticated requests from
+filling that journal or observing sink health.
 Authenticated unknown datasets and ungranted profiles enter refusal auditing;
 unknown IDs use a fixed route identity so caller input cannot enter the journal.
 Unmatched routes record the actual standard HTTP method and a fixed unknown
@@ -1662,7 +1661,7 @@ checked arithmetic, suppression, independent rounding, canonical bytes, and
 CSV escaping. The PostgreSQL statistics tests verify exact runtime privileges,
 atomic withdrawal, unexpected grants and altered withdrawal functions, and the
 authenticated HTTP release lifecycle. They also pin alias remapping in definition
-digests, owner count parity, anonymous refusals under audit failure, stored-byte
+digests, owner count parity, unauthenticated refusals under audit failure, stored-byte
 digest equality, real definition successor activation, and publication after
 maintained history erasure and rebaseline, including erasure between computation
 and persistence. The outer HTTP timeout test blocks the source table and verifies
@@ -2286,3 +2285,235 @@ against it; that reader already sees the raw principal beside it.
   to no current caller; finish or cancel open runs before such a change.
 - **Raw creator values stay with the run.** No run retention exists, so the
   issuer and principal stay as long as the run row does.
+
+## Runtime file decoded by the shared reader
+
+`runtime.yaml` is decoded through the shared runtime loader
+(`registry-platform-config`), which reads and types the file in one pass,
+instead of a product-side `serde_path_to_error` pass over the loader's
+generic value. It touches deployment defaults and the value-free reporting of
+operator configuration. This replaces the removed-runtime-key refusal codes
+and the unset-variable wording that "State older than the immediate
+predecessor" describes.
+
+### Threat
+
+An operator who cannot see every problem in the file, with its position,
+edits it by trial and error, and a refusal that echoes a configured value
+leaks a secret or a substituted value into logs and terminals. A product-side
+second decode also loses the reader's all-unknown-keys reporting, so an
+unknown key inside a platform block (`package`, `authentication.oidc`,
+`audit`) was reported alone or not at all.
+
+### Enforcement and defaults
+
+- `runtime_config_loader()` in `crates/registry-breg/src/runtime_config.rs`
+  declares the envelope and the removed keys (`database.url`,
+  `database.password`, `database.plaintext`), and `RawRuntimeConfig` is
+  decoded by the loader directly. The platform blocks are read through the
+  reader's shared-block recipe, not serde `flatten`.
+- Every member is closed, so a registry-project member such as `entities`,
+  `webhooks`, or `telemetry` is refused as `config.unknown-key` wherever it
+  appears. The heuristic that looked for those names across the document is
+  removed; the binding maps (`eventDestinations`, `evidenceProviders`,
+  `reviewAuthorities`, `reviewExecutors`) were already exempt from it, and a
+  logical id there is still not a governed member.
+- A listener `bind` that is not a numeric socket address and an
+  `audit.hashKeyRef` that is not a secret reference are refused by the reader
+  at their own pointer (`config.invalid-value`) rather than as the binding.
+  The semantic checks that follow (private or loopback address, distinct
+  sockets, provider roots) are unchanged.
+- `breg` that refuses its runtime file prints one fixed sentence and the
+  reader's diagnostics in the human shape on stderr. Each names the file path
+  the operator passed, as Evidence and Casework already do, and none names a
+  configured value. The JSON operational log on stdout carries only the
+  closed refusal class and no path. `ReaderRefusal`'s `Debug` prints the
+  deciding code and pointer only, so a startup error carried elsewhere never
+  prints the path.
+- The file bound is the shared 1 MiB (CFG-YAML-6), raised from 64 KiB. The
+  bound on the document after `${...}` substitution is removed: a substituted
+  value is held to the bound of the member it fills. The environment is
+  operator-held, as the file is.
+- A substitution refusal names the variable to set, as every product's does,
+  and never its value or a `${NAME:?message}` message. The variable name is
+  already written in the file the operator holds.
+
+### Tests
+
+- `crates/registry-breg/tests/runtime_config.rs`:
+  `two_unknown_keys_inside_each_shared_block_are_all_reported_with_positions`
+  (fails when a block is read through `flatten`),
+  `a_document_refusal_names_its_field_and_never_echoes_the_refused_value`,
+  `unknown_package_keys_are_refused_as_document_errors_without_their_value`,
+  `an_unknown_package_key_holding_a_set_variable_is_refused_without_the_substituted_value`,
+  `raw_database_urls_inline_secrets_and_plaintext_posture_are_refused`
+  (the removed keys, value-free), `a_substitution_inside_a_secret_reference_is_refused`,
+  and `an_oversized_substituted_value_is_refused_by_its_member_without_echo`.
+- `crates/registry-breg/tests/startup_http.rs`:
+  `provenance_operational_logs_metrics_and_traces_are_separate_closed_and_value_free`
+  runs the `breg` binary on a refused file and proves stdout carries no path
+  or value and stderr carries the reader's diagnostic with its position and
+  fix and no value.
+- `crates/registry-bregctl/src/doctor.rs`:
+  `a_refused_runtime_file_reports_every_reader_diagnostic_unchanged`.
+
+### Accepted residuals
+
+- **Stderr names the file path.** An operator who forwards stderr into a
+  shared log forwards the path of the runtime file. The path is the one the
+  operator typed, and the stdout log stays path-free.
+- **No bound on the substituted document as a whole.** A file of many
+  `${...}` expressions that each expand to a large variable can make the
+  decoded document much larger than the file. Both the file and the
+  environment are operator-held; a bound belongs in the shared loader, for
+  every product, if one is wanted.
+- **The `bregctl` JSON report carries no line or column.** Reader
+  diagnostics keep their code, pointer, and fix in `bregctl --format json`,
+  but the tool report has no source position field; the human `breg` output
+  carries it.
+
+## Runtime references and URLs typed by the shared reader
+
+Every `*Ref` member of `runtime.yaml` is decoded as the shared
+`SecretReference`, and the URLs a runtime calls or compares (`listener.publicOrigin`,
+an Evidence provider's `baseUrl`, the task-grant status `baseUrl` and
+`sourceIssuer`) as the shared `Url`. It touches secret reference handling,
+outbound endpoints, and the value-free reporting of operator configuration.
+
+### Threat
+
+A product-side parse of each reference, repeated per block, can drift: one
+block accepting a reference another refuses, or a refusal that echoes the
+inline secret an operator pasted where a reference belongs. A URL checked only
+after decode reports the whole block, not the member, so the operator cannot
+tell which value to fix.
+
+### Enforcement and defaults
+
+- The database `runtimeUrlRef` and `migrationUrlRef`, `cursor.secretRef`, the
+  review authority, review executor, and Evidence provider credentials
+  (`tokenRef`, `privateKeyJwt.privateKeyRef`, `trustedJwksRef`,
+  `caBundleRef`), an event destination's `hmacSha256KeyRef` and TLS
+  `caBundleRef` and `clientIdentityRef`, the attachment storage and
+  verification references, the field-encryption `dekRef`, and the task-grant
+  status `privateKeyRef` and `caBundleRef` are `SecretReference`
+  (`crates/registry-platform-config`). The reader refuses a value that is not
+  `secret:env/NAME` or `secret:file/name` as `config.invalid-value` at the
+  member and never repeats it. Which providers a reference may name is still
+  checked against `secretProviders` after decode, unchanged; the
+  field-encryption `dekRef` still refuses an environment reference.
+- `Url` (`crates/registry-platform-yaml`) refuses anything but an absolute
+  `http` or `https` URL with a host and no user information, of at most 2048
+  characters. The product checks that follow are unchanged: `publicOrigin`,
+  an Evidence `baseUrl`, and a task-grant `baseUrl` are `https`, with `http`
+  only for a loopback host. `sourceIssuer` is compared with the Casework
+  issuer and never fetched, so `http` stays accepted there; a non-URL issuer
+  such as a `urn:` is now refused.
+- An empty `authentication.oidc.assertionIssuers` mapping is refused: it
+  restricts which authority each client may exchange from, and omitting the
+  member is how a file applies no assertion-issuer rule (CFG-EMPTY-2). A
+  client listed with `[]` may exchange from no authority, as a client left
+  out may not; that was already the verifier's behaviour.
+- The published schema states the same: each reference is
+  `$ref: SecretReference`, each URL `$ref: Url`, and an optional reference,
+  path, or retention member publishes no `default: null` and says what
+  omitting it means.
+
+### Tests
+
+- `crates/registry-breg/tests/runtime_config.rs`:
+  `raw_database_urls_inline_secrets_and_plaintext_posture_are_refused` (an
+  inline database URL refused at `/database/runtimeUrlRef` without its
+  password), `invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refused`
+  (a traversing key reference refused at the member, value-free), and
+  `invalid_assertion_issuer_shapes_are_refused` (the empty mapping refused,
+  an empty per-client list accepted as no authority).
+- `crates/registry-breg/src/attachment_storage.rs` and
+  `crates/registry-breg/src/attachment_verification.rs`: an inline
+  credential is refused at decode and the error does not carry it.
+- `crates/registry-breg/src/task_grant/config.rs`: user information,
+  `http` outside loopback, and a fragment are refused in the status
+  `baseUrl`.
+
+### Accepted residuals
+
+- **A provider-specific refusal comes after decode.** A reference that names
+  a provider `secretProviders` does not enable is still refused by the
+  product check, with the runtime's code, after the reader has accepted its
+  shape.
+
+## Reviewed migration documents read through the shared reader
+
+The change reads the three reviewed migration documents, the descriptor, the
+rehearsal receipt, and the backup binding, through the shared configuration
+reader (`read_migration_descriptor`, `read_rehearsal_receipt`, and
+`read_backup_binding_document` in `crates/registry-breg/src/migration_plan.rs`;
+`read_backup_binding` in `crates/registry-breg/src/migration.rs`). Each now
+starts with its `apiVersion` and `kind`, uses the convention's spellings, and
+no longer has to be canonical JSON bytes. It touches the evidence a reviewed
+migration carries into a package and the backup evidence `plan` and `apply`
+require before a destructive step; the checks that evidence feeds are
+unchanged, so no security invariant row changes.
+
+### Threat
+
+1. Dropping the canonical-bytes rule must not let a descriptor change after
+   its rehearsal: the receipt's plan digest was the SHA-256 of the
+   descriptor's exact bytes.
+2. A document the reader cannot read must not reach the checks with a
+   member silently dropped or defaulted, and a refusal must not echo a digest,
+   path, or row count it was given.
+3. A receipt or binding written in the previous spelling must not be read as
+   an empty or partial one.
+
+### Enforcement and defaults
+
+- **Plan binding.** `planDigest` is the SHA-256 of the canonical JSON of the
+  decoded descriptor, header included, so whitespace and key order are free
+  while any member change, including its `apiVersion` or `kind`, breaks the
+  binding with the refusal it had. The SQL and assertion files stay bound by
+  their exact bytes. A package carries the descriptor bytes it was built
+  from, and loading the package revalidates the plan through the same
+  reader, so a package built from a descriptor in the previous spelling is
+  refused on load.
+- **Strict decode.** The binding keeps its 64 KiB cap and the descriptor and
+  receipt their 1 MiB one. Unknown, duplicate, missing, and renamed keys, a
+  wrong header, and a malformed digest are refused before any semantic check:
+  `bregctl` and `plan`/`apply` print the reader's code, JSON pointer, line,
+  and column, and the runtime's package load keeps its existing value-free
+  refusal. Renamed keys carry a removed-key entry naming their replacement,
+  and `proofs` is refused the same way.
+- **Unchanged checks.** The binding's absolute path, owner-only file, size,
+  age bound (`maximumAgeSeconds`, at most 31 days), prior package digest and
+  schema fingerprint, database identity, and backup digest checks run as
+  before, and so does every descriptor shape and step check.
+- **Value-free refusals.** Reader diagnostics name the key and the expected
+  shape, never the value; `bregctl` prints them unchanged under one sentence
+  naming the document.
+
+### Tests
+
+`crates/registry-breg/tests/migration_plan.rs`:
+`reviewed_migration_documents_refuse_their_previous_spellings_at_each_key`,
+`reviewed_descriptor_reformatted_by_hand_keeps_its_rehearsal_binding`, and
+`reviewed_package_whose_receipt_carries_the_retired_proofs_is_refused`.
+`crates/registry-breg/src/migration.rs`:
+`a_written_backup_binding_reads_back_through_the_shared_reader` and
+`a_backup_binding_in_its_previous_spelling_is_refused_with_positioned_diagnostics`.
+`crates/registry-bregctl/src/lib.rs`:
+`a_refused_backup_binding_document_keeps_the_reader_diagnostics`.
+`crates/registry-bregctl/tests/cli/reviewed_migrations.rs`:
+`reviewed_successor_accepts_a_reformatted_descriptor_and_refuses_previous_spellings`,
+`reviewed_successor_refuses_a_malformed_receipt_digest_at_its_key_without_repeating_it`,
+`reviewed_successor_refuses_duplicate_keys_headerless_documents_and_extra_artifacts`,
+and `reviewed_successor_refuses_a_receipt_that_carries_retired_proofs`.
+
+### Accepted residuals
+
+- **Packages carrying reviewed migrations are rebuilt.** A package built by an
+  earlier release with a reviewed migration is refused on load after the
+  upgrade; rewrite its documents in the new spelling and rebuild it. Nobody
+  runs Base Registry Engine in production yet.
+- **The migration ledger keeps its own spelling.** The backup references the
+  ledger records (`sha256`, `byteLength`) are internal database state, not a
+  document an operator writes, and are unchanged.

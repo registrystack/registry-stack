@@ -401,6 +401,10 @@ mod tests {
         )
         .unwrap();
         let agent_type = crate::render::agent_type_document(&description).unwrap();
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "reads back a ThunderID resource this crate rendered, an external format (platform/thunderid-resources) ThunderID owns, not configuration an operator writes"
+        )]
         let schema: serde_json::Value = serde_norway::from_str(&agent_type).unwrap();
         assert_eq!(schema["schema"]["evidence_tags"]["type"], "array");
         assert_eq!(schema["schema"]["evidence_tags"]["items"]["type"], "string");
@@ -410,6 +414,10 @@ mod tests {
             description.machine_clients[0].agent_id
         )))
         .unwrap();
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "reads back a ThunderID resource this crate rendered, an external format (platform/thunderid-resources) ThunderID owns, not configuration an operator writes"
+        )]
         let agent: serde_json::Value = serde_norway::from_str(&agent).unwrap();
         assert_eq!(
             agent["attributes"]["evidence_tags"],

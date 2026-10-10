@@ -374,30 +374,30 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
             }
           }],
           "accessProfiles":[{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{
+            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","submit_request","revise_request","cancel_request"],
               "readableFields":["placement","proposed-site"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           },{
-            "id":"request-submitter","principalClaim":"principal","permissions":[{
+            "id":"request-submitter","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","create","patch","submit_request"],
               "readableFields":["placement","proposed-site"],
               "writableFields":["placement","proposed-site"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           },{
-            "id":"request-applier","principalClaim":"principal","permissions":[{
+            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","apply_request"],
               "readableFields":["placement"],
-              "applyTargets":[{"entity":"placement", "rowBoundaries": []}],
-              "rowBoundaries": []
+              "applyTargets":[{"entity":"placement", "rowBoundaries": "unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]
           },{
-            "id":"placement-viewer","principalClaim":"principal","permissions":[{
+            "id":"placement-viewer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"placement",
               "operations":["get"],
               "readableFields":["site"],
@@ -405,7 +405,7 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
                 "requestType":"placement-correction-request",
                 "rowBoundaries":[{"field":"placement","claim":"placement_claim","operator":"equals"}]
               }],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,

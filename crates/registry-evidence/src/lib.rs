@@ -9,11 +9,14 @@ pub mod audit;
 pub mod auth;
 pub mod binding;
 pub mod bundle;
+pub mod check;
 #[doc(hidden)]
 pub mod cli;
+pub mod codelist;
 pub mod config;
 pub mod contracts;
 pub mod discovery;
+pub mod fixture;
 pub mod kernel;
 pub mod local_verification;
 pub mod model;
@@ -22,6 +25,8 @@ pub mod problem;
 pub mod rate_limit;
 pub mod rhai_runtime;
 pub mod runtime;
+#[cfg(feature = "schema")]
+pub mod schema;
 pub mod secrets;
 pub mod selector;
 pub mod server;
@@ -31,6 +36,7 @@ pub mod source_evidence;
 pub mod source_sqlite;
 pub mod trace;
 pub mod values;
+pub mod verification_policy;
 
 /// The response formats, their payload contract, and the strict verifier are
 /// owned by the portable `registry-evidence-verifier` crate and served here at

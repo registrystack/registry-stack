@@ -1,0 +1,11 @@
+id: oversize
+rules: [CFG-YAML-6]
+summary: A file one byte over 1 MiB, padded with comment lines at run time, is refused before parsing, with no position.
+encoding:
+  size: 1048577
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.too-large
+      path: ""
+      at: file

@@ -1,0 +1,36 @@
+{
+  "apiVersion": "id.registrystack.org/formats/breg/dev-state/v1alpha1",
+  "kind": "BRegDevState",
+  "project": "/home/operator/my-registry",
+  "owner": "6f1c2a7e-3b4d-4c5e-8f90-a1b2c3d4e5f6",
+  "status": "ready",
+  "bregPort": 8094,
+  "issuerPort": 8095,
+  "databasePort": 55448,
+  "requiresPostgis": false,
+  "clientsFile": "/home/operator/my-registry/dev-clients.yaml",
+  "sourceDigest": "5555555555555555555555555555555555555555555555555555555555555555",
+  "sequence": 1,
+  "instanceId": "my-registry",
+  "sourceRevision": "local",
+  "containerId": "6666666666666666666666666666666666666666666666666666666666666666",
+  "tlsFilesCopied": true,
+  "databaseReady": true,
+  "packageDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+  "activated": true,
+  "seeded": [
+    "operator-records"
+  ],
+  "seedImportAuthorities": {},
+  "seedImportIntents": {},
+  "binaries": {
+    "breg": {
+      "path": "/usr/local/bin/breg",
+      "version": "breg 0.40.0"
+    },
+    "docker": {
+      "path": "/usr/local/bin/docker",
+      "version": "Docker version 28.0.0"
+    }
+  }
+}

@@ -1,13 +1,16 @@
-institution: الهيئة النموذجية للخدمات العامة
-title: وصل دفع
-payer: الدافع
-id: رقم الهوية
-region: المنطقة
-details: البيان
-amount: المبلغ
-date: التاريخ
-method: طريقة الأداء
-footnote: هذا الوصل صادر آلياً ولا يتطلب توقيعاً
-ref: المرجع
-verify: التحقق الإلكتروني
-system-generated: مستند صادر آلياً من النظام دون توقيع
+apiVersion: id.registrystack.org/formats/render/labels/v1alpha1
+kind: RenderLabels
+labels:
+  institution: الهيئة النموذجية للخدمات العامة
+  title: وصل دفع
+  payer: الدافع
+  id: رقم الهوية
+  region: المنطقة
+  details: البيان
+  amount: المبلغ
+  date: التاريخ
+  method: طريقة الأداء
+  footnote: هذا الوصل صادر آلياً ولا يتطلب توقيعاً
+  ref: المرجع
+  verify: التحقق الإلكتروني
+  system-generated: مستند صادر آلياً من النظام دون توقيع

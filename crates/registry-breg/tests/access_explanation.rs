@@ -72,7 +72,7 @@ fn membership_source() -> Value {
     let grant = &mut source["accessProfiles"][0]["permissions"][0];
     grant["operations"] = json!(["get", "list"]);
     grant["writableFields"] = json!([]);
-    grant["rowBoundaries"] = json!([]);
+    grant["rowBoundaries"] = json!("unrestricted");
     grant["membershipBoundaries"] = json!([{
         "field":"organization", "membershipEntity":"membership",
         "membershipKeyField":"organization", "principalField":"principal", "activeField":"active"
@@ -89,6 +89,8 @@ fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
     // A project without consent configuration states no consent block.
     assert_eq!(explanation["consent"], serde_json::Value::Null);
     assert!(explanation.as_object().unwrap().contains_key("consent"));
+    // A project without statistical datasets states an empty audience list.
+    assert_eq!(explanation["statisticalDatasets"], json!([]));
     assert_eq!(explanation["rowReach"][0]["profile"], "clerk");
     assert_eq!(explanation["rowReach"][0]["ownerOnlyRequestReads"], false);
     assert_eq!(
@@ -110,12 +112,12 @@ fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
         .contains("not evaluated"));
 
     let mut broad = source();
-    broad["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!([]);
+    broad["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!("unrestricted");
     let registry = compile(&broad);
     assert!(registry
         .findings()
         .iter()
-        .any(|finding| finding.code == "access.profile.unrestricted_rows"));
+        .any(|finding| finding.code == "breg.access.profile-unrestricted-rows"));
     let explanation =
         serde_json::to_value(registry_breg::access::explain_access(&registry)).unwrap();
     assert_eq!(explanation["rowReach"][0]["rows"], "all");
@@ -179,11 +181,9 @@ fn access_explanation_includes_nested_target_authority_and_owner_read_limits() {
             .find(|reach| reach.surface == surface)
             .unwrap();
         assert_eq!(reach.rows, "all");
-        assert!(registry
-            .findings()
-            .iter()
-            .any(|finding| finding.code == "access.target.unrestricted_rows"
-                && finding.path == reach.source_path));
+        assert!(registry.findings().iter().any(|finding| finding.code
+            == "breg.access.target-unrestricted-rows"
+            && finding.path == reach.source_path));
     }
     let owner = explanation
         .row_reach
@@ -203,7 +203,7 @@ fn access_explanation_includes_nested_target_authority_and_owner_read_limits() {
 #[test]
 fn membership_row_reach_is_explicit_and_uses_the_selected_principal() {
     for (boundaries, rows, direct_claims) in [
-        (json!([]), "membership_bound", 0),
+        (json!("unrestricted"), "membership_bound", 0),
         (
             json!([{"field":"district", "claim":"districts", "operator":"in"}]),
             "claim_and_membership_bound",
@@ -224,31 +224,12 @@ fn membership_row_reach_is_explicit_and_uses_the_selected_principal() {
         assert_eq!(reach.membership_boundaries[0].principal_field, "principal");
         assert!(!registry.findings().iter().any(|finding| matches!(
             finding.code.as_str(),
-            "access.profile.unrestricted_rows" | "access.profile.unrestricted_collection"
+            "breg.access.profile-unrestricted-rows" | "breg.access.profile-unrestricted-collection"
         )));
         let claims = explanation.claim_contract.unwrap();
         assert_eq!(claims.principal_claims, ["sub".to_owned()].into());
         assert_eq!(claims.direct_claims.len(), direct_claims);
     }
-}
-
-#[test]
-fn membership_only_profiles_require_authentication() {
-    let mut source = membership_source();
-    let profile = &mut source["accessProfiles"][0];
-    profile.as_object_mut().unwrap().remove("principalClaim");
-    profile["requiredScopes"] = json!([]);
-    profile["anonymous"] = json!(true);
-    let failure = compile_project(
-        &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
-        &[],
-        CompileProfile::Authoring,
-    )
-    .expect_err("stored membership never grants anonymous record access");
-    assert!(failure
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "access.membership.authentication"));
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]

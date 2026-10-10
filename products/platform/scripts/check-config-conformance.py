@@ -110,15 +110,23 @@ ROWS: tuple[Row, ...] = (
     Row(
         product="render",
         loader_sources=("crates/registry-render/src",),
-        runtime_schema=Exemption("Render publishes no generated runtime schema"),
-        shared_blocks=(),
+        runtime_schema="products/render/schemas/runtime.schema.json",
+        shared_blocks=(
+            "Digest",
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "ListenerBind",
+            "PackageConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+        ),
         reference_refusal=TestRef(
             "crates/registry-render/src/runtime.rs",
             "environment_expressions_substitute_values_but_never_secret_references",
         ),
         authored_refusal=TestRef(
             "crates/registry-render/src/manifest.rs",
-            "an_authored_manifest_carrying_an_environment_expression_is_refused",
+            "cfg_sec_2_an_authored_manifest_carrying_an_environment_expression_is_refused",
         ),
         digest_mismatch=TestRef(
             "crates/registry-render/tests/serve.rs",
@@ -148,12 +156,12 @@ ROWS: tuple[Row, ...] = (
     Row(
         product="discovery",
         loader_sources=("crates/registry-discovery/src",),
-        runtime_schema=Exemption("Discovery publishes no generated runtime schema"),
-        shared_blocks=(),
+        runtime_schema="products/discovery/schemas/runtime.schema.json",
+        shared_blocks=("Digest", "ListenerBind", "ListenerConfig", "PackageConfig"),
         reference_refusal=Exemption("the Discovery runtime has no *Ref field"),
-        authored_refusal=Exemption(
-            "the Discovery runtime serves a built index and reads no authored "
-            "project file"
+        authored_refusal=TestRef(
+            "crates/registry-discoveryctl/src/project.rs",
+            "cfg_sec_2_authored_files_refuse_substitution_at_its_position",
         ),
         digest_mismatch=TestRef(
             "crates/registry-discovery/src/startup.rs",
@@ -161,17 +169,16 @@ ROWS: tuple[Row, ...] = (
         ),
         rust_blocks=(
             RustBlock(
-                "crates/registry-discovery/src/startup.rs",
+                "crates/registry-discovery/src/runtime_config.rs",
                 "RuntimeConfig",
                 "listener",
                 "ListenerConfig",
             ),
-        ),
-        hand_schemas=(
-            HandSchema(
-                "products/discovery/schemas/runtime.schema.json",
-                ("properties", "listener"),
-                "ListenerConfig",
+            RustBlock(
+                "crates/registry-discovery/src/runtime_config.rs",
+                "RuntimeConfig",
+                "package",
+                "PackageConfig",
             ),
         ),
     ),
@@ -268,9 +275,9 @@ ROWS: tuple[Row, ...] = (
             ),
             RustBlock(
                 "crates/registry-breg/src/runtime_config.rs",
-                "RawListenerConfig",
-                "bind",
-                "ListenerBind",
+                "RawRegistryListener",
+                "listener",
+                "ListenerConfig",
             ),
             RustBlock(
                 "crates/registry-breg/src/runtime_config.rs",
@@ -364,7 +371,7 @@ ROWS: tuple[Row, ...] = (
         ),
         authored_refusal=TestRef(
             "crates/registry-scheduling/src/config.rs",
-            "an_authored_policy_carrying_an_environment_expression_is_refused",
+            "a_packaged_policy_carrying_an_environment_expression_is_refused",
         ),
         digest_mismatch=TestRef(
             "crates/registry-scheduling/src/config.rs",
@@ -419,7 +426,7 @@ ROWS: tuple[Row, ...] = (
         ),
         digest_mismatch=TestRef(
             "crates/registry-messaging/src/config.rs",
-            "runtime_package_digest_pin_reports_expected_and_found",
+            "runtime_package_digest_pin_names_the_found_digest",
         ),
         rust_blocks=(
             RustBlock(
@@ -445,8 +452,18 @@ ROWS: tuple[Row, ...] = (
     Row(
         product="breg-mcp",
         loader_sources=("crates/registry-breg-mcp/src",),
-        runtime_schema=Exemption("the citizen service publishes no generated runtime schema"),
-        shared_blocks=(),
+        runtime_schema="products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
+        shared_blocks=(
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "JwksSource",
+            "ListenerBind",
+            "ListenerNetworkExposure",
+            "PrivateListenerConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+            "TlsTermination",
+        ),
         reference_refusal=TestRef(
             "crates/registry-breg-mcp/src/config.rs",
             "runtime_loader_refuses_environment_expressions_in_secret_references",
@@ -477,8 +494,17 @@ ROWS: tuple[Row, ...] = (
     Row(
         product="breg-review",
         loader_sources=("crates/registry-breg-review/src",),
-        runtime_schema=Exemption("the citizen service publishes no generated runtime schema"),
-        shared_blocks=(),
+        runtime_schema="products/breg/generated/review-runtime/review-runtime.schema.json",
+        shared_blocks=(
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "ListenerBind",
+            "ListenerNetworkExposure",
+            "PrivateListenerConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+            "TlsTermination",
+        ),
         reference_refusal=TestRef(
             "crates/registry-breg-review/src/config.rs",
             "runtime_loader_refuses_environment_expressions_in_secret_references",
@@ -503,11 +529,36 @@ ROWS: tuple[Row, ...] = (
             ),
         ),
     ),
+    Row(
+        product="evidence-oid4vci",
+        loader_sources=("crates/registry-evidence-oid4vci/src",),
+        runtime_schema="products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
+        shared_blocks=(
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "ListenerBind",
+            "ListenerConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+        ),
+        reference_refusal=TestRef(
+            "crates/registry-evidence-oid4vci/src/config.rs",
+            "runtime_loader_refuses_environment_expressions_in_secret_references",
+        ),
+        authored_refusal=Exemption(
+            "the wallet delivery service reads only its runtime configuration, "
+            "not authored package files"
+        ),
+        digest_mismatch=Exemption(
+            "the wallet delivery service owns no installed package; the Evidence "
+            "runtime it calls verifies the bundle it serves"
+        ),
+    ),
 )
 
 EXPECTED_PRODUCTS = frozenset(
     {"render", "discovery", "evidence", "breg", "casework", "scheduling",
-     "messaging", "breg-mcp", "breg-review"}
+     "messaging", "breg-mcp", "breg-review", "evidence-oid4vci"}
 )
 
 

@@ -1,0 +1,227 @@
+---
+import docsetsManifest from '../data/generated/docsets.json';
+import { docsetHasProduct, selectedDocset } from '../lib/docset-products.mjs';
+
+type Format = {
+  id: string;
+  title: string;
+  audience: 'authored' | 'operator';
+  files: string[];
+  syntax: string;
+  apiVersion: string | null;
+  kind: string | null;
+  exceptionClass: 'external-format' | 'exchange-model' | null;
+  schemaId: string | null;
+  schemaPath: string | null;
+  check: string | null;
+  stability: 'promised' | 'experimental' | 'unpromised';
+  docsetProduct: string | null;
+};
+
+type Product = {
+  id: string;
+  title: string;
+  docsetProduct: string | null;
+  references: { label: string; page: string }[];
+  checkPage: string | null;
+  formats: Format[];
+};
+
+interface Props {
+  products: Product[];
+}
+
+const audienceLabels: Record<Format['audience'], string> = {
+  authored: 'Authored',
+  operator: 'Operator',
+};
+
+const stabilityLabels: Record<Format['stability'], string> = {
+  promised: 'Promised',
+  experimental: 'Experimental',
+  unpromised: 'Unpromised',
+};
+
+const exceptionLabels: Record<NonNullable<Format['exceptionClass']>, string> = {
+  'external-format': 'External format',
+  'exchange-model': 'Exchange model',
+};
+
+const { products } = Astro.props;
+
+if (products.length === 0) {
+  throw new Error('the configuration format table is empty; run npm run generate');
+}
+
+for (const format of products.flatMap((product) => product.formats)) {
+  if (!audienceLabels[format.audience] || !stabilityLabels[format.stability]) {
+    throw new Error(`the configuration format table cannot label ${format.id}`);
+  }
+  if (format.exceptionClass && !exceptionLabels[format.exceptionClass]) {
+    throw new Error(`the configuration format table cannot label ${format.id}`);
+  }
+}
+
+// A docset publishes a product's formats only when it publishes the product,
+// so the table never names a product the rest of the docset leaves out.
+const docset = selectedDocset(docsetsManifest, process.env);
+const published = (gate: string | null) => gate === null || docsetHasProduct(docset, gate);
+const sections = products
+  .filter((product) => published(product.docsetProduct))
+  .map((product) => ({
+    ...product,
+    formats: product.formats.filter((format) => published(format.docsetProduct)),
+  }))
+  .filter((product) => product.formats.length > 0);
+
+// The page lives at reference/configuration-files/, two levels below the
+// docs root, so a relative link keeps the docset base.
+const href = (page: string) => `../../${page}/`;
+// Only a product page that renders ConfigurationFormatChecks carries a row per format.
+const checkFragment = (product: Product, format: Format) =>
+  product.checkPage?.startsWith('products/') || product.checkPage?.startsWith('reference/cli/')
+    ? ''
+    : `#check-${format.id.replace('/', '-')}`;
+---
+
+{
+  sections.map((product) => (
+    <section class="format-product">
+      <h3 id={`formats-${product.id}`}>{product.title}</h3>
+      {product.references.length > 0 && (
+        <p class="format-references">
+          Explained in{' '}
+          {product.references.map((reference, index) => (
+            <>
+              {index > 0 && (index === product.references.length - 1 ? ' and ' : ', ')}
+              <a href={href(reference.page)}>{reference.label}</a>
+            </>
+          ))}
+          .
+        </p>
+      )}
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Format and files</th>
+              <th scope="col">Audience</th>
+              <th scope="col">Header</th>
+              <th scope="col">Schema <code>$id</code></th>
+              <th scope="col">Check command</th>
+              <th scope="col">Stability</th>
+            </tr>
+          </thead>
+          <tbody>
+            {product.formats.map((format) => (
+              <tr id={`format-${format.id.replace('/', '-')}`}>
+                <th scope="row">
+                  {format.title}
+                  <ul class="value-list">
+                    {format.files.map((file) => (
+                      <li>
+                        <code>{file}</code>
+                      </li>
+                    ))}
+                  </ul>
+                </th>
+                <td>{audienceLabels[format.audience]}</td>
+                <td>
+                  {format.apiVersion || format.kind ? (
+                    <ul class="value-list">
+                      <li>
+                        {format.apiVersion ? (
+                          <code>apiVersion: {format.apiVersion}</code>
+                        ) : (
+                          'No apiVersion'
+                        )}
+                      </li>
+                      <li>{format.kind ? <code>kind: {format.kind}</code> : 'No kind'}</li>
+                    </ul>
+                  ) : format.exceptionClass ? (
+                    <>
+                      {exceptionLabels[format.exceptionClass]}
+                      <span class="note">No Registry Stack header</span>
+                    </>
+                  ) : (
+                    'None'
+                  )}
+                </td>
+                <td>
+                  {format.schemaId ? <code>{format.schemaId}</code> : 'None'}
+                  {format.schemaPath && (
+                    <span class="note">
+                      Source copy: <code>{format.schemaPath}</code>
+                    </span>
+                  )}
+                </td>
+                <td>
+                  {format.check ? <code>{format.check}</code> : 'None'}
+                  {format.check && product.checkPage && (
+                    <span class="note">
+                      <a href={`${href(product.checkPage)}${checkFragment(product, format)}`}>
+                        {product.title} reference
+                      </a>
+                    </span>
+                  )}
+                </td>
+                <td>{stabilityLabels[format.stability]}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  ))
+}
+
+<style>
+  .format-product {
+    margin-block: 2rem;
+  }
+
+  .format-references {
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+  }
+
+  .table-scroll {
+    overflow-x: auto;
+  }
+
+  .table-scroll table {
+    width: 100%;
+  }
+
+  .table-scroll th[scope='row'] {
+    text-align: start;
+    vertical-align: top;
+  }
+
+  .table-scroll td {
+    vertical-align: top;
+  }
+
+  .table-scroll code {
+    overflow-wrap: anywhere;
+  }
+
+  .note {
+    color: var(--sl-color-gray-2);
+    display: block;
+    font-size: var(--sl-text-xs);
+    font-weight: 400;
+    margin-top: 0.25rem;
+  }
+
+  .value-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  th[scope='row'] .value-list {
+    font-weight: 400;
+    margin-top: 0.25rem;
+  }
+</style>

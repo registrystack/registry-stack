@@ -1,0 +1,13 @@
+id: ambiguous-number
+rules: [CFG-VAL-1]
+summary: A plain scalar with a base prefix is refused in every position.
+mutation:
+  append: |
+    conformanceNumber: 0x1F
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.ambiguous-number
+      path: /conformanceNumber
+      at: {line: 1, column: 20}
+      suggestedAction: Write the number in decimal digits; quote it only where the key takes text.

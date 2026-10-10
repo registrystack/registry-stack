@@ -15,9 +15,9 @@ use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
-    redact_refused_values, AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
-    PackageConfig as SharedPackageConfig, RuntimeConfigErrorKind, RuntimeConfigLoader,
-    RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
+    AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
+    PackageConfig as SharedPackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
+    SecretError, SecretReference, SecretResolver,
 };
 use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
@@ -28,17 +28,16 @@ use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, ClaimNames, JwksFetcher, JwksFetcherConfig,
     OidcDiscoveryConfig, TokenVerifierConfig,
 };
+#[cfg(feature = "schema")]
+use registry_platform_yaml::{BoundedU32, BoundedU64};
+use registry_platform_yaml::{Diagnostic, Report, Severity, Source, Url};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-#[cfg(feature = "schema")]
-use crate::compiler::{
-    MAX_WEBHOOK_ATTEMPTS, MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS, MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS,
-};
 use crate::{
-    auth::AuthorityClaimConfig,
+    auth::{AuthenticationConfigError, AuthorityClaimConfig},
     cursor::CursorCodec,
     event_destination::{
         ActivatedEventDestinationRegistry, EventDestinationConfigs, RawEventDestinationConfigs,
@@ -51,7 +50,6 @@ use crate::{
     postgres::{ConnectionConfig, PoolBounds, SqlIdentifier},
 };
 
-const MAX_RUNTIME_CONFIG_BYTES: u64 = 64 * 1024;
 const MAX_PATH_BYTES: usize = 512;
 const MAX_DEPLOYMENT_VALUE_BYTES: usize = 256;
 const MAX_OIDC_VALUE_BYTES: usize = 2048;
@@ -96,13 +94,9 @@ const MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 = 1_048_576;
 const DEFAULT_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 =
     crate::wasm_handler::DEFAULT_WASM_GUEST_MEMORY_BYTES as u64;
 const MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 = 1_073_741_824;
-#[cfg(feature = "schema")]
-const MAX_DATABASE_POOL_SIZE: u64 = 128;
-#[cfg(feature = "schema")]
-const SECRET_REFERENCE_SCHEMA_PATTERN: &str =
-    "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$";
-#[cfg(feature = "schema")]
-const MAX_SECRET_REFERENCE_SCHEMA_LENGTH: usize = "secret:file/".len() + 128;
+const MAX_DATABASE_POOL_SIZE: u32 = 128;
+/// The longest a pool waits for, creates, or recycles a connection.
+const MAX_POOL_TIMEOUT_MILLISECONDS: u64 = 60_000;
 #[cfg(feature = "schema")]
 const SQL_IDENTIFIER_SCHEMA_PATTERN: &str = "^[_a-z][_a-z0-9]{0,62}$";
 #[cfg(feature = "schema")]
@@ -125,28 +119,84 @@ const EVENT_DESTINATION_PATH_SCHEMA_PATTERN: &str =
 pub const RUNTIME_CONFIG_API_VERSION: &str = "registry.registrystack.org/breg-runtime/v1alpha1";
 pub const RUNTIME_CONFIG_KIND: &str = "BRegRuntimeConfig";
 
+/// Keys the runtime file no longer accepts, each refused with the edit that
+/// replaces it.
+const REMOVED_KEYS: &[RemovedKey] = &[
+    RemovedKey {
+        path: "database.url",
+        replacement: "delete database.url and name the connection URL by secret reference in database.runtimeUrlRef and database.migrationUrlRef",
+    },
+    RemovedKey {
+        path: "database.password",
+        replacement: "delete database.password and put the password inside the connection URL that database.runtimeUrlRef and database.migrationUrlRef name by secret reference",
+    },
+    RemovedKey {
+        path: "database.plaintext",
+        replacement: "delete database.plaintext; the connection URL is always named by secret reference in database.runtimeUrlRef and database.migrationUrlRef",
+    },
+];
+
+/// The shared reader's refusal of a runtime configuration file: every
+/// diagnostic it reported, each with its code, pointer, line, and column.
+///
+/// `Debug` names the deciding code and pointer only, so a refusal carried in
+/// a startup error never prints the configured file path.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ReaderRefusal(registry_platform_config::RuntimeConfigError);
+
+impl ReaderRefusal {
+    /// Every diagnostic, in the order the reader reported them.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        self.0.diagnostics()
+    }
+
+    /// The diagnostic the refusal is classified by: the first error of the
+    /// earliest kind.
+    #[must_use]
+    pub fn deciding_diagnostic(&self) -> &Diagnostic {
+        self.0.deciding_diagnostic()
+    }
+}
+
+/// The deciding diagnostic on one line, without the file: its pointer, its
+/// message, and after `next:` its suggested action. Like every diagnostic, it
+/// never repeats a value.
+impl fmt::Display for ReaderRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let deciding = self.deciding_diagnostic();
+        let path = if deciding.path.is_empty() {
+            "/"
+        } else {
+            deciding.path.as_str()
+        };
+        write!(formatter, "{path}: {}", deciding.message)?;
+        if !deciding.suggested_action.is_empty() {
+            write!(formatter, "; next: {}", deciding.suggested_action)?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for ReaderRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let deciding = self.deciding_diagnostic();
+        formatter
+            .debug_struct("ReaderRefusal")
+            .field("code", &deciding.code)
+            .field("path", &deciding.path)
+            .finish()
+    }
+}
+
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum RuntimeConfigError {
-    #[error("the runtime configuration file is unavailable")]
-    Unavailable,
-    #[error("the runtime configuration file is unsafe")]
-    UnsafeFile,
-    #[error("the runtime configuration exceeds its resource bounds")]
-    Bounds,
-    #[error("runtime configuration environment expansion was refused")]
-    EnvExpansion,
-    #[error("runtime configuration substitutes into a secret reference or secret provider")]
-    SubstitutionInReference,
-    /// The document is not YAML this runtime reads, or a member does not fit
-    /// its typed shape. The message names the field and never the value.
-    #[error("the runtime configuration document is invalid: {0}")]
-    Document(String),
-    #[error("runtime configuration uses an unsupported apiVersion")]
-    InvalidApiVersion,
-    #[error("runtime configuration uses an unsupported kind")]
-    InvalidKind,
-    #[error("runtime configuration contains a governed member")]
-    GovernedMember,
+    /// The shared reader refused the file: it could not be read, it is not
+    /// in the shared YAML subset, its envelope is wrong, a substitution
+    /// failed, or a member does not fit its typed shape. The message is the
+    /// deciding diagnostic on one line and never repeats a value.
+    #[error("{0}")]
+    Reader(ReaderRefusal),
     #[error("runtime configuration contains an invalid deployment binding")]
     InvalidBinding,
     #[error(
@@ -169,6 +219,8 @@ pub enum RuntimeConfigError {
     UnsafeSecretProviderRoot,
     #[error("runtime configuration contains an invalid database binding")]
     InvalidDatabase,
+    #[error("runtime configuration asks for a plaintext database connection")]
+    PlaintextDatabase,
     #[error("runtime configuration contains an invalid package binding")]
     InvalidPackage,
     #[error("the configured package root is missing or is not a readable directory")]
@@ -199,89 +251,48 @@ pub enum RuntimeConfigError {
     Secret,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RuntimeConfigErrorMetadata {
-    code: &'static str,
-    path: &'static str,
-}
-
-impl RuntimeConfigErrorMetadata {
-    #[must_use]
-    pub const fn code(self) -> &'static str {
-        self.code
-    }
-
-    #[must_use]
-    pub const fn path(self) -> &'static str {
-        self.path
-    }
-}
-
 impl RuntimeConfigError {
+    /// The code of the refusal: the deciding reader diagnostic's code, or
+    /// this runtime's code for a rule the reader cannot state.
     #[must_use]
-    pub const fn metadata(&self) -> RuntimeConfigErrorMetadata {
-        RuntimeConfigErrorMetadata {
-            code: self.code(),
-            path: self.path(),
+    fn code(&self) -> &str {
+        match self {
+            Self::Reader(refusal) => &refusal.deciding_diagnostic().code,
+            Self::InvalidBinding => "breg.runtime.invalid-binding",
+            Self::InvalidInstanceId => "breg.runtime.invalid-instance-id",
+            Self::EnvironmentIdentityConflict => "breg.runtime.environment-identity-conflict",
+            Self::InvalidListener => "breg.runtime.invalid-listener",
+            Self::InvalidMetricsListener => "breg.runtime.invalid-metrics-listener",
+            Self::InvalidSecretProvider => "breg.runtime.invalid-secret-provider",
+            Self::SecretProviderRootUnavailable => "breg.runtime.secret-provider-root-unavailable",
+            Self::UnsafeSecretProviderRoot => "breg.runtime.unsafe-secret-provider-root",
+            Self::InvalidDatabase => "breg.runtime.invalid-database",
+            Self::PlaintextDatabase => "breg.runtime.plaintext-database",
+            Self::InvalidPackage => "breg.runtime.invalid-package",
+            Self::PackageRootUnavailable => "breg.runtime.package-root-unavailable",
+            Self::UnsafePackageRoot => "breg.runtime.unsafe-package-root",
+            Self::InvalidOidc => "breg.runtime.invalid-oidc",
+            Self::InvalidOidcLeeway => "breg.runtime.invalid-oidc-leeway",
+            Self::InvalidAudit => "breg.runtime.invalid-audit",
+            Self::InvalidCursor => "breg.runtime.invalid-cursor",
+            Self::InvalidEventDestination => "breg.runtime.invalid-event-destination",
+            Self::InvalidAttachmentStorage => "breg.runtime.invalid-attachment-storage",
+            Self::InvalidAttachmentVerification => "breg.runtime.invalid-attachment-verification",
+            Self::InvalidFieldEncryption => "breg.runtime.invalid-field-encryption",
+            Self::InvalidBounds => "breg.runtime.invalid-bounds",
+            Self::InvalidWasmExecution => "breg.runtime.invalid-wasm-execution",
+            Self::Secret => "breg.runtime.secret",
         }
     }
 
+    /// The RFC 6901 pointer the refusal concerns; `""` for the whole file.
     #[must_use]
-    pub const fn code(&self) -> &'static str {
+    fn path(&self) -> &str {
         match self {
-            Self::Unavailable => "runtime_config.unavailable",
-            Self::UnsafeFile => "runtime_config.unsafe_file",
-            Self::Bounds => "runtime_config.bounds",
-            Self::EnvExpansion => "runtime_config.env_expansion",
-            Self::SubstitutionInReference => "runtime_config.substitution_in_reference",
-            Self::Document(_) => "runtime_config.document",
-            Self::InvalidApiVersion => "runtime_config.invalid_api_version",
-            Self::InvalidKind => "runtime_config.invalid_kind",
-            Self::GovernedMember => "runtime_config.governed_member",
-            Self::InvalidBinding => "runtime_config.invalid_binding",
-            Self::InvalidInstanceId => "runtime_config.invalid_instance_id",
-            Self::EnvironmentIdentityConflict => "runtime_config.environment_identity_conflict",
-            Self::InvalidListener => "runtime_config.invalid_listener",
-            Self::InvalidMetricsListener => "runtime_config.invalid_metrics_listener",
-            Self::InvalidSecretProvider => "runtime_config.invalid_secret_provider",
-            Self::SecretProviderRootUnavailable => {
-                "runtime_config.secret_provider_root_unavailable"
-            }
-            Self::UnsafeSecretProviderRoot => "runtime_config.unsafe_secret_provider_root",
-            Self::InvalidDatabase => "runtime_config.invalid_database",
-            Self::InvalidPackage => "runtime_config.invalid_package",
-            Self::PackageRootUnavailable => "runtime_config.package_root_unavailable",
-            Self::UnsafePackageRoot => "runtime_config.unsafe_package_root",
-            Self::InvalidOidc => "runtime_config.invalid_oidc",
-            Self::InvalidOidcLeeway => "runtime_config.invalid_oidc_leeway",
-            Self::InvalidAudit => "runtime_config.invalid_audit",
-            Self::InvalidCursor => "runtime_config.invalid_cursor",
-            Self::InvalidEventDestination => "runtime_config.invalid_event_destination",
-            Self::InvalidAttachmentStorage => "runtime_config.invalid_attachment_storage",
-            Self::InvalidAttachmentVerification => "runtime_config.invalid_attachment_verification",
-            Self::InvalidFieldEncryption => "runtime_config.invalid_field_encryption",
-            Self::InvalidBounds => "runtime_config.invalid_bounds",
-            Self::InvalidWasmExecution => "runtime_config.invalid_wasm_execution",
-            Self::Secret => "runtime_config.secret",
-        }
-    }
-
-    #[must_use]
-    pub const fn path(&self) -> &'static str {
-        match self {
-            Self::Unavailable
-            | Self::UnsafeFile
-            | Self::Bounds
-            | Self::EnvExpansion
-            | Self::SubstitutionInReference
-            | Self::Document(_)
-            | Self::GovernedMember
-            | Self::InvalidBinding
-            | Self::Secret => "/",
-            Self::InvalidApiVersion => "/apiVersion",
+            Self::Reader(refusal) => &refusal.deciding_diagnostic().path,
+            Self::InvalidBinding | Self::Secret => "",
             Self::InvalidInstanceId => "/identity/instanceId",
             Self::EnvironmentIdentityConflict => "/identity/databaseInitializationEnvironment",
-            Self::InvalidKind => "/kind",
             Self::InvalidListener => "/listener",
             Self::InvalidMetricsListener => "/metricsListener",
             Self::InvalidSecretProvider => "/secretProviders",
@@ -289,6 +300,7 @@ impl RuntimeConfigError {
                 "/secretProviders/file/root"
             }
             Self::InvalidDatabase => "/database",
+            Self::PlaintextDatabase => "/database/testOnlyPlaintext",
             Self::InvalidPackage => "/package",
             Self::PackageRootUnavailable | Self::UnsafePackageRoot => "/package/root",
             Self::InvalidOidc => "/authentication/oidc",
@@ -302,6 +314,114 @@ impl RuntimeConfigError {
             Self::InvalidBounds => "/operationalTimeouts",
             Self::InvalidWasmExecution => "/wasmExecution",
         }
+    }
+
+    /// The edit that fixes a refusal this runtime decides itself
+    /// (CFG-DIAG-6). A reader refusal carries its own action in each
+    /// diagnostic.
+    fn suggested_action(&self) -> &'static str {
+        match self {
+            Self::Reader(_) => "",
+            Self::InvalidBinding => {
+                "Give every identity value as trimmed text without control characters, and declare in the runtime file, with a valid endpoint and credential, every task grant status source, Evidence provider, review authority, and review executor the package relies on."
+            }
+            Self::InvalidInstanceId => {
+                "Set identity.instanceId to a lowercase letter followed by at most 63 lowercase letters, digits, `-`, or `_`."
+            }
+            Self::EnvironmentIdentityConflict => {
+                "Set identity.environment and identity.databaseInitializationEnvironment to the environment the database was initialized in."
+            }
+            Self::InvalidListener => {
+                "Set listener.bind to a numeric address and port, and listener.publicOrigin, when given, to an https origin (http only on loopback) with no query, fragment, or user information."
+            }
+            Self::InvalidMetricsListener => {
+                "Set metricsListener.bind to a loopback or private numeric address with a named port, on a socket the Registry listener does not also bind."
+            }
+            Self::InvalidSecretProvider => {
+                "Declare each secret provider once, with the file provider's root an absolute normal path."
+            }
+            Self::SecretProviderRootUnavailable => {
+                "Create the file secret provider root as a readable directory, or point secretProviders.file.root at one."
+            }
+            Self::UnsafeSecretProviderRoot => {
+                "Point secretProviders.file.root at a path with no symbolic link in it."
+            }
+            Self::InvalidDatabase => {
+                "Name database.runtimeUrlRef, database.migrationUrlRef, and database.trustedRootCertificateRef (PEM root certificates), when given, by secret reference, give each SQL role a lowercase identifier, and use two references when the roles differ."
+            }
+            Self::PlaintextDatabase => {
+                "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."
+            }
+            Self::InvalidPackage => {
+                "Set package.root to an absolute normal path and package.expectedDigest, when given, to the package's sha256 digest."
+            }
+            Self::PackageRootUnavailable => {
+                "Create the package root as a readable directory, or point package.root at one."
+            }
+            Self::UnsafePackageRoot => "Point package.root at a path with no symbolic link in it.",
+            Self::InvalidOidc => {
+                "Correct authentication.oidc and authentication.authorityClaims: an https issuer (http only on loopback), bounded values with no whitespace, distinct list entries, and claim names that do not repeat."
+            }
+            Self::InvalidOidcLeeway => {
+                "Set authentication.oidc.leewayMilliseconds to a multiple of 1000 no greater than 300000."
+            }
+            Self::InvalidAudit => {
+                "Give the file audit destination an absolute path, and leave audit.path, audit.rotateBytes, and audit.retainDays out for the stdout destination."
+            }
+            Self::InvalidCursor => "Name cursor.secretRef by secret reference.",
+            Self::InvalidEventDestination => {
+                "Correct the event destination bindings: an https origin, a path that starts with `/`, and secret references for keys and TLS material."
+            }
+            Self::InvalidAttachmentStorage => {
+                "Correct attachmentStorage: name every credential by secret reference and give the S3 endpoint as an https URL."
+            }
+            Self::InvalidAttachmentVerification => {
+                "Correct attachmentVerification: give the verifier as an https URL and name its authorization by secret reference."
+            }
+            Self::InvalidFieldEncryption => {
+                "Correct fieldEncryption: name the data key by secret reference and give the transit endpoint as an https URL."
+            }
+            Self::InvalidBounds => {
+                "Keep every timeout, retention, and pool member within the bounds the runtime schema states."
+            }
+            Self::InvalidWasmExecution => {
+                "Set wasmExecution.backend to a supported backend and keep its module and guest memory ceilings within the bounds the runtime schema states."
+            }
+            Self::Secret => {
+                "Make every secret reference resolve through the declared secret providers."
+            }
+        }
+    }
+
+    /// The refusal as diagnostics in the shared shape (CFG-DIAG-1): every
+    /// diagnostic the reader reported, or one for a rule this runtime
+    /// decides itself, naming `file` as its source when one is given.
+    #[must_use]
+    pub fn diagnostics(&self, file: Option<&Path>) -> Vec<Diagnostic> {
+        if let Self::Reader(refusal) = self {
+            return refusal.diagnostics().to_vec();
+        }
+        let mut diagnostic = Diagnostic::error(
+            self.code(),
+            self.path(),
+            self.to_string(),
+            self.suggested_action(),
+        );
+        diagnostic.source = file.map(|file| Source {
+            file: file.display().to_string(),
+            line: None,
+            column: None,
+        });
+        vec![diagnostic]
+    }
+
+    /// The refusal in the shared human form (CFG-DIAG-2): every diagnostic,
+    /// then the summary line.
+    #[must_use]
+    pub fn render_human(&self, file: Option<&Path>) -> String {
+        let mut report = Report::new(self.diagnostics(file));
+        report.set_files_checked(1);
+        report.render_human()
     }
 }
 
@@ -336,15 +456,13 @@ pub fn load_runtime_config_with_env(
     path: &Path,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<RuntimeConfig> {
-    validate_absolute_lexical_path(path, RuntimeConfigError::UnsafeFile)?;
-    let substituted = runtime_config_loader()
-        .load_with::<Value>(path, lookup)
-        .map_err(|error| runtime_config_error_from_loader(&error))?
+    let raw = runtime_config_loader()
+        .load_with::<RawRuntimeConfig>(path, lookup)
+        .map_err(|error| RuntimeConfigError::Reader(ReaderRefusal(error)))?
         .config;
-    runtime_config_from_substituted(substituted).and_then(|config| {
-        config.validate_loaded_paths()?;
-        Ok(config)
-    })
+    let config = RuntimeConfig::from_raw(raw)?;
+    config.validate_loaded_paths()?;
+    Ok(config)
 }
 
 pub fn parse_runtime_config(raw: &str) -> Result<RuntimeConfig> {
@@ -355,154 +473,179 @@ pub fn parse_runtime_config_with_env(
     raw: &str,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<RuntimeConfig> {
-    if raw.is_empty() || raw.len() > usize::try_from(MAX_RUNTIME_CONFIG_BYTES).unwrap_or(usize::MAX)
-    {
-        return Err(RuntimeConfigError::Bounds);
-    }
-    let substituted = runtime_config_loader()
-        .parse_str::<Value>(raw, lookup)
-        .map_err(|error| runtime_config_error_from_loader(&error))?
+    let raw = runtime_config_loader()
+        .parse_str::<RawRuntimeConfig>(raw, lookup)
+        .map_err(|error| RuntimeConfigError::Reader(ReaderRefusal(error)))?
         .config;
-    runtime_config_from_substituted(substituted)
+    RuntimeConfig::from_raw(raw)
 }
 
-/// The shared runtime configuration loader under BReg's envelope and bound.
-/// BReg reads the file through it: the loader holds the path,
-/// symbolic link, regular file, and bounded read checks.
+/// What an offline check of one runtime file found (CFG-CHECK-1).
+#[derive(Debug)]
+pub struct RuntimeConfigCheck {
+    /// Every finding, each naming the file as `path` was given to
+    /// [`check_runtime_config`].
+    pub diagnostics: Vec<Diagnostic>,
+    /// The file could not be read at all, as opposed to read and refused.
+    pub unavailable: bool,
+}
+
+/// Check the runtime file at the absolute `path` as `breg` reads it at
+/// startup, with no package, database, network, or secret material
+/// (CFG-CHECK-1).
+///
+/// With `substitute` set, `${NAME}` expressions are filled from the process
+/// environment and every value is checked. Without it, each expression is
+/// checked by syntax and position only, and a member that takes a URL, a URI,
+/// or an absolute path is read as a placeholder of that form. The runtime's
+/// own rules stop at their first refusal, as they do at startup; when that
+/// refusal is about a block that holds an expression, it says nothing about
+/// the file, and the check reports the warning
+/// `platform.runtime-config.check-incomplete` there in its place. The package
+/// root and the file secret provider root are not looked for: a runtime file
+/// is checked before the deployment it describes exists.
+///
+/// With the `registry` the file will serve, the authentication block is also
+/// held to the compiled access profiles, as startup holds it: a client the
+/// registry names that `authentication.oidc.allowedClients` does not list, or
+/// a principal claim the profiles do not use, is refused here.
+#[must_use]
+pub fn check_runtime_config(
+    path: &Path,
+    substitute: bool,
+    registry: Option<&CompiledRegistry>,
+) -> RuntimeConfigCheck {
+    let mut check = runtime_config_loader().check_offline::<RawRuntimeConfig>(
+        path,
+        substitute,
+        runtime_stand_in,
+    );
+    let mut diagnostics = std::mem::take(&mut check.diagnostics);
+    if let Some(loaded) = check.loaded.take() {
+        match RuntimeConfig::from_raw(loaded.config) {
+            Err(error) => {
+                for refusal in error.diagnostics(None) {
+                    diagnostics.push(if check.defers_within(&refusal.path) {
+                        // The rule read a stand-in, so its refusal says
+                        // nothing about the file; the rules after it did
+                        // not run, and the check says so.
+                        let mut warning = check.error_at(
+                            RUNTIME_CONFIG_KIND,
+                            registry_platform_config::INCOMPLETE_CODE,
+                            &refusal.path,
+                            "The check does not fill an expression this block holds, and a rule about the block needs its value; the check stopped here, and the rules after it were not checked.",
+                            "Check the file again with --environment, where the variable the expression names is set.",
+                        );
+                        warning.severity = Severity::Warning;
+                        warning
+                    } else {
+                        check.error_at(
+                            RUNTIME_CONFIG_KIND,
+                            &refusal.code,
+                            &refusal.path,
+                            refusal.message,
+                            refusal.suggested_action,
+                        )
+                    });
+                }
+            }
+            Ok(config) => {
+                for index in config.authentication().oidc().wildcard_spelled_clients() {
+                    let mut warning = check.error_at(
+                        RUNTIME_CONFIG_KIND,
+                        "breg.access.wildcard-spelled-item",
+                        &format!("/authentication/oidc/allowedClients/{index}"),
+                        "The item is spelled like a wildcard but names one client: `*` and `unrestricted` match nothing else in this list.",
+                        "List each client by its exact identifier, or write allowedClients: unrestricted to admit every client.",
+                    );
+                    warning.severity = Severity::Warning;
+                    diagnostics.push(warning);
+                }
+                if let Some(registry) = registry {
+                    if !check.defers_within("/authentication") {
+                        if let Err(error) = config.authentication().check_against(registry) {
+                            let (pointer, code) = authentication_refusal_site(error);
+                            diagnostics.push(check.error_at(
+                                RUNTIME_CONFIG_KIND,
+                                code,
+                                pointer,
+                                error.to_string(),
+                                "Correct the authentication block so it agrees with the project's access profiles.",
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    RuntimeConfigCheck {
+        diagnostics,
+        unavailable: check.unavailable,
+    }
+}
+
+/// The member of the runtime file an authentication refusal is about, and its
+/// diagnostic code.
+fn authentication_refusal_site(error: AuthenticationConfigError) -> (&'static str, &'static str) {
+    match error {
+        AuthenticationConfigError::NamedClientNotListed => (
+            "/authentication/oidc/allowedClients",
+            "breg.runtime.clients-unlisted",
+        ),
+        AuthenticationConfigError::PrincipalClaimMismatch => (
+            "/authentication/authorityClaims/principal",
+            "breg.runtime.principal-claim-mismatch",
+        ),
+        _ => (
+            "/authentication/authorityClaims",
+            "breg.runtime.invalid-authority-claims",
+        ),
+    }
+}
+
+/// A value that satisfies the member at `pointer`, so a deferred expression
+/// decides neither whether its neighbours decode nor whether the rules about
+/// its block run. Every member that takes a URL, a URI, or an absolute path
+/// has one; any other member takes the shared default.
+fn runtime_stand_in(pointer: &str) -> &'static str {
+    let segments: Vec<&str> = pointer.split('/').skip(1).collect();
+    match segments.as_slice() {
+        ["listener", "bind"] => "127.0.0.1:8080",
+        ["metricsListener", "bind"] => "127.0.0.1:9100",
+        ["listener", "publicOrigin"] => "https://registry.invalid",
+        ["authentication", "oidc", "issuer"] => "https://issuer.invalid",
+        ["authentication", "oidc", "jwksSource", "uri"] => "https://issuer.invalid/jwks",
+        ["package", "root"] => "/",
+        ["package", "expectedDigest"] => {
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        }
+        ["audit", "path"]
+        | ["fieldEncryption", "provider", "unixSocketPath"]
+        | ["eventDestinations", _, "path"] => "/deferred",
+        ["attachmentStorage" | "attachmentVerification", "endpoint"]
+        | ["eventDestinations", _, "origin"]
+        | ["evidenceProviders", _, "baseUrl"]
+        | ["taskGrantStatus", _, "baseUrl" | "sourceIssuer"]
+        | ["reviewAuthorities" | "reviewExecutors", _, "endpoint"]
+        | ["reviewAuthorities" | "reviewExecutors", _, "privateKeyJwt", "tokenEndpoint" | "assertionAudience" | "resource"] => {
+            "https://deferred.invalid/"
+        }
+        _ => registry_platform_config::DEFAULT_STAND_IN,
+    }
+}
+
+/// The shared runtime configuration loader under BReg's envelope. BReg reads
+/// the file through it: the loader holds the path, symbolic link, regular
+/// file, and bounded read checks, and the shared reader decodes the typed
+/// configuration, so every unknown key, its closest accepted key, and every
+/// position reach the operator. The file is held to the shared 1 MiB bound
+/// (CFG-YAML-6).
 const fn runtime_config_loader() -> RuntimeConfigLoader {
     RuntimeConfigLoader::new(RuntimeEnvelope {
         api_version: RUNTIME_CONFIG_API_VERSION,
         kind: RUNTIME_CONFIG_KIND,
     })
-    .max_bytes(MAX_RUNTIME_CONFIG_BYTES)
-}
-
-fn runtime_config_from_substituted(substituted: Value) -> Result<RuntimeConfig> {
-    // A substituted value may be longer than the expression it replaced, so
-    // the substituted document is held to the same bound as the file.
-    let substituted_len = serde_json::to_string(&substituted)
-        .map_err(|_| {
-            RuntimeConfigError::Document(
-                "the runtime configuration could not be measured after substitution".to_owned(),
-            )
-        })?
-        .len();
-    if substituted_len > usize::try_from(MAX_RUNTIME_CONFIG_BYTES).unwrap_or(usize::MAX) {
-        return Err(RuntimeConfigError::Bounds);
-    }
-    if contains_governed_member(&substituted) {
-        return Err(RuntimeConfigError::GovernedMember);
-    }
-    reject_invalid_binding_text(&substituted)?;
-    let raw: RawRuntimeConfig = serde_path_to_error::deserialize(substituted).map_err(|error| {
-        let field = error.path().to_string();
-        let field = if field == "." { "/".to_owned() } else { field };
-        let reason = redact_refused_values(&error.into_inner().to_string());
-        RuntimeConfigError::Document(format!("{field} is invalid: {reason}"))
-    })?;
-    RuntimeConfig::from_raw(raw)
-}
-
-/// The shared loader parses the document, checks its envelope, and substitutes
-/// `${VAR}` inside string values; each of its refusals keeps the code this
-/// runtime reported for the same cause.
-fn runtime_config_error_from_loader(
-    error: &registry_platform_config::RuntimeConfigError,
-) -> RuntimeConfigError {
-    match error.kind() {
-        RuntimeConfigErrorKind::Envelope if error.field() == "apiVersion" => {
-            RuntimeConfigError::InvalidApiVersion
-        }
-        RuntimeConfigErrorKind::Envelope => RuntimeConfigError::InvalidKind,
-        RuntimeConfigErrorKind::Substitution => RuntimeConfigError::EnvExpansion,
-        RuntimeConfigErrorKind::SubstitutionInReference => {
-            RuntimeConfigError::SubstitutionInReference
-        }
-        RuntimeConfigErrorKind::Bounds => RuntimeConfigError::Bounds,
-        RuntimeConfigErrorKind::Path | RuntimeConfigErrorKind::UnsafeFile => {
-            RuntimeConfigError::UnsafeFile
-        }
-        RuntimeConfigErrorKind::Unavailable => RuntimeConfigError::Unavailable,
-        RuntimeConfigErrorKind::RemovedKey
-        | RuntimeConfigErrorKind::Syntax
-        | RuntimeConfigErrorKind::Encoding
-        | RuntimeConfigErrorKind::InvalidValue
-        | RuntimeConfigErrorKind::AuthoredExpression
-        | RuntimeConfigErrorKind::AuthoredSyntax => {
-            RuntimeConfigError::Document(error.message().to_owned())
-        }
-    }
-}
-
-/// A listener address or an audit key reference that does not parse is
-/// refused as that binding, the code it had when the binding parsed its own
-/// text, before the typed document reports every other shape problem as a
-/// document error.
-fn reject_invalid_binding_text(document: &Value) -> Result<()> {
-    let refuses = |pointer: &str, parses: fn(&Value) -> bool| {
-        document
-            .pointer(pointer)
-            .is_some_and(|value| value.is_string() && !parses(value))
-    };
-    if refuses("/listener/bind", |value| {
-        ListenerBind::deserialize(value).is_ok()
-    }) {
-        return Err(RuntimeConfigError::InvalidListener);
-    }
-    if refuses("/metricsListener/bind", |value| {
-        ListenerBind::deserialize(value).is_ok()
-    }) {
-        return Err(RuntimeConfigError::InvalidMetricsListener);
-    }
-    if refuses("/audit/hashKeyRef", |value| {
-        SecretReference::deserialize(value).is_ok()
-    }) {
-        return Err(RuntimeConfigError::InvalidAudit);
-    }
-    Ok(())
-}
-
-fn contains_governed_member(value: &Value) -> bool {
-    const GOVERNED: &[&str] = &[
-        "entities",
-        "fields",
-        "accessProfiles",
-        "routes",
-        "hooks",
-        "packages",
-        "sources",
-        "semantics",
-        "classifications",
-        "relationships",
-        "mutationMode",
-        "readableFields",
-        "writableFields",
-        "rowBoundaries",
-        "requestVisibility",
-        "requiredScopes",
-        "requiredPurposes",
-        "retention",
-        "webhooks",
-        "telemetry",
-        "cors",
-    ];
-    match value {
-        Value::Object(mapping) => mapping.iter().any(|(key, value)| {
-            GOVERNED.contains(&key.as_str())
-                // Binding-map keys are compiler-issued logical ids. Do not
-                // reinterpret an id such as `hooks` as a governed field; the
-                // strict binding value types still reject undeployed members.
-                || (!matches!(
-                    key.as_str(),
-                    "eventDestinations"
-                        | "evidenceProviders"
-                        | "reviewAuthorities"
-                        | "reviewExecutors"
-                ) && contains_governed_member(value))
-        }),
-        Value::Array(values) => values.iter().any(contains_governed_member),
-        _ => false,
-    }
+    .removed_keys(REMOVED_KEYS)
 }
 
 #[derive(Clone)]
@@ -533,12 +676,6 @@ pub struct RuntimeConfig {
 
 impl RuntimeConfig {
     fn from_raw(raw: RawRuntimeConfig) -> Result<Self> {
-        if raw.api_version != RUNTIME_CONFIG_API_VERSION {
-            return Err(RuntimeConfigError::InvalidApiVersion);
-        }
-        if raw.kind != RUNTIME_CONFIG_KIND {
-            return Err(RuntimeConfigError::InvalidKind);
-        }
         let listener = ListenerConfig::from_raw(raw.listener)?;
         let identity = DeploymentIdentity::from_raw(raw.identity)?;
         let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
@@ -1078,8 +1215,23 @@ impl RuntimeConfig {
         if postgres.get_user() != Some(expected_role.as_str()) {
             return Err(RuntimeConfigError::InvalidDatabase);
         }
-        ConnectionConfig::require_tls_config(postgres, self.database.pool_bounds)
-            .map_err(|_| RuntimeConfigError::InvalidDatabase)
+        #[cfg(feature = "postgres-test")]
+        if self.database.test_only_plaintext {
+            return ConnectionConfig::from_test_config(postgres, self.database.pool_bounds)
+                .map_err(|_| RuntimeConfigError::InvalidDatabase);
+        }
+        let connection = match &self.database.trusted_root_certificate_ref {
+            Some(roots_ref) => {
+                let roots = self.secret_resolver()?.resolve_reference(roots_ref)?;
+                ConnectionConfig::require_tls_config_with_roots_pem(
+                    postgres,
+                    roots.expose_secret(),
+                    self.database.pool_bounds,
+                )
+            }
+            None => ConnectionConfig::require_tls_config(postgres, self.database.pool_bounds),
+        };
+        connection.map_err(|_| RuntimeConfigError::InvalidDatabase)
     }
 
     pub fn audit_profile(&self) -> Result<AuditProfile> {
@@ -1161,8 +1313,8 @@ pub struct ListenerConfig {
 }
 
 impl ListenerConfig {
-    fn from_raw(raw: RawListenerConfig) -> Result<Self> {
-        let bind = raw.bind.socket_addr();
+    fn from_raw(raw: RawRegistryListener) -> Result<Self> {
+        let bind = raw.listener.bind.socket_addr();
         Ok(Self {
             bind,
             public_origin: raw
@@ -1445,19 +1597,32 @@ impl fmt::Debug for SecretProvidersConfig {
 pub struct DatabaseConfig {
     runtime_url_ref: SecretReference,
     migration_url_ref: SecretReference,
+    trusted_root_certificate_ref: Option<SecretReference>,
+    #[cfg(feature = "postgres-test")]
+    test_only_plaintext: bool,
     pool_bounds: PoolBounds,
     roles: SqlRoles,
 }
 
 impl DatabaseConfig {
-    fn from_raw(raw: RawDatabaseConfig) -> Result<Self> {
-        if raw.plaintext.is_some() || raw.url.is_some() || raw.password.is_some() {
-            return Err(RuntimeConfigError::InvalidDatabase);
+    fn from_raw(raw: RawRegistryDatabase) -> Result<Self> {
+        #[cfg(not(feature = "postgres-test"))]
+        if raw.database.test_only_plaintext {
+            return Err(RuntimeConfigError::PlaintextDatabase);
         }
-        let runtime_url_ref =
-            parse_secret_reference(raw.runtime_url_ref, RuntimeConfigError::InvalidDatabase)?;
-        let migration_url_ref =
-            parse_secret_reference(raw.migration_url_ref, RuntimeConfigError::InvalidDatabase)?;
+        let runtime_url_ref = parse_secret_reference(
+            raw.database.runtime_url_ref,
+            RuntimeConfigError::InvalidDatabase,
+        )?;
+        let migration_url_ref = parse_secret_reference(
+            raw.database.migration_url_ref,
+            RuntimeConfigError::InvalidDatabase,
+        )?;
+        let trusted_root_certificate_ref = raw
+            .database
+            .trusted_root_certificate_ref
+            .map(|reference| parse_secret_reference(reference, RuntimeConfigError::InvalidDatabase))
+            .transpose()?;
         let roles = SqlRoles::from_raw(raw.roles)?;
         // One database reference logs in as one role, so two references are
         // required only when the runtime and migration roles differ.
@@ -1466,14 +1631,17 @@ impl DatabaseConfig {
         }
         let pool_bounds = PoolBounds::new(
             raw.pool.max_size,
-            millis(raw.pool.wait_timeout_milliseconds)?,
-            millis(raw.pool.create_timeout_milliseconds)?,
-            millis(raw.pool.recycle_timeout_milliseconds)?,
+            Duration::from_millis(raw.pool.wait_timeout_milliseconds),
+            Duration::from_millis(raw.pool.create_timeout_milliseconds),
+            Duration::from_millis(raw.pool.recycle_timeout_milliseconds),
         )
         .map_err(|_| RuntimeConfigError::InvalidBounds)?;
         Ok(Self {
             runtime_url_ref,
             migration_url_ref,
+            trusted_root_certificate_ref,
+            #[cfg(feature = "postgres-test")]
+            test_only_plaintext: raw.database.test_only_plaintext,
             pool_bounds,
             roles,
         })
@@ -1481,6 +1649,12 @@ impl DatabaseConfig {
 
     pub fn pool_bounds(&self) -> PoolBounds {
         self.pool_bounds
+    }
+
+    /// The secret reference to the PEM root certificates the database
+    /// connections trust, when the platform roots are not used.
+    pub fn trusted_root_certificate_ref(&self) -> Option<&SecretReference> {
+        self.trusted_root_certificate_ref.as_ref()
     }
 }
 
@@ -1490,6 +1664,13 @@ impl fmt::Debug for DatabaseConfig {
             .debug_struct("DatabaseConfig")
             .field("runtime_url_ref", &"<redacted>")
             .field("migration_url_ref", &"<redacted>")
+            .field(
+                "trusted_root_certificate_ref",
+                &self
+                    .trusted_root_certificate_ref
+                    .as_ref()
+                    .map(|_| "<redacted>"),
+            )
             .field("pool_bounds", &self.pool_bounds)
             .finish()
     }
@@ -1546,6 +1727,18 @@ impl AuthenticationConfig {
 
     pub fn authority_claim_config(&self) -> AuthorityClaimConfig {
         self.authority_claims.to_platform_config()
+    }
+
+    /// Hold this block to the compiled access profiles, as startup does.
+    pub fn check_against(
+        &self,
+        registry: &CompiledRegistry,
+    ) -> std::result::Result<(), AuthenticationConfigError> {
+        crate::auth::check_claim_mapping(
+            registry,
+            &self.oidc.token_verifier_config(),
+            &self.authority_claim_config(),
+        )
     }
 }
 
@@ -1608,19 +1801,19 @@ impl OidcVerifierConfig {
             return Err(RuntimeConfigError::InvalidOidc);
         }
         // Duplicate assertion-issuer client keys are already refused before this
-        // point: the shared loader parses the whole document into a generic
-        // value first, and that parse rejects any duplicate YAML mapping key
+        // point: the shared reader refuses any duplicate YAML mapping key
         // anywhere in the document, including here.
-        let assertion_issuer_clients = raw.assertion_issuers.keys().cloned().collect::<Vec<_>>();
+        let assertion_issuers = raw.assertion_issuers;
+        let assertion_issuer_clients = assertion_issuers.keys().cloned().collect::<Vec<_>>();
         validate_bounded_list(&assertion_issuer_clients)?;
-        for issuers in raw.assertion_issuers.values() {
+        for issuers in assertion_issuers.values() {
             validate_bounded_list(issuers)?;
             let issuer_unique = issuers.iter().collect::<HashSet<_>>();
             if issuer_unique.len() != issuers.len() {
                 return Err(RuntimeConfigError::InvalidOidc);
             }
         }
-        let max_token_lifetime = seconds_bounded(raw.max_token_lifetime_seconds, 1, 7200)?;
+        let max_token_lifetime = Duration::from_secs(raw.max_token_lifetime_seconds);
         let leeway = oidc_leeway(raw.leeway_milliseconds)?;
         let jwks_source = OidcJwksSource::from_block(raw.provider.jwks_source)?;
         Ok(Self {
@@ -1632,7 +1825,7 @@ impl OidcVerifierConfig {
             scope_separator: raw.scope_separator,
             allowed_clients: raw.allowed_clients,
             denied_kids: raw.denied_kids,
-            assertion_issuers: raw.assertion_issuers,
+            assertion_issuers,
             max_token_lifetime,
             leeway,
             jwks_cache: JwksCacheConfig::from_raw(raw.jwks_cache)?,
@@ -1658,6 +1851,23 @@ impl OidcVerifierConfig {
             request_timeout: self.jwks_cache.request_timeout,
             outage_tolerance: self.jwks_cache.outage_tolerance,
         }
+    }
+
+    /// Whether the file leaves `allowedClients` unrestricted, so a token from
+    /// any client is accepted.
+    #[must_use]
+    pub fn admits_every_client(&self) -> bool {
+        self.allowed_clients.is_empty()
+    }
+
+    /// The positions of listed clients spelled like a wildcard, which name one
+    /// client each.
+    fn wildcard_spelled_clients(&self) -> impl Iterator<Item = usize> + '_ {
+        self.allowed_clients
+            .iter()
+            .enumerate()
+            .filter(|(_, client)| matches!(client.as_str(), "*" | "unrestricted"))
+            .map(|(index, _)| index)
     }
 
     pub fn token_verifier_config(&self) -> TokenVerifierConfig {
@@ -2031,16 +2241,13 @@ pub struct JwksCacheConfig {
 
 impl JwksCacheConfig {
     fn from_raw(raw: RawJwksCacheConfig) -> Result<Self> {
-        if raw.max_document_bytes == 0 || raw.max_document_bytes > MAX_JWKS_DOCUMENT_BYTES {
-            return Err(RuntimeConfigError::InvalidOidc);
-        }
         Ok(Self {
-            cache_ttl: seconds_bounded(raw.cache_ttl_seconds, 1, 86_400)?,
-            negative_cache_ttl: seconds_bounded(raw.negative_cache_ttl_seconds, 1, 3_600)?,
-            refresh_cooldown: seconds_bounded(raw.refresh_cooldown_seconds, 1, 3_600)?,
+            cache_ttl: Duration::from_secs(raw.cache_ttl_seconds),
+            negative_cache_ttl: Duration::from_secs(raw.negative_cache_ttl_seconds),
+            refresh_cooldown: Duration::from_secs(raw.refresh_cooldown_seconds),
             max_document_bytes: raw.max_document_bytes,
-            request_timeout: millis_bounded(raw.request_timeout_milliseconds, 1, 30_000)?,
-            outage_tolerance: seconds_bounded(raw.outage_tolerance_seconds, 0, 86_400)?,
+            request_timeout: Duration::from_millis(raw.request_timeout_milliseconds),
+            outage_tolerance: Duration::from_secs(raw.outage_tolerance_seconds),
         })
     }
 }
@@ -2082,7 +2289,7 @@ impl AuthorityClaimsConfig {
                 return Err(RuntimeConfigError::InvalidOidc);
             }
         }
-        let contextual = raw.contextual.map(ClaimNames::from).unwrap_or_default();
+        let contextual = ClaimNames::from(raw.contextual);
         contextual
             .validate()
             .map_err(|_| RuntimeConfigError::InvalidOidc)?;
@@ -2179,11 +2386,6 @@ pub struct EventDeliveryConfig {
 
 impl EventDeliveryConfig {
     fn from_raw(raw: RawEventDeliveryConfig) -> Result<Self> {
-        if raw.payload_retention_days == 0
-            || raw.payload_retention_days > MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS
-        {
-            return Err(RuntimeConfigError::InvalidBounds);
-        }
         Ok(Self {
             payload_retention: Duration::from_secs(
                 u64::from(raw.payload_retention_days) * 24 * 60 * 60,
@@ -2204,11 +2406,6 @@ pub struct IdempotencyConfig {
 
 impl IdempotencyConfig {
     fn from_raw(raw: RawIdempotencyConfig) -> Result<Self> {
-        if raw.receipt_retention_days == 0
-            || raw.receipt_retention_days > crate::idempotency::MAX_RECEIPT_RETENTION_DAYS
-        {
-            return Err(RuntimeConfigError::InvalidBounds);
-        }
         Ok(Self {
             receipt_retention_days: raw.receipt_retention_days,
         })
@@ -2224,8 +2421,8 @@ impl IdempotencyConfig {
 impl CursorConfig {
     fn from_raw(raw: RawCursorConfig) -> Result<Self> {
         Ok(Self {
-            secret_ref: parse_secret_reference(raw.secret_ref, RuntimeConfigError::InvalidCursor)?,
-            max_age: seconds_bounded(raw.max_age_seconds, 1, 86_400)?,
+            secret_ref: raw.secret_ref,
+            max_age: Duration::from_secs(raw.max_age_seconds),
         })
     }
 
@@ -2256,19 +2453,11 @@ pub struct OperationalTimeouts {
 impl OperationalTimeouts {
     fn from_raw(raw: RawOperationalTimeouts) -> Result<Self> {
         Ok(Self {
-            http_request: millis_bounded(
-                raw.http_request_milliseconds,
-                1,
-                MAX_HTTP_REQUEST_TIMEOUT_MILLISECONDS,
-            )?,
-            shutdown_grace: millis_bounded(raw.shutdown_grace_milliseconds, 1, 300_000)?,
-            record_lock: millis_bounded(raw.record_lock_milliseconds, 1, 30_000)?,
-            migration_lock: millis_bounded(raw.migration_lock_milliseconds, 1, 300_000)?,
-            migration_statement: millis_bounded(
-                raw.migration_statement_milliseconds,
-                1,
-                3_600_000,
-            )?,
+            http_request: Duration::from_millis(raw.http_request_milliseconds),
+            shutdown_grace: Duration::from_millis(raw.shutdown_grace_milliseconds),
+            record_lock: Duration::from_millis(raw.record_lock_milliseconds),
+            migration_lock: Duration::from_millis(raw.migration_lock_milliseconds),
+            migration_statement: Duration::from_millis(raw.migration_statement_milliseconds),
         })
     }
 }
@@ -2289,13 +2478,6 @@ impl WasmExecutionConfig {
     pub(crate) fn from_raw(raw: RawWasmExecutionConfig) -> Result<Self> {
         let backend = crate::wasm_handler::WasmExecutionBackend::parse(&raw.backend)
             .ok_or(RuntimeConfigError::InvalidWasmExecution)?;
-        if raw.max_module_bytes < MINIMUM_WASM_EXECUTION_MODULE_BYTES
-            || raw.max_module_bytes > MAXIMUM_WASM_EXECUTION_MODULE_BYTES
-            || raw.max_guest_memory_bytes < MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES
-            || raw.max_guest_memory_bytes > MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES
-        {
-            return Err(RuntimeConfigError::InvalidWasmExecution);
-        }
         Ok(Self {
             max_module_bytes: raw.max_module_bytes,
             max_guest_memory_bytes: raw.max_guest_memory_bytes,
@@ -2400,17 +2582,11 @@ impl ReviewAuthorityConfig {
             (Some(token_ref), Some(recipient))
                 if crate::review_store::valid_completion_recipient(&recipient) =>
             {
-                Some((
-                    parse_secret_reference(token_ref, RuntimeConfigError::InvalidBinding)?,
-                    recipient,
-                ))
+                Some((token_ref, recipient))
             }
             _ => return Err(RuntimeConfigError::InvalidBinding),
         };
-        let token_ref = raw
-            .token_ref
-            .map(|reference| parse_secret_reference(reference, RuntimeConfigError::InvalidBinding))
-            .transpose()?;
+        let token_ref = raw.token_ref;
         let private_key_jwt = raw
             .private_key_jwt
             .map(ReviewPrivateKeyJwtConfig::from_raw)
@@ -2424,7 +2600,6 @@ impl ReviewAuthorityConfig {
             || raw.producer_id.trim().is_empty()
             || raw.producer_id.len() > 128
             || raw.producer_id.chars().any(char::is_control)
-            || !(1..=crate::review_store::MAXIMUM_REVIEW_RECOVERY_DAYS).contains(&raw.recovery_days)
         {
             return Err(RuntimeConfigError::InvalidBinding);
         }
@@ -2446,16 +2621,34 @@ impl ReviewAuthorityConfig {
 struct RawReviewAuthorityConfig {
     endpoint: String,
     profile: String,
-    #[serde(default)]
-    token_ref: Option<String>,
-    #[serde(default)]
+    /// A static bearer token for the review service. Exactly one of
+    /// `tokenRef` and `privateKeyJwt` is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token_ref: Option<SecretReference>,
+    /// A refreshing client-assertion credential for the review service.
+    /// Exactly one of `tokenRef` and `privateKeyJwt` is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     private_key_jwt: Option<RawReviewPrivateKeyJwtConfig>,
     producer_id: String,
-    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3650)))]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u32::<_, 1, { crate::review_store::MAXIMUM_REVIEW_RECOVERY_DAYS }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, { crate::review_store::MAXIMUM_REVIEW_RECOVERY_DAYS }>")
+    )]
     recovery_days: u32,
-    #[serde(default)]
-    completion_token_ref: Option<String>,
-    #[serde(default)]
+    /// The bearer token the review authority presents when it notifies this
+    /// registry that a review completed. Written together with
+    /// `completionRecipient`; omitted, no completion notification is
+    /// accepted and the registry polls for results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completion_token_ref: Option<SecretReference>,
+    /// The logical recipient the review authority names in each completion
+    /// notification. Written together with `completionTokenRef`; omitted, no
+    /// completion notification is accepted and the registry polls for
+    /// results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     completion_recipient: Option<String>,
 }
 
@@ -2492,23 +2685,12 @@ impl ReviewPrivateKeyJwtConfig {
         }
         Ok(Self {
             token_endpoint,
-            client_id_ref: parse_secret_reference(
-                raw.client_id_ref,
-                RuntimeConfigError::InvalidBinding,
-            )?,
-            client_assertion_key_ref: parse_secret_reference(
-                raw.client_assertion_key_ref,
-                RuntimeConfigError::InvalidBinding,
-            )?,
+            client_id_ref: raw.client_id_ref,
+            client_assertion_key_ref: raw.client_assertion_key_ref,
             assertion_audience: raw.assertion_audience,
             resource: raw.resource,
             scopes: raw.scopes,
-            ca_bundle_ref: raw
-                .ca_bundle_ref
-                .map(|reference| {
-                    parse_secret_reference(reference, RuntimeConfigError::InvalidBinding)
-                })
-                .transpose()?,
+            ca_bundle_ref: raw.ca_bundle_ref,
         })
     }
 }
@@ -2518,13 +2700,15 @@ impl ReviewPrivateKeyJwtConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawReviewPrivateKeyJwtConfig {
     token_endpoint: String,
-    client_id_ref: String,
-    client_assertion_key_ref: String,
+    client_id_ref: SecretReference,
+    client_assertion_key_ref: SecretReference,
     assertion_audience: String,
     resource: String,
     scopes: Vec<String>,
-    #[serde(default)]
-    ca_bundle_ref: Option<String>,
+    /// A PEM bundle of the roots that sign the token endpoint's certificate.
+    /// Omitted, the platform's trusted roots verify it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ca_bundle_ref: Option<SecretReference>,
 }
 
 #[derive(Clone)]
@@ -2554,10 +2738,7 @@ impl ReviewExecutorConfig {
             reqwest::Url::parse(&raw.endpoint).map_err(|_| RuntimeConfigError::InvalidBinding)?;
         registry_platform_httputil::client::ServiceBaseUrl::new(endpoint.clone())
             .map_err(|_| RuntimeConfigError::InvalidBinding)?;
-        let token_ref = raw
-            .token_ref
-            .map(|reference| parse_secret_reference(reference, RuntimeConfigError::InvalidBinding))
-            .transpose()?;
+        let token_ref = raw.token_ref;
         let private_key_jwt = raw
             .private_key_jwt
             .map(ReviewPrivateKeyJwtConfig::from_raw)
@@ -2580,9 +2761,13 @@ impl ReviewExecutorConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawReviewExecutorConfig {
     endpoint: String,
-    #[serde(default)]
-    token_ref: Option<String>,
-    #[serde(default)]
+    /// A static bearer token for the executing registry. Exactly one of
+    /// `tokenRef` and `privateKeyJwt` is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token_ref: Option<SecretReference>,
+    /// A refreshing client-assertion credential for the executing registry.
+    /// Exactly one of `tokenRef` and `privateKeyJwt` is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     private_key_jwt: Option<RawReviewPrivateKeyJwtConfig>,
     registry_id: String,
     access_profile: String,
@@ -2592,12 +2777,16 @@ struct RawReviewExecutorConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawRuntimeConfig {
+    /// The reader checks the envelope before it decodes; the members are
+    /// declared only so the generated schema describes them.
+    #[cfg(feature = "schema")]
     api_version: String,
+    #[cfg(feature = "schema")]
     kind: String,
-    listener: RawListenerConfig,
+    listener: RawRegistryListener,
     identity: RawDeploymentIdentity,
     secret_providers: registry_platform_config::SecretProvidersConfig,
-    database: RawDatabaseConfig,
+    database: RawRegistryDatabase,
     /// Defaults to PostgreSQL; S3 requires a bucket with versioning never enabled.
     #[serde(default)]
     attachment_storage: crate::attachment_storage::RawAttachmentStorageConfig,
@@ -2638,19 +2827,27 @@ struct RawRuntimeConfig {
     wasm_execution: RawWasmExecutionConfig,
     /// Optional operator-private metrics listener. Absent by default, which
     /// serves no metrics surface at all.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     metrics_listener: Option<RawMetricsListenerConfig>,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawListenerConfig {
-    bind: ListenerBind,
-    /// Canonical HTTPS origin (loopback HTTP for local development) for QGIS
-    /// discovery and pagination. Required when the registry exposes GIS collections.
+/// The registry's listener: the shared listener block and an optional public
+/// origin.
+struct RawRegistryListener {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/listener"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
+    listener: registry_platform_config::ListenerConfig,
+    /// Canonical public origin for QGIS discovery and pagination links, with
+    /// an optional deployment path prefix such as
+    /// `https://registry.example.org/breg`. It is `https`; `http` is accepted
+    /// only for a loopback host, for local development. Required when the
+    /// registry exposes GIS collections; omitted, the registry builds no
+    /// absolute discovery or paging links.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    public_origin: Option<String>,
+    public_origin: Option<Url>,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -2675,35 +2872,55 @@ struct RawDeploymentIdentity {
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawDatabaseConfig {
-    runtime_url_ref: String,
-    migration_url_ref: String,
+/// The registry's database: the shared database block and the connection
+/// pool and SQL roles the registry adds.
+struct RawRegistryDatabase {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/database"))]
+    #[cfg_attr(feature = "schema", schemars(flatten), serde(skip_serializing))]
+    database: registry_platform_config::DatabaseConfig,
     pool: RawPoolBounds,
     roles: RawSqlRoles,
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(skip))]
-    plaintext: Option<bool>,
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(skip))]
-    url: Option<String>,
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(skip))]
-    password: Option<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawPoolBounds {
+    #[serde(deserialize_with = "crate::contract::bounded_usize::<_, 1, MAX_DATABASE_POOL_SIZE>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, MAX_DATABASE_POOL_SIZE>")
+    )]
     max_size: usize,
     /// Defaults to the bounded PostgreSQL pool wait timeout.
     #[serde(default = "default_pool_wait_timeout_milliseconds")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_POOL_TIMEOUT_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<1, MAX_POOL_TIMEOUT_MILLISECONDS>")
+    )]
     wait_timeout_milliseconds: u64,
     /// Defaults to the bounded PostgreSQL pool connection-creation timeout.
     #[serde(default = "default_pool_create_timeout_milliseconds")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_POOL_TIMEOUT_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<1, MAX_POOL_TIMEOUT_MILLISECONDS>")
+    )]
     create_timeout_milliseconds: u64,
     /// Defaults to the bounded PostgreSQL pool connection-recycle timeout.
     #[serde(default = "default_pool_recycle_timeout_milliseconds")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_POOL_TIMEOUT_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<1, MAX_POOL_TIMEOUT_MILLISECONDS>")
+    )]
     recycle_timeout_milliseconds: u64,
 }
 
@@ -2719,7 +2936,8 @@ struct RawSqlRoles {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawPackageConfig {
-    #[serde(flatten)]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/package"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
     shared: SharedPackageConfig,
 }
 
@@ -2735,7 +2953,8 @@ struct RawAuthenticationConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawOidcVerifierConfig {
-    #[serde(flatten)]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
     provider: OidcIssuerConfig,
     allowed_algorithm: OidcAlgorithm,
     /// The one admitted access-token `typ` semantics. Configuring the
@@ -2746,17 +2965,56 @@ struct RawOidcVerifierConfig {
     access_token_type: String,
     scope_claim: String,
     scope_separator: char,
-    #[serde(default)]
+    /// The OAuth clients whose tokens this registry accepts: `unrestricted`
+    /// to accept a token from every client, or a list of at least one
+    /// client.
+    #[serde(deserialize_with = "crate::contract::sentinel::allowed_clients")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "crate::contract::sentinel::AllowedClients")
+    )]
     allowed_clients: Vec<String>,
     #[serde(default)]
     denied_kids: Vec<String>,
-    #[serde(default)]
+    /// The assertion authorities each client may exchange a subject token
+    /// from, keyed by client identifier. Omitted, no assertion-issuer rule
+    /// applies; written, it lists at least one client, and a client not
+    /// listed, or listed with `[]`, may exchange from no authority.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "non_empty_assertion_issuers"
+    )]
     assertion_issuers: BTreeMap<String, Vec<String>>,
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 7_200>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 7_200>"))]
     max_token_lifetime_seconds: u64,
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, 0, MAX_OIDC_LEEWAY_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<0, MAX_OIDC_LEEWAY_MILLISECONDS>")
+    )]
     leeway_milliseconds: u64,
     /// Optional JWKS fetch and cache tuning. Defaults to bounded cache behavior.
     #[serde(default)]
     jwks_cache: RawJwksCacheConfig,
+}
+
+/// An empty mapping is not how the file says "no assertion-issuer rule"
+/// (CFG-EMPTY-2): omitting the member says it.
+fn non_empty_assertion_issuers<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, Vec<String>>, D::Error> {
+    let issuers = BTreeMap::<String, Vec<String>>::deserialize(deserializer)?;
+    if issuers.is_empty() {
+        return Err(registry_platform_yaml::Invalid::expected(
+            "at least one client",
+            "List at least one client with its assertion issuers, or omit assertionIssuers to apply no assertion-issuer rule.",
+        ).into_error());
+    }
+    Ok(issuers)
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -2765,21 +3023,36 @@ struct RawOidcVerifierConfig {
 struct RawJwksCacheConfig {
     /// Defaults to the bounded JWKS cache time-to-live.
     #[serde(default = "default_jwks_cache_ttl_seconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 86_400>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 86_400>"))]
     cache_ttl_seconds: u64,
     /// Defaults to the bounded JWKS negative-cache time-to-live.
     #[serde(default = "default_jwks_negative_cache_ttl_seconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 3_600>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 3_600>"))]
     negative_cache_ttl_seconds: u64,
     /// Defaults to the bounded JWKS refresh cooldown.
     #[serde(default = "default_jwks_refresh_cooldown_seconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 3_600>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 3_600>"))]
     refresh_cooldown_seconds: u64,
     /// Defaults to the bounded maximum JWKS document size.
     #[serde(default = "default_jwks_max_document_bytes")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_JWKS_DOCUMENT_BYTES>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<1, MAX_JWKS_DOCUMENT_BYTES>")
+    )]
     max_document_bytes: u64,
     /// Defaults to the bounded JWKS fetch timeout.
     #[serde(default = "default_jwks_request_timeout_milliseconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 30_000>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 30_000>"))]
     request_timeout_milliseconds: u64,
     /// Defaults to the bounded cached-key outage tolerance.
     #[serde(default = "default_jwks_outage_tolerance_seconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 0, 86_400>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<0, 86_400>"))]
     outage_tolerance_seconds: u64,
 }
 
@@ -2790,8 +3063,10 @@ struct RawAuthorityClaimsConfig {
     principal: String,
     #[serde(default)]
     purpose: Option<String>,
+    /// The claim names that carry delegated-authority context. Each name
+    /// defaults to its `registry_` claim; written, every name is given.
     #[serde(default)]
-    contextual: Option<RawContextualClaimNames>,
+    contextual: RawContextualClaimNames,
     #[serde(default)]
     trusted_actors: BTreeMap<String, String>,
 }
@@ -2800,29 +3075,55 @@ struct RawAuthorityClaimsConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawContextualClaimNames {
-    actor_kind: String,
-    purpose: String,
-    grant_id: String,
-    grant_source_issuer: String,
-    grant_client: String,
-    grant_resource: String,
-    grant_exp: String,
-    grant_bounds: String,
-    approver: String,
+    actor_kind: ClaimName,
+    purpose: ClaimName,
+    grant_id: ClaimName,
+    grant_source_issuer: ClaimName,
+    grant_client: ClaimName,
+    grant_resource: ClaimName,
+    grant_exp: ClaimName,
+    grant_bounds: ClaimName,
+    approver: ClaimName,
+}
+
+/// The name of one top-level claim of an access token. The reader accepts any
+/// text; the runtime then refuses a name that is not a valid claim name, one
+/// that repeats another contextual name, and one that is a registered or
+/// authentication claim.
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct ClaimName(String);
+
+impl Default for RawContextualClaimNames {
+    fn default() -> Self {
+        let names = ClaimNames::default();
+        Self {
+            actor_kind: ClaimName(names.actor_kind),
+            purpose: ClaimName(names.purpose),
+            grant_id: ClaimName(names.grant_id),
+            grant_source_issuer: ClaimName(names.grant_source_issuer),
+            grant_client: ClaimName(names.grant_client),
+            grant_resource: ClaimName(names.grant_resource),
+            grant_exp: ClaimName(names.grant_exp),
+            grant_bounds: ClaimName(names.grant_bounds),
+            approver: ClaimName(names.approver),
+        }
+    }
 }
 
 impl From<RawContextualClaimNames> for ClaimNames {
     fn from(value: RawContextualClaimNames) -> Self {
         Self {
-            actor_kind: value.actor_kind,
-            purpose: value.purpose,
-            grant_id: value.grant_id,
-            grant_source_issuer: value.grant_source_issuer,
-            grant_client: value.grant_client,
-            grant_resource: value.grant_resource,
-            grant_exp: value.grant_exp,
-            grant_bounds: value.grant_bounds,
-            approver: value.approver,
+            actor_kind: value.actor_kind.0,
+            purpose: value.purpose.0,
+            grant_id: value.grant_id.0,
+            grant_source_issuer: value.grant_source_issuer.0,
+            grant_client: value.grant_client.0,
+            grant_resource: value.grant_resource.0,
+            grant_exp: value.grant_exp.0,
+            grant_bounds: value.grant_bounds.0,
+            approver: value.approver.0,
         }
     }
 }
@@ -2831,21 +3132,42 @@ impl From<RawContextualClaimNames> for ClaimNames {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawAuditConfig {
-    #[serde(flatten)]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/audit-key"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
     key: AuditKeyConfig,
     /// `file` (the default) writes a durable, rotated JSON Lines file at
     /// `path`; `stdout` writes one JSON line per entry to standard output.
     #[serde(default)]
     destination: AuditDestinationKind,
     /// Absolute path of the active audit file. Required for, and accepted
-    /// only with, the `file` destination.
-    #[serde(default)]
+    /// only with, the `file` destination; omitted with `stdout`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     path: Option<String>,
-    /// Size in bytes at which the active file rotates. Defaults to 100 MiB.
-    #[serde(default)]
+    /// Size in bytes at which the active file rotates, accepted only with the
+    /// `file` destination. Omitted, the file rotates at 100 MiB.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::contract::optional_bounded_u64::<_, { registry_platform_audit::MIN_AUDIT_ROTATE_BYTES }, { u32::MAX as u64 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BoundedU64<{ registry_platform_audit::MIN_AUDIT_ROTATE_BYTES }, { u32::MAX as u64 }>"
+        )
+    )]
     rotate_bytes: Option<u64>,
-    /// Days a rotated file is retained. Defaults to 90.
-    #[serde(default)]
+    /// Days a rotated file is retained, accepted only with the `file`
+    /// destination. Omitted, a rotated file is retained for 90 days.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::contract::optional_bounded_u32::<_, 1, { registry_platform_audit::MAX_AUDIT_RETAIN_DAYS }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, { registry_platform_audit::MAX_AUDIT_RETAIN_DAYS }>")
+    )]
     retain_days: Option<u32>,
 }
 
@@ -2853,9 +3175,11 @@ struct RawAuditConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawCursorConfig {
-    secret_ref: String,
+    secret_ref: SecretReference,
     /// Defaults to the bounded cursor validity lifetime.
     #[serde(default = "default_cursor_max_age_seconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 86_400>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 86_400>"))]
     max_age_seconds: u64,
 }
 
@@ -2865,6 +3189,13 @@ struct RawCursorConfig {
 struct RawEventDeliveryConfig {
     /// Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.
     #[serde(default = "default_webhook_payload_retention_days")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>")
+    )]
     payload_retention_days: u8,
 }
 
@@ -2887,6 +3218,15 @@ struct RawIdempotencyConfig {
     /// Days a held response is kept after its commit. A retry after it is
     /// refused as expired and never executed; the key stays spent.
     #[serde(default = "default_receipt_retention_days")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u16::<_, 1, { crate::idempotency::MAX_RECEIPT_RETENTION_DAYS as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BoundedU32<1, { crate::idempotency::MAX_RECEIPT_RETENTION_DAYS as u32 }>"
+        )
+    )]
     receipt_retention_days: u16,
 }
 
@@ -2908,18 +3248,33 @@ const fn default_receipt_retention_days() -> u16 {
 struct RawOperationalTimeouts {
     /// Defaults to the bounded per-request HTTP timeout.
     #[serde(default = "default_http_request_timeout_milliseconds")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_HTTP_REQUEST_TIMEOUT_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<1, MAX_HTTP_REQUEST_TIMEOUT_MILLISECONDS>")
+    )]
     http_request_milliseconds: u64,
     /// Defaults to the bounded graceful-shutdown timeout.
     #[serde(default = "default_shutdown_grace_milliseconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 300_000>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 300_000>"))]
     shutdown_grace_milliseconds: u64,
     /// Defaults to the bounded record lock timeout.
     #[serde(default = "default_record_lock_milliseconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 30_000>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 30_000>"))]
     record_lock_milliseconds: u64,
     /// Defaults to the bounded migration lock timeout.
     #[serde(default = "default_migration_lock_milliseconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 300_000>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 300_000>"))]
     migration_lock_milliseconds: u64,
     /// Defaults to the bounded migration statement timeout.
     #[serde(default = "default_migration_statement_milliseconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 3_600_000>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 3_600_000>"))]
     migration_statement_milliseconds: u64,
 }
 
@@ -2942,9 +3297,27 @@ pub(crate) struct RawWasmExecutionConfig {
     /// Defaults to the default execution-time module ceiling (2 MiB); the
     /// structural admission ceiling (5 MiB) is operator-reachable here.
     #[serde(default = "default_wasm_execution_max_module_bytes")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, MINIMUM_WASM_EXECUTION_MODULE_BYTES, MAXIMUM_WASM_EXECUTION_MODULE_BYTES>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BoundedU64<MINIMUM_WASM_EXECUTION_MODULE_BYTES, MAXIMUM_WASM_EXECUTION_MODULE_BYTES>"
+        )
+    )]
     max_module_bytes: u64,
     /// Defaults to the platform guest-memory ceiling (32 MiB).
     #[serde(default = "default_wasm_execution_max_guest_memory_bytes")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES, MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BoundedU64<MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES, MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES>"
+        )
+    )]
     max_guest_memory_bytes: u64,
     /// The backend handler modules are compiled and executed for: `pulley`
     /// (default, the portable interpreter target) or `native`. Any other
@@ -3063,53 +3436,15 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
         provider.insert(
             "oneOf".to_owned(),
             serde_json::json!([
-                {"required": ["tokenRef"], "properties": {"tokenRef": {"type": "string"}}},
-                {"required": ["privateKeyJwt"], "properties": {"privateKeyJwt": {"type": "object"}}}
+                {"required": ["tokenRef"]},
+                {"required": ["privateKeyJwt"]}
             ]),
         );
-    }
-    for definition in [
-        "RawAttachmentStorageConfig",
-        "RawAttachmentVerificationConfig",
-    ] {
-        if let Some(variants) = schema
-            .pointer_mut(&format!("/$defs/{definition}/oneOf"))
-            .and_then(Value::as_array_mut)
-        {
-            for variant in variants {
-                for key in [
-                    "accessKeyIdRef",
-                    "secretAccessKeyRef",
-                    "sessionTokenRef",
-                    "caBundleRef",
-                    "authorizationRef",
-                ] {
-                    if let Some(member) = variant
-                        .get_mut("properties")
-                        .and_then(|properties| properties.get_mut(key))
-                        .and_then(Value::as_object_mut)
-                    {
-                        install_string_constraints_in_object(
-                            member,
-                            1,
-                            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-                            SECRET_REFERENCE_SCHEMA_PATTERN,
-                        );
-                    }
-                }
-            }
-        }
     }
     for pointer in [
         "/properties/eventDestinations",
         "/$defs/RawAuthorityClaimsConfig/properties/purpose",
-        "/$defs/RawDatabaseConfig/properties/password",
-        "/$defs/RawDatabaseConfig/properties/plaintext",
-        "/$defs/RawDatabaseConfig/properties/url",
         "/$defs/RawEventDestinationConfig/properties/tls",
-        "/$defs/RawEventDestinationTlsConfig/properties/caBundleRef",
-        "/$defs/RawEventDestinationTlsConfig/properties/clientIdentityRef",
-        "/$defs/RawOidcVerifierConfig/properties/allowedClients",
         "/$defs/RawOidcVerifierConfig/properties/deniedKids",
         "/$defs/RawOidcVerifierConfig/properties/jwksSource",
         "/$defs/RawOidcVerifierConfig/properties/assertionIssuers",
@@ -3121,30 +3456,13 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
 
 #[cfg(feature = "schema")]
 fn install_schema_constraints(schema: &mut Value) {
-    install_schema_integer_bounds(
-        schema,
-        "/$defs/RawAuditConfig/properties/rotateBytes",
-        registry_platform_audit::MIN_AUDIT_ROTATE_BYTES,
-        u64::from(u32::MAX),
-    );
-    install_schema_integer_bounds(
-        schema,
-        "/$defs/RawAuditConfig/properties/retainDays",
-        1,
-        u64::from(registry_platform_audit::MAX_AUDIT_RETAIN_DAYS),
-    );
     // `AuditDestination::from_settings`: the `stdout` destination refuses
     // every file setting, and the `file` destination needs an absolute path.
     if let Some(audit) = schema
         .pointer_mut("/$defs/RawAuditConfig")
         .and_then(Value::as_object_mut)
     {
-        let set = |name: &str| {
-            serde_json::json!({
-                "required": [name],
-                "properties": {name: {"not": {"type": "null"}}}
-            })
-        };
+        let set = |name: &str| serde_json::json!({"required": [name]});
         audit.insert(
             "if".to_owned(),
             serde_json::json!({
@@ -3169,134 +3487,8 @@ fn install_schema_constraints(schema: &mut Value) {
             }),
         );
     }
-    for (pointer, minimum, maximum) in [
-        (
-            "/$defs/RawPoolBounds/properties/maxSize",
-            1,
-            MAX_DATABASE_POOL_SIZE,
-        ),
-        (
-            "/$defs/RawPoolBounds/properties/waitTimeoutMilliseconds",
-            1,
-            60_000,
-        ),
-        (
-            "/$defs/RawPoolBounds/properties/createTimeoutMilliseconds",
-            1,
-            60_000,
-        ),
-        (
-            "/$defs/RawPoolBounds/properties/recycleTimeoutMilliseconds",
-            1,
-            60_000,
-        ),
-        (
-            "/$defs/RawOidcVerifierConfig/properties/maxTokenLifetimeSeconds",
-            1,
-            7_200,
-        ),
-        (
-            "/$defs/RawOidcVerifierConfig/properties/leewayMilliseconds",
-            0,
-            MAX_OIDC_LEEWAY_MILLISECONDS,
-        ),
-        (
-            "/$defs/RawJwksCacheConfig/properties/cacheTtlSeconds",
-            1,
-            86_400,
-        ),
-        (
-            "/$defs/RawJwksCacheConfig/properties/negativeCacheTtlSeconds",
-            1,
-            3_600,
-        ),
-        (
-            "/$defs/RawJwksCacheConfig/properties/refreshCooldownSeconds",
-            1,
-            3_600,
-        ),
-        (
-            "/$defs/RawJwksCacheConfig/properties/maxDocumentBytes",
-            1,
-            MAX_JWKS_DOCUMENT_BYTES,
-        ),
-        (
-            "/$defs/RawJwksCacheConfig/properties/requestTimeoutMilliseconds",
-            1,
-            30_000,
-        ),
-        (
-            "/$defs/RawJwksCacheConfig/properties/outageToleranceSeconds",
-            0,
-            86_400,
-        ),
-        ("/$defs/RawCursorConfig/properties/maxAgeSeconds", 1, 86_400),
-        (
-            "/$defs/RawEventDeliveryConfig/properties/payloadRetentionDays",
-            1,
-            u64::from(MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS),
-        ),
-        (
-            "/$defs/RawIdempotencyConfig/properties/receiptRetentionDays",
-            1,
-            u64::from(crate::idempotency::MAX_RECEIPT_RETENTION_DAYS),
-        ),
-        (
-            "/$defs/RawOperationalTimeouts/properties/httpRequestMilliseconds",
-            1,
-            60_000,
-        ),
-        (
-            "/$defs/RawOperationalTimeouts/properties/shutdownGraceMilliseconds",
-            1,
-            300_000,
-        ),
-        (
-            "/$defs/RawOperationalTimeouts/properties/recordLockMilliseconds",
-            1,
-            30_000,
-        ),
-        (
-            "/$defs/RawOperationalTimeouts/properties/migrationLockMilliseconds",
-            1,
-            300_000,
-        ),
-        (
-            "/$defs/RawOperationalTimeouts/properties/migrationStatementMilliseconds",
-            1,
-            3_600_000,
-        ),
-        (
-            "/$defs/RawWasmExecutionConfig/properties/maxModuleBytes",
-            MINIMUM_WASM_EXECUTION_MODULE_BYTES,
-            MAXIMUM_WASM_EXECUTION_MODULE_BYTES,
-        ),
-        (
-            "/$defs/RawWasmExecutionConfig/properties/maxGuestMemoryBytes",
-            MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES,
-            MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES,
-        ),
-        (
-            "/$defs/RawEventDestinationDeliveryCeilings/properties/attemptTimeoutMilliseconds",
-            u64::from(MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS),
-            u64::from(MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS),
-        ),
-        (
-            "/$defs/RawEventDestinationDeliveryCeilings/properties/maximumAttempts",
-            1,
-            u64::from(MAX_WEBHOOK_ATTEMPTS),
-        ),
-    ] {
-        install_schema_integer_bounds(schema, pointer, minimum, maximum);
-    }
 
     for (pointer, minimum, maximum, pattern) in [
-        (
-            "/$defs/RawListenerConfig/properties/publicOrigin",
-            1,
-            MAX_PUBLIC_ORIGIN_BYTES,
-            r"^https?://[^/@?#\s]+/?$",
-        ),
         (
             "/$defs/RawDeploymentIdentity/properties/environment",
             1,
@@ -3320,18 +3512,6 @@ fn install_schema_constraints(schema: &mut Value) {
             1,
             MAX_DEPLOYMENT_VALUE_BYTES,
             VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
-        ),
-        (
-            "/$defs/RawDatabaseConfig/properties/runtimeUrlRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
-        ),
-        (
-            "/$defs/RawDatabaseConfig/properties/migrationUrlRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
         ),
         (
             "/$defs/RawSqlRoles/properties/migration",
@@ -3394,12 +3574,6 @@ fn install_schema_constraints(schema: &mut Value) {
             CLAIM_NAME_SCHEMA_PATTERN,
         ),
         (
-            "/$defs/RawCursorConfig/properties/secretRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
-        ),
-        (
             "/$defs/RawEventDestinationConfig/properties/origin",
             1,
             MAX_DESTINATION_ORIGIN_URL_BYTES,
@@ -3411,30 +3585,14 @@ fn install_schema_constraints(schema: &mut Value) {
             MAX_DESTINATION_TARGET_BYTES,
             EVENT_DESTINATION_PATH_SCHEMA_PATTERN,
         ),
-        (
-            "/$defs/RawEventDestinationConfig/properties/hmacSha256KeyRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
-        ),
-        (
-            "/$defs/RawEventDestinationTlsConfig/properties/caBundleRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
-        ),
-        (
-            "/$defs/RawEventDestinationTlsConfig/properties/clientIdentityRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
-        ),
     ] {
         install_schema_string_constraints(schema, pointer, minimum, maximum, pattern);
     }
 
     for pointer in [
-        "/$defs/RawOidcVerifierConfig/properties/allowedClients",
+        // The list arm of `allowedClients`; the other arm is the keyword
+        // `unrestricted`.
+        "/$defs/AllowedClients/anyOf/1",
         "/$defs/RawOidcVerifierConfig/properties/deniedKids",
         "/$defs/RawOidcVerifierConfig/properties/assertionIssuers/additionalProperties",
     ] {
@@ -3472,6 +3630,7 @@ fn install_schema_constraints(schema: &mut Value) {
         .pointer_mut("/$defs/RawOidcVerifierConfig/properties/assertionIssuers")
         .and_then(Value::as_object_mut)
     {
+        member.insert("minProperties".to_owned(), Value::from(1_u64));
         member.insert("maxProperties".to_owned(), Value::from(MAX_LIST_ITEMS));
     }
     install_schema_array_constraints(
@@ -3512,16 +3671,6 @@ fn install_schema_const_property(schema: &mut Value, property: &'static str, exp
     member.clear();
     member.insert("type".to_owned(), Value::String("string".to_owned()));
     member.insert("const".to_owned(), Value::String(expected.to_owned()));
-}
-
-#[cfg(feature = "schema")]
-fn install_schema_integer_bounds(schema: &mut Value, pointer: &str, minimum: u64, maximum: u64) {
-    if let Some(member) = schema.pointer_mut(pointer).and_then(Value::as_object_mut) {
-        member.insert("minimum".to_owned(), Value::from(minimum));
-        if maximum != u64::MAX {
-            member.insert("maximum".to_owned(), Value::from(maximum));
-        }
-    }
 }
 
 #[cfg(feature = "schema")]
@@ -3617,28 +3766,8 @@ fn install_schema_tls_presence_constraint(schema: &mut Value) {
     member.insert(
         "anyOf".to_owned(),
         serde_json::json!([
-            {
-                "required": ["caBundleRef"],
-                "properties": {
-                    "caBundleRef": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-                        "pattern": SECRET_REFERENCE_SCHEMA_PATTERN
-                    }
-                }
-            },
-            {
-                "required": ["clientIdentityRef"],
-                "properties": {
-                    "clientIdentityRef": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-                        "pattern": SECRET_REFERENCE_SCHEMA_PATTERN
-                    }
-                }
-            }
+            {"required": ["caBundleRef"]},
+            {"required": ["clientIdentityRef"]}
         ]),
     );
 }
@@ -3779,31 +3908,13 @@ fn validate_bounded_list(values: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn millis(value: u64) -> Result<Duration> {
-    millis_bounded(value, 1, 60_000)
-}
-
 /// The token verifier applies leeway in whole seconds, so a value carrying
 /// sub-second precision would be truncated without the operator being told.
 fn oidc_leeway(milliseconds: u64) -> Result<Duration> {
-    if milliseconds > MAX_OIDC_LEEWAY_MILLISECONDS || !milliseconds.is_multiple_of(1_000) {
+    if !milliseconds.is_multiple_of(1_000) {
         return Err(RuntimeConfigError::InvalidOidcLeeway);
     }
     Ok(Duration::from_millis(milliseconds))
-}
-
-fn millis_bounded(value: u64, min: u64, max: u64) -> Result<Duration> {
-    if value < min || value > max {
-        return Err(RuntimeConfigError::InvalidBounds);
-    }
-    Ok(Duration::from_millis(value))
-}
-
-fn seconds_bounded(value: u64, min: u64, max: u64) -> Result<Duration> {
-    if value < min || value > max {
-        return Err(RuntimeConfigError::InvalidBounds);
-    }
-    Ok(Duration::from_secs(value))
 }
 
 #[cfg(all(test, feature = "schema"))]
@@ -3824,13 +3935,13 @@ mod schema_tests {
             json!({"hashKeyRef": key, "destination": "file", "path": "/audit.jsonl",
                 "rotateBytes": 1_048_576, "retainDays": 1}),
             json!({"hashKeyRef": key, "destination": "stdout"}),
-            json!({"hashKeyRef": key, "destination": "stdout", "path": null}),
         ] {
             assert!(validator.is_valid(&accepted), "{accepted}");
         }
         for refused in [
             json!({"hashKeyRef": key}),
             json!({"hashKeyRef": key, "path": null}),
+            json!({"hashKeyRef": key, "destination": "stdout", "path": null}),
             json!({"hashKeyRef": key, "path": "audit.jsonl"}),
             json!({"hashKeyRef": key, "destination": "stdout", "path": "/audit.jsonl"}),
             json!({"hashKeyRef": key, "destination": "stdout", "rotateBytes": 1_048_576}),

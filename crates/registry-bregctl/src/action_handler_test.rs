@@ -309,7 +309,7 @@ fn read_json(path: &Path, location: &str) -> Result<Value, FailureReport> {
         MAX_PLANNER_TEST_REQUEST_BYTES,
     )
     .map_err(|error| {
-        let message = if error.code == "source.file.bounds" {
+        let message = if error.code == "breg.source.file-bounds" {
             "the synthetic JSON file exceeds its fixed size bound"
         } else {
             "provide a bounded readable regular JSON file at a physical path with no symbolic-link components; on macOS use /private/tmp instead of /tmp"
@@ -451,7 +451,7 @@ mod tests {
 kind: RegistryProject
 registry:
   id: wasm-planner-test-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://wasm-planner-test-fixture.example.test
 entities:
@@ -480,11 +480,12 @@ accessProfiles:
   - id: registrar
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - action: register-person
         operations: [invoke]
         targets:
-          - {entity: person, rowBoundaries: []}
+          - {entity: person, rowBoundaries: unrestricted}
         results: [person]
 "#;
 

@@ -24,9 +24,19 @@ that names its refusals, and otherwise the exit class of the failure:
 each diagnostic names a `suggestedAction`.
 
 `apiVersion` versions the complete CLI surface. `kind` selects one of the
-self-contained draft 2020-12 schemas in this directory. The schemas cover
-successful reports and the diagnostic refusal a parsed command can emit.
-Argument parsing failures use `UsageReport`.
+draft 2020-12 schemas in this directory. Each is published in the
+identifier catalog under the `kind` in kebab case: `CheckReport.schema.json`
+is
+`https://id.registrystack.org/schemas/casework/check-report/check-report.v1alpha3.schema.json`. The schemas cover successful reports and the diagnostic
+refusal a parsed command can emit. Argument parsing failures use
+`UsageReport`.
+
+`ExplainReport` and `CheckReport` carry part of the authored project and refer
+to the project schema's definitions of it,
+`../project/project.v1alpha1.schema.json`, rather than copying them. A
+validator for those two loads
+`products/casework/generated/project/project.schema.json` beside the report
+schema.
 
 Clap's `--help` and `--version` displays are command-line metadata, not command
 responses. Clap emits them as plain text before command dispatch, even when
@@ -66,29 +76,21 @@ because they are process-control implementation details and do not support
 ## Pinned and opaque fields
 
 A field is **pinned** when its schema names it, types it, and its containing
-object has `additionalProperties: false`. These fields are constructed
-explicitly by `registry-caseworkctl`; changing their name, type, presence, or
-closed value set changes this wire contract. Every report's top-level fields,
-the common diagnostic shape, doctor readiness keys, lifecycle descriptions,
-simulation subject, test fixture summary, and dev directory summary are
-pinned.
+object is closed. Changing a pinned field's name, type, presence, or closed
+value set changes this wire contract. Every field is pinned except the opaque
+ones listed below. A field typed by a project schema definition is pinned to
+that definition and changes when the project schema does.
 
 A field is **opaque** when the schema constrains it only as an object, array,
 or unconstrained JSON value. These nodes pass through a type owned by the
 Casework engine, a source adapter, or another product. Their interior is not a
 promise made by this CLI contract:
 
-- `AttemptSettlementReport.report`, `AttemptUncertainMarkingReport.report`,
-  and `RetentionEraseReport.report`
-- `CheckReport.effective`
-- `DoctorReport.secretFileChecks` and `DoctorReport.sourceChecks`
-- the policy arrays in `ExplainReport`
-- `PackageReport.files`
-- `SimulationReport.routing` and `SimulationReport.clock`
-- `SourceAddReport.connection`, `bregAuthoringChanges`,
-  `bregAuthoringPatch`, and `candidateRuntimeBinding`
+- the `target` of each request in `CheckReport.effective.sources`
+- `SimulationReport.clock`
+- `SourceAddReport.bregAuthoringChanges`, `bregAuthoringPatch`, and
+  `candidateRuntimeBinding`
 - `DevReport.sources` and `DevReport.clients`
-- `PlanReport.effects` and `ApplyReport.effects`
 
 Consumers of an opaque node must validate the fields they read. A stable
 `caseworkctl` `apiVersion` does not say that an opaque engine-owned structure
@@ -108,7 +110,22 @@ source, or retained dev session use a deliberate real refusal fixture, so the
 gate remains database-free while still proving their envelope and diagnostic
 path. The same gate runs the generator in freshness mode.
 
-Regenerate after an intentional contract edit:
+Each report format registers an example in
+`products/casework/examples/formats/reports/`: the output of one command, run
+from the repository root, with the checkout's path removed from `package`'s
+`project`. A command whose successful report needs a database, an issuer, a
+BReg project, or a running development session (`attempt`, `retention erase`, `apply`, `plan`,
+`status`, `doctor`, `source add`, and every `dev` command except
+`dev identity`) has its refusal as its example.
+`crates/registry-caseworkctl/tests/report_examples.rs` fails when an example differs from what its command writes, and the contract
+test validates each example against its schema. Regenerate the examples after
+an intentional report change:
+
+```sh
+CASEWORKCTL_WRITE_REPORT_EXAMPLES=1 cargo test -p registry-caseworkctl --test report_examples
+```
+
+Regenerate the schemas after an intentional contract edit:
 
 ```sh
 python3 products/casework/scripts/generate_cli_schemas.py

@@ -86,11 +86,11 @@ Initialized a registry project. 6 artifacts written.
   runtime.example.yaml
   tests/journeys.yaml
 
-  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+  finding  breg.access.profile-unrestricted-collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
            this profile can list all rows, subject only to query bounds; caller filters
            are not authorization. Add a claim-bound row restriction or review this
            registry-wide access
-  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+  finding  breg.access.profile-unrestricted-rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
            this profile has no claim-bound row restriction for its granted operations;
            requestVisibility owner limits request reads only, and other lifecycle rules
            still apply. Review this registry-wide access
@@ -128,8 +128,16 @@ type.
 
 A finding is advice the compiler attaches to a result that succeeded: an error stops a command, a
 finding does not.
-Both findings here are expected, as the second step under `Next:` says, and every later command
-repeats them.
+`init` prints each one as a `finding`; `bregctl check` and the commands after it print the same two
+as `warning[...]` lines and count them as warnings.
+Both are expected, as the second step under `Next:` says, and every later command repeats them.
+
+The comment in `registry.yaml` says you can close the operator finding by giving the operator's
+`record` grant a `rowBoundaries` entry. If you try that later, `bregctl check` replaces it with
+`breg.access.profile-writable-row-boundary`: the row boundary pins a field to the caller's claim on
+insert, so `create` needs that field in `writableFields`. Keep it writable, expect a `create` naming
+any other value to be refused, and review separately that `patch` can move a record within the
+values the caller may hold. This tutorial leaves both findings as they are.
 
 ### The local callers
 
@@ -229,15 +237,15 @@ curl --silent --show-error \
 ```
 
 ```text test-expect
-HTTP 404
+HTTP 401
 ```
 
-Open `tutorial-work/problem.json`: its code is `resource.not_found`.
-BReg conceals a protected route from an unauthenticated caller by answering as if the route did not
-exist, and naming a profile in the query granted nothing.
+Open `tutorial-work/problem.json`: its code is `authentication.refused`.
+BReg serves authenticated callers only: a request without a verified bearer token is refused
+before any access profile is selected, so naming a profile in the query granted nothing.
 
-{/* Evidence: crates/registry-breg/src/auth.rs; crates/registry-breg/src/api/mod.rs;
-    crates/registry-breg/tests/http_auth.rs; crates/registry-bregctl/src/lib.rs, init_files(). */}
+{/* Evidence: crates/registry-breg/src/auth.rs, authenticate_request();
+    crates/registry-breg/tests/startup_http.rs; crates/registry-bregctl/src/lib.rs, init_files(). */}
 
 ## Create a record
 

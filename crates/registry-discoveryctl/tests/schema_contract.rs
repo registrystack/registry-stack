@@ -9,9 +9,10 @@ use registry_discovery::{package_limits, parse_index, prepare, INDEX_FILE, PACKA
 use registry_discovery_profile::{
     parse_description, render_description, DiscoveryDescription, ServiceDescription,
 };
-use registry_discoveryctl::{check_project, MAX_MAPPING_FILE_BYTES};
+use registry_discoveryctl::check_project;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::write_package;
+use registry_platform_yaml::Reader;
 use serde_json::Value;
 
 const PRODUCT_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../products/discovery");
@@ -45,8 +46,16 @@ fn load_json(relative: &str) -> Value {
 }
 
 fn load_yaml(relative: &str) -> Value {
-    serde_yaml_ng::from_slice(&fs::read(product_path(relative)).expect("fixture reads"))
+    Reader::new(relative)
+        .scan(&fs::read(product_path(relative)).expect("fixture reads"))
         .expect("fixture is YAML")
+        .expect("fixture is not empty")
+        .to_json_value()
+}
+
+/// A document written as JSON text, which the shared reader reads as YAML.
+fn yaml_text(document: &Value) -> String {
+    serde_json::to_string_pretty(document).expect("document serializes")
 }
 
 fn validator(relative: &str) -> JSONSchema {
@@ -154,14 +163,10 @@ fn generated_negative_value(case: &NegativeCase, baseline: &Value) -> Value {
 fn write_project(origins: &Value, mapping: &Value) -> tempfile::TempDir {
     let temporary = tempfile::tempdir().expect("temporary project");
     fs::create_dir(temporary.path().join("mappings")).expect("mapping directory");
-    fs::write(
-        temporary.path().join("origins.yaml"),
-        serde_yaml_ng::to_string(origins).expect("origins serialize"),
-    )
-    .expect("origins write");
+    fs::write(temporary.path().join("origins.yaml"), yaml_text(origins)).expect("origins write");
     fs::write(
         temporary.path().join("mappings/case.yaml"),
-        serde_yaml_ng::to_string(mapping).expect("mapping serializes"),
+        yaml_text(mapping),
     )
     .expect("mapping write");
     temporary
@@ -209,11 +214,7 @@ fn accepted_by_rust(contract: &str, document: &Value) -> bool {
                 );
             }
             let path = temporary.path().join("runtime.yaml");
-            fs::write(
-                &path,
-                serde_yaml_ng::to_string(&runtime).expect("runtime serializes"),
-            )
-            .expect("runtime write");
+            fs::write(&path, yaml_text(&runtime)).expect("runtime write");
             prepare(&path).is_ok()
         }
         "index" => canonicalize_json(document).is_ok_and(|bytes| parse_index(&bytes).is_ok()),
@@ -280,15 +281,6 @@ fn current_fixtures_match_rust_while_historical_profile_fixtures_remain_schema_v
             );
         }
     }
-}
-
-#[test]
-fn mapping_schema_publishes_the_rust_authored_file_byte_bound() {
-    let schema = load_json("schemas/evidence-mapping.schema.json");
-    assert_eq!(
-        schema["x-maximumDocumentBytes"].as_u64(),
-        Some(MAX_MAPPING_FILE_BYTES)
-    );
 }
 
 #[test]
@@ -390,7 +382,7 @@ fn runtime_response_and_listener_boundaries_match_the_closed_rust_parser() {
         "the public schema must carry the stable Rust response-size minimum"
     );
     assert_eq!(
-        schema["properties"]["listener"]["properties"]["bind"]["maxLength"].as_u64(),
+        schema["$defs"]["ListenerBind"]["maxLength"].as_u64(),
         u64::try_from(registry_discovery::MAXIMUM_LISTENER_BIND_CHARACTERS).ok(),
         "the public schema must carry the Rust listener-bind bound"
     );
@@ -539,5 +531,21 @@ fn shared_negative_corpus_is_refused_by_both_schema_and_rust() {
             "runtime".to_owned(),
         ]),
         "the shared negative corpus must cover every closed contract"
+    );
+}
+
+/// An optional member is left out, never written as `null`: the reader
+/// refuses the null, so the schema must too.
+#[test]
+fn a_null_jurisdiction_is_refused_by_both_schema_and_rust() {
+    let mut mapping = positive_document("evidence-mapping");
+    set_pointer(&mut mapping, "/jurisdiction", Value::Null);
+    assert!(
+        !validators()["evidence-mapping"].is_valid(&mapping),
+        "the mapping schema accepts a null jurisdiction"
+    );
+    assert!(
+        !accepted_by_rust("evidence-mapping", &mapping),
+        "the reader accepts a null jurisdiction"
     );
 }

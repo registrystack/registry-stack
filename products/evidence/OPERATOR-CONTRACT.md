@@ -342,8 +342,8 @@ source's own `batch.maximumItems` says, because items above that ceiling run
 sequentially rather than being refused. A holder-bound release may carry up to
 `holderBoundBatchMaxSize` holder keys when the bundle serves a holder-bound
 requirement and enables `sd-jwt-vc-batch`. `evidence check` and `evidencectl
-doctor` warn when `burstPerPrincipal` is below that cost, naming both numbers
-and the key. It is a warning rather than a refusal: a burst below the batch
+doctor` warn when `burstPerPrincipal` is below that cost, naming the ceiling
+and the key but never the configured value. It is a warning rather than a refusal: a burst below the batch
 size is a deliberate way to cap how much one principal may ask for at once,
 at the price of refusing every larger batch. The shipped reference and starter
 configurations set `burstPerPrincipal: 16`; raise it at least that far unless
@@ -548,8 +548,10 @@ bundle alone does not carry. Nothing on that path dispatches an HTTP request:
 it materializes request parts and asserts them, and executes only a statement
 source, against a fixture extract. Shared client identity, private CA trust,
 the token cache, and admission are therefore not among the facts a bundle-only
-run proves. `evidence check` and `evidence fixture` read `runtime.yaml`, build
-the resources, and refuse a connected source that cannot get them.
+run proves. `evidence evaluate` reads `runtime.yaml`, builds the resources, and
+refuses a connected source that cannot get them. `evidence check` stays
+offline: it checks the runtime file's outbound TLS and CA bundle bindings
+without building a client.
 
 Each subject role admits only named selector profiles from the trusted bundle.
 Each profile has one exact deployment-defined scalar field set, byte and
@@ -1129,22 +1131,29 @@ appear at the JWKS endpoint. A file audit destination must be on storage whose
 append durability, permissions, capacity, backup, and restore the operator
 owns, and the operator ships its sealed files to append-only storage.
 
-`evidence check` validates and compiles the complete bundle, and resolves and
-validates the mounted audit, subject-binding, and signer exactly as startup
-does, including the asynchronous provider sign-and-verify test, without
-opening the audit destination. A deployment whose secret or provider material
-startup would refuse, including a signer whose public key differs from
-`signing.activePublicJwkFile`, fails check. Source credentials are not
-resolved by check; readiness owns them. Fixture evaluation
+`evidence check` is offline. It reads the runtime file, verifies the package
+`package.root` names, validates and compiles the complete bundle, reads each
+CA bundle a trust profile names, and checks every binding between the runtime
+file and the bundle. It reads no secret material, opens no audit destination,
+and contacts no provider, source, or issuer. It reports every problem it finds
+as a positioned diagnostic with a three-segment code, and exits `0` when the
+deployment passed, `1` when it was refused, `2` on a usage error, and `3` when
+an input it depends on could not be read. Fixture evaluation
 covers positive, negative, boundary, missing-data, source-failure,
 existence-disclosure, and anti-reconstruction behavior without a running
 source.
- `evidence check --require-runtime-dependencies` is the pre-routing container
-form. In addition to what `evidence check` verifies, it opens and verifies the
-audit writer, requires the signer self-test, resolves source credentials
-without sending an evidence-data request, and requires the configured
-access-token JWKS endpoint to provide a usable key set. This fail-closed
-preflight does not change normal
+ `evidence check --require-runtime-dependencies` is the target-host and
+pre-routing container form. In addition to what `evidence check` verifies, it
+refuses a writable deployment input, refuses a stale extract, resolves and
+validates the mounted audit, subject-binding, and signer secrets exactly as
+startup does, opens and verifies the audit writer, requires the asynchronous
+provider sign-and-verify self-test, resolves source credentials without
+sending an evidence-data request, and requires the configured access-token
+JWKS endpoint to provide a usable key set. A deployment whose secret or
+provider material startup would refuse, including a signer whose public key
+differs from `signing.activePublicJwkFile`, fails this form. A dependency the
+host cannot provide exits `3`; an input the host holds wrongly exits `1`. This
+fail-closed preflight does not change normal
 serving readiness, which retains its bounded issuer-outage behavior.
 
 Adding `--require-audit-under <absolute-directory>` proves one further
@@ -1468,6 +1477,14 @@ The command performs no network access, reports cryptographic authenticity
 separately from current validity, and exits 0 only when both hold; an
 authentic but expired response exits 3. Every failed policy comparison reports
 one generic class so verification is not an oracle.
+A policy document the command cannot read is reported as the closed `malformed`
+class too. `evidence check-policy --verification-policy <file>` reads the same
+document the same way and reports every problem with its line, column, and
+code, and `--holder-bound-policy <file>` does the same for the policy
+`evidence verify-presentation` reads. No diagnostic repeats a value written in
+the policy, and the command compares the policy with no response, so it is no
+oracle either. It exits 0 when the policy reads, 1 when it was refused, 2 on a
+usage error, and 3 when the file could not be read.
 
 Operators must verify a candidate revision with the applicable phase and final
 commands in [AGENTS.md](AGENTS.md). Public-demo source tests are optional,

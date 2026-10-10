@@ -1,0 +1,147 @@
+{
+  "$defs": {
+    "HttpProviderCapabilities": {
+      "additionalProperties": false,
+      "description": "What a provider can do, declared by the package. Whether it\ndeduplicates submissions is declared once, as `idempotentSubmit` on the\nprovider in `messaging.yaml`, where the sender profile checks read it.",
+      "properties": {
+        "maximumConcurrentRequests": {
+          "description": "The most sends the provider accepts at once, 1 to 64. A deployment's\n`maximumConcurrentRequests` for the provider is at most this.",
+          "format": "uint16",
+          "maximum": 64,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "ratePerSecond": {
+          "description": "The provider's documented send rate, 1 to 1000. The worker enforces\nit at claim time; this module only checks it.",
+          "format": "uint32",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "receipts": {
+          "$ref": "#/$defs/ReceiptCapability"
+        }
+      },
+      "required": [
+        "receipts",
+        "maximumConcurrentRequests"
+      ],
+      "type": "object"
+    },
+    "HttpProviderRequest": {
+      "additionalProperties": false,
+      "description": "The request shape a prepare script fills.",
+      "properties": {
+        "headers": {
+          "default": [],
+          "description": "Request headers the prepare script may set, lowercase, at most 16.\nThe authorization, host, content, cookie, and forwarding headers are\nnever script-writable. Omitted, a script sets none.",
+          "items": {
+            "$ref": "#/$defs/RequestHeaderName"
+          },
+          "maxItems": 16,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "method": {
+          "$ref": "#/$defs/HttpSendMethod"
+        }
+      },
+      "required": [
+        "method"
+      ],
+      "type": "object"
+    },
+    "HttpSendMethod": {
+      "description": "The method one send uses.",
+      "oneOf": [
+        {
+          "const": "post",
+          "description": "A JSON or form body.",
+          "type": "string"
+        },
+        {
+          "const": "get",
+          "description": "The message in the query string, for gateways that accept nothing\nelse. The runtime settings must acknowledge that the content reaches\nthe provider's access logs.",
+          "type": "string"
+        }
+      ]
+    },
+    "ReceiptCapability": {
+      "description": "How a provider reports delivery after accepting a message.",
+      "enum": [
+        "none",
+        "callback",
+        "reconcile"
+      ],
+      "type": "string"
+    },
+    "RequestHeaderName": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$",
+      "type": "string"
+    },
+    "ResponseHeaderName": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$",
+      "type": "string"
+    },
+    "ScriptPath": {
+      "maxLength": 256,
+      "pattern": "^([a-z0-9_-][a-z0-9._-]*/)*[a-z0-9_-][a-z0-9._-]*\\.rhai$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/messaging/provider/provider.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Package material for one HTTP provider.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/messaging/provider/v1alpha1",
+      "type": "string"
+    },
+    "capabilities": {
+      "$ref": "#/$defs/HttpProviderCapabilities"
+    },
+    "interpretScript": {
+      "$ref": "#/$defs/ScriptPath",
+      "description": "Package path of the script whose `interpret(response)` classifies the\nresponse. Without one, the status code decides."
+    },
+    "kind": {
+      "const": "MessagingProvider",
+      "type": "string"
+    },
+    "prepareScript": {
+      "$ref": "#/$defs/ScriptPath",
+      "description": "Package path of the script whose `prepare(message, profile)` returns\nthe request."
+    },
+    "receiptScript": {
+      "$ref": "#/$defs/ScriptPath",
+      "description": "Package path of the script whose `receipt(request)` reads a verified\ndelivery callback. Required exactly when `capabilities.receipts` is\n`callback`."
+    },
+    "request": {
+      "$ref": "#/$defs/HttpProviderRequest"
+    },
+    "responseHeaders": {
+      "default": [],
+      "description": "Response headers the interpret script may read, lowercase, at most\n16. Omitted, a script reads none.",
+      "items": {
+        "$ref": "#/$defs/ResponseHeaderName"
+      },
+      "maxItems": 16,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "prepareScript",
+    "request",
+    "capabilities"
+  ],
+  "title": "Registry Messaging HTTP provider package",
+  "type": "object"
+}

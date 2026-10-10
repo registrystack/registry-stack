@@ -253,7 +253,7 @@ fn statement_source(
             maximum_extract_age_seconds,
             extract_profile,
             ..
-        } => Ok((request, *maximum_extract_age_seconds, extract_profile)),
+        } => Ok((request, maximum_extract_age_seconds.get(), extract_profile)),
         SourceConfig::HttpJson { .. } => Err(SqliteSourceError::InvalidPlan),
     }
 }
@@ -315,12 +315,12 @@ impl SqliteExtractSource {
     ) -> Result<Self, SqliteSourceError> {
         let (request, maximum_extract_age_seconds, extract_profile) = statement_source(source)?;
         let artifact = request.statement.as_str();
-        let timeout = Duration::from_millis(request.timeout_milliseconds);
+        let timeout = Duration::from_millis(request.timeout_milliseconds.get());
         let profile = DatabaseProfile::Snapshot(captured);
         let metadata = read_extract_metadata(
             &profile,
             extract_profile,
-            request.maximum_statement_steps,
+            request.maximum_statement_steps.get(),
             timeout,
         )?;
         let statement = ReadOnlyStatement::open_with_text_value_response_budget(
@@ -479,14 +479,15 @@ fn platform_contract(
         columns,
         parameters,
         limits: StatementLimits {
-            maximum_rows: request.maximum_rows,
-            maximum_cell_bytes: usize::try_from(request.maximum_cell_bytes)
+            maximum_rows: request.maximum_rows.get(),
+            maximum_cell_bytes: usize::try_from(request.maximum_cell_bytes.get())
                 .map_err(|_| SqliteSourceError::InvalidPlan)?,
-            maximum_response_bytes: usize::try_from(request.maximum_response_bytes)
+            maximum_response_bytes: usize::try_from(request.maximum_response_bytes.get())
                 .map_err(|_| SqliteSourceError::InvalidPlan)?,
-            maximum_statement_steps: request.maximum_statement_steps,
-            timeout: Duration::from_millis(request.timeout_milliseconds),
-            concurrency: usize::from(request.concurrency_limit),
+            maximum_statement_steps: request.maximum_statement_steps.get(),
+            timeout: Duration::from_millis(request.timeout_milliseconds.get()),
+            concurrency: usize::try_from(request.concurrency_limit.get())
+                .map_err(|_| SqliteSourceError::InvalidPlan)?,
         },
         schema: None,
     })
@@ -688,6 +689,10 @@ fn map_metadata_error(
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
@@ -1135,17 +1140,19 @@ factSchema: schemas/facts.schema.yaml
         let directory = TempDir::new().expect("a temporary directory");
         let path = extract(&directory);
         // Opening verifies the extract metadata under the same configured
-        // budget. Leave setup margin, then keep the step ceiling high enough
-        // that the execution deadline is the first statement limit reached.
+        // budget. Leave setup margin, then take the largest step ceiling a
+        // bundle admits and make every row slow, hexing a blob that depends
+        // on the row so it cannot be computed once, so the execution deadline
+        // is the first statement limit reached.
         let plan = Plan::default()
             .columns("[{name: total, type: integer}]")
-            .steps(100_000_000)
+            .steps(1_000_000)
             .timeout(50);
         let source = open(
             &plan,
             "WITH RECURSIVE counter(n) AS (
                  SELECT 1 UNION ALL SELECT n + 1 FROM counter WHERE n < 50000000
-             ) SELECT COUNT(*) AS total FROM counter",
+             ) SELECT SUM(length(hex(zeroblob(20000 + n % 2)))) AS total FROM counter",
             &path,
         );
         let error = source

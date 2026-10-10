@@ -1,8 +1,8 @@
 # Synthetic loopback deployment only. Review the fixed authority and connection.
 # Set the absolute runtime paths. target new --signing-public-key binds the generated public key.
-formatVersion: 1
+apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
+kind: EvidenceTargetSettings
 governance:
-  version: 1
   assuranceProfile: local
   service:
     providerId: urn:example:provider:record-evidence

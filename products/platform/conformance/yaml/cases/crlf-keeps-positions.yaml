@@ -1,0 +1,14 @@
+id: crlf-keeps-positions
+rules: [CFG-YAML-6, CFG-DIAG-1]
+summary: CRLF line endings count as one line break each, so a refusal after them keeps its position.
+encoding:
+  lineEndings: crlf
+mutation:
+  append: |
+    conformanceAnchor: &conformance text
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.anchor
+      path: /conformanceAnchor
+      at: {line: 1, column: 20}

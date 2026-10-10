@@ -29,10 +29,11 @@ The canonical adopter commands do not change the numeric Evidence Gateway Versio
 
 | Command | Inputs | Result | Does not do |
 | --- | --- | --- | --- |
-| `evidencectl check <project>` | Editable project | Reports authoring completeness and field-addressed findings | Claim deployment closure, run fixtures, resolve secrets, or contact a dependency |
+| `evidencectl check <project>` | Editable project | Reports authoring completeness and field-addressed warnings | Claim deployment closure, run fixtures, resolve secrets, or contact a dependency |
 | `evidencectl check <project> --target <target>` | Editable project and one explicit target | Adds the target's governance, runtime structure, public keys, source connections, and governed-bundle validation | Require target-host paths or secrets to exist, run fixtures, or contact a dependency |
 | `evidencectl check <project> --target <target> --production` | Editable project and one explicit production or evidence-grade target | Refuses incomplete deployment closure under that target's own assurance profile | Select a target, upgrade its profile, or prove live readiness |
-| `evidencectl explain <project> [--target <target>]` | Editable project and optional explicit target | Applies the same offline authoring validation, then reports status, findings, revision, and the authored inventory; includes target governance only when selected | Contact sources or expose secret and subject values |
+| `evidencectl check --file <file>` | One tooling file: a client profile, reviewed contracts, development state, a source-import baseline or journal, a source resolution file, or a source export manifest | Reads the file with its format's reader, named by the file's `kind` (or, for a client profile and reviewed contracts, its `schema`), and reports field-addressed diagnostics; exits 0 when it passes, 1 when it is refused, 3 when the file cannot be read | Check a project, resolve secrets, write the file, or contact a dependency |
+| `evidencectl explain <project> [--target <target>]` | Editable project and optional explicit target | Applies the same offline authoring validation, then reports status, diagnostics, revision, and the authored inventory; includes target governance only when selected | Contact sources or expose secret and subject values |
 | `evidencectl package <project> --target <target> --output <new-package>` | Editable project and one explicit production target | Creates one closed package with `SHA256SUMS`; runtime remains in the target | Overwrite output, contact source services or OIDC, create production secrets, or start a listener |
 | `evidencectl test <editable-project> [--target <deployment-target>]` | An editable project with `questions/`, `sources/`, and referenced synthetic fixtures; an optional target supplies complete deployment governance | Privately compiles the project, then uses runtime `bundle-check` and `bundle-evaluate` | Start HTTP, call a source, or write a production audit entry |
 | `evidencectl test <editable-project> --target <deployment-target> --explain` | The same, and asks each evaluation to explain itself | Relays each fixture's stage trace beside its step, or as that fixture's `trace` field under `--format json` | Print a response, fact, derived, or selector value, or explain a served request |
@@ -54,7 +55,7 @@ outside the allowed project directories. A failed package publishes no candidate
 
 `check`, `test`, `package`, `source diff`, and `source update`, plus the compatibility spelling
 `fixtures run`, refuse a derivation whose `answer` reads a fact its question's source
-does not declare, with `evidence.authoring.derivation-fact-undeclared` against the derivation
+does not declare, with `evidence.derivation.fact-undeclared` against the derivation
 file. A source declares an inline operation's `source.facts[].name`, or the properties of a
 referenced source's closed `factSchema`. A registry field rename that a derivation still reads
 under its old name therefore fails before `source update` installs anything. The check reads the
@@ -67,16 +68,20 @@ derivation reads a fact the check should not see. It, a read inside a helper fun
 `answer` that rebinds or writes its first parameter, and an open fact schema are left to the
 fixtures.
 
-An ordinary `check` can succeed with `status: incomplete` and visible findings. Add
-`--deny-findings` when any finding must refuse the command. All findings carry `severity`, `code`,
-`artifact`, `path`, `message`, and `suggestedAction`. Human output is the default. Add the global
+An ordinary `check` can succeed with `status: incomplete` and visible warnings. Add
+`--deny-warnings` when any warning must refuse the command; the former `--deny-findings` spelling
+is a usage error that names it. Every diagnostic carries `severity`, `code`, `artifact`, `path`,
+`message`, `suggestedAction`, and the `source` file, line, and column it names, and the JSON report
+lists them under `diagnostics`. `check` exits 0 when it passes, 1 when it refuses the project, 2
+for a usage error, and 3 when it could not finish. Human output is the default. Add the global
 `--format json` option for the same result as structured JSON. A command that provides no JSON
 report accepts only `--format human`, and the CLI reference shows which commands those are;
 `--format json` on one of them is the usage error `evidencectl.format.unsupported`.
 
 Under `--format json`, a command writes exactly one JSON object on standard output and nothing on
-standard error. The object opens with `ok`, `command`, and `status`, in that order, then carries the
-command's own members. Every member name is camelCase; a map keyed by authored identifiers, such
+standard error. The object opens with `ok`, `command`, `status`, `apiVersion`, and `kind`, in that order, then carries the
+command's own members. `apiVersion` is `id.registrystack.org/formats/evidence/ctl-report/v1alpha1` and `kind` is
+`EvidenceCtlReport`. Every member name is camelCase; a map keyed by authored identifiers, such
 as `selectorProfiles`, keeps those identifiers as its keys. `command` is the command path, such as `check` or
 `dev start`, and `status` names what happened, such as `complete`, `incomplete`, `passed`, or
 `ready`. `ok` is `true` exactly when the process exits `0`. A refusal uses the same object with
@@ -86,7 +91,7 @@ one of the statuses `refused`, `failed`, `domain-refusal`, `usage-error`, or
 `command: "usage"`. Pending changes, such as a `source add` preview, are a `status`, never an exit
 code.
 
-The workflow exit classes are `0` for success, `1` for a domain refusal, denied finding, or failing
+The workflow exit classes are `0` for success, `1` for a domain refusal, denied warning, or failing
 fixture, `2` for command-line usage, and `3` for an operational failure, such as a file, process,
 or local session the command depends on being unavailable. These classes belong to adopter tooling;
 they do not change the Evidence Gateway runtime verifier's frozen exit contract.
@@ -116,13 +121,11 @@ The `doctor --project <target>` compatibility form retains artifact inspection;
 use `artifact inspect <target>` for that operation and reserve `doctor --runtime-config` for
 live startup dependency checks. Every command that reads one project names it as a positional
 `<project>` argument, defaulting to the current directory where the command allows it. The former
-`--project <project>` spelling remains accepted, but hidden, on commands whose project is now
-positional. Only `source import`, `source diff`, and `source update`, whose positional argument is
+`--project <project>` spelling is refused on commands whose project is positional. Only `source import`, `source diff`, and `source update`, whose positional argument is
 the export, and `target new`, whose positional argument is the target, document `--project`.
 `doctor` keeps its visible `--project <target>` option, and the `access` commands and
 `audit show` act on the current directory; none of these takes a positional project. Do
-not combine a canonical positional project with its former `--project` flag; conflicting old and
-new forms are usage errors.
+pass `--project` to a command whose project is positional; clap refuses it as an unexpected argument.
 Request preparation uses `--response-format signed-jws|sd-jwt-vc` so the
 response choice cannot collide with global report formatting. The released
 `request prepare --format` spelling remains accepted only for those two legacy
@@ -145,7 +148,7 @@ requirements. It accepts logical `secret:file/<name>` references, not values or 
 paths.
 
 The output runtime document is copied byte-for-byte. Its paths and secret posture are accepted only
-by the final target-host `evidence check`.
+by the final target-host `evidence check --require-runtime-dependencies`.
 
 The maintained reference layout keeps the editable project under `shared/evidence-project/` and each
 complete deployment target under `environments/<target>/evidence/`. That layout is a repository
@@ -247,28 +250,36 @@ production candidate input.
 
 | Command | Inputs | Result | Does not do |
 | --- | --- | --- | --- |
-| `evidencectl tooling editor [<project>]` | Editable project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all six managed files | Install an extension, change editor settings outside the project, or replace a file it did not write |
+| `evidencectl tooling editor [<project>]` | Editable project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all thirteen managed files | Install an extension, change editor settings outside the project, or replace a file it did not write |
 | `evidencectl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Evidence Gateway authoring diagnostics for every document it indexes in the project, not only the open one | Open a socket, contact a source, read source values, or observe SQLite |
 
-`tooling editor` writes six files into the project:
+`tooling editor` writes thirteen files into the project:
 
 ```text
 .evidence-editor/manifest.json
+.evidence-editor/schemas/access-client.schema.json
+.evidence-editor/schemas/access-policy.schema.json
+.evidence-editor/schemas/fixture.schema.json
+.evidence-editor/schemas/mock-plan.schema.json
 .evidence-editor/schemas/project-marker.schema.json
 .evidence-editor/schemas/question.schema.json
+.evidence-editor/schemas/selector.schema.json
+.evidence-editor/schemas/source.schema.json
+.evidence-editor/schemas/target-settings.schema.json
 .vscode/extensions.json
 .vscode/settings.json
 .zed/settings.json
 ```
 
-Commit all six with the rest of the project. They are generated, nonsecret configuration matched to
+Commit all thirteen with the rest of the project. They are generated, nonsecret configuration matched to
 the schemas the checks apply, and the `.gitignore` that `evidencectl init` writes excludes `secrets/`
 and `.evidence/` only. A later run refreshes exactly what an earlier run recorded writing. A managed
 file someone has edited by hand stops the command, which names that file and changes nothing.
 
-The mappings cover `evidence-project.yaml` and `questions/*.yaml`, the two document kinds a Rust type
-stands behind. Sources, selectors, derivations, answer schemas, and fixtures carry no static schema;
-the language server checks those.
+The mappings cover `evidence-project.yaml`, `questions/*.yaml`, `sources/*.yaml`,
+`selectors/*.yaml`, `fixtures/*.yaml`, `access/clients/*.yaml`, `access/policies/*.yaml`,
+`mocks/source.yaml`, and `targets/*/settings.yaml`, the document kinds a Rust type stands behind.
+Derivations and answer schemas carry no static schema; the language server checks those.
 
 A diagnostic in your editor carries the sentence `evidencectl` reports for the same input, because
 both read one shared set of authoring checks. Fixing what the editor reports satisfies the command
@@ -278,7 +289,8 @@ line for that rule. The editor bounds a message at 1024 characters.
     crates/registry-evidencectl/src/tooling_editor.rs, EDITOR_SCHEMA_CATALOG and MANAGED_FILES;
     crates/registry-evidencectl/src/scaffold.rs;
     crates/registry-evidence-authoring/src/validate.rs, validate_question();
-    crates/registry-evidencectl/src/authoring.rs, first_finding();
+    crates/registry-evidence-authoring/src/formats.rs, check_question();
+    crates/registry-evidencectl/src/authoring.rs, read_questions();
     crates/registry-language-server/src/evidence/diagnostics.rs, bounded_message(). */}
 
 ### Base Registry Engine projects

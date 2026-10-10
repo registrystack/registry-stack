@@ -94,63 +94,63 @@ fn consent_fixture_compiles_with_synthesized_vocabularies_and_feed_bound() {
 fn consent_record_must_be_create_only() {
     let mut value = source();
     value["entities"][CONSENT]["mutationMode"] = json!("mutable");
-    assert_refused(&value, "consent.record.mutation_mode");
+    assert_refused(&value, "breg.consent.record-mutation-mode");
 }
 
 #[test]
 fn consent_record_fields_have_the_declared_types() {
     let mut value = source();
     value["entities"][CONSENT]["consentRecord"]["subject"] = json!("purpose");
-    assert_refused(&value, "consent.record.fields");
+    assert_refused(&value, "breg.consent.record-fields");
 
     let mut value = source();
     consent_field(&mut value, "recipient")["vocabulary"] = json!("data-use-purpose");
-    assert_refused(&value, "consent.record.fields");
+    assert_refused(&value, "breg.consent.record-fields");
 
     let mut value = source();
     consent_field(&mut value, "scope")["vocabulary"] = json!("data-use-purpose");
-    assert_refused(&value, "consent.record.fields");
+    assert_refused(&value, "breg.consent.record-fields");
 
     let mut value = source();
     value["entities"][CONSENT]["consentRecord"]["decision"]["field"] = json!("effective-at");
-    assert_refused(&value, "consent.record.fields");
+    assert_refused(&value, "breg.consent.record-fields");
 
     let mut value = source();
     value["entities"][CONSENT]["consentRecord"]["validity"]["from"] = json!("decision");
-    assert_refused(&value, "consent.record.fields");
+    assert_refused(&value, "breg.consent.record-fields");
 
     let mut value = source();
     consent_field(&mut value, "effective-at")["required"] = json!(false);
-    assert_refused(&value, "consent.record.fields");
+    assert_refused(&value, "breg.consent.record-fields");
 
     let mut value = source();
     value["entities"][CONSENT]["consentRecord"]["validity"]["until"] = json!("unknown-field");
-    assert_refused(&value, "consent.record.fields");
+    assert_refused(&value, "breg.consent.record-fields");
 }
 
 #[test]
 fn consent_record_decision_sets_are_disjoint_and_within_the_vocabulary() {
     let mut value = source();
     value["entities"][CONSENT]["consentRecord"]["decision"]["gives"] = json!([]);
-    assert_refused(&value, "consent.record.values");
+    assert_refused(&value, "breg.consent.record-values");
 
     let mut value = source();
     value["entities"][CONSENT]["consentRecord"]["decision"]["revokes"] = json!([]);
     value["entities"][CONSENT]["consentRecord"]["decision"]["refusals"] = json!([]);
-    assert_refused(&value, "consent.record.values");
+    assert_refused(&value, "breg.consent.record-values");
 
     let mut value = source();
     value["entities"][CONSENT]["consentRecord"]["decision"]["gives"] =
         json!(["given", "withdrawn"]);
-    assert_refused(&value, "consent.record.values");
+    assert_refused(&value, "breg.consent.record-values");
 
     let mut value = source();
     value["entities"][CONSENT]["consentRecord"]["decision"]["gives"] = json!(["granted"]);
-    assert_refused(&value, "consent.record.values");
+    assert_refused(&value, "breg.consent.record-values");
 
     let mut value = source();
     value["entities"][CONSENT]["consentRecord"]["decision"]["refusals"] = json!(["given"]);
-    assert_refused(&value, "consent.record.values");
+    assert_refused(&value, "breg.consent.record-values");
 }
 
 #[test]
@@ -160,7 +160,7 @@ fn consent_record_max_duration_is_positive_and_bounded() {
     ] {
         let mut value = source();
         value["entities"][CONSENT]["consentRecord"]["validity"]["maxDuration"] = json!(invalid);
-        assert_refused(&value, "consent.record.max_duration");
+        assert_refused(&value, "breg.consent.record-max-duration");
     }
     for valid in ["P10Y", "P3652D", "P1Y2M3W4DT5H6M7S", "PT1S", "P120M"] {
         let mut value = source();
@@ -171,13 +171,13 @@ fn consent_record_max_duration_is_positive_and_bounded() {
 
 /// A consent key or validity field has a reference, vocabulary-code or
 /// timestamp type, none of which the source grammar lets carry `encrypted`.
-/// That grammar refuses first; `consent.record.plaintext` restates the rule
+/// That grammar refuses first; `breg.consent.record-plaintext` restates the rule
 /// for the compiled record and is proven directly in `consent::tests`.
 fn assert_unparseable(value: &Value) {
     let refusal = registry_breg::parse_project_json(&serde_json::to_vec(value).unwrap())
         .expect_err("an encrypted consent key field must not parse");
     assert!(
-        format!("{refusal:?}").contains("encrypted requires"),
+        format!("{refusal:?}").contains("encrypted only on"),
         "{refusal:?}"
     );
 }
@@ -205,7 +205,7 @@ fn consent_record_is_a_leaf() {
     let mut value = source();
     value["accessProfiles"][FEED]["permissions"][0]["requireConsent"] =
         json!([{"record": "consent-decision", "on": "subject"}]);
-    assert_refused(&value, "consent.record.leaf");
+    assert_refused(&value, "breg.consent.record-leaf");
 
     // No incoming read paths.
     let mut value = source();
@@ -218,7 +218,7 @@ fn consent_record_is_a_leaf() {
         .push(json!({"id": "household", "type": "reference", "target": "household", "classification": "internal"}));
     value["accessProfiles"][FOOD_TARGETING]["permissions"][0]["readPaths"] =
         json!([{"path": "decisions", "readableFields": ["label"]}]);
-    assert_refused(&value, "consent.record.leaf");
+    assert_refused(&value, "breg.consent.record-leaf");
 
     // Not the key target of a consent probe.
     let mut value = source();
@@ -229,7 +229,7 @@ fn consent_record_is_a_leaf() {
     value["entities"].as_array_mut().unwrap().push(second);
     value["accessProfiles"][FEED]["permissions"][0]["requireConsent"] =
         json!([{"record": "consent-audit", "on": "id"}]);
-    assert_refused(&value, "consent.record.leaf");
+    assert_refused(&value, "breg.consent.record-leaf");
 }
 
 #[test]
@@ -251,7 +251,7 @@ fn consent_record_is_never_written_directly() {
             value["entities"][CONSENT]["batch"] =
                 json!({"maximumItems": 10, "maximumBytes": 65536});
         }
-        assert_refused(&value, "consent.record.direct_write");
+        assert_refused(&value, "breg.consent.record-direct-write");
     }
 }
 
@@ -263,20 +263,20 @@ fn consent_vocabularies_are_reserved() {
             .as_array_mut()
             .unwrap()
             .push(json!({"id": id, "values": ["forged"]}));
-        assert_refused(&value, "consent.vocabulary.reserved");
+        assert_refused(&value, "breg.consent.vocabulary-reserved");
     }
 
     let mut value = source();
     consent_field(&mut value, "recipient")["values"] = json!(["forged"]);
-    assert_refused(&value, "consent.vocabulary.reserved");
+    assert_refused(&value, "breg.consent.vocabulary-reserved");
 
     let mut value = source();
     value["retiredConsentScopes"] = json!(["food-targeting"]);
-    assert_refused(&value, "consent.vocabulary.reserved");
+    assert_refused(&value, "breg.consent.vocabulary-reserved");
 
     let mut value = source();
     value["retiredConsentScopes"] = json!(["Not A Code"]);
-    assert_refused(&value, "consent.vocabulary.reserved");
+    assert_refused(&value, "breg.consent.vocabulary-reserved");
 }
 
 #[test]
@@ -292,7 +292,7 @@ fn a_consent_record_no_profile_requires_names_the_require_consent_step() {
     let unused = failure
         .diagnostics()
         .iter()
-        .filter(|diagnostic| diagnostic.code == "consent.require.unused")
+        .filter(|diagnostic| diagnostic.code == "breg.consent.require-unused")
         .collect::<Vec<_>>();
     // The record's scope field and the issuing action's scope input.
     assert_eq!(unused.len(), 2, "{:?}", failure.diagnostics());
@@ -318,7 +318,7 @@ fn consent_actions_declare_an_issuer() {
         .as_object_mut()
         .unwrap()
         .remove("consentIssuer");
-    assert_refused(&value, "consent.issuer.declared");
+    assert_refused(&value, "breg.consent.issuer-declared");
 }
 
 #[test]
@@ -329,19 +329,20 @@ fn self_issued_consent_binds_the_subject_through_the_principal_link() {
 
     // The link must be bound to the caller's principal in every permission.
     let mut value = self_issued_project();
-    value["accessProfiles"][3]["permissions"][0]["targets"][0]["rowBoundaries"] = json!([]);
-    assert_refused(&value, "consent.issuer.self_binding");
+    value["accessProfiles"][3]["permissions"][0]["targets"][0]["rowBoundaries"] =
+        json!("unrestricted");
+    assert_refused(&value, "breg.consent.issuer-self-binding");
 
     // The subject must come from the input the link requirement checks.
     let mut value = self_issued_project();
     value["actions"][1]["requires"] = json!([{"input": "link", "field": "active", "equals": true}]);
-    assert_refused(&value, "consent.issuer.self_binding");
+    assert_refused(&value, "breg.consent.issuer-self-binding");
 
     // The link must be active.
     let mut value = self_issued_project();
     value["actions"][1]["requires"] =
         json!([{"input": "link", "field": "subject", "equalsInput": "subject"}]);
-    assert_refused(&value, "consent.issuer.self_binding");
+    assert_refused(&value, "breg.consent.issuer-self-binding");
 
     // The subject must be set from that input.
     let mut value = self_issued_project();
@@ -349,7 +350,7 @@ fn self_issued_consent_binds_the_subject_through_the_principal_link() {
         json!({"id": "other", "type": "reference", "target": "person", "required": true, "classification": "restricted"}),
     );
     value["actions"][1]["effects"][0]["set"]["subject"] = json!({"fromField": "other"});
-    assert_refused(&value, "consent.issuer.self_binding");
+    assert_refused(&value, "breg.consent.issuer-self-binding");
 
     // A steward issuer on the same action is accepted without the binding.
     let mut value = self_issued_project();
@@ -365,7 +366,7 @@ fn a_self_issued_actions_link_bound_targets_are_not_registry_wide_findings() {
             .unwrap()
             .findings()
             .iter()
-            .filter(|finding| finding.code == "access.target.unrestricted_rows")
+            .filter(|finding| finding.code == "breg.access.target-unrestricted-rows")
             .map(|finding| finding.path.clone())
             .collect::<BTreeSet<_>>()
     };
@@ -419,14 +420,14 @@ fn gated_permissions_are_read_only() {
         if operation == "tombstone" {
             value["entities"][PERSON]["tombstone"] = json!(true);
         }
-        assert_refused(&value, "consent.require.read_only");
+        assert_refused(&value, "breg.consent.require-read-only");
     }
 
     // requireConsent on an action permission is refused.
     let mut value = source();
     value["accessProfiles"][STEWARD]["permissions"][5]["requireConsent"] =
         json!([{"record": "consent-decision", "on": "id"}]);
-    assert_refused(&value, "consent.require.read_only");
+    assert_refused(&value, "breg.consent.require-read-only");
 
     // A profile gated on an entity cannot target it through an action.
     let mut value = source();
@@ -435,18 +436,21 @@ fn gated_permissions_are_read_only() {
         .as_array_mut()
         .unwrap()
         .push(action);
-    assert_refused(&value, "consent.require.read_only");
+    assert_refused(&value, "breg.consent.require-read-only");
 }
 
 #[test]
 fn gated_profiles_declare_purposes_from_the_record_vocabulary() {
     let mut value = source();
-    value["accessProfiles"][FOOD_TARGETING]["requiredPurposes"] = json!([]);
-    assert_refused(&value, "consent.require.purpose");
+    value["accessProfiles"][FOOD_TARGETING]
+        .as_object_mut()
+        .unwrap()
+        .remove("requiredPurposes");
+    assert_refused(&value, "breg.consent.require-purpose");
 
     let mut value = source();
     value["accessProfiles"][FOOD_TARGETING]["requiredPurposes"] = json!(["marketing"]);
-    assert_refused(&value, "consent.require.purpose");
+    assert_refused(&value, "breg.consent.require-purpose");
 }
 
 #[test]
@@ -460,12 +464,12 @@ fn gated_profiles_declare_mapped_requester_clients() {
         .as_object_mut()
         .unwrap()
         .remove("actorKind");
-    assert_refused(&value, "consent.require.clients");
+    assert_refused(&value, "breg.consent.require-clients");
 
     let mut value = source();
     value["accessProfiles"][FOOD_TARGETING]["requesterClients"] =
         json!(["wfp-scope", "unmapped-client"]);
-    assert_refused(&value, "consent.require.clients");
+    assert_refused(&value, "breg.consent.require-clients");
 }
 
 #[test]
@@ -474,13 +478,13 @@ fn consent_key_references_the_consent_subject_entity() {
     let mut value = source();
     value["accessProfiles"][FOOD_TARGETING]["permissions"][1]["requireConsent"] =
         json!([{"record": "consent-decision", "on": "id"}]);
-    assert_refused(&value, "consent.require.key");
+    assert_refused(&value, "breg.consent.require-key");
 
     // A non-reference field.
     let mut value = source();
     value["accessProfiles"][FOOD_TARGETING]["permissions"][1]["requireConsent"] =
         json!([{"record": "consent-decision", "on": "programme"}]);
-    assert_refused(&value, "consent.require.key");
+    assert_refused(&value, "breg.consent.require-key");
 
     // A reference to a different entity.
     let mut value = source();
@@ -488,35 +492,22 @@ fn consent_key_references_the_consent_subject_entity() {
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "entity": "household-member", "rowBoundaries": [], "operations": ["get"],
+            "entity": "household-member", "rowBoundaries": "unrestricted", "operations": ["get"],
             "readableFields": ["household"],
             "requireConsent": [{"record": "consent-decision", "on": "household"}]
         }));
-    assert_refused(&value, "consent.require.key");
+    assert_refused(&value, "breg.consent.require-key");
 
     // An unknown consent record, or an entity that is not one.
     let mut value = source();
     value["accessProfiles"][FOOD_TARGETING]["permissions"][0]["requireConsent"] =
         json!([{"record": "enrolment", "on": "id"}]);
-    assert_refused(&value, "consent.require.key");
+    assert_refused(&value, "breg.consent.require-key");
 
     // An encrypted key field never parses; `consent::tests` proves the rule.
     let mut value = source();
     value["entities"][ENROLMENT]["fields"][0]["encrypted"] = json!(true);
     assert_unparseable(&value);
-}
-
-#[test]
-fn anonymous_profiles_cannot_require_consent() {
-    let mut value = source();
-    value["accessProfiles"].as_array_mut().unwrap().push(json!({
-        "id": "public-person", "anonymous": true,
-        "permissions": [{
-            "entity": "household", "rowBoundaries": [], "operations": ["get"], "readableFields": ["label"],
-            "requireConsent": [{"record": "consent-decision", "on": "id"}]
-        }]
-    }));
-    assert_refused(&value, "consent.require.anonymous");
 }
 
 #[test]
@@ -529,14 +520,14 @@ fn gated_permissions_refuse_spatial_queries() {
     permission["readableFields"] = json!(["given-name", "district", "location"]);
     permission["spatialQueries"] =
         json!({"bbox": {"maximumLongitudeSpanDegrees": 1, "maximumLatitudeSpanDegrees": 1}});
-    assert_refused(&value, "consent.require.spatial_unsupported");
+    assert_refused(&value, "breg.consent.require-spatial-unsupported");
 }
 
 #[test]
 fn gated_permissions_refuse_data_export() {
     let mut value = source();
     value["accessProfiles"][FOOD_TARGETING]["permissions"][0]["allowDataExport"] = json!(true);
-    assert_refused(&value, "consent.require.export_unsupported");
+    assert_refused(&value, "breg.consent.require-export-unsupported");
 }
 
 #[test]
@@ -555,7 +546,7 @@ fn read_paths_cannot_reach_a_gated_entity() {
     ]);
     value["accessProfiles"][STEWARD]["permissions"][1]["readPaths"] =
         json!([{"path": "members", "readableFields": ["given-name"]}]);
-    assert_refused(&value, "consent.require.read_path_target");
+    assert_refused(&value, "breg.consent.require-read-path-target");
 
     // Nor pass through one.
     let mut value = source();
@@ -575,13 +566,13 @@ fn read_paths_cannot_reach_a_gated_entity() {
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "entity": "household-member", "rowBoundaries": [], "operations": ["get"],
+            "entity": "household-member", "rowBoundaries": "unrestricted", "operations": ["get"],
             "readableFields": ["household"],
             "requireConsent": [{"record": "consent-decision", "on": "id"}]
         }));
     value["accessProfiles"][STEWARD]["permissions"][1]["readPaths"] =
         json!([{"path": "enrolments", "readableFields": ["programme"]}]);
-    assert_refused(&value, "consent.require.read_path_target");
+    assert_refused(&value, "breg.consent.require-read-path-target");
 }
 
 #[test]
@@ -601,28 +592,31 @@ fn evidence_source_export_refuses_a_gated_profile() {
         Ok(_) => panic!("a gated profile must not be exported as an Evidence source"),
         Err(refusal) => refusal,
     };
-    assert_eq!(refusal.code, "consent.require.evidence_source_unsupported");
+    assert_eq!(
+        refusal.code,
+        "breg.consent.require-evidence-source-unsupported"
+    );
 }
 
 #[test]
 fn recipient_ids_are_unique_codes() {
     let mut value = source();
     value["recipients"]["groups"][0]["id"] = json!("wfp");
-    assert_refused(&value, "recipients.id");
+    assert_refused(&value, "breg.recipients.id");
 
     let mut value = source();
     value["recipients"]["organizations"][1]["id"] = json!("wfp");
     value["recipients"]["organizations"][1]["clients"] = json!([]);
-    assert_refused(&value, "recipients.id");
+    assert_refused(&value, "breg.recipients.id");
 
     let mut value = source();
     value["recipients"]["organizations"][2]["id"] = json!("NGO Beta");
-    assert_refused(&value, "recipients.id");
+    assert_refused(&value, "breg.recipients.id");
 
     for field in ["name", "contact"] {
         let mut value = source();
         value["recipients"]["organizations"][0][field] = json!("");
-        assert_refused(&value, "recipients.id");
+        assert_refused(&value, "breg.recipients.id");
     }
 }
 
@@ -630,25 +624,25 @@ fn recipient_ids_are_unique_codes() {
 fn recipient_clients_map_to_one_organization() {
     let mut value = source();
     value["recipients"]["organizations"][2]["clients"] = json!(["wfp-scope"]);
-    assert_refused(&value, "recipients.client_unique");
+    assert_refused(&value, "breg.recipients.client-unique");
 }
 
 #[test]
 fn recipient_groups_list_declared_organizations() {
     let mut value = source();
     value["recipients"]["groups"][0]["members"] = json!(["wfp", "unknown"]);
-    assert_refused(&value, "recipients.group_members");
+    assert_refused(&value, "breg.recipients.group-members");
 
     let mut value = source();
     value["recipients"]["groups"]
         .as_array_mut()
         .unwrap()
         .push(json!({"id": "nested", "name": "Nested", "members": ["referral-network"]}));
-    assert_refused(&value, "recipients.group_members");
+    assert_refused(&value, "breg.recipients.group-members");
 
     let mut value = source();
     value["recipients"]["groups"][0]["members"] = json!(["wfp", "wfp"]);
-    assert_refused(&value, "recipients.group_members");
+    assert_refused(&value, "breg.recipients.group-members");
 }
 
 #[test]
@@ -658,7 +652,7 @@ fn an_organization_belongs_to_at_most_63_groups() {
         .map(|index| json!({"id": format!("group-{index}"), "name": "Group", "members": ["wfp"]}))
         .collect::<Vec<_>>();
     value["recipients"]["groups"] = json!(groups);
-    assert_refused(&value, "recipients.set_bound");
+    assert_refused(&value, "breg.recipients.set-bound");
 
     let mut value = source();
     let groups = (0..63)
@@ -674,13 +668,13 @@ fn the_recipient_claim_binds_only_the_consent_feed() {
     let mut value = source();
     value["accessProfiles"][FEED]["permissions"][0]["rowBoundaries"] =
         json!([{"field": "purpose", "claim": "registry:recipients", "operator": "in"}]);
-    assert_refused(&value, "consent.feed.claim");
+    assert_refused(&value, "breg.consent.feed-claim");
 
     // Not with equals.
     let mut value = source();
     value["accessProfiles"][FEED]["permissions"][0]["rowBoundaries"] =
         json!([{"field": "recipient", "claim": "registry:recipients", "operator": "equals"}]);
-    assert_refused(&value, "consent.feed.claim");
+    assert_refused(&value, "breg.consent.feed-claim");
 
     // Not on a non-consent entity.
     let mut value = source();
@@ -691,7 +685,7 @@ fn the_recipient_claim_binds_only_the_consent_feed() {
             "entity": "household", "operations": ["get"], "readableFields": ["label"],
             "rowBoundaries": [{"field": "label", "claim": "registry:recipients", "operator": "in"}]
         }));
-    assert_refused(&value, "consent.feed.claim");
+    assert_refused(&value, "breg.consent.feed-claim");
 
     // Not beyond get and list.
     let mut value = source();
@@ -701,13 +695,13 @@ fn the_recipient_claim_binds_only_the_consent_feed() {
         json!([{"id": "subject", "fields": ["subject"]}]);
     value["accessProfiles"][FEED]["permissions"][0]["lookups"] =
         json!([{"selector": "subject", "valueOrigin": "request"}]);
-    assert_refused(&value, "consent.feed.claim");
+    assert_refused(&value, "breg.consent.feed-claim");
 
     // Not in an action target.
     let mut value = source();
     value["accessProfiles"][STEWARD]["permissions"][5]["targets"][1]["rowBoundaries"] =
         json!([{"field": "recipient", "claim": "registry:recipients", "operator": "in"}]);
-    assert_refused(&value, "consent.feed.claim");
+    assert_refused(&value, "breg.consent.feed-claim");
 
     // The synthesized decision claim is never authored.
     let mut value = source();
@@ -715,12 +709,12 @@ fn the_recipient_claim_binds_only_the_consent_feed() {
         {"field": "recipient", "claim": "registry:recipients", "operator": "in"},
         {"field": "decision", "claim": "registry:consent-decisions:consent-decision", "operator": "in"}
     ]);
-    assert_refused(&value, "consent.feed.claim");
+    assert_refused(&value, "breg.consent.feed-claim");
 
     // Nor used as the principal claim.
     let mut value = source();
     value["accessProfiles"][FEED]["principalClaim"] = json!("registry:recipients");
-    assert_refused(&value, "consent.feed.claim");
+    assert_refused(&value, "breg.consent.feed-claim");
 
     // Nor wherever else a project names a verified claim.
     reserved_claims_never_select_lookup_values();
@@ -743,7 +737,7 @@ fn refusals(value: &Value) -> Vec<(String, String)> {
 fn assert_only_reserved_claim_refusal(value: &Value, path: &str) {
     assert_eq!(
         refusals(value),
-        [("consent.feed.claim".to_owned(), path.to_owned())]
+        [("breg.consent.feed-claim".to_owned(), path.to_owned())]
     );
 }
 
@@ -757,7 +751,7 @@ fn consent_claim_lookup(field: &str, claim: &str) -> Value {
         "requesterClients": ["wfp-scope"], "requiredScopes": ["consent:read"],
         "permissions": [{
             "entity": "consent-decision", "operations": ["lookup"],
-            "readableFields": ["subject", "recipient", "decision"], "rowBoundaries": [],
+            "readableFields": ["subject", "recipient", "decision"], "rowBoundaries": "unrestricted",
             "lookups": [{"selector": field, "valueOrigin": "verified_claim", "claimMapping": {field: claim}}]
         }]
     }));
@@ -825,20 +819,20 @@ fn change_request_project(apply_claim: &str, presence_claim: &str) -> Value {
             }
         }],
         "accessProfiles": [{
-            "id": "asset-reader", "principalClaim": "principal",
+            "id": "asset-reader", "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": "asset", "operations": ["get"], "readableFields": ["label"],
-                "rowBoundaries": [],
+                "rowBoundaries": "unrestricted",
                 "requestPresence": [{"requestType": "asset-request", "rowBoundaries": [
                     {"field": "label", "claim": presence_claim, "operator": "in"}
                 ]}]
             }]
         }, {
-            "id": "reviewer", "default": true, "principalClaim": "principal",
+            "id": "reviewer", "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": "asset-request", "operations": ["get", "submit_request", "apply_request"],
                 "readableFields": ["asset", "label"], "writableFields": ["asset", "label"],
-                "rowBoundaries": [],
+                "rowBoundaries": "unrestricted",
                 "applyTargets": [{"entity": "asset", "rowBoundaries": [
                     {"field": "label", "claim": apply_claim, "operator": "in"}
                 ]}]
@@ -910,7 +904,51 @@ mod startup {
         let registry = compile(&value).expect("consent fixture compiles");
         assert_eq!(
             authenticator(&registry, &idp, &["wfp-scope", "ngo-alpha-portal"]).err(),
-            Some(AuthenticationConfigError::InvalidClaimMapping)
+            Some(AuthenticationConfigError::NamedClientNotListed)
+        );
+    }
+
+    /// `allowedClients: unrestricted` reaches the verifier as an empty list,
+    /// which lists no client, so a project that names clients is refused with
+    /// the cause that says so rather than a generic mapping error.
+    #[tokio::test]
+    async fn an_unrestricted_client_list_refuses_a_project_that_names_clients() {
+        let registry = compile(&source()).expect("consent fixture compiles");
+        let idp = MockIdp::start().await;
+        assert_eq!(
+            authenticator(&registry, &idp, &[]).err(),
+            Some(AuthenticationConfigError::NamedClientNotListed)
+        );
+        let message = AuthenticationConfigError::NamedClientNotListed.to_string();
+        for fix in ["allowedClients", "requesterClients", "unrestricted"] {
+            assert!(message.contains(fix), "{fix}: {message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_trusted_actor_client_must_be_an_allowed_client() {
+        use std::collections::BTreeMap;
+
+        let registry = compile(&source()).expect("consent fixture compiles");
+        let idp = MockIdp::start().await;
+        let mut verifier = oidc_verifier_config(idp.issuer(), vec!["consent-api".to_owned()]);
+        verifier.allowed_clients = vec!["wfp-scope".to_owned(), "ngo-alpha-portal".to_owned()];
+        let key_source = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            idp.jwks_uri(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        ));
+        let claims = AuthorityClaimConfig::new("principal", Some("purpose".to_owned()))
+            .with_contextual_claims(
+                Default::default(),
+                BTreeMap::from([(
+                    "unlisted-agent".to_owned(),
+                    "00000000-0000-4000-8000-000000000001".to_owned(),
+                )]),
+            );
+        assert_eq!(
+            RegistryAuthenticator::new(&registry, verifier, key_source, claims).err(),
+            Some(AuthenticationConfigError::NamedClientNotListed)
         );
     }
 }
@@ -921,7 +959,7 @@ fn a_consent_record_needs_declared_recipients() {
     let object = value.as_object_mut().unwrap();
     object.remove("recipients");
     object.remove("retiredConsentScopes");
-    assert_refused(&value, "consent.record.fields");
+    assert_refused(&value, "breg.consent.record-fields");
 }
 
 #[cfg(feature = "runtime")]
@@ -1164,7 +1202,7 @@ fn package_request(
         modules: vec![],
         fixture_journeys: PackageSourceFile {
             path: "tests/journeys.yaml".to_owned(),
-            bytes: b"apiVersion: registry.registrystack.org/breg-journeys/v1\njourneys: []\n"
+            bytes: b"apiVersion: id.registrystack.org/formats/breg/journeys/v1\nkind: BRegJourneys\njourneys: []\n"
                 .to_vec(),
         },
         migration_plan,
@@ -1330,7 +1368,7 @@ fn a_client_reading_a_gated_entity_through_an_ungated_profile_is_a_finding() {
             .unwrap()
             .findings()
             .iter()
-            .filter(|finding| finding.code == "access.consent.ungated_client")
+            .filter(|finding| finding.code == "breg.access.consent-ungated-client")
             .map(|finding| (finding.path.clone(), finding.message.clone()))
             .collect::<Vec<_>>()
     };
@@ -1374,7 +1412,7 @@ fn a_profile_that_only_writes_or_invokes_on_a_gated_entity_is_not_an_ungated_cli
             .unwrap()
             .findings()
             .iter()
-            .filter(|finding| finding.code == "access.consent.ungated_client")
+            .filter(|finding| finding.code == "breg.access.consent-ungated-client")
             .map(|finding| finding.path.clone())
             .collect::<Vec<_>>()
     };

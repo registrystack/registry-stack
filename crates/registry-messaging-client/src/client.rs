@@ -111,7 +111,7 @@ impl MessagingClient {
     /// that the first attempt failed. Never resubmit it under a new key:
     /// have the operator restore the access, template version, or locale the
     /// refusal names, then retry under the same key within the deployment's
-    /// `retention.submissionReceiptDays`, after which an accepted key is
+    /// `retention.submissionReceiptRetentionDays`, after which an accepted key is
     /// spent. A key that is empty, longer than
     /// `MAXIMUM_IDEMPOTENCY_KEY_BYTES`, or carries a byte outside visible
     /// ASCII is refused before a request is sent. A templated submission's

@@ -291,13 +291,14 @@ fn delegation_registry() -> Arc<CompiledRegistry> {
         .push(serde_json::json!({
             "id": "standing-agent",
             "principalClaim": "principal",
+            "requiredScopes": "unrestricted",
             "actorKind": "agent",
             "requesterClients": ["agent-client"],
             "permissions": [{
                 "entity": "placement-correction-request",
                 "operations": ["get"],
                 "readableFields": ["placement"],
-                "rowBoundaries": []
+                "rowBoundaries": "unrestricted"
             }]
         }));
     let project =
@@ -341,19 +342,19 @@ const COMPILED_REGISTRY_PROJECT: &str = r#"{
             }
           }],
           "accessProfiles":[{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{
+            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","submit_request","revise_request","cancel_request"],
               "readableFields":["placement","proposed-site"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           },{
-            "id":"request-applier","principalClaim":"principal","permissions":[{
+            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","apply_request"],
               "readableFields":["placement"],
               "applyTargets":[{"entity":"placement", "rowBoundaries":[{"field":"site","claim":"site_claim","operator":"equals"}]}],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#;

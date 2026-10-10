@@ -1,0 +1,10 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+a: 0x1F
+b: 0123
+c: .5
+d: .inf
+e: 1_000
+f: 1e400
+g: 99999999999999999999999
+h: -0

@@ -99,7 +99,7 @@ profession/activity/status combinations. `first-record` needs no samples: its ex
 fictional external URIs permit an independent create and read. Edit
 `examples/inputs/first-record.json` before the first run. Native retained state
 binds exact inputs and captured UUIDs to each attempt. The correction's
-`recordRef` is resolved to the captured first-record UUID by the native runner;
+`recordCapture` is resolved to the captured first-record UUID by the native runner;
 external URI strings remain unchanged and trigger no lookup.
 
 The normal and security journey suites exercise independent creation,

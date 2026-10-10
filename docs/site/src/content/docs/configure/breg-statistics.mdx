@@ -25,19 +25,36 @@ statisticalDatasets:
     unit: discharge-report
     population: "substanceCode ne null"
     period:
-      kind: flow
+      type: flow
       field: period-start
       granularity: month
       firstPeriod: 2025-01
     dimensions: [administrative-boundary, has-measured-quantity]
     disclosure: {minimumCount: 5, roundingBase: 5}
-    live: [facility-operator]
-    releases:
-      publisher: statistics-publisher
-      readers: [statistics-reader]
 ```
 
-The publisher needs an ordinary `list` permission with `allowCount: true`, readable and filterable dataset fields, and caller-independent visibility on every source dependency. The reader profile may declare `permissions: []`: its dataset grant authorizes released statistics without granting record access. Review [disclosure risks](../../explanation/breg-statistical-datasets/) before choosing dimensions and release cadence.
+The dataset names no profile. Grant it in each access profile's `permissions`, beside the profile's record grants, so one profile review shows everything the profile reaches:
+
+```yaml
+accessProfiles:
+  - id: facility-operator
+    # principalClaim, requiredScopes, and the record permissions
+    permissions:
+      - dataset: monthly-discharge-reports
+        operations: [read-live, read-releases]
+  - id: statistics-publisher
+    permissions:
+      - dataset: monthly-discharge-reports
+        operations: [publish, read-releases]
+  - id: statistics-reader
+    permissions:
+      - dataset: monthly-discharge-reports
+        operations: [read-releases]
+```
+
+A dataset permission holds `dataset` and `operations` only. `read-live` reads exact live counts, `publish` publishes and withdraws releases, and `read-releases` reads released documents. Exactly one profile may hold `publish` on a dataset. When a dataset has a publisher, the publisher and every `read-live` profile also write `read-releases`, because the release routes serve them; `bregctl check` refuses the project otherwise and names the profile. `read-releases` on a dataset nobody publishes is refused the same way.
+
+The publisher and every `read-live` profile also need an ordinary `list` permission with `allowCount: true`, readable and filterable dataset fields, and, for the publisher, caller-independent visibility on every source dependency. A profile that only holds `read-releases` needs no record permission: its dataset grant authorizes released statistics without granting record access. Run `bregctl explain access` to see, per dataset, which profiles hold each operation. Review [disclosure risks](../../explanation/breg-statistical-datasets/) before choosing dimensions and release cadence.
 
 Compile your project, replacing `./facility` with its path:
 
@@ -45,7 +62,7 @@ Compile your project, replacing `./facility` with its path:
 bregctl check ./facility
 ```
 
-Resolve a refused declaration before packaging. In particular, remove claim-bound source policies from a publisher, or keep the dataset live-only when the population must depend on the caller. Package and apply the project using [deploy a registry](../../operate/breg/).
+Resolve a refused declaration before packaging. In particular, remove claim-bound source policies from a publisher, or grant only `read-live` when the population must depend on the caller. Package and apply the project using [deploy a registry](../../operate/breg/).
 
 {/* Evidence: products/breg/acceptance/facility/registry.yaml;
     crates/registry-breg/src/compiler/statistics.rs. */}

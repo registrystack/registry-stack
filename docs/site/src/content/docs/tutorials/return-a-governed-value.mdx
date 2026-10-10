@@ -76,6 +76,8 @@ cd adult-status
 Create a second question definition alongside `questions/adult-status.yaml`:
 
 ```yaml title="questions/age-bracket.yaml" test-file
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: age-bracket
 question: Which age bracket does this person belong to?
 purpose: service-path-selection

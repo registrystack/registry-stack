@@ -825,6 +825,11 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework logical backup and restore",
             ),
             (
+                "if: matrix.name == 'casework'\n        run: products/casework/scripts/check-schemas.sh",
+                "if: matrix.name == 'casework'\n        run: true # Casework schema drift disabled",
+                "Casework generated schema drift check",
+            ),
+            (
                 "cargo test --locked -p registry-casework --features postgres-test --test postgres_transactions",
                 "true # Casework transactions disabled",
                 "Casework claim, reconciliation, and attempt suite",
@@ -946,6 +951,11 @@ class GateInventoryTest(unittest.TestCase):
                 "run: products/scheduling/scripts/check-contracts.sh",
                 "run: true # Scheduling contract reproduction disabled",
                 "Scheduling contract reproduction",
+            ),
+            (
+                "run: products/scheduling/scripts/check-schemas.sh",
+                "run: true # Scheduling schema drift disabled",
+                "Scheduling generated schema drift check",
             ),
             (
                 "scheduling_postgres: ${{ steps.filter.outputs.scheduling_postgres }}",
@@ -1106,7 +1116,7 @@ class GateInventoryTest(unittest.TestCase):
                 "Messaging generated document drift check",
             ),
             (
-                'expect_refusal unknown-key listener.port',
+                'expect_refusal unknown-key /listener/port config.unknown-key',
                 "Messaging configuration refusal journeys",
             ),
         ):
@@ -1502,6 +1512,21 @@ class GateInventoryTest(unittest.TestCase):
             ),
         )
 
+    def test_missing_yaml_reader_boundary_gates_are_reported(self) -> None:
+        for snippet, gate in (
+            (
+                "run: products/platform/scripts/check-yaml-reader-boundary.sh",
+                "YAML reader boundary",
+            ),
+            (
+                "run: python3 -m unittest products/platform/scripts/test_check_yaml_reader_boundary.py",
+                "YAML reader boundary tests",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, "run: true # YAML reader boundary disabled")
+                self.assertIn(gate, self.module.missing_gates(text))
+
     def test_missing_config_conformance_gate_is_reported(self) -> None:
         text = self.workflow.replace(
             "run: products/platform/scripts/check-config-conformance.py --check-generated",
@@ -1509,6 +1534,47 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn(
             "Runtime configuration conformance gate",
+            self.module.missing_gates(text),
+        )
+
+    def test_missing_config_conformance_corpus_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: products/platform/scripts/run-config-conformance.sh --strict --bin-dir target/debug",
+            "run: products/platform/scripts/run-config-conformance.sh --bin-dir target/debug",
+        )
+        self.assertIn(
+            "Configuration conformance corpus",
+            self.module.missing_gates(text),
+        )
+
+    def test_missing_config_conventions_rule_coverage_is_reported(self) -> None:
+        text = self.workflow.replace(
+            '"${lint[@]}" --rule-coverage',
+            "true # Configuration conventions rule coverage disabled",
+        )
+        self.assertIn(
+            "Configuration conventions rule coverage",
+            self.module.missing_gates(text),
+        )
+
+    def test_missing_config_conformance_corpus_runner_tests_are_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_config_conformance.py",
+            "run: true # Configuration conformance corpus runner tests disabled",
+        )
+        self.assertIn(
+            "Configuration conformance corpus runner tests",
+            self.module.missing_gates(text),
+        )
+
+    def test_missing_breg_service_schema_drift_check_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "--features registry-breg-mcp/schema,registry-breg-review/schema --lib schema::tests",
+            "--lib",
+        )
+        self.assertNotEqual(text, self.workflow)
+        self.assertIn(
+            "BReg citizen service runtime schema drift",
             self.module.missing_gates(text),
         )
 

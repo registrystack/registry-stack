@@ -75,4 +75,3 @@ fixtures:
     manifest: true
     expect: valid
     description: Minimal social protection fixture with household, individual, and enrollment metadata.
-generator_command: null

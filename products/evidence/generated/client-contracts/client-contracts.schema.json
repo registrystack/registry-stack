@@ -1,0 +1,71 @@
+{
+  "$defs": {
+    "AssuranceProfile": {
+      "enum": [
+        "local",
+        "production",
+        "evidence-grade"
+      ],
+      "type": "string"
+    },
+    "ContractsSchema": {
+      "description": "The `schema` of a reviewed contracts file.",
+      "enum": [
+        "registry.evidence-client-contracts/v1"
+      ],
+      "type": "string"
+    },
+    "UriIdentity": {
+      "description": "An absolute URI the service states as an identity, compared exactly.",
+      "format": "uri",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/client-contracts/client-contracts.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A reviewed snapshot of the definitions an Evidence service publishes for\none requester, written by `evidencectl client contracts fetch` and\npromoted after review. It holds no source plan, script, credential,\nrequester tag, authority profile, selector value, codelist, or internal\nconstraint.",
+  "properties": {
+    "assuranceProfile": {
+      "$ref": "#/$defs/AssuranceProfile",
+      "description": "The assurance profile the service states."
+    },
+    "audience": {
+      "$ref": "#/$defs/UriIdentity",
+      "description": "The audience the definitions are scoped to."
+    },
+    "definitions": {
+      "description": "The definitions, as the service published them.",
+      "items": {
+        "$ref": "https://registrystack.org/schemas/evidence/definitions-v1.json#/$defs/definition"
+      },
+      "maxItems": 16384,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "issuedBy": {
+      "$ref": "#/$defs/UriIdentity",
+      "description": "The service that issues assertions for the definitions."
+    },
+    "providedBy": {
+      "$ref": "#/$defs/UriIdentity",
+      "description": "The provider the definitions describe."
+    },
+    "schema": {
+      "$ref": "#/$defs/ContractsSchema",
+      "description": "The contracts format and its version."
+    }
+  },
+  "required": [
+    "schema",
+    "assuranceProfile",
+    "audience",
+    "issuedBy",
+    "providedBy",
+    "definitions"
+  ],
+  "title": "Evidence client reviewed contracts",
+  "type": "object"
+}

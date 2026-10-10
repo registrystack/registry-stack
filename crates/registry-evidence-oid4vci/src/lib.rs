@@ -43,7 +43,8 @@ pub mod issuer;
 pub mod metadata;
 mod observability;
 pub mod offer;
-pub mod secretfile;
+#[cfg(feature = "schema")]
+pub mod schema;
 pub mod service;
 pub mod store;
 

@@ -1,0 +1,6 @@
+{
+  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
+  "controlledWrites": [],
+  "kind": "ChangeRequestsExplanation",
+  "requests": []
+}

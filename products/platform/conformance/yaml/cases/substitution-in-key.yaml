@@ -1,0 +1,14 @@
+id: substitution-in-key
+rules: [CFG-SEC-2, CFG-SEC-3]
+summary: A substitution expression in a key is refused at the key.
+appliesTo:
+  audiences: [operator]
+mutation:
+  append: |
+    ${REGISTRY_CONFORMANCE_VALUE}: one
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.substitution-not-allowed
+      path: /${REGISTRY_CONFORMANCE_VALUE}
+      at: {line: 1, column: 1}

@@ -1148,7 +1148,7 @@ mod tests {
     use registry_scheduling_core::LedgerKind;
 
     use super::*;
-    use crate::config::{DestinationsConfig, MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS};
+    use crate::config::{reads_block, DestinationsConfig, MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS};
     use crate::store::{ClaimOwner, ClaimState};
 
     #[test]
@@ -1259,6 +1259,17 @@ mod tests {
         assert!(destination_parts("https://receiver.example/hooks?token=secret").is_err());
     }
 
+    /// Whether the runtime configuration's reader accepts `config` bound to
+    /// the hook destination `id`.
+    fn configuration_accepts(id: &str, config: &HookDestinationConfig) -> bool {
+        reads_block::<DestinationsConfig>(&json!({"hooks": {id: {
+            "url": config.url,
+            "hmacSha256KeyRef": config.hmac_sha256_key_ref,
+            "attemptTimeoutMilliseconds": config.attempt_timeout_milliseconds,
+            "maximumAttempts": config.maximum_attempts,
+        }}}))
+    }
+
     /// Activation refuses a binding as a budget widening exactly when the
     /// runtime configuration refuses it, at each bound's edge on both sides,
     /// so a bound moved in the configuration moves activation with it.
@@ -1305,12 +1316,7 @@ mod tests {
         }
         let mut accepted = 0;
         for (id, config) in cases {
-            let configured = DestinationsConfig {
-                reminders: None,
-                hooks: BTreeMap::from([(id.clone(), config.clone())]),
-            }
-            .check()
-            .is_ok();
+            let configured = configuration_accepts(&id, &config);
             let activated = ActivatedDestination::activate(&id, &config, &secrets);
             if configured {
                 accepted += 1;

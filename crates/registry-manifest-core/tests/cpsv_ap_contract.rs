@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod support;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use oxjsonld::JsonLdParser;
@@ -8,7 +10,7 @@ use serde_json::{json, Value};
 
 #[test]
 fn cpsv_ap_service_first_fixture_satisfies_jsonld_rdf_contract() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(include_str!(
+    let manifest: MetadataManifest = support::from_yaml(include_str!(
         "../../../products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml"
     ))
     .expect("service-first fixture parses");
@@ -23,7 +25,7 @@ fn cpsv_ap_service_first_fixture_satisfies_jsonld_rdf_contract() {
 
 #[test]
 fn cpsv_ap_jsonld_parser_rejects_broken_context() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(include_str!(
+    let manifest: MetadataManifest = support::from_yaml(include_str!(
         "../../../products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml"
     ))
     .expect("service-first fixture parses");

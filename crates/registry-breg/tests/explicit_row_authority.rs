@@ -7,7 +7,25 @@ use registry_breg::contract::{
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
+/// An authored grant states its row reach: `unrestricted`, or at least one
+/// boundary. Nothing written, `null`, and an empty list are all refused.
 fn requires_explicit_rows<T: DeserializeOwned>(mut value: Value) {
+    assert!(serde_json::from_value::<T>(value.clone()).is_err());
+    value["rowBoundaries"] = Value::Null;
+    assert!(serde_json::from_value::<T>(value.clone()).is_err());
+    value["rowBoundaries"] = json!([]);
+    assert!(serde_json::from_value::<T>(value.clone()).is_err());
+    value["rowBoundaries"] = json!("unrestricted");
+    assert!(serde_json::from_value::<T>(value.clone()).is_ok());
+    value["rowBoundaries"] = json!([
+        {"field":"district", "claim":"districts", "operator":"in"}
+    ]);
+    assert!(serde_json::from_value::<T>(value).is_ok());
+}
+
+/// The compiled form carries the row reach as a list, empty when the grant
+/// reaches every row, and still refuses a grant that carries none.
+fn carries_compiled_rows<T: DeserializeOwned>(mut value: Value) {
     assert!(serde_json::from_value::<T>(value.clone()).is_err());
     value["rowBoundaries"] = Value::Null;
     assert!(serde_json::from_value::<T>(value.clone()).is_err());
@@ -25,15 +43,15 @@ fn every_row_bearing_grant_requires_an_explicit_declaration() {
         "entity":"record", "operations":["get"]
     }));
     requires_explicit_rows::<ActionTargetPermissionSource>(json!({"entity":"record"}));
-    requires_explicit_rows::<ApplyTargetPermissionSource>(json!({"entity":"record"}));
-    requires_explicit_rows::<RequestPresencePermissionSource>(json!({"requestType":"correction"}));
+    carries_compiled_rows::<ApplyTargetPermissionSource>(json!({"entity":"record"}));
+    carries_compiled_rows::<RequestPresencePermissionSource>(json!({"requestType":"correction"}));
 }
 
 #[test]
 fn invocation_and_mandatory_requirements_do_not_invent_row_grants() {
     let action: AccessPermissionSource = serde_json::from_value(json!({
         "action":"register", "operations":["invoke"],
-        "targets":[{"entity":"record", "rowBoundaries":[]}]
+        "targets":[{"entity":"record", "rowBoundaries":"unrestricted"}]
     }))
     .expect("invocation declares rows only at its targets");
     assert!(action.row_boundaries.is_empty());
@@ -56,7 +74,7 @@ fn membership_preserves_explicit_row_declarations_and_round_trips() {
         "entity":"record", "operations":["get"], "membershipBoundaries": boundaries
     });
     requires_explicit_rows::<AccessPermissionSource>(grant.clone());
-    grant["rowBoundaries"] = json!([]);
+    grant["rowBoundaries"] = json!("unrestricted");
     let parsed: AccessPermissionSource = serde_json::from_value(grant).unwrap();
     assert_eq!(parsed.membership_boundaries.len(), 1);
     assert_eq!(
@@ -64,7 +82,7 @@ fn membership_preserves_explicit_row_declarations_and_round_trips() {
         boundaries
     );
 
-    requires_explicit_rows::<AccessProfileSource>(json!({
+    carries_compiled_rows::<AccessProfileSource>(json!({
         "id":"member", "principalClaim":"sub", "operations":["get"],
         "membershipBoundaries": boundaries
     }));

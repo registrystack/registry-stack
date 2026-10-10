@@ -1,3 +1,6 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: adult-status
 question: Is the person at least 18 years old?
 purpose: age-check

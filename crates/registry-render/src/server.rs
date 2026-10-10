@@ -88,8 +88,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     let bind: SocketAddr = runtime.listener.bind.socket_addr();
     runtime::validate_bind(bind)?;
     let bundle = runtime::load_package(&runtime)?;
-    crate::check::check_script_coverage(&bundle)?;
-    crate::check::check_label_key_sets(&bundle)?;
+    crate::check::check_labels(&bundle)?;
     let audit = RenderAudit::open(runtime.audit.destination()?).await?;
     let service = Arc::new(Service {
         caller_fingerprint: registry_platform_authcommon::fingerprint_api_key(
@@ -100,8 +99,10 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         api_key,
         limits: runtime.limits.clone(),
         bundle_path: runtime.package.root.clone(),
-        concurrency: Arc::new(tokio::sync::Semaphore::new(runtime.limits.max_concurrency)),
-        max_concurrency: runtime.limits.max_concurrency,
+        concurrency: Arc::new(tokio::sync::Semaphore::new(
+            runtime.limits.concurrent_renders(),
+        )),
+        max_concurrency: runtime.limits.concurrent_renders(),
     });
     tracing::info!(
         renderer = crate::display_version(),
@@ -113,7 +114,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         RenderProblem::new(ProblemKind::RuntimeInvalid, format!("bind {bind}: {err}"))
     })?;
     let app = router(Arc::clone(&service)).layer(axum::middleware::from_fn(lifecycle_log));
-    let grace = Duration::from_secs(runtime.listener.shutdown_grace_seconds);
+    let grace = runtime.listener.shutdown_grace();
     let drain_service = Arc::clone(&service);
     // The stop signal is observed once and broadcast, so the drain and the
     // hard bound below race the same event.
@@ -160,7 +161,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         .await;
         if drained.is_err() {
             tracing::warn!(
-                grace_seconds = grace.as_secs(),
+                grace_milliseconds = grace.as_millis(),
                 "shutdown grace elapsed with renders in flight; moving to connection teardown"
             );
         }
@@ -187,7 +188,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
             ))
         }
         None => tracing::warn!(
-            grace_seconds = grace.as_secs(),
+            grace_milliseconds = grace.as_millis(),
             "shutdown window elapsed with connections still open; abandoning them (their workers are killed)"
         ),
     }
@@ -216,7 +217,7 @@ fn router(service: Arc<Service>) -> Router {
         // `any`, not `post`: a wrong method must answer with the problem
         // vocabulary (and an audit event), not axum's bare 405.
         .route("/v1/render/{type}", any(render_route))
-        .layer(request_body_limit(service.limits.max_request_body_bytes))
+        .layer(request_body_limit(service.limits.request_bytes()))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&service),
             refuse_oversized_bodies,
@@ -279,7 +280,7 @@ async fn refuse_oversized_bodies(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    let limit = service.limits.max_request_body_bytes;
+    let limit = service.limits.request_bytes();
     let problem = if request.headers().get(header::TRANSFER_ENCODING).is_some() {
         Some(RenderProblem::new(
             ProblemKind::InvalidArgument,
@@ -755,7 +756,7 @@ fn prepare_render(
         issued_at,
         strict: false,
         require_package: true,
-        max_output_bytes: service.limits.max_output_bytes,
+        max_output_bytes: service.limits.output_bytes(),
         memory_limit_bytes: 512 * 1024 * 1024,
     };
     Ok((worker_request, document_version))
@@ -773,7 +774,7 @@ async fn run_render(
         .acquire_owned()
         .await
         .map_err(|_| RenderProblem::new(ProblemKind::Internal, "concurrency latch closed"))?;
-    let timeout = Duration::from_secs(service.limits.render_timeout_seconds);
+    let timeout = service.limits.render_timeout();
     let result = worker::supervise(worker_request, timeout).await;
     drop(permit);
     // The worker already rendered from one verified immutable snapshot. Its

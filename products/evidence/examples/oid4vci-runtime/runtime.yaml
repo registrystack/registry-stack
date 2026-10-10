@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/oid4vci-runtime/oid4vci-runtime.v1alpha1.schema.json
+# A minimal Evidence OID4VCI delivery runtime configuration: the file
+# `evidence-oid4vci serve --config` and `inspect --config` read, and
+# `evidence-oid4vci check --config` checks offline. Replace every origin with
+# this deployment's own, and place the delivery client's private JWK at
+# secretProviders.file.root, named as tokenClient.privateKeyRef names it.
+apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
+kind: EvidenceOid4vciRuntimeConfig
+credentialIssuer: https://wallet.example.org
+listener:
+  bind: 127.0.0.1:8090
+secretProviders:
+  file:
+    root: /run/secrets/evidence-oid4vci
+evidence:
+  baseUrl: https://evidence.example.org
+tokenClient:
+  tokenEndpoint: https://mint.example.org/token
+  clientId: evidence-oid4vci
+  privateKeyRef: secret:file/delivery-client.jwk.json
+  resource: https://evidence.example.org
+offers:
+  issuer: https://mint.example.org
+  jwksUri: https://mint.example.org/.well-known/jwks.json
+  audiences: ["https://wallet.example.org"]
+  authorizedClients: [adopter-front-end]
+  requiredScopes: [oid4vci:offer]
+store:
+  maximumOffers: 4096

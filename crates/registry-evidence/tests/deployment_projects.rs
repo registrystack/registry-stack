@@ -1,6 +1,10 @@
 //! Executable proof for the complete Evidence Version 1 reference deployments.
 
 #![cfg(unix)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -45,7 +49,6 @@ const TEST_CA: &str = "-----BEGIN CERTIFICATE-----\nMAMCAQE=\n-----END CERTIFICA
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FixtureContract {
-    fixture: String,
     synthetic_only: bool,
     common: FixtureCommon,
     cases: Vec<FixtureCase>,
@@ -456,8 +459,14 @@ fn project_extract_seed(project_name: &str, project_root: &Path) -> Option<Strin
         .filter_map(|path| {
             let text = fs::read_to_string(&path)
                 .unwrap_or_else(|_| panic!("{project_name}: fixture artifact is unreadable"));
-            let fixture: FixtureContract = serde_norway::from_str(&text)
-                .unwrap_or_else(|_| panic!("{project_name}: fixture vocabulary is not closed"));
+            // The envelope is the reader's; the closed contract is the rest.
+            let mut document: serde_norway::Mapping = serde_norway::from_str(&text)
+                .unwrap_or_else(|_| panic!("{project_name}: fixture is not a mapping"));
+            document.remove("apiVersion");
+            document.remove("kind");
+            let fixture: FixtureContract =
+                serde_norway::from_value(serde_norway::Value::Mapping(document))
+                    .unwrap_or_else(|_| panic!("{project_name}: fixture vocabulary is not closed"));
             fixture.common.extract
         })
         .collect::<Vec<_>>();
@@ -496,11 +505,6 @@ fn validate_contract_shape(project_name: &str, fixture: &FixtureContract, statem
         fixture.common.extract.is_some(),
         statement_source,
         "{project_name}: the fixture extract does not match the source transport"
-    );
-    assert!(
-        fixture.fixture.starts_with("registry.evidence.reference.")
-            && fixture.fixture.ends_with("/v1"),
-        "{project_name}: fixture identifier is invalid"
     );
     assert!(
         !fixture.cases.is_empty() && fixture.cases.len() <= 256,
@@ -1210,11 +1214,9 @@ fn execute_parameter_mutation(
         );
         parameters.insert(name.clone(), value.clone());
     }
-    disposable.config = serde_json::from_value(config)
-        .unwrap_or_else(|_| panic!("{label}: parameter mutation is not typed"));
-    disposable
-        .config
-        .validate()
+    let mutated = serde_json::to_vec(&config)
+        .unwrap_or_else(|_| panic!("{label}: parameter mutation is not representable"));
+    disposable.config = registry_evidence::config::EvidenceConfig::parse_yaml(&mutated)
         .unwrap_or_else(|_| panic!("{label}: parameter mutation broke startup validation"));
     let disposable = Arc::new(disposable);
     let kernel = OfflineKernel::compile(Arc::clone(&disposable))

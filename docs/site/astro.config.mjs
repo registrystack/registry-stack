@@ -158,6 +158,7 @@ const schedulingOpenApiSchema = {
 };
 const schedulingRoutes = [
   '/reference/apis/registry-scheduling/',
+  '/reference/scheduling-configuration/',
 ];
 /**
  * @param {boolean} hasScheduling
@@ -588,6 +589,7 @@ export default defineConfig({
           label: 'Registry Scheduling',
           collapsed: true,
           items: [
+            { label: 'Configuration reference', slug: 'reference/scheduling-configuration' },
             { label: 'API contract', slug: 'reference/apis/registry-scheduling' },
             { label: 'Audit upgrades and retention', slug: 'operate/retention-and-persistent-state' },
             ...openAPISidebarGroups.slice(2, 3),
@@ -691,6 +693,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'reference' },
             { label: 'Errors and status codes', slug: 'reference/errors' },
             { label: 'Environment variables', slug: 'reference/environment-variables' },
+            { label: 'Configuration files', slug: 'reference/configuration-files' },
             { label: 'API overview', slug: 'reference/apis' },
             { label: 'evidencectl workflows', slug: 'reference/evidencectl' },
             ...cliReferenceSidebar(undefined, { omit: omittedCliBinaries(selectedDocset) }),

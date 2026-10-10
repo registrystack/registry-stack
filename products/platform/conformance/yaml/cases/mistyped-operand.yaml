@@ -1,0 +1,13 @@
+id: mistyped-operand
+rules: [CFG-VAL-9, CFG-SEC-3]
+summary: Text planted in a value whose type another declaration states is refused by the check command at the value, and no output repeats it.
+mutation:
+  member:
+    role: operand
+    value: '"{marker}"'
+expect:
+  exit: 1
+  diagnostics:
+    - code: any
+      path: "{pointer}"
+      at: {line: 1, column: 1}

@@ -9,8 +9,8 @@ mod consent_fixture;
 use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
 use serde_json::{json, Value};
 
-const UNINDEXED_FILTER: &str = "entity.list.unindexed_filter";
-const UNINDEXED_SORT: &str = "entity.list.unindexed_sort";
+const UNINDEXED_FILTER: &str = "breg.entity.list-unindexed-filter";
+const UNINDEXED_SORT: &str = "breg.entity.list-unindexed-sort";
 
 fn source() -> Value {
     json!({
@@ -289,17 +289,17 @@ fn a_change_requests_active_lifecycle_unique_still_reports_the_list_finding() {
            }}
         ],
         "accessProfiles":[{
-          "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{
-            "rowBoundaries": [], "entity":"placement-correction-request",
+          "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "rowBoundaries": "unrestricted", "entity":"placement-correction-request",
             "operations":["get","list","submit_request"],
             "readableFields":["placement","proposed-site","reason","code"],
             "filterableFields":["code"],"sortableFields":["code"]
           }]
         },{
-          "id":"request-applier","principalClaim":"principal","permissions":[{
-            "rowBoundaries": [], "entity":"placement-correction-request","operations":["get","apply_request"],
+          "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "rowBoundaries": "unrestricted", "entity":"placement-correction-request","operations":["get","apply_request"],
             "readableFields":["placement"],
-            "applyTargets":[{"entity":"placement","rowBoundaries":[]}]
+            "applyTargets":[{"entity":"placement","rowBoundaries":"unrestricted"}]
           }]
         }]
     });

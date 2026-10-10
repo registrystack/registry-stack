@@ -1,0 +1,389 @@
+{
+  "$defs": {
+    "AssuranceProfile": {
+      "enum": [
+        "local",
+        "production",
+        "evidence-grade"
+      ],
+      "type": "string"
+    },
+    "ClientId": {
+      "$ref": "#/$defs/ExternalId",
+      "description": "A client identifier of at most 256 bytes.",
+      "maxLength": 256
+    },
+    "ContractsMember": {
+      "description": "Which definitions the client may request.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The definitions the service publishes for this client.",
+          "properties": {
+            "type": {
+              "const": "published",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Only the definitions in a reviewed contracts file, written by\n`evidencectl client contracts fetch`; a relative path resolves against\nthe profile's directory.",
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/ProfilePath"
+            },
+            "type": {
+              "const": "reviewed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "file"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "EnvironmentName": {
+      "description": "An environment variable name.",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+      "type": "string"
+    },
+    "ExpectedDefinitionMember": {
+      "additionalProperties": false,
+      "description": "What the client expects of one definition it requests.",
+      "properties": {
+        "assuranceProfile": {
+          "$ref": "#/$defs/AssuranceProfile",
+          "description": "The assurance profile the service states."
+        },
+        "configurationRevision": {
+          "$ref": "#/$defs/Digest",
+          "description": "The definition's configuration revision."
+        },
+        "evidenceType": {
+          "$ref": "#/$defs/UriIdentity",
+          "description": "The evidence type an assertion for the definition names."
+        },
+        "purpose": {
+          "$ref": "#/$defs/Purpose",
+          "description": "The purpose the client states when it requests the definition."
+        },
+        "responseFormat": {
+          "$ref": "#/$defs/ExpectedResponseFormat",
+          "description": "The response format the client requests."
+        }
+      },
+      "required": [
+        "configurationRevision",
+        "evidenceType",
+        "purpose",
+        "assuranceProfile",
+        "responseFormat"
+      ],
+      "type": "object"
+    },
+    "ExpectedMember": {
+      "additionalProperties": false,
+      "description": "What the client expects the service to state.",
+      "properties": {
+        "audience": {
+          "$ref": "#/$defs/UriIdentity",
+          "description": "The audience an accepted assertion names."
+        },
+        "definitions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ExpectedDefinitionMember"
+          },
+          "description": "Pins for selected definition handles. A service may publish other\ndefinitions without changing the meaning of this profile.",
+          "maxProperties": 128,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "pattern": "^[a-z0-9._-]{1,128}$"
+          },
+          "type": "object"
+        },
+        "issuer": {
+          "$ref": "#/$defs/UriIdentity",
+          "description": "The issuer an accepted assertion names. It is an identity the service\nstates, compared exactly, not a URL the client fetches."
+        },
+        "provider": {
+          "$ref": "#/$defs/UriIdentity",
+          "description": "The provider an accepted assertion names."
+        }
+      },
+      "type": "object"
+    },
+    "ExpectedResponseFormat": {
+      "description": "A response format the client verifies on its own.",
+      "oneOf": [
+        {
+          "const": "signed-jws",
+          "description": "A flattened JWS carrying the Evidence payload.",
+          "type": "string"
+        },
+        {
+          "const": "sd-jwt-vc",
+          "description": "A compact SD-JWT VC carrying the same payload.",
+          "type": "string"
+        }
+      ]
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "OauthMember": {
+      "additionalProperties": false,
+      "description": "Fixed OAuth request parameters for the token acquisition.\n\n`clientAssertionAudience` is who checks the client's authentication JWT;\n`resource` is the RFC 8707 resource indicator the token's audience must\nname. Neither is `expected.audience`, the Evidence assertion's audience.",
+      "properties": {
+        "clientAssertionAudience": {
+          "$ref": "#/$defs/UriIdentity",
+          "description": "The audience of the client's authentication JWT."
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceIndicator",
+          "description": "The resource indicator the token request carries."
+        },
+        "scopes": {
+          "description": "The scopes the token request asks for.",
+          "items": {
+            "$ref": "#/$defs/ScopeToken"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "type": "object"
+    },
+    "PrivateKeyMember": {
+      "description": "Where the client's private signing key is read from: a file, or an\nenvironment variable holding the JSON Web Key.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A file holding the key; a relative path resolves against the\nprofile's directory.",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/ProfilePath"
+            },
+            "source": {
+              "const": "file",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An environment variable holding the key.",
+          "properties": {
+            "source": {
+              "const": "environment",
+              "type": "string"
+            },
+            "variable": {
+              "$ref": "#/$defs/EnvironmentName"
+            }
+          },
+          "required": [
+            "source",
+            "variable"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProfilePath": {
+      "description": "A file path, relative to the profile's directory or absolute.",
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "ProfileSchema": {
+      "description": "The client profile format version.",
+      "enum": [
+        "registry.evidence-client-profile/v1"
+      ],
+      "type": "string"
+    },
+    "Purpose": {
+      "description": "A request purpose.",
+      "pattern": "^[a-z0-9._:-]{1,128}$",
+      "type": "string"
+    },
+    "ResourceIndicator": {
+      "description": "An RFC 8707 resource indicator: an absolute URI with no fragment.",
+      "format": "uri",
+      "maxLength": 4096,
+      "type": "string"
+    },
+    "ScopeToken": {
+      "description": "An RFC 6749 scope token.",
+      "pattern": "^[!#-\\[\\]-~]{1,256}$",
+      "type": "string"
+    },
+    "TrustMember": {
+      "description": "How the client learns the keys that sign Evidence responses.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Fetch the service's published keys over https.",
+          "properties": {
+            "type": {
+              "const": "https-discovery",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Fetch the published keys of a service on `http://127.0.0.1`, for\nlocal development only.",
+          "properties": {
+            "type": {
+              "const": "local-loopback-discovery",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Trust only the keys in a reviewed JSON Web Key Set file; a relative\npath resolves against the profile's directory.",
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/ProfilePath"
+            },
+            "type": {
+              "const": "pinned-jwks",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "file"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "UriIdentity": {
+      "description": "An absolute URI the service states as an identity, compared exactly.",
+      "format": "uri",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
+    },
+    "VerificationMember": {
+      "additionalProperties": false,
+      "description": "Bounds on the assertions the client accepts.",
+      "properties": {
+        "clockSkewSeconds": {
+          "description": "The clock difference tolerated when checking an assertion's times, in\nseconds. Omitted, it is 30.",
+          "maximum": 300,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumAssertionLifetimeSeconds": {
+          "description": "The longest validity an accepted assertion may state, in seconds.\nOmitted, it is 300.",
+          "format": "uint64",
+          "maximum": 31536000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/client-profile/client-profile.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "An Evidence relying-party client profile: where the Evidence service is,\nhow this client authenticates to it, which keys and contracts it trusts,\nand what it expects the service to assert.",
+  "properties": {
+    "baseUrl": {
+      "$ref": "#/$defs/Url",
+      "description": "The Evidence service origin: scheme, host, and port, with no path,\nquery, fragment, or trailing slash, in lowercase. It uses `https`,\nexcept `http://127.0.0.1:<port>` under `local-loopback-discovery`\ntrust. Under `https-discovery` and `pinned-jwks` trust the host is not\na loopback, private, link-local, unspecified, or cloud metadata\naddress."
+    },
+    "clientId": {
+      "$ref": "#/$defs/ClientId",
+      "description": "The client identifier the Evidence service's token issuer knows this\nclient by."
+    },
+    "contracts": {
+      "$ref": "#/$defs/ContractsMember",
+      "description": "Which definitions the client may request. Omitted, it uses the\ndefinitions the service publishes for it."
+    },
+    "expected": {
+      "$ref": "#/$defs/ExpectedMember",
+      "description": "What the client expects the service to state about itself and about\nthe definitions it requests."
+    },
+    "maximumMetadataCacheSeconds": {
+      "description": "How long the client keeps the service's discovery metadata, in\nseconds. Omitted, it is 600.",
+      "format": "uint64",
+      "maximum": 600,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "oauth": {
+      "$ref": "#/$defs/OauthMember",
+      "description": "Fixed OAuth request parameters for the token acquisition, for issuers\nwhose client-assertion audience, resource indicator, or requested\nscopes are not derivable from discovery. Omitted members keep the\ndiscovery-driven behavior."
+    },
+    "privateKey": {
+      "$ref": "#/$defs/PrivateKeyMember",
+      "description": "Where the client's private signing key, a JSON Web Key, is read from."
+    },
+    "schema": {
+      "$ref": "#/$defs/ProfileSchema",
+      "description": "The profile format and its version."
+    },
+    "trust": {
+      "$ref": "#/$defs/TrustMember",
+      "description": "How the client learns the keys that sign Evidence responses. Omitted,\nit fetches the service's published keys over https."
+    },
+    "verification": {
+      "$ref": "#/$defs/VerificationMember",
+      "description": "Bounds on the assertions the client accepts."
+    }
+  },
+  "required": [
+    "schema",
+    "baseUrl",
+    "clientId",
+    "privateKey"
+  ],
+  "title": "Evidence client profile",
+  "type": "object"
+}

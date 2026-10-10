@@ -8,7 +8,7 @@
 //! under `catalog` (`standards`), and one case for a typo inside a doubly
 //! nested item struct (`datasets[].entities[]`).
 
-use registry_manifest_core::MetadataManifest;
+mod support;
 
 fn minimal_manifest_with(extra: &str) -> String {
     format!(
@@ -110,7 +110,7 @@ fn top_level_section_key_typos_are_rejected() {
 
     for (section, extra, typo_key) in cases {
         let raw = minimal_manifest_with(extra);
-        let error = serde_yaml_ng::from_str::<MetadataManifest>(&raw)
+        let error = support::from_yaml(&raw)
             .expect_err(&format!("{section} typo must be rejected, got: parsed ok"));
 
         assert!(
@@ -136,7 +136,7 @@ datasets: []
 codelists: []
 "#;
 
-    let error = serde_yaml_ng::from_str::<MetadataManifest>(raw)
+    let error = support::from_yaml(raw)
         .expect_err("typo of catalog.standards must be rejected, got: parsed ok");
 
     assert!(
@@ -164,7 +164,7 @@ datasets:
 codelists: []
 "#;
 
-    let error = serde_yaml_ng::from_str::<MetadataManifest>(raw)
+    let error = support::from_yaml(raw)
         .expect_err("typo of entities[].concept_uri must be rejected, got: parsed ok");
 
     assert!(

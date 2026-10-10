@@ -7,18 +7,28 @@ use serde_json::Value;
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-#[error("logical record reference is malformed, unavailable or exceeds its nesting bound")]
-pub struct ReferenceError;
+pub enum ReferenceError {
+    #[error("logical record reference is malformed, unavailable or exceeds its nesting bound")]
+    Malformed,
+    #[error(
+        "`{{\"recordRef\": ...}}` is the retired spelling of a logical record reference; \
+         write `{{\"recordCapture\": \"<capture>\"}}`"
+    )]
+    RetiredSpelling,
+}
 
-/// Recognize the existing exact `{ "recordRef": "alias" }` authored form.
+/// Recognize the exact `{ "recordCapture": "alias" }` authored form.
 pub fn record_reference(value: &Value) -> Result<Option<&str>, ReferenceError> {
     let Some(object) = value.as_object() else {
         return Ok(None);
     };
-    let Some(reference) = object.get("recordRef") else {
+    if object.len() == 1 && object.contains_key("recordRef") {
+        return Err(ReferenceError::RetiredSpelling);
+    }
+    let Some(reference) = object.get("recordCapture") else {
         return Ok(None);
     };
-    let reference = reference.as_str().ok_or(ReferenceError)?;
+    let reference = reference.as_str().ok_or(ReferenceError::Malformed)?;
     if object.len() != 1
         || reference.is_empty()
         || reference.len() > 64
@@ -27,7 +37,7 @@ pub fn record_reference(value: &Value) -> Result<Option<&str>, ReferenceError> {
             .bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
     {
-        return Err(ReferenceError);
+        return Err(ReferenceError::Malformed);
     }
     Ok(Some(reference))
 }
@@ -44,10 +54,12 @@ pub fn resolve_record_references(
         depth: usize,
     ) -> Result<Value, ReferenceError> {
         if depth > 32 {
-            return Err(ReferenceError);
+            return Err(ReferenceError::Malformed);
         }
         if let Some(alias) = record_reference(value)? {
-            return lookup(alias).map(Value::String).ok_or(ReferenceError);
+            return lookup(alias)
+                .map(Value::String)
+                .ok_or(ReferenceError::Malformed);
         }
         match value {
             Value::Object(object) => object
@@ -72,20 +84,27 @@ mod tests {
     use serde_json::json;
     #[test]
     fn shared_grammar_resolves_nested_aliases_and_refuses_malformed_or_unavailable_captures() {
-        let value = json!({"items":[{"recordRef":"first"},null,5]});
+        let value = json!({"items":[{"recordCapture":"first"},null,5]});
         assert_eq!(
             resolve_record_references(&value, |id| (id == "first").then(|| "returned-id".into()))
                 .unwrap(),
             json!({"items":["returned-id",null,5]})
         );
         for value in [
-            json!({"recordRef":"missing"}),
-            json!({"recordRef":3}),
-            json!({"recordRef":"first","other":true}),
-            json!({"recordRef":"../first"}),
+            json!({"recordCapture":"missing"}),
+            json!({"recordCapture":3}),
+            json!({"recordCapture":"first","other":true}),
+            json!({"recordCapture":"../first"}),
         ] {
-            assert!(resolve_record_references(&value, |_| None).is_err());
+            assert_eq!(
+                resolve_record_references(&value, |_| None),
+                Err(ReferenceError::Malformed)
+            );
         }
+        assert_eq!(
+            resolve_record_references(&json!({"recordRef":"first"}), |_| Some("id".into())),
+            Err(ReferenceError::RetiredSpelling)
+        );
         let nested = (0..34).fold(json!(null), |v, _| json!([v]));
         assert!(resolve_record_references(&nested, |_| None).is_err());
     }

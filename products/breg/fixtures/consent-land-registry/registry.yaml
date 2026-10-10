@@ -82,12 +82,12 @@ accessProfiles:
         operations: [create, get, list]
         readableFields: [parcel-code, district, area-square-metres]
         writableFields: [parcel-code, district, area-square-metres]
-        rowBoundaries: []
+        rowBoundaries: unrestricted
       - entity: tenure-right
         operations: [create, get, list]
         readableFields: [parcel, holder-name, tenure-kind, encumbered]
         writableFields: [parcel, holder-name, tenure-kind, encumbered]
-        rowBoundaries: []
+        rowBoundaries: unrestricted
   - id: lender-assessment
     principalClaim: registry_principal
     actorKind: service
@@ -99,7 +99,7 @@ accessProfiles:
         operations: [get, list]
         readableFields: [parcel, holder-name, tenure-kind, encumbered]
         allowCount: true
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         requireConsent:
           - {record: tenure-right-consent-decision, on: id}
   - id: tenure-right-consent-self
@@ -107,7 +107,7 @@ accessProfiles:
     requiredScopes: ['consent:tenure-right:self']
     permissions:
     - entity: tenure-right-consent-decision
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       membershipBoundaries:
       - {field: subject, membershipEntity: tenure-right-consent-link, membershipKeyField: subject, principalField: principal, activeField: active}
       operations: [get, list]
@@ -118,88 +118,88 @@ accessProfiles:
       operations: [get, list]
       readableFields: [subject, active]
     - entity: tenure-right-privacy-notice
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [get, list]
       readableFields: [notice-version, language, title, text, text-uri, controller-name, controller-contact, jurisdiction, legal-basis, rights-statement, rights-uri, withdrawal-method, published-at]
     - entity: tenure-right-notice-clause
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [get, list]
       readableFields: [notice, recipient, purpose, scope, data-life, description]
     - action: give-tenure-right-consent
       operations: [invoke]
       targets:
       - {entity: tenure-right-consent-link, rowBoundaries: [{field: principal, claim: registry_principal, operator: equals}]}
-      - {entity: tenure-right, rowBoundaries: []}
-      - {entity: tenure-right-notice-clause, rowBoundaries: []}
-      - {entity: tenure-right-consent-decision, rowBoundaries: []}
+      - {entity: tenure-right, rowBoundaries: unrestricted}
+      - {entity: tenure-right-notice-clause, rowBoundaries: unrestricted}
+      - {entity: tenure-right-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
     - action: refuse-tenure-right-consent
       operations: [invoke]
       targets:
       - {entity: tenure-right-consent-link, rowBoundaries: [{field: principal, claim: registry_principal, operator: equals}]}
-      - {entity: tenure-right, rowBoundaries: []}
-      - {entity: tenure-right-notice-clause, rowBoundaries: []}
-      - {entity: tenure-right-consent-decision, rowBoundaries: []}
+      - {entity: tenure-right, rowBoundaries: unrestricted}
+      - {entity: tenure-right-notice-clause, rowBoundaries: unrestricted}
+      - {entity: tenure-right-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
     - action: withdraw-tenure-right-consent
       operations: [invoke]
       targets:
       - {entity: tenure-right-consent-link, rowBoundaries: [{field: principal, claim: registry_principal, operator: equals}]}
-      - {entity: tenure-right, rowBoundaries: []}
-      - {entity: tenure-right-notice-clause, rowBoundaries: []}
-      - {entity: tenure-right-consent-decision, rowBoundaries: []}
+      - {entity: tenure-right, rowBoundaries: unrestricted}
+      - {entity: tenure-right-notice-clause, rowBoundaries: unrestricted}
+      - {entity: tenure-right-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
   - id: tenure-right-consent-assisted-capture
     principalClaim: registry_principal
     requiredScopes: ['consent:tenure-right:capture']
     permissions:
     - entity: tenure-right-notice-clause
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [get, list]
       readableFields: [notice, recipient, purpose, scope, data-life, description]
     - action: record-tenure-right-consent-assisted
       operations: [invoke]
       targets:
-      - {entity: tenure-right, rowBoundaries: []}
-      - {entity: tenure-right-notice-clause, rowBoundaries: []}
-      - {entity: tenure-right-consent-decision, rowBoundaries: []}
+      - {entity: tenure-right, rowBoundaries: unrestricted}
+      - {entity: tenure-right-notice-clause, rowBoundaries: unrestricted}
+      - {entity: tenure-right-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
   - id: tenure-right-consent-steward
     principalClaim: registry_principal
     requiredScopes: ['consent:tenure-right:steward']
     permissions:
     - entity: tenure-right-privacy-notice
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [create, get, list]
       readableFields: [notice-version, language, title, text, text-uri, controller-name, controller-contact, jurisdiction, legal-basis, rights-statement, rights-uri, withdrawal-method, published-at]
       writableFields: [notice-version, language, title, text, text-uri, controller-name, controller-contact, jurisdiction, legal-basis, rights-statement, rights-uri, withdrawal-method, published-at]
     - entity: tenure-right-notice-clause
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [create, get, list]
       readableFields: [notice, recipient, purpose, scope, data-life, description]
       writableFields: [notice, recipient, purpose, scope, data-life, description]
     - entity: tenure-right-consent-decision
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [get, list]
       readableFields: [subject, link, notice, clause, recipient, purpose, scope, decision, effective-at, expires-at, channel, evidence, witness, invalidation-reason, source-reference]
     - action: invalidate-tenure-right-consent
       operations: [invoke]
       targets:
-      - {entity: tenure-right, rowBoundaries: []}
-      - {entity: tenure-right-consent-decision, rowBoundaries: []}
+      - {entity: tenure-right, rowBoundaries: unrestricted}
+      - {entity: tenure-right-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
     - action: import-tenure-right-consent
       operations: [invoke]
       targets:
-      - {entity: tenure-right, rowBoundaries: []}
-      - {entity: tenure-right-consent-decision, rowBoundaries: []}
+      - {entity: tenure-right, rowBoundaries: unrestricted}
+      - {entity: tenure-right-consent-decision, rowBoundaries: unrestricted}
       results: [decision]
   - id: tenure-right-consent-link-steward
     principalClaim: registry_principal
     requiredScopes: ['consent:tenure-right:link']
     permissions:
     - entity: tenure-right-consent-link
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       operations: [create, get, list, patch]
       readableFields: [subject, principal, active]
       writableFields: [subject, principal, active]

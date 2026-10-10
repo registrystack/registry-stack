@@ -1,0 +1,9 @@
+id: comments-accepted
+rules: [CFG-YAML-7, CFG-SEC-3]
+summary: A comment carries no meaning, and nothing in it is repeated.
+mutation:
+  append: |
+    # A closing comment: {marker}
+expect:
+  exit: 0
+  diagnostics: []

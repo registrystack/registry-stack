@@ -1,0 +1,9 @@
+id: document-end-accepted
+rules: [CFG-ENV-4]
+summary: A final `...` is accepted.
+mutation:
+  append: |
+    ...
+expect:
+  exit: 0
+  diagnostics: []

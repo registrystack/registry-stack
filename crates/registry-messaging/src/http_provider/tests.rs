@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
 
 use std::os::unix::fs::PermissionsExt as _;
@@ -6,12 +10,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use registry_messaging_core::{
-    CallbackBodyEncoding, CallbackRequest, CallbackVerifierConfig, Channel, DeliveryReport,
-    Receipt, RenderedParts, SenderProfile, UncertainPolicy,
+    CallbackBodyEncoding, CallbackRequest, Channel, DeliveryReport, Receipt, RenderedParts,
+    SenderProfile, UncertainPolicy, MESSAGING_PROVIDER_API_VERSION, MESSAGING_PROVIDER_KIND,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_dispatch::{FailureCode, ReceiverReference, SendOutcome};
 use registry_platform_testing::MockHttpUpstream;
+use registry_platform_yaml::{Reader, Report};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::io::AsyncReadExt as _;
@@ -77,8 +82,34 @@ fn no_secrets() -> Secrets {
     secrets(&[])
 }
 
+/// Read `body` as a `provider.yaml` under its envelope.
+fn decode_package(body: &str) -> Result<HttpProviderPackage, Report> {
+    let yaml = format!(
+        "apiVersion: {MESSAGING_PROVIDER_API_VERSION}\nkind: {MESSAGING_PROVIDER_KIND}\n{body}"
+    );
+    HttpProviderPackage::decode(Reader::new("provider.yaml"), yaml.as_bytes())
+        .map(|decoded| decoded.value)
+}
+
+/// The code and pointer of every diagnostic refusing `body`.
+fn package_refusal(body: &str) -> Vec<(String, String)> {
+    decode_package(body)
+        .expect_err("package is refused")
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+        .collect()
+}
+
 fn package(yaml: &str) -> HttpProviderPackage {
-    serde_norway::from_str(yaml).expect("package parses")
+    decode_package(yaml).expect("package parses")
+}
+
+/// Read a whole example `provider.yaml`, envelope included.
+fn example_package(yaml: &str) -> HttpProviderPackage {
+    HttpProviderPackage::decode(Reader::new("provider.yaml"), yaml.as_bytes())
+        .expect("example package parses")
+        .value
 }
 
 fn plain_package(interpret: bool) -> HttpProviderPackage {
@@ -91,7 +122,7 @@ request:
 responseHeaders: [x-request-id]
 capabilities:
   receipts: none
-  concurrencyLimit: 4
+  maximumConcurrentRequests: 4
 ",
     );
     if interpret {
@@ -102,13 +133,13 @@ capabilities:
 
 fn settings(base_url: &str, authentication: &str) -> HttpProviderSettings {
     serde_norway::from_str(&format!(
-        "baseUrl: {base_url}\ntimeoutMilliseconds: 3000\nmaximumResponseBytes: 65536\n\
-         concurrencyLimit: 4\nredirects: deny\nauthentication:\n{authentication}"
+        "baseUrl: {base_url}\nattemptTimeoutMilliseconds: 3000\nmaximumResponseBytes: 65536\n\
+         maximumConcurrentRequests: 4\nredirects: deny\nauthentication:\n{authentication}"
     ))
     .expect("settings parse")
 }
 
-const NONE: &str = "  kind: none\n";
+const NONE: &str = "  type: none\n";
 
 fn base(upstream: &MockHttpUpstream) -> String {
     format!("{}/v1/", upstream.url().trim_end_matches('/'))
@@ -215,7 +246,7 @@ async fn basic_authentication_sends_the_encoded_pair_in_the_authorization_header
     let secrets = secrets(&[("user", b"account-1"), ("password", PASSWORD)]);
     let settings = settings(
         &base(&upstream),
-        "  kind: basic\n  usernameRef: secret:file/user\n  passwordRef: secret:file/password\n",
+        "  type: basic\n  usernameRef: secret:file/user\n  passwordRef: secret:file/password\n",
     );
     let provider = activate(
         &settings,
@@ -246,7 +277,7 @@ async fn static_authorization_sends_a_bearer_token() {
     let secrets = secrets(&[("token", TOKEN)]);
     let settings = settings(
         &base(&upstream),
-        "  kind: static-authorization\n  tokenRef: secret:file/token\n",
+        "  type: static-authorization\n  tokenRef: secret:file/token\n",
     );
     let provider = activate(
         &settings,
@@ -276,7 +307,7 @@ async fn static_api_key_sends_the_value_in_the_declared_header_only() {
     let secrets = secrets(&[("key", TOKEN)]);
     let settings = settings(
         &base(&upstream),
-        "  kind: static-api-key\n  headerName: X-Api-Key\n  valueRef: secret:file/key\n",
+        "  type: static-api-key\n  headerName: X-Api-Key\n  valueRef: secret:file/key\n",
     );
     let provider = activate(
         &settings,
@@ -307,7 +338,7 @@ async fn static_api_key_query_appends_the_parameter_after_the_script_target() {
     let secrets = secrets(&[("key", TOKEN)]);
     let settings = settings(
         &base(&upstream),
-        "  kind: static-api-key-query\n  parameterName: api_key\n  valueRef: secret:file/key\n",
+        "  type: static-api-key-query\n  parameterName: api_key\n  valueRef: secret:file/key\n",
     );
     let provider = activate(
         &settings,
@@ -351,7 +382,7 @@ async fn oauth2_client_credentials_fetches_caches_and_drops_a_refused_token() {
     let settings = settings(
         &base(&upstream),
         &format!(
-            "  kind: oauth2-client-credentials\n  tokenEndpoint: {}/oauth/token\n  \
+            "  type: oauth2-client-credentials\n  tokenEndpoint: {}/oauth/token\n  \
              clientIdRef: secret:file/client-id\n  clientSecretRef: secret:file/client-secret\n  \
              scope: messages.send\n  maximumCacheSeconds: 600\n",
             upstream.url().trim_end_matches('/')
@@ -439,7 +470,7 @@ async fn oauth2_accepts_a_token_response_with_scope_and_a_lowercase_type() {
         let settings = settings(
             &base(&upstream),
             &format!(
-                "  kind: oauth2-client-credentials\n  tokenEndpoint: {}/oauth/token\n  \
+                "  type: oauth2-client-credentials\n  tokenEndpoint: {}/oauth/token\n  \
                  clientIdRef: secret:file/client-id\n  clientSecretRef: secret:file/client-secret\n  \
                  maximumCacheSeconds: 600\n{expiry}",
                 upstream.url().trim_end_matches('/')
@@ -491,10 +522,25 @@ fn a_credential_must_be_a_secret_reference() {
         "token-value-7f3a9c",
         "secret:vault/token",
     ] {
-        let settings = settings(
+        // The reader refuses the member before activation is reached.
+        let read = serde_norway::from_str::<HttpProviderSettings>(&format!(
+            "baseUrl: https://gateway.example.org/v1/\nattemptTimeoutMilliseconds: 3000\n\
+             maximumResponseBytes: 65536\nmaximumConcurrentRequests: 4\nredirects: deny\n\
+             authentication:\n  type: static-authorization\n  tokenRef: '{reference}'\n"
+        ))
+        .expect_err(reference);
+        assert!(!read.to_string().contains("token-value-7f3a9c"));
+
+        let mut settings = settings(
             "https://gateway.example.org/v1/",
-            &format!("  kind: static-authorization\n  tokenRef: '{reference}'\n"),
+            "  type: static-authorization\n  tokenRef: secret:file/token\n",
         );
+        let HttpProviderAuthentication::StaticAuthorization { token_ref, .. } =
+            &mut settings.authentication
+        else {
+            unreachable!("the settings above authenticate with a static authorization");
+        };
+        reference.clone_into(token_ref);
         let error = settings
             .activate(
                 "gateway",
@@ -1010,7 +1056,7 @@ async fn a_response_slower_than_the_timeout_is_maybe_sent() {
         .respond(ResponseTemplate::new(201).set_delay(Duration::from_millis(1_500)))
         .await;
     let mut settings = settings(&base(&upstream), NONE);
-    settings.timeout_milliseconds = 300;
+    settings.attempt_timeout_milliseconds = 300;
     let provider = activate(
         &settings,
         &plain_package(false),
@@ -1028,8 +1074,8 @@ async fn a_response_slower_than_the_timeout_is_maybe_sent() {
 async fn a_send_waiting_past_its_deadline_for_a_slot_is_transient() {
     let upstream = MockHttpUpstream::start().await;
     let mut settings = settings(&base(&upstream), NONE);
-    settings.timeout_milliseconds = 200;
-    settings.concurrency_limit = 1;
+    settings.attempt_timeout_milliseconds = 200;
+    settings.maximum_concurrent_requests = 1;
     let provider = activate(
         &settings,
         &plain_package(false),
@@ -1075,7 +1121,7 @@ async fn counting_listener() -> (u16, Arc<AtomicUsize>) {
 fn production(base_url: &str) -> HttpProviderSettings {
     settings(
         base_url,
-        "  kind: static-authorization\n  tokenRef: secret:file/token\n",
+        "  type: static-authorization\n  tokenRef: secret:file/token\n",
     )
 }
 
@@ -1194,7 +1240,10 @@ fn a_provider_url_with_credentials_a_query_or_plain_http_to_a_remote_host_is_ref
         "https://gateway.example.org/v1/%2e%2e/",
         "ftp://gateway.example.org/v1/",
     ] {
-        let error = production(base_url)
+        // Activation holds the URL to its rules even when the reader did not.
+        let mut settings = production("https://gateway.example.org/v1/");
+        base_url.clone_into(&mut settings.base_url);
+        let error = settings
             .activate(
                 "gateway",
                 &plain_package(false),
@@ -1323,7 +1372,7 @@ fn an_api_key_header_may_not_also_be_script_writable() {
     let secrets = secrets(&[("key", TOKEN)]);
     let settings = settings(
         "https://gateway.example.org/v1/",
-        "  kind: static-api-key\n  headerName: x-request-id\n  valueRef: secret:file/key\n",
+        "  type: static-api-key\n  headerName: x-request-id\n  valueRef: secret:file/key\n",
     );
     let error = settings
         .activate(
@@ -1350,7 +1399,7 @@ async fn secrets_are_absent_from_script_scope() {
     let secrets = secrets(&[("user", b"account-1"), ("password", PASSWORD)]);
     let settings = settings(
         &base(&upstream),
-        "  kind: basic\n  usernameRef: secret:file/user\n  passwordRef: secret:file/password\n",
+        "  type: basic\n  usernameRef: secret:file/user\n  passwordRef: secret:file/password\n",
     );
     let prepare = r#"
 fn prepare(message, profile) {
@@ -1448,50 +1497,121 @@ async fn a_script_referring_to_anything_outside_its_arguments_fails() {
 
 #[test]
 fn idempotent_submission_is_declared_in_the_manifest_not_in_capabilities() {
-    let declared_here = serde_norway::from_str::<HttpProviderPackage>(
-        "prepareScript: p.rhai\nrequest: {method: post}\n\
-         capabilities: {receipts: none, idempotentSubmit: true, concurrencyLimit: 1}\n",
+    assert_eq!(
+        package_refusal(
+            "prepareScript: p.rhai\nrequest: {method: post}\n\
+             capabilities: {receipts: none, idempotentSubmit: true, maximumConcurrentRequests: 1}\n",
+        ),
+        [(
+            "config.unknown-key".to_owned(),
+            "/capabilities/idempotentSubmit".to_owned()
+        )]
     );
-    assert!(declared_here.is_err());
 }
 
 #[test]
 fn unknown_configuration_members_are_refused() {
     let unknown_setting = serde_norway::from_str::<HttpProviderSettings>(
-        "baseUrl: https://gateway.example.org/v1/\ntimeoutMilliseconds: 1000\n\
-         maximumResponseBytes: 1024\nconcurrencyLimit: 1\nredirects: deny\n\
-         authentication: {kind: none}\nfollowRedirects: true\n",
+        "baseUrl: https://gateway.example.org/v1/\nattemptTimeoutMilliseconds: 1000\n\
+         maximumResponseBytes: 1024\nmaximumConcurrentRequests: 1\nredirects: deny\n\
+         authentication: {type: none}\nfollowRedirects: true\n",
     );
     assert!(unknown_setting.is_err());
     let unknown_authentication_member = serde_norway::from_str::<HttpProviderSettings>(
-        "baseUrl: https://gateway.example.org/v1/\ntimeoutMilliseconds: 1000\n\
-         maximumResponseBytes: 1024\nconcurrencyLimit: 1\nredirects: deny\n\
-         authentication: {kind: static-authorization, tokenRef: secret:file/t, token: inline}\n",
+        "baseUrl: https://gateway.example.org/v1/\nattemptTimeoutMilliseconds: 1000\n\
+         maximumResponseBytes: 1024\nmaximumConcurrentRequests: 1\nredirects: deny\n\
+         authentication: {type: static-authorization, tokenRef: secret:file/t, token: inline}\n",
     );
     assert!(unknown_authentication_member.is_err());
     let unknown_kind = serde_norway::from_str::<HttpProviderSettings>(
-        "baseUrl: https://gateway.example.org/v1/\ntimeoutMilliseconds: 1000\n\
-         maximumResponseBytes: 1024\nconcurrencyLimit: 1\nredirects: deny\n\
-         authentication: {kind: digest}\n",
+        "baseUrl: https://gateway.example.org/v1/\nattemptTimeoutMilliseconds: 1000\n\
+         maximumResponseBytes: 1024\nmaximumConcurrentRequests: 1\nredirects: deny\n\
+         authentication: {type: digest}\n",
     );
     assert!(unknown_kind.is_err());
     let follow_redirects = serde_norway::from_str::<HttpProviderSettings>(
-        "baseUrl: https://gateway.example.org/v1/\ntimeoutMilliseconds: 1000\n\
-         maximumResponseBytes: 1024\nconcurrencyLimit: 1\nredirects: follow\n\
-         authentication: {kind: none}\n",
+        "baseUrl: https://gateway.example.org/v1/\nattemptTimeoutMilliseconds: 1000\n\
+         maximumResponseBytes: 1024\nmaximumConcurrentRequests: 1\nredirects: follow\n\
+         authentication: {type: none}\n",
     );
     assert!(follow_redirects.is_err());
-    let unknown_package_member = serde_norway::from_str::<HttpProviderPackage>(
-        "prepareScript: p.rhai\nrequest: {method: post}\n\
-         capabilities: {receipts: none, concurrencyLimit: 1}\n\
-         endpoint: https://gateway.example.org/\n",
+    assert_eq!(
+        package_refusal(
+            "prepareScript: p.rhai\nrequest: {method: post}\n\
+             capabilities: {receipts: none, maximumConcurrentRequests: 1}\n\
+             endpoint: https://gateway.example.org/\n",
+        ),
+        [("config.unknown-key".to_owned(), "/endpoint".to_owned())]
     );
-    assert!(unknown_package_member.is_err());
-    let unknown_capability = serde_norway::from_str::<HttpProviderPackage>(
-        "prepareScript: p.rhai\nrequest: {method: post}\n\
-         capabilities: {receipts: none, concurrencyLimit: 1, burst: 3}\n",
+    assert_eq!(
+        package_refusal(
+            "prepareScript: p.rhai\nrequest: {method: post}\n\
+             capabilities: {receipts: none, maximumConcurrentRequests: 1, burst: 3}\n",
+        ),
+        [(
+            "config.unknown-key".to_owned(),
+            "/capabilities/burst".to_owned()
+        )]
     );
-    assert!(unknown_capability.is_err());
+}
+
+#[test]
+fn package_members_out_of_bounds_are_refused_at_their_pointer() {
+    let cases = [
+        (
+            "capabilities: {receipts: none, maximumConcurrentRequests: 0}",
+            "config.out-of-range",
+            "/capabilities/maximumConcurrentRequests",
+        ),
+        (
+            "capabilities: {receipts: none, maximumConcurrentRequests: 65}",
+            "config.out-of-range",
+            "/capabilities/maximumConcurrentRequests",
+        ),
+        (
+            "capabilities: {receipts: none, maximumConcurrentRequests: 1, ratePerSecond: 0}",
+            "config.out-of-range",
+            "/capabilities/ratePerSecond",
+        ),
+        (
+            "capabilities: {receipts: none, maximumConcurrentRequests: 1, ratePerSecond: 1001}",
+            "config.out-of-range",
+            "/capabilities/ratePerSecond",
+        ),
+    ];
+    for (capabilities, code, pointer) in cases {
+        assert_eq!(
+            package_refusal(&format!(
+                "prepareScript: p.rhai\nrequest: {{method: post}}\n{capabilities}\n"
+            )),
+            [(code.to_owned(), pointer.to_owned())],
+            "{capabilities}"
+        );
+    }
+    // The replacement is missing too, so both are named.
+    assert_eq!(
+        package_refusal(
+            "prepareScript: p.rhai\nrequest: {method: post}\n\
+             capabilities: {receipts: none, concurrencyLimit: 1}\n",
+        ),
+        [
+            ("config.missing-key".to_owned(), "/capabilities".to_owned()),
+            (
+                "config.removed-key".to_owned(),
+                "/capabilities/concurrencyLimit".to_owned()
+            )
+        ]
+    );
+    assert_eq!(
+        package_refusal(
+            "prepareScript: ../outside.rhai\nrequest: {method: post}\n\
+             capabilities: {receipts: none, maximumConcurrentRequests: 1}\n",
+        ),
+        [(
+            "config.invalid-value".to_owned(),
+            "/prepareScript".to_owned()
+        )]
+    );
 }
 
 type PackageChange = fn(&mut HttpProviderPackage);
@@ -1500,11 +1620,11 @@ type SettingsChange = fn(&mut HttpProviderSettings);
 #[test]
 fn package_capabilities_and_script_paths_are_bounded() {
     let cases: [(&str, PackageChange); 7] = [
-        ("capabilities.concurrencyLimit", |package| {
-            package.capabilities.concurrency_limit = 0;
+        ("capabilities.maximumConcurrentRequests", |package| {
+            package.capabilities.maximum_concurrent_requests = 0;
         }),
-        ("capabilities.concurrencyLimit", |package| {
-            package.capabilities.concurrency_limit = MAXIMUM_CONCURRENCY_LIMIT + 1;
+        ("capabilities.maximumConcurrentRequests", |package| {
+            package.capabilities.maximum_concurrent_requests = MAXIMUM_CONCURRENT_REQUESTS + 1;
         }),
         ("capabilities.ratePerSecond", |package| {
             package.capabilities.rate_per_second = Some(0);
@@ -1537,14 +1657,14 @@ fn package_capabilities_and_script_paths_are_bounded() {
 fn connection_bounds_are_checked_at_activation() {
     let secrets = no_secrets();
     let cases: [(&str, SettingsChange); 5] = [
-        ("timeoutMilliseconds", |settings| {
-            settings.timeout_milliseconds = 10_001;
+        ("attemptTimeoutMilliseconds", |settings| {
+            settings.attempt_timeout_milliseconds = 10_001;
         }),
         ("maximumResponseBytes", |settings| {
             settings.maximum_response_bytes = MAXIMUM_RESPONSE_BYTES + 1;
         }),
-        ("concurrencyLimit", |settings| {
-            settings.concurrency_limit = 5
+        ("maximumConcurrentRequests", |settings| {
+            settings.maximum_concurrent_requests = 5
         }),
         ("tlsTrustProfile", |settings| {
             settings.tls_trust_profile = Some("gateway-ca".to_owned());
@@ -1621,7 +1741,7 @@ fn scripts_are_compiled_at_activation_against_their_entry_points() {
 fn a_debug_rendering_never_shows_a_credential_reference() {
     let settings = settings(
         "https://gateway.example.org/v1/",
-        "  kind: basic\n  usernameRef: secret:file/user-name-ref\n  passwordRef: secret:file/password-ref\n",
+        "  type: basic\n  usernameRef: secret:file/user-name-ref\n  passwordRef: secret:file/password-ref\n",
     );
     let rendered = format!("{settings:?}");
     assert!(!rendered.contains("user-name-ref"));
@@ -1692,7 +1812,7 @@ fn json_response(status: u16, body: &str) -> ResponseTemplate {
 }
 
 async fn form_sms_gateway(upstream: &MockHttpUpstream, secrets: &Secrets) -> HttpProvider {
-    let package = package(FORM_SMS_PACKAGE);
+    let package = example_package(FORM_SMS_PACKAGE);
     let mut settings: HttpProviderSettings =
         serde_norway::from_str(FORM_SMS_CONNECTION).expect("example connection parses");
     settings.base_url = format!(
@@ -1861,7 +1981,7 @@ async fn the_form_sms_example_reads_recorded_shape_status_callbacks() {
 }
 
 async fn mock_gateway(upstream: &MockHttpUpstream, secrets: &Secrets) -> HttpProvider {
-    let package = package(MOCK_PACKAGE);
+    let package = example_package(MOCK_PACKAGE);
     let mut settings: HttpProviderSettings =
         serde_norway::from_str(MOCK_CONNECTION).expect("example connection parses");
     settings.base_url = base(upstream);
@@ -1963,6 +2083,30 @@ fn receipt(request) {
 "#;
 
 #[test]
+fn a_callback_verifier_debug_output_names_no_secret_reference() {
+    let verifiers = [
+        CallbackVerifierConfig::HmacSha256Body {
+            header: "x-signature".to_owned(),
+            encoding: CallbackBodyEncoding::Hex,
+            secret_ref: "secret:file/gateway-callback-key".to_owned(),
+        },
+        CallbackVerifierConfig::HmacSha1UrlForm {
+            url: "https://messaging.example.org/v1/provider-callbacks/gateway".to_owned(),
+            header: "x-signature".to_owned(),
+            secret_ref: "secret:file/gateway-callback-key".to_owned(),
+        },
+        CallbackVerifierConfig::PathToken {
+            token_ref: "secret:file/gateway-callback-key".to_owned(),
+        },
+    ];
+    for verifier in verifiers {
+        let rendered = format!("{verifier:?}");
+        assert!(!rendered.contains("gateway-callback-key"), "{rendered}");
+        assert!(!rendered.contains("secret:"), "{rendered}");
+    }
+}
+
+#[test]
 fn a_receipt_script_reads_only_what_the_callback_verifier_authenticated() {
     let secrets = secrets(&[("callback-key", b"callback-key-value")]);
     let mut package = plain_package(false);
@@ -2052,7 +2196,7 @@ fn aws_settings(authentication: &str) -> HttpProviderSettings {
     settings("https://sms-voice.us-east-1.amazonaws.com/", authentication)
 }
 
-const AWS_AUTH: &str = "  kind: aws-sigv4\n  region: us-east-1\n  service: sms-voice\n  accessKeyIdRef: secret:file/access-key\n  secretAccessKeyRef: secret:file/secret-key\n  sessionTokenRef: secret:file/session-token\n";
+const AWS_AUTH: &str = "  type: aws-sigv4\n  region: us-east-1\n  service: sms-voice\n  accessKeyIdRef: secret:file/access-key\n  secretAccessKeyRef: secret:file/secret-key\n  sessionTokenRef: secret:file/session-token\n";
 
 #[test]
 fn aws_credentials_are_explicit_secret_references_and_debug_is_redacted() {
@@ -2111,11 +2255,6 @@ fn aws_inline_credentials_and_invalid_signing_scopes_are_refused() {
             "service: SMS",
             "authentication.service",
         ),
-        (
-            "accessKeyIdRef: secret:file/access-key",
-            "accessKeyIdRef: INLINE_CANARY",
-            "authentication.accessKeyIdRef",
-        ),
     ] {
         let settings = aws_settings(&AWS_AUTH.replace(from, to));
         let error = settings
@@ -2123,8 +2262,38 @@ fn aws_inline_credentials_and_invalid_signing_scopes_are_refused() {
             .err()
             .expect("invalid settings refused");
         assert!(error.to_string().contains(field), "{error}");
-        assert!(!error.to_string().contains("INLINE_CANARY"));
     }
+
+    // An inline credential is refused by the reader, and again at
+    // activation should one reach it.
+    let read = serde_norway::from_str::<HttpProviderSettings>(&format!(
+        "baseUrl: https://sms-voice.us-east-1.amazonaws.com/\nattemptTimeoutMilliseconds: 3000\n\
+         maximumResponseBytes: 65536\nmaximumConcurrentRequests: 4\nredirects: deny\n\
+         authentication:\n{}",
+        AWS_AUTH.replace(
+            "accessKeyIdRef: secret:file/access-key",
+            "accessKeyIdRef: INLINE_CANARY"
+        )
+    ))
+    .expect_err("an inline access key is refused");
+    assert!(!read.to_string().contains("INLINE_CANARY"));
+    let mut settings = aws_settings(AWS_AUTH);
+    let HttpProviderAuthentication::AwsSigv4 {
+        access_key_id_ref, ..
+    } = &mut settings.authentication
+    else {
+        unreachable!("the settings above sign with aws-sigv4");
+    };
+    "INLINE_CANARY".clone_into(access_key_id_ref);
+    let error = settings
+        .resolve_authentication(&package, false, &secrets.resolver)
+        .err()
+        .expect("an inline access key is refused");
+    assert!(
+        error.to_string().contains("authentication.accessKeyIdRef"),
+        "{error}"
+    );
+    assert!(!error.to_string().contains("INLINE_CANARY"));
 }
 
 #[test]

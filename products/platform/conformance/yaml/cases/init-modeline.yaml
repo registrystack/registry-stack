@@ -1,0 +1,5 @@
+id: init-modeline
+rules: [CFG-SCHEMA-7]
+summary: The file of the format that the product's init command writes starts with the modeline naming the format's schema.
+run: init
+expect: {exit: 0, report: false}

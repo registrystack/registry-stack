@@ -390,6 +390,12 @@ def _replace_once(source: str, expected: str, replacement: str, description: str
     return source.replace(expected, replacement, 1)
 
 
+def _replace_every(source: str, expected: str, replacement: str, description: str) -> str:
+    if expected not in source:
+        raise DemoError(description)
+    return source.replace(expected, replacement)
+
+
 def reserve_ports(count: int = 3) -> tuple[int, ...]:
     if count not in (3, 4):
         raise DemoError("the demo reserves either three or four ports")
@@ -459,37 +465,37 @@ def _local_project(
     if fixture_kind == "asset-site":
         source = _replace_once(
             source,
-            "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes:",
             "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{ASSET_OPERATOR_SCOPE}]\n    requiredPurposes:",
             "asset-site fixture no longer has the expected asset-operator access profile",
         )
         source = _replace_once(
             source,
-            "  - id: site-planner\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: site-planner\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes:",
             "  - id: site-planner\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{ASSET_PLANNER_SCOPE}]\n    requiredPurposes:",
             "asset-site fixture no longer has the expected site-planner access profile",
         )
         journeys_path = target / "tests/journeys.yaml"
         journeys = journeys_path.read_text(encoding="utf-8")
-        journeys = _replace_once(
+        journeys = _replace_every(
             journeys,
-            "        claims: &asset_operator_claims\n"
+            "        claims:\n"
             "          principal: synthetic-asset-operator\n"
             "          purpose: asset-management\n",
-            "        claims: &asset_operator_claims\n"
+            "        claims:\n"
             "          principal: synthetic-asset-operator\n"
             f"          scopes: [{ASSET_OPERATOR_SCOPE}]\n"
             "          purpose: asset-management\n",
             "asset-site fixture no longer has the expected operator journey claims",
         )
-        journeys = _replace_once(
+        journeys = _replace_every(
             journeys,
-            "        claims: &site_planner_claims\n"
+            "        claims:\n"
             "          principal: synthetic-site-planner\n"
             "          purpose: site-planning\n",
-            "        claims: &site_planner_claims\n"
+            "        claims:\n"
             "          principal: synthetic-site-planner\n"
             f"          scopes: [{ASSET_PLANNER_SCOPE}]\n"
             "          purpose: site-planning\n",
@@ -499,8 +505,8 @@ def _local_project(
             "        claims:\n"
             "          principal: synthetic-site-planner\n"
             "        request:\n"
-            "          operation: get\n"
-            "          recordRef: renamed-asset\n"
+            "          type: get\n"
+            "          recordCapture: renamed-asset\n"
         )
         journeys = _replace_once(
             journeys,
@@ -509,34 +515,34 @@ def _local_project(
             "          principal: synthetic-site-planner\n"
             f"          scopes: [{ASSET_PLANNER_SCOPE}]\n"
             "        request:\n"
-            "          operation: get\n"
-            "          recordRef: renamed-asset\n",
+            "          type: get\n"
+            "          recordCapture: renamed-asset\n",
             "asset-site fixture no longer has the expected no-purpose planner step",
         )
         journeys_path.write_text(journeys, encoding="utf-8")
     elif fixture_kind == "asset-change-request":
         source = _replace_once(
             source,
-            "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes:",
             "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{ASSET_OPERATOR_SCOPE}]\n    requiredPurposes:",
             "asset change-request fixture no longer has the expected asset-operator access profile",
         )
         source = _replace_once(
             source,
-            "  - id: site-planner\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: site-planner\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes:",
             "  - id: site-planner\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{ASSET_PLANNER_SCOPE}]\n    requiredPurposes:",
             "asset change-request fixture no longer has the expected site-planner access profile",
         )
         journeys_path = target / "tests/journeys.yaml"
         journeys = journeys_path.read_text(encoding="utf-8")
-        journeys = _replace_once(
+        journeys = _replace_every(
             journeys,
-            "        claims: &operator_claims\n"
+            "        claims:\n"
             "          principal: asset-operator\n"
             "          purpose: asset-management\n",
-            "        claims: &operator_claims\n"
+            "        claims:\n"
             "          principal: asset-operator\n"
             f"          scopes: [{ASSET_OPERATOR_SCOPE}]\n"
             "          purpose: asset-management\n",
@@ -546,7 +552,7 @@ def _local_project(
     elif fixture_kind == "facility":
         source = _replace_once(
             source,
-            "  - id: facility-operator\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: facility-operator\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes:",
             "  - id: facility-operator\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{FACILITY_OPERATOR_SCOPE}]\n    requiredPurposes:",
             "facility fixture no longer has the expected operator access profile",
@@ -565,18 +571,7 @@ def _local_project(
         )
         journeys_path = target / "tests/journeys.yaml"
         journeys = journeys_path.read_text(encoding="utf-8")
-        journeys = _replace_once(
-            journeys,
-            "        claims: &north_operator_claims\n"
-            "          principal: synthetic-facility-operator\n"
-            "          purpose: facility-registry\n",
-            "        claims: &north_operator_claims\n"
-            "          principal: synthetic-facility-operator\n"
-            f"          scopes: [{FACILITY_OPERATOR_SCOPE}]\n"
-            "          purpose: facility-registry\n",
-            "facility fixture no longer has the expected north operator journey claims",
-        )
-        journeys = _replace_once(
+        journeys = _replace_every(
             journeys,
             "        claims:\n"
             "          principal: synthetic-facility-operator\n"
@@ -585,25 +580,25 @@ def _local_project(
             "          principal: synthetic-facility-operator\n"
             f"          scopes: [{FACILITY_OPERATOR_SCOPE}]\n"
             "          purpose: facility-registry\n",
-            "facility fixture no longer has the expected south operator journey claims",
+            "facility fixture no longer has the expected operator journey claims",
         )
         journeys_path.write_text(journeys, encoding="utf-8")
     elif fixture_kind == "inspection":
         source = _replace_once(
             source,
-            "  - id: inspection-inspector\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: inspection-inspector\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes:",
             "  - id: inspection-inspector\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{INSPECTION_INSPECTOR_SCOPE}]\n    requiredPurposes:",
             "inspection fixture no longer has the expected inspector access profile",
         )
         journeys_path = target / "tests/journeys.yaml"
         journeys = journeys_path.read_text(encoding="utf-8")
-        journeys = _replace_once(
+        journeys = _replace_every(
             journeys,
-            "        claims: &inspection_inspector_claims\n"
+            "        claims:\n"
             "          principal: synthetic-inspection-inspector\n"
             "          purpose: facility-inspection\n",
-            "        claims: &inspection_inspector_claims\n"
+            "        claims:\n"
             "          principal: synthetic-inspection-inspector\n"
             f"          scopes: [{INSPECTION_INSPECTOR_SCOPE}]\n"
             "          purpose: facility-inspection\n",
@@ -683,7 +678,7 @@ def prepare_dev(root: Path, fixture: Path, fixture_kind: str, webhook: bool = Fa
         if "testBindings" in declaration:
             client["testBindings"] = declaration["testBindings"]
         clients.append(client)
-    (project / "dev-clients.yaml").write_text(json.dumps({"version": 1, "clients": clients}, indent=2) + "\n", encoding="utf-8")
+    (project / "dev-clients.yaml").write_text(json.dumps({"apiVersion": "id.registrystack.org/formats/breg/dev-clients/v1alpha1", "kind": "BRegDevClients", "clients": clients}, indent=2) + "\n", encoding="utf-8")
 
 def bind_webhook_module(
     root: Path,

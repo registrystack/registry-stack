@@ -35,12 +35,12 @@ assurance require complete fixture coverage before the bundle loads.
 
 The fixture runner compiles the editable project the way a production build compiles it, so the
 governance a candidate needs is required before the first fixture run, not at build time. Give
-every question a `governance` block and every answer a stable concept identifier:
+every question a `governance` block and every answer a stable concept `uri`:
 
 ```yaml
 answers:
   - concept: is_adult
-    id: urn:example:concept:adult-status:v1
+    uri: urn:example:concept:adult-status:v1
     type: boolean
 governance:
   requirement: urn:example:requirement:adult-status:v1
@@ -57,7 +57,7 @@ Three rules decide whether the run starts at all:
 
 - A question with no `governance` block stops the run with `evidencectl: compiling editable project
   for fixture evaluation: every production question requires governance`.
-- An answer with no `id` stops it with `every production answer requires one stable concept id`.
+- An answer with no `uri` stops it with `every production answer requires one stable concept uri`.
 - `governance.fixtures` must be exactly `fixtures/<name>.yaml`, a path inside the project. No
   requirement, framework, Evidence Type, disclosure family, or concept identifier may be one of the
   disposable `urn:registrystack:evidence:local:` URIs that a local generation issues.
@@ -98,7 +98,7 @@ then keep only cases that express your project.
 From any directory, run:
 
 ```sh
-evidencectl check "<evidence-project>" --deny-findings
+evidencectl check "<evidence-project>" --deny-warnings
 evidencectl test "<evidence-project>"
 ```
 
@@ -170,13 +170,20 @@ evidence check --runtime-config "<deployment-target>/runtime.yaml"
 ```
 
 This validates the complete captured bundle, scripts, schemas, codelists, key references, and
-runtime bindings, and it initializes the configured signer, so a production or evidence-grade
-candidate needs its Transit proxy already running. Source credentials are checked by readiness when
-the service starts, not by the offline fixture runner.
+runtime bindings offline, and reports every problem it finds with its file, line, and column. It
+reads no secret material and contacts no service, so it runs the same anywhere.
 
 During local authoring, keep the project writable so changes are convenient. Freeze inputs only
 for the deployable revision: make the runtime and bundle non-writable to the service identity, or
-mount them read-only, then rerun the check against those exact bytes.
+mount them read-only, then prove those exact bytes on the target host:
+
+```sh
+evidence check --runtime-config "<deployment-target>/runtime.yaml" --require-runtime-dependencies
+```
+
+The target-host proof also refuses writable inputs, reads the secret material, initializes the
+configured signer, so a production or evidence-grade candidate needs its Transit proxy already
+running, and checks the source credentials and access-token JWKS the service needs.
 
 ## Hand off the reviewed inputs
 
@@ -187,7 +194,8 @@ from the editable project and one explicit production target.
 Build and hand off only when these facts are recorded together:
 
 1. The fixture suite passed against the editable inputs and generated package.
-2. `evidence check` accepted the exact installed package and target runtime.
+2. `evidence check --require-runtime-dependencies` accepted the exact installed package and target
+   runtime on the target host.
 3. A reviewer approved the source projection, cardinality mapping, requirement, derivation,
    codelists, purposes, audiences, and privacy expectations.
 4. The environment supplies a governed public signing key and matching Transit binding, plus

@@ -147,6 +147,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Platform hygiene alignment",
         "run: products/platform/scripts/check-hygiene-alignment.sh",
     ),
+    (
+        "YAML reader boundary",
+        "run: products/platform/scripts/check-yaml-reader-boundary.sh",
+    ),
+    (
+        "YAML reader boundary tests",
+        "run: python3 -m unittest products/platform/scripts/test_check_yaml_reader_boundary.py",
+    ),
     ("Runtime configuration conformance job", "config-conformance:"),
     (
         "Runtime configuration conformance path filter",
@@ -159,6 +167,19 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Runtime configuration conformance gate tests",
         "run: python3 -m unittest products/platform/scripts/test_check_config_conformance.py",
+    ),
+    ("Configuration conventions rule coverage", '"${lint[@]}" --rule-coverage'),
+    (
+        "Configuration conformance corpus",
+        "run: products/platform/scripts/run-config-conformance.sh --strict --bin-dir target/debug",
+    ),
+    (
+        "Configuration conformance corpus runner tests",
+        "run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_config_conformance.py",
+    ),
+    (
+        "BReg citizen service runtime schema drift",
+        "run: cargo test --locked -p registry-breg-mcp -p registry-breg-review --features registry-breg-mcp/schema,registry-breg-review/schema --lib schema::tests",
     ),
     ("Secret scan job", "secrets:"),
     ("Gitleaks version pin", 'GITLEAKS_VERSION: "8.30.1"'),
@@ -265,6 +286,12 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "python3 -m unittest discover -s products/casework/scripts -p 'test_*.py'",
     ),
     (
+        # The schema drift tests need no database, so they run in the
+        # pull-request test shard rather than in the PostgreSQL job.
+        "Casework generated schema drift check",
+        "if: matrix.name == 'casework'\n        run: products/casework/scripts/check-schemas.sh",
+    ),
+    (
         "Casework offline authoring journeys",
         '"$caseworkctl_bin" test "$work/project"',
     ),
@@ -343,6 +370,12 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Scheduling contract reproduction",
         "run: products/scheduling/scripts/check-contracts.sh",
+    ),
+    (
+        # The schema drift tests need no database, so they run in the
+        # contracts job on every pull request that reaches Scheduling.
+        "Scheduling generated schema drift check",
+        "run: products/scheduling/scripts/check-schemas.sh",
     ),
     (
         "Scheduling PostgreSQL path filter",
@@ -450,7 +483,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Messaging configuration refusal journeys",
-        "expect_refusal unknown-key listener.port",
+        "expect_refusal unknown-key /listener/port config.unknown-key",
     ),
     (
         "Messaging runtime PostgreSQL suite",
@@ -716,6 +749,8 @@ REQUIRED_NIGHTLY_FUZZ_TARGETS: dict[str, tuple[str, ...]] = {
         "sdjwt_holder_proof",
         "sdjwt_issuance",
         "sqlite_statement",
+        "yaml_decode",
+        "yaml_reader",
     ),
     "manifest-fuzz": (
         "metadata_manifest_yaml",

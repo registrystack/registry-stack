@@ -1,0 +1,5 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+listener:
+  <<: {port: 1}
+  "<<": quoted

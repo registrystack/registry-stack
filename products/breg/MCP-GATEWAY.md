@@ -93,7 +93,10 @@ Each service reads its own closed YAML runtime configuration document.
 the full key list, defaults, and an example document for each; this page
 does not repeat them. Both refuse an inline secret value: every credential
 is a `secret:file/` or `secret:env/` reference, never a literal in the
-configuration document.
+configuration document. Each binary's `check` command reads its document
+offline, without reading a secret or opening a socket, and each document has
+a generated JSON Schema under `generated/mcp-runtime/` and
+`generated/review-runtime/`.
 
 ## Token path
 

@@ -1,0 +1,214 @@
+id: too-many-problems
+rules: [CFG-DIAG-5]
+summary: A file with 101 unknown keys reports the first 100 by position, then one diagnostic that counts the rest.
+mutation:
+  append: |
+    conformanceUnknown001: x
+    conformanceUnknown002: x
+    conformanceUnknown003: x
+    conformanceUnknown004: x
+    conformanceUnknown005: x
+    conformanceUnknown006: x
+    conformanceUnknown007: x
+    conformanceUnknown008: x
+    conformanceUnknown009: x
+    conformanceUnknown010: x
+    conformanceUnknown011: x
+    conformanceUnknown012: x
+    conformanceUnknown013: x
+    conformanceUnknown014: x
+    conformanceUnknown015: x
+    conformanceUnknown016: x
+    conformanceUnknown017: x
+    conformanceUnknown018: x
+    conformanceUnknown019: x
+    conformanceUnknown020: x
+    conformanceUnknown021: x
+    conformanceUnknown022: x
+    conformanceUnknown023: x
+    conformanceUnknown024: x
+    conformanceUnknown025: x
+    conformanceUnknown026: x
+    conformanceUnknown027: x
+    conformanceUnknown028: x
+    conformanceUnknown029: x
+    conformanceUnknown030: x
+    conformanceUnknown031: x
+    conformanceUnknown032: x
+    conformanceUnknown033: x
+    conformanceUnknown034: x
+    conformanceUnknown035: x
+    conformanceUnknown036: x
+    conformanceUnknown037: x
+    conformanceUnknown038: x
+    conformanceUnknown039: x
+    conformanceUnknown040: x
+    conformanceUnknown041: x
+    conformanceUnknown042: x
+    conformanceUnknown043: x
+    conformanceUnknown044: x
+    conformanceUnknown045: x
+    conformanceUnknown046: x
+    conformanceUnknown047: x
+    conformanceUnknown048: x
+    conformanceUnknown049: x
+    conformanceUnknown050: x
+    conformanceUnknown051: x
+    conformanceUnknown052: x
+    conformanceUnknown053: x
+    conformanceUnknown054: x
+    conformanceUnknown055: x
+    conformanceUnknown056: x
+    conformanceUnknown057: x
+    conformanceUnknown058: x
+    conformanceUnknown059: x
+    conformanceUnknown060: x
+    conformanceUnknown061: x
+    conformanceUnknown062: x
+    conformanceUnknown063: x
+    conformanceUnknown064: x
+    conformanceUnknown065: x
+    conformanceUnknown066: x
+    conformanceUnknown067: x
+    conformanceUnknown068: x
+    conformanceUnknown069: x
+    conformanceUnknown070: x
+    conformanceUnknown071: x
+    conformanceUnknown072: x
+    conformanceUnknown073: x
+    conformanceUnknown074: x
+    conformanceUnknown075: x
+    conformanceUnknown076: x
+    conformanceUnknown077: x
+    conformanceUnknown078: x
+    conformanceUnknown079: x
+    conformanceUnknown080: x
+    conformanceUnknown081: x
+    conformanceUnknown082: x
+    conformanceUnknown083: x
+    conformanceUnknown084: x
+    conformanceUnknown085: x
+    conformanceUnknown086: x
+    conformanceUnknown087: x
+    conformanceUnknown088: x
+    conformanceUnknown089: x
+    conformanceUnknown090: x
+    conformanceUnknown091: x
+    conformanceUnknown092: x
+    conformanceUnknown093: x
+    conformanceUnknown094: x
+    conformanceUnknown095: x
+    conformanceUnknown096: x
+    conformanceUnknown097: x
+    conformanceUnknown098: x
+    conformanceUnknown099: x
+    conformanceUnknown100: x
+    conformanceUnknown101: x
+expect:
+  exit: 1
+  diagnostics:
+    - {code: config.unknown-key, path: /conformanceUnknown001, at: {line: 1, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown002, at: {line: 2, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown003, at: {line: 3, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown004, at: {line: 4, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown005, at: {line: 5, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown006, at: {line: 6, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown007, at: {line: 7, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown008, at: {line: 8, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown009, at: {line: 9, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown010, at: {line: 10, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown011, at: {line: 11, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown012, at: {line: 12, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown013, at: {line: 13, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown014, at: {line: 14, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown015, at: {line: 15, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown016, at: {line: 16, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown017, at: {line: 17, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown018, at: {line: 18, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown019, at: {line: 19, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown020, at: {line: 20, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown021, at: {line: 21, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown022, at: {line: 22, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown023, at: {line: 23, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown024, at: {line: 24, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown025, at: {line: 25, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown026, at: {line: 26, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown027, at: {line: 27, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown028, at: {line: 28, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown029, at: {line: 29, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown030, at: {line: 30, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown031, at: {line: 31, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown032, at: {line: 32, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown033, at: {line: 33, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown034, at: {line: 34, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown035, at: {line: 35, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown036, at: {line: 36, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown037, at: {line: 37, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown038, at: {line: 38, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown039, at: {line: 39, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown040, at: {line: 40, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown041, at: {line: 41, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown042, at: {line: 42, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown043, at: {line: 43, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown044, at: {line: 44, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown045, at: {line: 45, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown046, at: {line: 46, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown047, at: {line: 47, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown048, at: {line: 48, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown049, at: {line: 49, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown050, at: {line: 50, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown051, at: {line: 51, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown052, at: {line: 52, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown053, at: {line: 53, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown054, at: {line: 54, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown055, at: {line: 55, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown056, at: {line: 56, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown057, at: {line: 57, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown058, at: {line: 58, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown059, at: {line: 59, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown060, at: {line: 60, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown061, at: {line: 61, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown062, at: {line: 62, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown063, at: {line: 63, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown064, at: {line: 64, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown065, at: {line: 65, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown066, at: {line: 66, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown067, at: {line: 67, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown068, at: {line: 68, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown069, at: {line: 69, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown070, at: {line: 70, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown071, at: {line: 71, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown072, at: {line: 72, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown073, at: {line: 73, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown074, at: {line: 74, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown075, at: {line: 75, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown076, at: {line: 76, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown077, at: {line: 77, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown078, at: {line: 78, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown079, at: {line: 79, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown080, at: {line: 80, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown081, at: {line: 81, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown082, at: {line: 82, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown083, at: {line: 83, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown084, at: {line: 84, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown085, at: {line: 85, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown086, at: {line: 86, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown087, at: {line: 87, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown088, at: {line: 88, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown089, at: {line: 89, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown090, at: {line: 90, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown091, at: {line: 91, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown092, at: {line: 92, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown093, at: {line: 93, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown094, at: {line: 94, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown095, at: {line: 95, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown096, at: {line: 96, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown097, at: {line: 97, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown098, at: {line: 98, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown099, at: {line: 99, column: 1}}
+    - {code: config.unknown-key, path: /conformanceUnknown100, at: {line: 100, column: 1}}
+    - code: config.too-many-problems
+      path: ""
+      at: file
+      message: 1 more problem in this file is not shown
+      suggestedAction: Fix the problems shown, then check the file again.

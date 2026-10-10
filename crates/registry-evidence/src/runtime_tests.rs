@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
@@ -2275,8 +2279,15 @@ async fn local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_secur
         .expect("validUntil parses")
         .with_timezone(&Utc)
         + chrono::Duration::seconds(
-            i64::try_from(runtime.bundle().config.signing.verifier_clock_skew_seconds)
-                .expect("clock skew fits i64")
+            i64::try_from(
+                runtime
+                    .bundle()
+                    .config
+                    .signing
+                    .verifier_clock_skew_seconds
+                    .get(),
+            )
+            .expect("clock skew fits i64")
                 + 1,
         );
     let expired_policy = local_procedure_policy(&procedure, &request.request_nonce, expired_at);

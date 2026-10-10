@@ -1,0 +1,22 @@
+{
+  "apiVersion": "id.registrystack.org/formats/breg/migration-descriptor/v1alpha1",
+  "kind": "BRegMigrationDescriptor",
+  "id": "read-maintenance-note",
+  "changeClass": "access_or_disclosure_change",
+  "covers": [
+    {
+      "code": "access_profile_changed",
+      "target": {
+        "kind": "access_profile",
+        "memberId": "planner"
+      }
+    }
+  ],
+  "recovery": "exact_target_resume",
+  "lockTimeoutMilliseconds": 1000,
+  "statementTimeoutMilliseconds": 60000,
+  "steps": [],
+  "preAssertions": [],
+  "postAssertions": [],
+  "rehearsalReceiptPath": "modules/asset-site-placement-core/migrations/read-maintenance-note/rehearsal.json"
+}

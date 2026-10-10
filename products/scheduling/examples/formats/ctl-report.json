@@ -1,0 +1,45 @@
+{
+  "ok": true,
+  "command": "check",
+  "status": "complete",
+  "apiVersion": "id.registrystack.org/formats/scheduling/ctl-report/v1alpha1",
+  "kind": "SchedulingCtlReport",
+  "databaseAccess": false,
+  "diagnostics": [],
+  "effective": {
+    "holdPolicy": {
+      "maximumPerCaller": 3,
+      "ttlMinutes": 5
+    },
+    "offerings": {
+      "count": 2,
+      "ids": [
+        "registry-update-30",
+        "fold-day-update-30"
+      ]
+    },
+    "openings": {
+      "count": 2,
+      "ids": [
+        "bangkok-counter-hours",
+        "new-york-hall-hours"
+      ]
+    },
+    "policyDigest": "sha256:1d8c8b10c782b6274c454e4ea17ace1bd879c80d6fb0fef8b71480c7beeab62b",
+    "projectId": "registry-updates",
+    "projectVersion": "1",
+    "services": {
+      "count": 1,
+      "ids": [
+        "registry-update"
+      ]
+    },
+    "windows": {
+      "count": 0,
+      "ids": []
+    }
+  },
+  "filesChecked": 5,
+  "networkAccess": false,
+  "project": "products/scheduling/examples/standalone-exact-time"
+}

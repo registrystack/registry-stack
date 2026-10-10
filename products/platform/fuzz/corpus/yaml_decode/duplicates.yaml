@@ -1,0 +1,12 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+id: example
+version: "1"
+scopes: [read, read]
+steps:
+  - id: a
+  - id: a
+listener:
+  bind: a
+  port: 1
+  portNumber: 2

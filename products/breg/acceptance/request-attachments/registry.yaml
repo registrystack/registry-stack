@@ -113,7 +113,7 @@
           "writableFields": [
             "label"
           ],
-          "rowBoundaries": []
+          "rowBoundaries": "unrestricted"
         }
       ],
       "requiredPurposes": [
@@ -151,7 +151,7 @@
             "label",
             "supporting-file"
           ],
-          "rowBoundaries": [],
+          "rowBoundaries": "unrestricted",
           "requestVisibility": "owner"
         }
       ],
@@ -190,7 +190,7 @@
             "label",
             "supporting-file"
           ],
-          "rowBoundaries": [],
+          "rowBoundaries": "unrestricted",
           "requestVisibility": "owner"
         }
       ],
@@ -220,7 +220,7 @@
             "review_state"
           ],
           "writableFields": [],
-          "rowBoundaries": []
+          "rowBoundaries": "unrestricted"
         }
       ],
       "requiredPurposes": [
@@ -250,11 +250,11 @@
             "review_state"
           ],
           "writableFields": [],
-          "rowBoundaries": [],
+          "rowBoundaries": "unrestricted",
           "applyTargets": [
             {
               "entity": "record",
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }
           ]
         }

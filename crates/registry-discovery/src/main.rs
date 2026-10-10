@@ -42,6 +42,9 @@ async fn main() {
         )
         .init();
     if let Err(error) = serve(&arguments.runtime_config).await {
+        // The JSON log goes to standard output; the operator also gets the
+        // refusal, with each diagnostic's position and fix, on standard error.
+        eprintln!("discovery: {error}");
         tracing::error!(target: "registry_discovery::startup", error = %error, "Discovery stopped");
         std::process::exit(1);
     }

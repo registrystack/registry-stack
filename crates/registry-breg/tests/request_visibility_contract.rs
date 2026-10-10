@@ -48,7 +48,7 @@ fn owner_request_visibility_is_rejected_outside_authenticated_request_reads() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "access_profile.request_visibility.invalid"));
+        .any(|diagnostic| diagnostic.code == "breg.access-profile.request-visibility-invalid"));
 
     let mut write_only = acceptance_project();
     let submitter = write_only
@@ -68,7 +68,7 @@ fn owner_request_visibility_is_rejected_outside_authenticated_request_reads() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "access_profile.request_visibility.invalid"));
+        .any(|diagnostic| diagnostic.code == "breg.access-profile.request-visibility-invalid"));
 }
 
 #[test]
@@ -134,5 +134,5 @@ fn request_reason_permissions_refuse_non_request_entity_overrides() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| { diagnostic.code == "access_profile.request_fields.invalid" }));
+        .any(|diagnostic| { diagnostic.code == "breg.access-profile.request-fields-invalid" }));
 }

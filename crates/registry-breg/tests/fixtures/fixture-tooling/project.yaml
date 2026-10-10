@@ -50,6 +50,7 @@ accessProfiles:
   - id: operator
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes: [case-management]
     permissions:
       - entity: widget

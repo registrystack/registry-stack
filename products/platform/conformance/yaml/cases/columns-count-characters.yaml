@@ -1,0 +1,12 @@
+id: columns-count-characters
+rules: [CFG-DIAG-1]
+summary: Columns count characters, not bytes, so each accented letter in a key moves the column by one.
+mutation:
+  append: |
+    conformanceÉté: &conformance text
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.anchor
+      path: /conformanceÉté
+      at: {line: 1, column: 17}

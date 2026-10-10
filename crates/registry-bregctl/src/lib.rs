@@ -42,12 +42,14 @@ use serde_json::{json, Value};
 mod action_handler_test;
 mod active_registry;
 mod apply_lifecycle;
+mod check;
 mod consent_module;
 mod data_lifecycle;
 mod dev;
 mod doctor;
 mod field_encryption;
 mod field_encryption_lifecycle;
+mod file_check;
 mod history_erasure_lifecycle;
 mod history_rebaseline_lifecycle;
 mod import_authority_lifecycle;
@@ -65,6 +67,8 @@ mod safe_path;
 mod starters;
 mod statistics_lifecycle;
 mod test_lifecycle;
+#[cfg(feature = "schema")]
+pub mod tool_schema;
 mod webhook_lifecycle;
 
 use active_registry::ActiveRegistryError;
@@ -355,8 +359,8 @@ struct InitArgs {
 #[command(group(
     ArgGroup::new("checked")
         .required(true)
-        .multiple(false)
-        .args(["project", "package"])
+        .multiple(true)
+        .args(["project", "package", "file"])
 ))]
 struct CheckArgs {
     /// Base Registry Engine project directory.
@@ -364,15 +368,33 @@ struct CheckArgs {
     project: Option<PathBuf>,
 
     /// Closed package to verify against its sums, reporting the registry revision it rederives.
-    #[arg(long, value_name = "DIRECTORY", conflicts_with_all = ["production", "deny_findings"])]
+    #[arg(
+        long,
+        value_name = "DIRECTORY",
+        conflicts_with_all = ["project", "file", "production", "runtime_config"]
+    )]
     package: Option<PathBuf>,
+
+    /// One tool file to check on its own, read by its kind: journeys, schema-test
+    /// credentials or receipt, a data checkpoint or import state, a migration descriptor,
+    /// rehearsal receipt or backup binding, a model selection, or a development clients,
+    /// example scenarios, session state or source preparation file. No secret, database,
+    /// or network is read. With PROJECT, journeys are checked against that project.
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["production", "runtime_config"])]
+    file: Option<PathBuf>,
 
     /// Enforce production-only package closure requirements.
     #[arg(long)]
     production: bool,
-    /// Exit unsuccessfully when any authoring finding needs review, including access warnings.
+    /// Exit unsuccessfully when the check reports any warning, including access warnings.
     #[arg(long)]
-    deny_findings: bool,
+    deny_warnings: bool,
+    /// Runtime configuration file to check offline beside the project; no package, database, network, or secret is read.
+    #[arg(long, value_name = "FILE")]
+    runtime_config: Option<PathBuf>,
+    /// Resolve the runtime configuration's `${VAR}` substitutions from the environment, and report an unset variable.
+    #[arg(long, requires = "runtime_config")]
+    environment: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1115,7 +1137,7 @@ struct DataValidateArgs {
     #[arg(long, value_name = "ID")]
     entity: String,
 
-    /// Compiled non-anonymous access profile identifier.
+    /// Compiled access profile identifier.
     #[arg(long, value_name = "ID")]
     profile: String,
 
@@ -1146,7 +1168,7 @@ struct DataImportArgs {
     #[arg(long, value_name = "ID")]
     entity: String,
 
-    /// Compiled non-anonymous access profile identifier.
+    /// Compiled access profile identifier.
     #[arg(long, value_name = "ID")]
     profile: String,
 
@@ -1185,7 +1207,7 @@ struct DataExportArgs {
     #[arg(long, value_name = "ID")]
     entity: String,
 
-    /// Compiled non-anonymous export-enabled access profile identifier.
+    /// Compiled export-enabled access profile identifier.
     #[arg(long, value_name = "ID")]
     profile: String,
 
@@ -1487,6 +1509,66 @@ struct FailureReport {
     diagnostics: Vec<ToolDiagnostic>,
 }
 
+/// A command refusal. A document the shared reader refused keeps the
+/// reader's diagnostics unchanged (CFG-DIAG-1, CFG-DIAG-2); every other
+/// refusal is the command's own report.
+enum Refusal {
+    Tool(FailureReport),
+    Document(DocumentRefusal),
+}
+
+/// A document the shared reader refused while a command read it.
+struct DocumentRefusal {
+    command: &'static str,
+    /// What the command refused, read as "bregctl <command> refused <subject>."
+    subject: &'static str,
+    report: registry_platform_yaml::Report,
+}
+
+impl From<FailureReport> for Refusal {
+    fn from(report: FailureReport) -> Refusal {
+        Refusal::Tool(report)
+    }
+}
+
+/// The ctl report envelope around reader diagnostics, carried unchanged.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentFailureReport<'a> {
+    ok: bool,
+    command: &'static str,
+    diagnostics: &'a [registry_platform_yaml::Diagnostic],
+}
+
+/// Name a file the command found inside a project by the project path the
+/// operator gave joined with the file's path inside it (CFG-DIAG-1).
+fn report_in_project(
+    report: registry_platform_yaml::Report,
+    project: &Path,
+) -> registry_platform_yaml::Report {
+    let files_checked = report.files_checked();
+    let in_project = |file: &str| project.join(file).display().to_string();
+    let mut rebased = registry_platform_yaml::Report::new(
+        report
+            .into_diagnostics()
+            .into_iter()
+            .map(|mut diagnostic| {
+                if let Some(source) = &mut diagnostic.source {
+                    source.file = in_project(&source.file);
+                }
+                for related in &mut diagnostic.related {
+                    related.file = in_project(&related.file);
+                }
+                diagnostic
+            })
+            .collect(),
+    );
+    if let Some(files) = files_checked {
+        rebased.set_files_checked(files);
+    }
+    rebased
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FieldEncryptionKeygenSuccessReport<'a> {
@@ -1635,7 +1717,6 @@ enum SuggestedAction {
     PrepareFieldEncryptionEraseRequest,
     CorrectPlannerTestInput,
     CorrectActionHandler,
-    RunSchemaTest,
 }
 
 #[derive(Serialize)]
@@ -2213,33 +2294,57 @@ where
         Command::Examples(args) => {
             return match dev::examples::run(args) {
                 Ok(report) => write_examples_success(&report, format, stdout, stderr),
-                Err(error) => write_failure(
-                    &source_failure(
-                        "examples",
-                        diagnostic("examples.failed", "examples", &format!("{error:#}")),
-                        DiagnosticArtifact::CommandArguments,
-                        SuggestedAction::CorrectCommandUsage,
+                Err(error) => match error.downcast::<dev::examples::CatalogueRefused>() {
+                    Ok(refused) => write_refusal(
+                        &Refusal::Document(DocumentRefusal {
+                            command: "examples",
+                            subject: "the example scenarios",
+                            report: refused.0,
+                        }),
+                        format,
+                        stdout,
+                        stderr,
                     ),
-                    format,
-                    stdout,
-                    stderr,
-                ),
+                    Err(error) => write_failure(
+                        &source_failure(
+                            "examples",
+                            diagnostic("examples.failed", "examples", &format!("{error:#}")),
+                            DiagnosticArtifact::CommandArguments,
+                            SuggestedAction::CorrectCommandUsage,
+                        ),
+                        format,
+                        stdout,
+                        stderr,
+                    ),
+                },
             };
         }
         Command::Dev(args) => {
             return match dev::run(args) {
                 Ok(report) => write_dev_success(&report, format, stdout, stderr),
-                Err(error) => write_failure(
-                    &source_failure(
-                        "dev",
-                        diagnostic("dev.failed", "dev", &format!("{error:#}")),
-                        DiagnosticArtifact::CommandArguments,
-                        SuggestedAction::CorrectCommandUsage,
+                Err(error) => match error.downcast::<dev::ClientsRefused>() {
+                    Ok(refused) => write_refusal(
+                        &Refusal::Document(DocumentRefusal {
+                            command: "dev",
+                            subject: "the development clients",
+                            report: refused.0,
+                        }),
+                        format,
+                        stdout,
+                        stderr,
                     ),
-                    format,
-                    stdout,
-                    stderr,
-                ),
+                    Err(error) => write_failure(
+                        &source_failure(
+                            "dev",
+                            diagnostic("dev.failed", "dev", &format!("{error:#}")),
+                            DiagnosticArtifact::CommandArguments,
+                            SuggestedAction::CorrectCommandUsage,
+                        ),
+                        format,
+                        stdout,
+                        stderr,
+                    ),
+                },
             };
         }
         Command::DevSupervisor(args) => {
@@ -2260,26 +2365,41 @@ where
                     (None, Some(name)) => init_from_model::Source::Starter(name),
                     (None, None) => init_from_model::Source::Interactive,
                 };
-                init_from_model::run(&args.destination, model, source)
+                return match init_from_model::run(&args.destination, model, source) {
+                    Ok(report) => write_success(&report, format, stdout, stderr),
+                    Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
+                };
             }
             (Some(_), Some(_)) => unreachable!("clap refuses --from together with --template"),
         },
-        Command::Check(args) => match (&args.project, &args.package) {
-            (Some(project), None) => check(project, profile(args.production)),
-            (None, Some(package)) => check_package(package),
-            _ => unreachable!("clap enforces exactly one of a project and a package"),
+        Command::Check(CheckArgs {
+            file: Some(file),
+            project,
+            deny_warnings,
+            ..
+        }) => {
+            return file_check::run(
+                &file_check::Request {
+                    file: &file,
+                    project: project.as_deref(),
+                    deny_warnings,
+                },
+                format,
+                stdout,
+                stderr,
+            );
         }
-        .and_then(|report| {
-            if args.deny_findings && !report.findings.is_empty() {
-                Err(FailureReport {
-                    ok: false,
-                    command: "check",
-                    diagnostics: report.findings,
-                })
-            } else {
-                Ok(report)
-            }
-        }),
+        Command::Check(args) => {
+            let request = check::Request {
+                project: args.project.as_deref(),
+                package: args.package.as_deref(),
+                production: args.production,
+                deny_warnings: args.deny_warnings,
+                runtime_config: args.runtime_config.as_deref(),
+                environment: args.environment,
+            };
+            return check::run(&request, format, stdout, stderr);
+        }
         Command::Module(args) => match args.command {
             ModuleCommand::Add(args) => match args.module {
                 ModuleAddCommand::Consent(args) => {
@@ -2312,31 +2432,31 @@ where
         Command::Package(args) => {
             return match package(&args) {
                 Ok(report) => write_package_success(&report, format, stdout, stderr),
-                Err(failure) => write_failure(&failure, format, stdout, stderr),
+                Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Test(args) if args.fingerprint_only => {
             return match measure_schema_fingerprint(&args) {
                 Ok(report) => write_schema_fingerprint(&report, format, stdout, stderr),
-                Err(failure) => write_failure(&failure, format, stdout, stderr),
+                Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Test(args) => {
             return match test(&args) {
                 Ok(report) => write_schema_test_success(&report, format, stdout, stderr),
-                Err(failure) => write_failure(&failure, format, stdout, stderr),
+                Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Apply(args) => {
             return match apply(&args) {
                 Ok(report) => write_apply_success(&report, format, stdout, stderr),
-                Err(failure) => write_failure(&failure, format, stdout, stderr),
+                Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Plan(args) => {
             return match plan(&args) {
                 Ok(report) => write_plan_success(&report, format, stdout, stderr),
-                Err(failure) => write_failure(&failure, format, stdout, stderr),
+                Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Status(args) => {
@@ -2354,24 +2474,27 @@ where
                     stdout,
                     stderr,
                 ),
-                Err(diagnostic) => {
-                    let (artifact, action) =
-                        if diagnostic.code.starts_with("startup.runtime_config") {
-                            (
-                                DiagnosticArtifact::RuntimeConfiguration,
-                                SuggestedAction::CorrectRuntimeConfiguration,
-                            )
-                        } else {
-                            (
-                                DiagnosticArtifact::StartupDependencies,
-                                SuggestedAction::VerifyStartupDependencies,
-                            )
-                        };
+                Err(refusal) => {
+                    let (artifact, action) = if refusal.runtime_configuration {
+                        (
+                            DiagnosticArtifact::RuntimeConfiguration,
+                            SuggestedAction::CorrectRuntimeConfiguration,
+                        )
+                    } else {
+                        (
+                            DiagnosticArtifact::StartupDependencies,
+                            SuggestedAction::VerifyStartupDependencies,
+                        )
+                    };
                     write_failure(
                         &FailureReport {
                             ok: false,
                             command: "doctor",
-                            diagnostics: vec![tool_diagnostic(diagnostic, artifact, action)],
+                            diagnostics: refusal
+                                .diagnostics
+                                .into_iter()
+                                .map(|diagnostic| tool_diagnostic(diagnostic, artifact, action))
+                                .collect(),
                         },
                         format,
                         stdout,
@@ -2426,13 +2549,13 @@ where
             DataCommand::Import(args) => {
                 return match data_import(&args) {
                     Ok(report) => write_data_import_success(&report, format, stdout, stderr),
-                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                    Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
                 };
             }
             DataCommand::Export(args) => {
                 return match data_export(&args) {
                     Ok(report) => write_data_export_success(&report, format, stdout, stderr),
-                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                    Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
                 };
             }
         },
@@ -3336,7 +3459,7 @@ fn history_erase(args: &HistoryEraseArgs) -> Result<HistoryEraseSuccessReport, F
 fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> FailureReport {
     let error = match error {
         HistoryErasureLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("history erase", "history.erase", error);
+            return runtime_config_failure("history erase", error);
         }
         HistoryErasureLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure("history erase", "history.erase", error);
@@ -3481,7 +3604,7 @@ fn history_rebaseline(
 fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) -> FailureReport {
     let error = match error {
         HistoryRebaselineLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("history rebaseline", "history.rebaseline", error);
+            return runtime_config_failure("history rebaseline", error);
         }
         HistoryRebaselineLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure("history rebaseline", "history.rebaseline", error);
@@ -3697,11 +3820,7 @@ fn field_encryption_preflight_failure(
 ) -> FailureReport {
     let error = match error {
         FieldEncryptionPreflightLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure(
-                "field-encryption preflight",
-                "field_encryption.preflight",
-                error,
-            );
+            return runtime_config_failure("field-encryption preflight", error);
         }
         FieldEncryptionPreflightLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure(
@@ -3848,11 +3967,7 @@ fn field_encryption_erase_history_failure(
 ) -> FailureReport {
     let error = match error {
         FieldEncryptionEraseHistoryLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure(
-                "field-encryption erase-history",
-                "field_encryption.erase_history",
-                error,
-            );
+            return runtime_config_failure("field-encryption erase-history", error);
         }
         FieldEncryptionEraseHistoryLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure(
@@ -4233,7 +4348,7 @@ fn data_validate(args: &DataValidateArgs) -> Result<DataValidateSuccessReport, F
     })
 }
 
-fn data_import(args: &DataImportArgs) -> Result<DataImportSuccessReport, FailureReport> {
+fn data_import(args: &DataImportArgs) -> Result<DataImportSuccessReport, Refusal> {
     let outcome = data_lifecycle::run_import(DataImportRequest {
         package: &args.package,
         breg_url: &args.breg_url,
@@ -4245,7 +4360,7 @@ fn data_import(args: &DataImportArgs) -> Result<DataImportSuccessReport, Failure
         checkpoint: &args.checkpoint,
         max_chunks: args.max_chunks,
     })
-    .map_err(|error| data_lifecycle_failure("data import", "data.import", error))?;
+    .map_err(|error| data_lifecycle_refusal("data import", "data.import", error))?;
     Ok(DataImportSuccessReport {
         ok: true,
         command: "data import",
@@ -4263,7 +4378,7 @@ fn data_import(args: &DataImportArgs) -> Result<DataImportSuccessReport, Failure
     })
 }
 
-fn data_export(args: &DataExportArgs) -> Result<DataExportSuccessReport, FailureReport> {
+fn data_export(args: &DataExportArgs) -> Result<DataExportSuccessReport, Refusal> {
     let outcome = data_lifecycle::run_export(DataExportRequest {
         package: &args.package,
         breg_url: &args.breg_url,
@@ -4275,7 +4390,7 @@ fn data_export(args: &DataExportArgs) -> Result<DataExportSuccessReport, Failure
         checkpoint: &args.checkpoint,
         max_pages: args.max_pages,
     })
-    .map_err(|error| data_lifecycle_failure("data export", "data.export", error))?;
+    .map_err(|error| data_lifecycle_refusal("data export", "data.export", error))?;
     Ok(DataExportSuccessReport {
         ok: true,
         command: "data export",
@@ -4459,6 +4574,33 @@ fn operation_arg(operation: registry_breg::data::DataImportOperation) -> DataOpe
     }
 }
 
+/// A data command refusal: a checkpoint or state file the shared reader
+/// refused keeps the reader's diagnostics, and every other failure is the
+/// command's own report.
+fn data_lifecycle_refusal(
+    command: &'static str,
+    prefix: &'static str,
+    error: DataLifecycleError,
+) -> Refusal {
+    let (subject, report) = match error {
+        DataLifecycleError::Data(DataError::CheckpointDocument(report)) => (
+            if command == "data export" {
+                "the data export checkpoint"
+            } else {
+                "the data import checkpoint"
+            },
+            report,
+        ),
+        DataLifecycleError::ImportStateDocument(report) => ("the data import state", report),
+        error => return Refusal::Tool(data_lifecycle_failure(command, prefix, error)),
+    };
+    Refusal::Document(DocumentRefusal {
+        command,
+        subject,
+        report,
+    })
+}
+
 fn data_lifecycle_failure(
     command: &'static str,
     prefix: &'static str,
@@ -4477,6 +4619,7 @@ fn data_lifecycle_failure(
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                PackageError::RetiredApiVersion => SuggestedAction::CorrectPackageBuild,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -4517,7 +4660,9 @@ fn data_lifecycle_failure(
             SuggestedAction::CorrectDataBinding,
         ),
         DataLifecycleError::Checkpoint
-        | DataLifecycleError::Data(DataError::CheckpointMismatch) => (
+        | DataLifecycleError::Data(DataError::CheckpointMismatch)
+        | DataLifecycleError::Data(DataError::CheckpointDocument(_))
+        | DataLifecycleError::ImportStateDocument(_) => (
             format!("{prefix}.checkpoint.refused"),
             "checkpoint",
             "the data checkpoint was refused",
@@ -4721,13 +4866,13 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
     })
 }
 
-fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
+fn package(args: &PackageArgs) -> Result<PackageSuccessReport, Refusal> {
     // The receipt names the fingerprint its rehearsal reached, so an operator who
     // does not restate it still packages against that exact managed catalogue.
     let schema_fingerprint = match &args.schema_fingerprint {
         Some(supplied) => supplied.clone(),
         None => package_lifecycle::receipt_schema_fingerprint(&args.test_receipt)
-            .map_err(package_lifecycle_failure)?,
+            .map_err(|error| package_lifecycle_refusal(error, &args.candidate.project))?,
     };
     let prepared = prepare_candidate(&args.candidate, schema_fingerprint, "package")?;
     let receipt = package_lifecycle::validate_test_receipt(
@@ -4735,7 +4880,7 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
         &prepared,
         args.schema_fingerprint.as_deref(),
     )
-    .map_err(package_lifecycle_failure)?;
+    .map_err(|error| package_lifecycle_refusal(error, &args.candidate.project))?;
     let outcome = package_lifecycle::run(prepared, receipt, &args.output, args.revision.as_deref())
         .map_err(package_lifecycle_failure)?;
     Ok(PackageSuccessReport {
@@ -4749,19 +4894,53 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
     })
 }
 
-fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, FailureReport> {
+/// A document `package` read is reported with the reader's diagnostics;
+/// every other refusal is the command's own report.
+fn package_lifecycle_refusal(error: PackageLifecycleError, project: &Path) -> Refusal {
+    match error {
+        PackageLifecycleError::Journeys(report) => Refusal::Document(DocumentRefusal {
+            command: "package",
+            subject: "the packaged fixture journeys",
+            report: report_in_project(report, project),
+        }),
+        PackageLifecycleError::ReceiptDocument(report) => Refusal::Document(DocumentRefusal {
+            command: "package",
+            subject: "the schema-test receipt",
+            report,
+        }),
+        error => package_lifecycle_failure(error).into(),
+    }
+}
+
+fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, Refusal> {
     let (Some(credentials), Some(output)) = (&args.credentials, &args.output) else {
         unreachable!("clap requires --credentials and --output unless --fingerprint-only is set")
     };
     let output = test_lifecycle::preflight_output(output).map_err(test_lifecycle_failure)?;
     let candidate = capture_candidate(&args.candidate, "test", true)?;
-    let outcome = test_lifecycle::run(TestLifecycleRequest {
+    let outcome = match test_lifecycle::run(TestLifecycleRequest {
         candidate,
         runtime_config: &args.runtime_config,
         credentials,
         output,
-    })
-    .map_err(test_lifecycle_failure)?;
+    }) {
+        Ok(outcome) => outcome,
+        Err(TestLifecycleError::JourneyDocument(report)) => {
+            return Err(Refusal::Document(DocumentRefusal {
+                command: "test",
+                subject: "the fixture journeys",
+                report: report_in_project(report, &args.candidate.project),
+            }));
+        }
+        Err(TestLifecycleError::CredentialsDocument(report)) => {
+            return Err(Refusal::Document(DocumentRefusal {
+                command: "test",
+                subject: "the schema-test credentials",
+                report,
+            }));
+        }
+        Err(error) => return Err(test_lifecycle_failure(error).into()),
+    };
     Ok(SchemaTestSuccessReport {
         ok: true,
         command: "test",
@@ -4785,7 +4964,7 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, FailureReport> {
 
 /// Measure the fresh-install schema fingerprint a reviewed migration declares
 /// as its target, without the fixture run or receipt of a full schema test.
-fn measure_schema_fingerprint(args: &TestArgs) -> Result<SchemaFingerprintReport, FailureReport> {
+fn measure_schema_fingerprint(args: &TestArgs) -> Result<SchemaFingerprintReport, Refusal> {
     let candidate = capture_candidate(&args.candidate, "test", false)?;
     let measurement =
         test_lifecycle::measure(candidate, &args.runtime_config).map_err(test_lifecycle_failure)?;
@@ -4848,17 +5027,17 @@ fn prepare_candidate(
     args: &PackageCandidateArgs,
     schema_fingerprint: String,
     command: &'static str,
-) -> Result<PreparedPackage, FailureReport> {
+) -> Result<PreparedPackage, Refusal> {
     capture_candidate(args, command, false)?
         .prepare(schema_fingerprint)
-        .map_err(|error| candidate_package_error(command, error))
+        .map_err(|error| candidate_package_error(command, error).into())
 }
 
 fn capture_candidate(
     args: &PackageCandidateArgs,
     command: &'static str,
     rehearse_successor: bool,
-) -> Result<CapturedPackageCandidate, FailureReport> {
+) -> Result<CapturedPackageCandidate, Refusal> {
     let source = capture_project_source(&args.project).map_err(|diagnostic| {
         source_failure(
             command,
@@ -4907,7 +5086,7 @@ fn capture_candidate(
         .collect();
     let fixture_journey_bytes = read_bounded_source_file(
         &args.project.join(FIXTURE_JOURNEYS_PATH),
-        "source.fixture_journeys.missing",
+        "breg.source.fixture-journeys-missing",
         FIXTURE_JOURNEYS_PATH,
         MAX_PACKAGE_SOURCE_FILE_BYTES,
     )
@@ -4935,7 +5114,8 @@ fn capture_candidate(
                     "the baseline package belongs to another registry; name this registry's chain tip package directory with --baseline-package",
                     DiagnosticArtifact::VerifiedPackage,
                     SuggestedAction::CorrectPackageBuild,
-                ));
+                )
+                .into());
             }
             if rehearse_successor {
                 rehearsal_baseline = Some(capture_rehearsal_baseline(
@@ -4962,20 +5142,31 @@ fn capture_candidate(
                     ),
                     DiagnosticArtifact::DatabaseMigration,
                     SuggestedAction::CorrectPackageBuild,
-                ));
+                )
+                .into());
             }
             let reviewable = rendered_changes(&changes.changes, |change| {
                 change.class != CompiledRegistryChangeClass::CompatibleAdditive
             });
             let plan = if let Some(directory) = &args.reviewed_migrations {
-                let review = reviewed_migrations::capture(directory).map_err(|diagnostic| {
-                    source_failure(
-                        command,
-                        diagnostic,
-                        DiagnosticArtifact::DatabaseMigration,
-                        SuggestedAction::CorrectPackageBuild,
-                    )
-                })?;
+                let review =
+                    reviewed_migrations::capture(directory).map_err(|refusal| match refusal {
+                        reviewed_migrations::CaptureRefusal::Tool(diagnostic) => {
+                            Refusal::Tool(source_failure(
+                                command,
+                                diagnostic,
+                                DiagnosticArtifact::DatabaseMigration,
+                                SuggestedAction::CorrectPackageBuild,
+                            ))
+                        }
+                        reviewed_migrations::CaptureRefusal::Document { subject, report } => {
+                            Refusal::Document(DocumentRefusal {
+                                command,
+                                subject,
+                                report,
+                            })
+                        }
+                    })?;
                 prevalidation_schema_fingerprint = Some(review.declared_schema_fingerprint);
                 reviewed_changes = reviewable;
                 PackageMigrationPlanInput::ReviewedSuccessorFromBaseline {
@@ -4996,7 +5187,8 @@ fn capture_candidate(
                         ),
                         DiagnosticArtifact::DatabaseMigration,
                         SuggestedAction::CorrectPackageBuild,
-                    ));
+                    )
+                    .into());
                 }
                 PackageMigrationPlanInput::SuccessorFromBaseline {
                     prior_baseline: Box::new(baseline.migration_baseline().clone()),
@@ -5052,7 +5244,7 @@ fn capture_candidate(
                 code,
                 "reviewedMigrations",
                 &format!(
-                    "the reviewed plan was refused; it has to cover exactly these changes: {reviewed_changes}. Check change coverage, canonical JSON, artifact hashes, prior package and schema bindings, and target fingerprint. Use the same reviewed directory for test and package"
+                    "the reviewed plan was refused; it has to cover exactly these changes: {reviewed_changes}. Check change coverage, artifact digests, prior package and schema bindings, and target fingerprint. Use the same reviewed directory for test and package"
                 ),
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::CorrectPackageBuild,
@@ -5062,7 +5254,7 @@ fn capture_candidate(
     Ok(candidate)
 }
 
-fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
+fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, Refusal> {
     let outcome = apply_lifecycle::run(ApplyLifecycleRequest {
         runtime_config: &args.runtime_config,
         package: &args.package,
@@ -5071,7 +5263,7 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
         operator_reference: args.operator_reference.as_deref(),
         expected_digest: args.expected_digest.as_deref(),
     })
-    .map_err(apply_lifecycle_failure)?;
+    .map_err(|error| lifecycle_refusal("apply", error))?;
     Ok(ApplySuccessReport {
         ok: true,
         command: "apply",
@@ -5086,14 +5278,14 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
     })
 }
 
-fn plan(args: &PlanArgs) -> Result<PlanSuccessReport, FailureReport> {
+fn plan(args: &PlanArgs) -> Result<PlanSuccessReport, Refusal> {
     let outcome = apply_lifecycle::plan(PlanLifecycleRequest {
         runtime_config: &args.runtime_config,
         package: &args.package,
         backups: &args.backups,
         expected_digest: args.expected_digest.as_deref(),
     })
-    .map_err(|error| lifecycle_failure("plan", error))?;
+    .map_err(|error| lifecycle_refusal("plan", error))?;
     Ok(PlanSuccessReport {
         ok: true,
         command: "plan",
@@ -5156,7 +5348,7 @@ fn status(args: &StatusArgs) -> Result<StatusSuccessReport, FailureReport> {
 fn status_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
         ApplyLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("status", "status", error);
+            return runtime_config_failure("status", error);
         }
         ApplyLifecycleError::RuntimeConfigPath => (
             "status.runtime_config.path_invalid",
@@ -5261,10 +5453,17 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
             DiagnosticArtifact::SchemaTestReceipt,
             SuggestedAction::SupplySchemaTestReceipt,
         ),
-        PackageLifecycleError::TestReceiptInvalid { message } => package_failure(
+        PackageLifecycleError::Journeys(_) => package_failure(
+            "package.test_receipt.refused",
+            "testReceipt",
+            "the packaged journey suite was refused",
+            DiagnosticArtifact::SchemaTestReceipt,
+            SuggestedAction::SupplySchemaTestReceipt,
+        ),
+        PackageLifecycleError::ReceiptDocument(_) => package_failure(
             "package.test_receipt.invalid",
             "testReceipt",
-            &message,
+            "the schema-test receipt was refused",
             DiagnosticArtifact::SchemaTestReceipt,
             SuggestedAction::SupplySchemaTestReceipt,
         ),
@@ -5372,7 +5571,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
                 ok: false,
                 command: "test",
                 diagnostics: vec![tool_diagnostic(
-                    diagnostic("field.pattern.syntax_invalid", &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+                    diagnostic("breg.field.pattern-syntax-invalid", &format!("entities[{entity_id}].fields[{field_id}].pattern"),
                         "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test"),
                     DiagnosticArtifact::SchemaTestCandidate,
                     SuggestedAction::CorrectSchemaTestCandidate,
@@ -5391,18 +5590,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             };
         }
         TestLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("test", "test", error);
-        }
-        TestLifecycleError::JourneySyntax { path, message } => {
-            return FailureReport {
-                ok: false,
-                command: "test",
-                diagnostics: vec![tool_diagnostic(
-                    diagnostic("test.journeys.refused", &path, message),
-                    DiagnosticArtifact::FixtureJourneys,
-                    SuggestedAction::CorrectFixtureJourneys,
-                )],
-            };
+            return runtime_config_failure("test", error);
         }
         TestLifecycleError::Journeys { message } => {
             return FailureReport {
@@ -5462,9 +5650,22 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
         ),
         TestLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
         TestLifecycleError::RuntimeSetup(_) => unreachable!("handled before match"),
-        TestLifecycleError::JourneySyntax { .. } => unreachable!("handled before match"),
+        TestLifecycleError::JourneyDocument(_) => (
+            "test.journeys.refused",
+            FIXTURE_JOURNEYS_PATH,
+            "the packaged schema-test journey suite was refused",
+            DiagnosticArtifact::FixtureJourneys,
+            SuggestedAction::CorrectFixtureJourneys,
+        ),
         TestLifecycleError::Journeys { .. } => unreachable!("handled before match"),
         TestLifecycleError::Credentials { .. } => unreachable!("handled before match"),
+        TestLifecycleError::CredentialsDocument(_) => (
+            "test.credentials.refused",
+            "credentials",
+            "the schema-test credentials were refused",
+            DiagnosticArtifact::SchemaTestCredentials,
+            SuggestedAction::SupplySchemaTestCredentials,
+        ),
         TestLifecycleError::JourneyStep { .. } => unreachable!("handled before match"),
         TestLifecycleError::Rehearsal(_) => unreachable!("handled before match"),
         TestLifecycleError::Candidate => (
@@ -5606,8 +5807,25 @@ fn migration_rehearsal_failure(error: MigrationRehearsalError) -> FailureReport 
     }
 }
 
+#[cfg(test)]
 fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
     lifecycle_failure("apply", error)
+}
+
+/// An `apply` or `plan` refusal: a backup binding the shared reader refused
+/// keeps the reader's diagnostics, and every other failure is the command's
+/// own report.
+fn lifecycle_refusal(command: &'static str, error: ApplyLifecycleError) -> Refusal {
+    match error {
+        ApplyLifecycleError::Apply(
+            registry_breg::migration::MigrationError::BackupBindingDocument(report),
+        ) => Refusal::Document(DocumentRefusal {
+            command,
+            subject: "the backup binding",
+            report: *report,
+        }),
+        error => Refusal::Tool(lifecycle_failure(command, error)),
+    }
 }
 
 /// Maps an apply lifecycle refusal for `apply` or `plan`: a plan runs apply's
@@ -5615,7 +5833,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
 fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> FailureReport {
     let error = match error {
         ApplyLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure(command, "apply", error);
+            return runtime_config_failure(command, error);
         }
         ApplyLifecycleError::CurrentPackage(PackageError::ExpectedDigestMismatch(mismatch)) => {
             return package_pin_failure(
@@ -5741,7 +5959,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 return source_failure(
                     command,
                     diagnostic(
-                        "field.pattern.syntax_invalid",
+                        "breg.field.pattern-syntax-invalid",
                         &format!("entities[{entity_id}].fields[{field_id}].pattern"),
                         "PostgreSQL rejected the native pattern syntax. The exact target remains pinned in maintenance; restore the pre-activation backup before correcting the PostgreSQL ARE syntax, schema-testing, and packaging the correction. Do not retry changed package bytes as the pinned target.",
                     ),
@@ -5756,7 +5974,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 return source_failure(
                     command,
                     diagnostic(
-                        "field.pattern.existing_rows_invalid",
+                        "breg.field.pattern-existing-rows-invalid",
                         &format!("entities[{entity_id}].fields[{field_id}].pattern"),
                         "Existing stored values do not satisfy the native pattern. The exact target remains pinned in maintenance; repair the violating values through operator recovery and retry the exact pinned target.",
                     ),
@@ -5866,7 +6084,8 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 DiagnosticArtifact::VerifiedPackage,
                 SuggestedAction::VerifyPackageBinding,
             ),
-            registry_breg::migration::MigrationError::BackupEvidence => (
+            registry_breg::migration::MigrationError::BackupEvidence
+            | registry_breg::migration::MigrationError::BackupBindingDocument(_) => (
                 "apply.backup_evidence.refused",
                 "backup",
                 "the destructive backup evidence was refused",
@@ -6132,7 +6351,7 @@ fn migration_reconcile_report(
 fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport {
     let error = match error {
         ReconcileLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("migration reconcile", "migration.reconcile", error);
+            return runtime_config_failure("migration reconcile", error);
         }
         ReconcileLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure("migration reconcile", "migration.reconcile", error);
@@ -6285,7 +6504,7 @@ fn inspection_failure(
 ) -> FailureReport {
     let error = match error {
         RuntimePackageInspectionError::RuntimeConfig(error) => {
-            return runtime_config_failure(command, prefix, error);
+            return runtime_config_failure(command, error);
         }
         RuntimePackageInspectionError::SharedPackage(message) => {
             return FailureReport {
@@ -6358,6 +6577,9 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
         }
         PackageError::Bounds | PackageError::Read => {
             ("package_refused", SuggestedAction::VerifyPackageIntegrity)
+        }
+        PackageError::RetiredApiVersion => {
+            ("retired_api_version", SuggestedAction::CorrectPackageBuild)
         }
     }
 }
@@ -6468,39 +6690,41 @@ fn baseline_package_failure(command: &'static str, error: PackageError) -> Failu
 }
 
 fn runtime_config_diff_failure(error: RuntimeConfigError) -> FailureReport {
-    let detail = runtime_config_diagnostic("diff", error);
-    diff_failure(&detail.code, detail.path, &detail.message)
+    runtime_config_failure("diff", error)
 }
 
-struct RuntimeConfigDiagnostic {
-    code: String,
-    path: &'static str,
-    message: String,
+/// The runtime configuration refusal as command diagnostics: every
+/// diagnostic the shared reader reported, or the one rule the runtime
+/// decides itself, with its `breg.runtime.*` or reader code and pointer
+/// unchanged and its fix after the message.
+fn runtime_config_diagnostics(error: &RuntimeConfigError) -> Vec<Diagnostic> {
+    error
+        .diagnostics(None)
+        .into_iter()
+        .map(|reader| {
+            diagnostic(
+                &reader.code,
+                &reader.path,
+                &format!("{}; next: {}", reader.message, reader.suggested_action),
+            )
+        })
+        .collect()
 }
 
-fn runtime_config_diagnostic(prefix: &str, error: RuntimeConfigError) -> RuntimeConfigDiagnostic {
-    let metadata = error.metadata();
-    RuntimeConfigDiagnostic {
-        code: format!("{prefix}.{}", metadata.code()),
-        path: metadata.path(),
-        message: error.to_string(),
-    }
-}
-
-fn runtime_config_failure(
-    command: &'static str,
-    prefix: &str,
-    error: RuntimeConfigError,
-) -> FailureReport {
-    let detail = runtime_config_diagnostic(prefix, error);
+fn runtime_config_failure(command: &'static str, error: RuntimeConfigError) -> FailureReport {
     FailureReport {
         ok: false,
         command,
-        diagnostics: vec![tool_diagnostic(
-            diagnostic(&detail.code, detail.path, &detail.message),
-            DiagnosticArtifact::RuntimeConfiguration,
-            SuggestedAction::CorrectRuntimeConfiguration,
-        )],
+        diagnostics: runtime_config_diagnostics(&error)
+            .into_iter()
+            .map(|diagnostic| {
+                tool_diagnostic(
+                    diagnostic,
+                    DiagnosticArtifact::RuntimeConfiguration,
+                    SuggestedAction::CorrectRuntimeConfiguration,
+                )
+            })
+            .collect(),
     }
 }
 
@@ -6895,69 +7119,6 @@ fn init_next_steps(destination: &Path) -> Vec<String> {
     ]
 }
 
-fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, FailureReport> {
-    let compiled = compile(project_path, profile, "check")?;
-    let mut findings = compiler_findings(&compiled);
-    findings.extend(compiled.entities().values().flat_map(|entity| {
-        entity.fields.values().filter_map(move |field| {
-            field.pattern.as_ref().map(|_| ToolDiagnostic {
-                severity: DiagnosticSeverity::Finding,
-                code: "field.pattern.unverified_offline".to_owned(),
-                artifact: DiagnosticArtifact::RegistryProject,
-                path: format!("entities[{}].fields[{}].pattern", entity.id, field.id),
-                message: "Offline check validates pattern structure and bounds only. Run bregctl test against disposable PostgreSQL to verify native pattern syntax and storage behavior.".to_owned(),
-                suggested_action: SuggestedAction::RunSchemaTest,
-            })
-        })
-    }));
-    Ok(SuccessReport {
-        ok: true,
-        command: "check",
-        profile,
-        revision: Some(compiled.revision().to_owned()),
-        registry_revision: Some(compiled.revision().to_owned()),
-        package_digest: None,
-        findings,
-        artifacts: Vec::new(),
-        explanation: None,
-        next_steps: Vec::new(),
-    })
-}
-
-/// Verify a closed package against its sums and rederive its registry
-/// revision, with no database, runtime configuration, or test receipt.
-fn check_package(package_root: &Path) -> Result<SuccessReport, FailureReport> {
-    let inspected = inspect_package_integrity(package_root).map_err(|error| {
-        let (suffix, action) = package_refusal(&error);
-        FailureReport {
-            ok: false,
-            command: "check",
-            diagnostics: vec![tool_diagnostic(
-                diagnostic(
-                    &format!("check.package.{suffix}"),
-                    "package",
-                    "the package was refused",
-                ),
-                DiagnosticArtifact::VerifiedPackage,
-                action,
-            )],
-        }
-    })?;
-    let revision = inspected.registry().revision().to_owned();
-    Ok(SuccessReport {
-        ok: true,
-        command: "check",
-        profile: ProfileArg::Production,
-        revision: Some(revision.clone()),
-        registry_revision: Some(revision),
-        package_digest: Some(inspected.package_digest().to_owned()),
-        findings: Vec::new(),
-        artifacts: Vec::new(),
-        explanation: None,
-        next_steps: Vec::new(),
-    })
-}
-
 fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, FailureReport> {
     let mut source = capture_project_source_for_lock(project_path).map_err(|diagnostic| {
         source_failure(
@@ -7016,7 +7177,7 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
             command: "project lock",
             diagnostics: vec![tool_diagnostic(
                 diagnostic(
-                    "module.lock.stale",
+                    "breg.module.lock-stale",
                     "project.modules",
                     "the project module locks are not up to date",
                 ),
@@ -7244,7 +7405,7 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
         MAX_PLANNER_TEST_REQUEST_BYTES,
     )
     .map_err(|diagnostic| {
-        let (code, message) = if diagnostic.code == "source.file.bounds" {
+        let (code, message) = if diagnostic.code == "breg.source.file-bounds" {
             (
                 "planner_test.request.bounds",
                 "the synthetic request exceeds its fixed size bound",
@@ -7436,7 +7597,7 @@ fn planner_test_failure(code: &str, path: &str, message: &str) -> FailureReport 
 
 /// `apiVersion` for every `bregctl explain` payload, versioned as a whole: any change
 /// to a pinned object's shape in one of the nine kinds bumps this version.
-const EXPLAIN_API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha3";
+const EXPLAIN_API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha4";
 
 /// Which `explanation` kind a subject (and, for `access`, whether a scenario ran)
 /// produces. Kept beside `explain_envelope` because the two always travel together.
@@ -7733,7 +7894,7 @@ fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, 
     let project_directory = validate_project_directory(project_path)?;
     let project_bytes = read_bounded_source_file(
         &project_path.join("registry.yaml"),
-        "source.project.missing",
+        "breg.source.project-missing",
         "registry.yaml",
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
@@ -7777,7 +7938,7 @@ fn ensure_module_id_matches_directory(
         return Ok(());
     }
     Err(diagnostic(
-        "source.module.id_mismatch",
+        "breg.source.module-id-mismatch",
         &format!("modules/{directory_id}/module.yaml"),
         "the module source id must match its directory name",
     ))
@@ -7799,7 +7960,7 @@ fn ensure_every_lock_has_a_source(
         .any(|lock| !discovered.contains(lock.id.as_str()))
     {
         return Err(diagnostic(
-            "module.lock.source_missing",
+            "breg.module.lock-source-missing",
             "project.modules",
             "every module lock must have a discovered module source",
         ));
@@ -7813,7 +7974,7 @@ fn capture_project_source_for_lock(
     let project_directory = validate_project_directory(project_path)?;
     let project_bytes = read_bounded_source_file(
         &project_path.join("registry.yaml"),
-        "source.project.missing",
+        "breg.source.project-missing",
         "registry.yaml",
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
@@ -7823,7 +7984,7 @@ fn capture_project_source_for_lock(
     for lock in &project.modules {
         if !locked.insert(lock.id.as_str()) {
             return Err(diagnostic(
-                "module.lock.duplicate",
+                "breg.module.lock-duplicate",
                 "project.modules",
                 "module lock identifiers must be unique",
             ));
@@ -7870,7 +8031,7 @@ fn load_module_files(
     for id in &modules.names {
         if !locked.contains(id.as_str()) {
             return Err(diagnostic(
-                "source.modules.unlocked",
+                "breg.source.modules-unlocked",
                 "modules",
                 "every authored module directory must be declared by the project module lock",
             ));
@@ -7894,14 +8055,14 @@ struct ModuleDirectories {
 fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories, Diagnostic> {
     let unreadable = || {
         diagnostic(
-            "source.modules.unreadable",
+            "breg.source.modules-unreadable",
             "modules",
             "module sources cannot be read",
         )
     };
     let invalid = || {
         diagnostic(
-            "source.modules.invalid",
+            "breg.source.modules-invalid",
             "modules",
             "module sources must be directories and must not be symbolic links",
         )
@@ -7918,7 +8079,7 @@ fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories,
         Err(error) => {
             return Err(path_diagnostic(
                 error,
-                "source.modules.invalid",
+                "breg.source.modules-invalid",
                 "project",
                 "the project directory is not available",
                 "the project directory must be a directory and must not be a symbolic link",
@@ -7937,7 +8098,7 @@ fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories,
         }
         let Some(name) = entry.name.to_str() else {
             return Err(diagnostic(
-                "source.modules.invalid",
+                "breg.source.modules-invalid",
                 "modules",
                 "module source names must be valid UTF-8 identifiers",
             ));
@@ -7976,7 +8137,7 @@ fn read_module_yaml_files(modules: ModuleDirectories) -> Result<Vec<ModuleSource
             let module_directory = directory.open_directory(OsStr::new(&id)).map_err(|error| {
                 path_diagnostic(
                     error,
-                    "source.module.missing",
+                    "breg.source.module-missing",
                     &report_path,
                     "the required authoring source is not available",
                     "authoring sources must be regular files and must not be symbolic links",
@@ -7985,7 +8146,7 @@ fn read_module_yaml_files(modules: ModuleDirectories) -> Result<Vec<ModuleSource
             let entry = SafeEntry::in_directory(module_directory, OsStr::new("module.yaml"));
             let bytes = read_bounded_source_entry(
                 &entry,
-                "source.module.missing",
+                "breg.source.module-missing",
                 &report_path,
                 AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
             )?;
@@ -8050,7 +8211,7 @@ fn load_project_planner_asset_files(
         let location = format!("evidenceProviders[{}].contracts", provider.id);
         if !registry_breg::action_evidence_contracts::valid_contract_path(&provider.contracts) {
             return Err(diagnostic(
-                "source.evidence_contract.path_unsafe",
+                "breg.source.evidence-contract-path-unsafe",
                 &location,
                 "Evidence contracts require normalized project-relative JSON paths",
             ));
@@ -8060,7 +8221,7 @@ fn load_project_planner_asset_files(
             &provider.contracts,
             || {
                 diagnostic(
-                    "source.evidence_contract.path_unsafe",
+                    "breg.source.evidence-contract-path-unsafe",
                     &location,
                     "Evidence contracts require normalized project-relative JSON paths",
                 )
@@ -8068,7 +8229,7 @@ fn load_project_planner_asset_files(
             |error| {
                 path_diagnostic(
                     error,
-                    "source.evidence_contract.missing",
+                    "breg.source.evidence-contract-missing",
                     &location,
                     "the required Evidence contract is unavailable",
                     "Evidence contracts must be regular files without symbolic links",
@@ -8077,7 +8238,7 @@ fn load_project_planner_asset_files(
         )?;
         let bytes = read_bounded_source_entry(
             &entry,
-            "source.evidence_contract.missing",
+            "breg.source.evidence-contract-missing",
             &location,
             registry_breg::action_evidence_contracts::MAX_EVIDENCE_CONTRACT_BYTES as u64,
         )?;
@@ -8107,7 +8268,7 @@ fn load_module_asset_files(
             validate_module_sql_asset_path(module_id, &derived.sql)?;
             if !paths.insert(derived.sql.clone()) {
                 return Err(diagnostic(
-                    "source.module_asset.duplicate",
+                    "breg.source.module-asset-duplicate",
                     &format!("modules/{module_id}/module.yaml"),
                     "derived SQL assets must be unique within a module",
                 ));
@@ -8119,7 +8280,7 @@ fn load_module_asset_files(
             validate_module_sql_asset_path(module_id, &derived.sql)?;
             if !paths.insert(derived.sql.clone()) {
                 return Err(diagnostic(
-                    "source.module_asset.duplicate",
+                    "breg.source.module-asset-duplicate",
                     &format!("modules/{module_id}/module.yaml"),
                     "derived SQL assets must be unique within a module",
                 ));
@@ -8137,7 +8298,7 @@ fn load_module_asset_files(
                 |error| {
                     path_diagnostic(
                         error,
-                        "source.module_asset.missing",
+                        "breg.source.module-asset-missing",
                         &report_path,
                         "the required authoring source is not available",
                         "authoring sources must be regular files and must not be symbolic links",
@@ -8146,13 +8307,13 @@ fn load_module_asset_files(
             )?;
             let bytes = read_bounded_source_entry(
                 &entry,
-                "source.module_asset.missing",
+                "breg.source.module-asset-missing",
                 &report_path,
                 MAX_DERIVED_SQL_ASSET_BYTES,
             )?;
             if bytes.is_empty() {
                 return Err(diagnostic(
-                    "source.module_asset.bounds",
+                    "breg.source.module-asset-bounds",
                     &format!("modules/{module_id}/{path}"),
                     "derived SQL assets must be non-empty bounded regular files",
                 ));
@@ -8284,7 +8445,7 @@ fn load_planner_asset_files(
                 |error| {
                     let mut diagnostic = path_diagnostic(
                         error,
-                        "source.planner_asset.missing",
+                        "breg.source.planner-asset-missing",
                         &declaring_path,
                         "the required authoring source is not available",
                         "authoring sources must be regular files and must not be symbolic links",
@@ -8303,7 +8464,7 @@ fn load_planner_asset_files(
             })?;
             let bytes = read_bounded_source_entry(
                 &entry,
-                "source.planner_asset.missing",
+                "breg.source.planner-asset-missing",
                 &declaring_path,
                 MAX_RHAI_PLANNER_SOURCE_BYTES,
             )
@@ -8315,7 +8476,7 @@ fn load_planner_asset_files(
             })?;
             if bytes.is_empty() {
                 return Err(diagnostic(
-                    "source.planner_asset.bounds",
+                    "breg.source.planner-asset-bounds",
                     &declaring_path,
                     &format!("referenced Rhai script {path:?} must be a non-empty bounded regular file"),
                 ));
@@ -8343,7 +8504,7 @@ fn load_wasm_module_asset_files(
                 |error| {
                     let mut diagnostic = path_diagnostic(
                         error,
-                        "source.wasm_module.missing",
+                        "breg.source.wasm-module-missing",
                         &declaring_path,
                         "the required handler module is not available",
                         "handler modules must be regular files and must not be symbolic links",
@@ -8356,13 +8517,13 @@ fn load_wasm_module_asset_files(
             )?;
             let bytes = read_bounded_source_entry(
                 &entry,
-                "source.wasm_module.missing",
+                "breg.source.wasm-module-missing",
                 &declaring_path,
                 registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES as u64,
             )?;
             if bytes.is_empty() {
                 return Err(diagnostic(
-                    "source.wasm_module.bounds",
+                    "breg.source.wasm-module-bounds",
                     &declaring_path,
                     &format!("referenced WASM module {path:?} must be a non-empty bounded regular file"),
                 ));
@@ -8409,7 +8570,7 @@ fn validate_wasm_module_asset_path(
 
 fn wasm_module_asset_path_diagnostic(declaring_path: &str) -> Diagnostic {
     diagnostic(
-        "source.wasm_module.path_unsafe",
+        "breg.source.wasm-module-path-unsafe",
         declaring_path,
         "WASM handler modules must use bounded declaring-origin-relative .wasm paths",
     )
@@ -8480,7 +8641,7 @@ fn validate_rhai_planner_asset_path(
 
 fn planner_asset_path_diagnostic(declaring_path: &str) -> Diagnostic {
     diagnostic(
-        "source.planner_asset.path_unsafe",
+        "breg.source.planner-asset-path-unsafe",
         declaring_path,
         "Rhai planner scripts must use bounded declaring-origin-relative .rhai paths",
     )
@@ -8520,7 +8681,7 @@ fn validate_module_sql_asset_path(module_id: &str, asset_path: &str) -> Result<(
 
 fn module_asset_path_diagnostic(module_id: &str) -> Diagnostic {
     diagnostic(
-        "source.module_asset.path_unsafe",
+        "breg.source.module-asset-path-unsafe",
         &format!("modules/{module_id}/module.yaml"),
         "derived SQL assets must be bounded module-relative .sql paths",
     )
@@ -8570,9 +8731,9 @@ bregctl explain events .
 ```
 
 `check` compiles the project and reports problems and findings. It reports two
-findings for this project on purpose: `access.profile.unrestricted_collection`,
+findings for this project on purpose: `breg.access.profile-unrestricted-collection`,
 because the `operator` profile can list every record, and
-`access.profile.unrestricted_rows`, because the `evidence-source` profile can
+`breg.access.profile-unrestricted-rows`, because the `evidence-source` profile can
 look up any record by its code. The comment above each profile says how to
 close it.
 
@@ -8757,11 +8918,14 @@ accessProfiles:
   # carry, `writableFields` what a create or patch may set, and
   # `filterableFields` which fields a caller may filter and sort a list by.
   #
-  # `check` reports `access.profile.unrestricted_collection` for this profile:
+  # `check` reports `breg.access.profile-unrestricted-collection` for this profile:
   # it can list every record, and a caller-supplied filter is not authorization.
   # That is intended for a single operations team running the whole registry.
   # Close it by giving the grant a `rowBoundaries` entry, the way `record-reader`
-  # below does, or by removing `list` from its operations.
+  # below does, or by removing `list` from its operations. Once the grant is
+  # row-bound, `breg.access.profile-writable-row-boundary` follows for a bound
+  # field the grant can write; it asks you to confirm that moving records
+  # between callers' rows is intended, or to drop the field from `writableFields`.
   - id: operator
     default: true
     principalClaim: registry_principal
@@ -8769,13 +8933,13 @@ accessProfiles:
     requiredPurposes: [registry-operations]
     permissions:
       - entity: record-group
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list]
         readableFields: [code, label]
         writableFields: [code, label]
         filterableFields: [code]
       - entity: record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list, patch]
         readableFields: [code, label, group, status]
         writableFields: [code, label, group, status]
@@ -8810,7 +8974,7 @@ accessProfiles:
   # `bregctl generate evidence-source .` exports this grant as an Evidence
   # source definition, so a project written by `init` exports unmodified.
   #
-  # `check` reports `access.profile.unrestricted_rows` for this profile: any
+  # `check` reports `breg.access.profile-unrestricted-rows` for this profile: any
   # record's code answers it, and the value a caller supplies is not
   # authorization. That is intended for a source that vouches for the whole
   # registry. Close it by giving the grant a `rowBoundaries` entry, the way
@@ -8821,7 +8985,7 @@ accessProfiles:
     requiredPurposes: [evidence-source-read]
     permissions:
       - entity: record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [lookup]
         readableFields: [code, status]
         lookups:
@@ -8946,7 +9110,8 @@ eventDestinations: {}
 "#;
 
 const INIT_DEV_CLIENTS: &[u8] =
-    br#"# Local callers for `bregctl dev`. The owned ThunderID issuer that
+    br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json
+# Local callers for `bregctl dev`. The owned ThunderID issuer that
 # `dev` starts beside the registry, registers each client below and issues it
 # short-lived tokens carrying these claims. One client binds each access profile
 # that `tests/journeys.yaml` uses, with the claims those journeys expect, so a
@@ -8956,7 +9121,8 @@ const INIT_DEV_CLIENTS: &[u8] =
 # products/breg/DEV.md documents the closed binding format.
 # `dev` generates a fresh private key per client under `.breg/dev/credentials/`;
 # nothing here is a credential, and none of it belongs in a deployment.
-version: 1
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
 clients:
   - id: operator
     accessProfiles: [operator]
@@ -8979,27 +9145,29 @@ clients:
       registry_purpose: evidence-source-read
 "#;
 
-const INIT_JOURNEYS: &[u8] = br#"# Project journeys: the requests `bregctl test` replays over real
+const INIT_JOURNEYS: &[u8] = br#"# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+# Project journeys: the requests `bregctl test` replays over real
 # HTTP, with real credentials, against a throwaway database before a package is
 # built. Every entity, profile, field, and claim below is resolved against the
 # compiled project first, so a journey can never reach past what a profile
 # already allows. The claims below are synthetic; credentials never belong here,
 # `bregctl test` binds one per step from its own credentials file.
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: record-lifecycle
     steps:
       # `capture` names the created record so later steps can refer to it, by
-      # `recordRef` for a target and by `{recordRef: ...}` for a reference value.
+      # `recordCapture` for a target and by `{recordCapture: ...}` for a reference value.
       - id: create-record-group
         entity: record-group
         accessProfile: operator
-        claims: &operator_claims
+        claims:
           principal: generic-registry-operator
           scopes: [registry:generic:operate]
           purpose: registry-operations
         request:
-          operation: create
+          type: create
           data: {code: group-a, label: Example group}
         expect:
           outcome: success
@@ -9009,13 +9177,16 @@ journeys:
       - id: create-record
         entity: record
         accessProfile: operator
-        claims: *operator_claims
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: create
+          type: create
           data:
             code: example
             label: Example record
-            group: {recordRef: example-group}
+            group: {recordCapture: example-group}
             status: active
         expect:
           outcome: success
@@ -9025,8 +9196,11 @@ journeys:
       - id: get-record
         entity: record
         accessProfile: operator
-        claims: *operator_claims
-        request: {operation: get, recordRef: example-record}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: get, recordCapture: example-record}
         expect:
           outcome: success
           status: 200
@@ -9037,24 +9211,27 @@ journeys:
       - id: read-record-within-the-claim
         entity: record
         accessProfile: record-reader
-        claims: &reader_claims
+        claims:
           principal: generic-registry-reader
           scopes: [registry:generic:read]
           purpose: registry-reporting
           directClaims:
             registry_record_status: active
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
-      # `etagRef` sends the captured record's ETag as `If-Match`, so a patch
+      # `etagCapture` sends the captured record's ETag as `If-Match`, so a patch
       # fails rather than overwriting a concurrent change.
       - id: retire-record
         entity: record
         accessProfile: operator
-        claims: *operator_claims
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: patch
-          recordRef: example-record
-          etagRef: example-record
+          type: patch
+          recordCapture: example-record
+          etagCapture: example-record
           changes:
             - {field: status, value: retired}
         expect:
@@ -9066,14 +9243,22 @@ journeys:
       - id: read-record-outside-the-claim
         entity: record
         accessProfile: record-reader
-        claims: *reader_claims
-        request: {operation: list}
+        claims:
+          principal: generic-registry-reader
+          scopes: [registry:generic:read]
+          purpose: registry-reporting
+          directClaims:
+            registry_record_status: active
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
       - id: list-records
         entity: record
         accessProfile: operator
-        claims: *operator_claims
-        request: {operation: list}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
 "#;
 
@@ -9257,7 +9442,7 @@ fn write_project_registry(
     })?;
     let current = read_bounded_source_entry(
         &destination,
-        "source.project.missing",
+        "breg.source.project-missing",
         "registry.yaml",
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
@@ -9698,7 +9883,6 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                 "permissions": action.permissions.iter().map(|grant| json!({
                     "profile": grant.profile_id,
                     "default": grant.default,
-                    "anonymous": grant.anonymous,
                     "requiredScopes": grant.required_scopes,
                     "requiredPurposes": grant.required_purposes,
                     "operations": grant.operations.iter().map(|operation| operation_wire_name(*operation)).collect::<Vec<_>>(),
@@ -10352,12 +10536,12 @@ fn decimal_literal_order(left: &str, right: &str) -> Option<std::cmp::Ordering> 
 fn validate_project_directory(project_path: &Path) -> Result<SafeDir, Diagnostic> {
     if project_path.as_os_str().is_empty() || has_parent_component(project_path) {
         return Err(diagnostic(
-            "source.project.path_unsafe",
+            "breg.source.project-path-unsafe",
             "project",
             "the project path must not contain parent-directory components",
         ));
     }
-    validate_directory(project_path, "source.project.invalid")
+    validate_directory(project_path, "breg.source.project-invalid")
 }
 
 /// Resolve a directory to a held descriptor, refusing a symbolic link at every
@@ -10469,7 +10653,7 @@ fn read_bounded_source_entry_with_identity(
 ) -> Result<(Vec<u8>, fs::Metadata), Diagnostic> {
     let invalid = || {
         diagnostic(
-            "source.file.invalid",
+            "breg.source.file-invalid",
             report_path,
             "authoring sources must be regular files and must not be symbolic links",
         )
@@ -10487,7 +10671,7 @@ fn read_bounded_source_entry_with_identity(
     }
     if stat.len() > bound {
         return Err(diagnostic(
-            "source.file.bounds",
+            "breg.source.file-bounds",
             report_path,
             "an authoring source exceeds its fixed size bound",
         ));
@@ -10498,14 +10682,14 @@ fn read_bounded_source_entry_with_identity(
     // rejects a name relinked between the stat above and this open.
     let file = entry.open_read().map_err(|_| {
         diagnostic(
-            "source.file.unreadable",
+            "breg.source.file-unreadable",
             report_path,
             "an authoring source cannot be read",
         )
     })?;
     let opened = file.metadata().map_err(|_| {
         diagnostic(
-            "source.file.unreadable",
+            "breg.source.file-unreadable",
             report_path,
             "an authoring source cannot be read",
         )
@@ -10516,14 +10700,14 @@ fn read_bounded_source_entry_with_identity(
     ensure_source_entry_identity(stat, &opened, report_path)?;
     if opened.len() > bound {
         return Err(diagnostic(
-            "source.file.bounds",
+            "breg.source.file-bounds",
             report_path,
             "an authoring source exceeds its fixed size bound",
         ));
     }
     let capacity = usize::try_from(opened.len()).map_err(|_| {
         diagnostic(
-            "source.file.bounds",
+            "breg.source.file-bounds",
             report_path,
             "an authoring source exceeds its fixed size bound",
         )
@@ -10533,14 +10717,14 @@ fn read_bounded_source_entry_with_identity(
         .read_to_end(&mut bytes)
         .map_err(|_| {
             diagnostic(
-                "source.file.unreadable",
+                "breg.source.file-unreadable",
                 report_path,
                 "an authoring source cannot be read",
             )
         })?;
     if bytes.len() as u64 > bound || bytes.len() as u64 != opened.len() {
         return Err(diagnostic(
-            "source.file.bounds",
+            "breg.source.file-bounds",
             report_path,
             "an authoring source exceeds its fixed size bound",
         ));
@@ -10566,7 +10750,7 @@ fn ensure_source_entry_identity(
         return Ok(());
     }
     Err(diagnostic(
-        "source.file.invalid",
+        "breg.source.file-invalid",
         report_path,
         "an authoring source changed while it was being read",
     ))
@@ -10762,7 +10946,7 @@ fn has_parent_component(path: &Path) -> bool {
 fn first_diagnostic(failure: CompileFailure) -> Diagnostic {
     failure.diagnostics().first().cloned().unwrap_or_else(|| {
         diagnostic(
-            "source.invalid",
+            "breg.source.invalid",
             "project",
             "the authoring source is invalid",
         )
@@ -10773,7 +10957,7 @@ fn remap_derived_diagnostic_path(
     mut diagnostic: Diagnostic,
     source: &CapturedProjectSource,
 ) -> Diagnostic {
-    if !diagnostic.code.starts_with("derived.sql.") {
+    if !diagnostic.code.starts_with("breg.derived.sql-") {
         return diagnostic;
     }
     diagnostic.message =
@@ -11423,7 +11607,7 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
         "principal claim",
         profile["principalClaim"]
             .as_str()
-            .unwrap_or("none (anonymous)")
+            .unwrap_or("none")
             .to_owned(),
     )];
     let membership_restricted = profile["membershipBoundaries"]
@@ -11468,12 +11652,7 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
             profile["requireConsent"].to_string(),
         ));
     }
-    for field in [
-        "anonymous",
-        "allowCount",
-        "revisionAccess",
-        "allowDataExport",
-    ] {
+    for field in ["allowCount", "revisionAccess", "allowDataExport"] {
         fields.push((field, profile[field].as_bool().unwrap_or(false).to_string()));
     }
     lines.pairs_at(depth + 1, &fields);
@@ -13217,6 +13396,53 @@ fn write_diff_success(
     }
 }
 
+fn write_refusal(
+    refusal: &Refusal,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    match refusal {
+        Refusal::Tool(report) => write_failure(report, format, stdout, stderr),
+        Refusal::Document(refusal) => write_document_failure(refusal, format, stdout, stderr),
+    }
+}
+
+fn write_document_failure(
+    refusal: &DocumentRefusal,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(
+            &mut *stdout,
+            &DocumentFailureReport {
+                ok: false,
+                command: refusal.command,
+                diagnostics: refusal.report.diagnostics(),
+            },
+        )
+        .map_err(io::Error::other)
+        .and_then(|()| writeln!(stdout))
+    } else {
+        // One sentence of the command's own, then the reader's diagnostics
+        // and summary line unchanged.
+        write!(
+            stderr,
+            "bregctl {} refused {}.\n{}",
+            refusal.command,
+            refusal.subject,
+            refusal.report.render_human()
+        )
+    };
+    if result.is_err() {
+        let _ = writeln!(stderr, "bregctl: output could not be written");
+        return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
+    }
+    ExitCode::from(DOMAIN_REFUSAL_EXIT)
+}
+
 fn write_failure(
     report: &FailureReport,
     format: OutputFormat,
@@ -13249,6 +13475,21 @@ fn write_failure(
 mod tests {
     use super::*;
     use registry_breg::postgres::RoleMode;
+
+    #[test]
+    fn the_initialized_dev_clients_and_journeys_open_with_their_schema_modeline() {
+        let files = init_files();
+        for (path, schema) in [
+            ("dev-clients.yaml", "dev-clients/dev-clients.v1alpha1"),
+            (FIXTURE_JOURNEYS_PATH, "journeys/journeys.v1"),
+        ] {
+            let text = String::from_utf8(files[path].clone()).expect("UTF-8");
+            let expected = format!(
+                "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/{schema}.schema.json"
+            );
+            assert_eq!(text.lines().next(), Some(expected.as_str()), "{path}");
+        }
+    }
 
     #[test]
     fn a_validator_reason_that_repeats_the_value_is_not_the_usage_message() {
@@ -14014,7 +14255,7 @@ mod tests {
                 validate_rhai_planner_asset_path("registry.yaml", path)
                     .unwrap_err()
                     .code,
-                "source.planner_asset.path_unsafe"
+                "breg.source.planner-asset-path-unsafe"
             );
         }
 
@@ -14031,7 +14272,7 @@ mod tests {
             )]),
         )
         .unwrap_err();
-        assert_eq!(oversized.code, "source.file.bounds");
+        assert_eq!(oversized.code, "breg.source.file-bounds");
     }
 
     #[test]
@@ -14067,7 +14308,7 @@ mod tests {
                 validate_wasm_module_asset_path("registry.yaml", path)
                     .unwrap_err()
                     .code,
-                "source.wasm_module.path_unsafe"
+                "breg.source.wasm-module-path-unsafe"
             );
         }
 
@@ -14081,7 +14322,7 @@ mod tests {
             BTreeMap::from([("wasm/oversized.wasm".to_owned(), "registry.yaml".to_owned())]),
         )
         .unwrap_err();
-        assert_eq!(oversized.code, "source.file.bounds");
+        assert_eq!(oversized.code, "breg.source.file-bounds");
     }
 
     /// The asset readers refuse an escaping path themselves, so the module and
@@ -14103,7 +14344,7 @@ mod tests {
                 |error| {
                     path_diagnostic(
                         error,
-                        "source.module_asset.missing",
+                        "breg.source.module-asset-missing",
                         "modules/persons",
                         "the required authoring source is not available",
                         "authoring sources must be regular files and must not be symbolic links",
@@ -14114,7 +14355,7 @@ mod tests {
 
             // The path arm answered, so no component of the escaping path was
             // opened on the way to a missing-source refusal.
-            assert_eq!(refused.code, "source.module_asset.path_unsafe");
+            assert_eq!(refused.code, "breg.source.module-asset-path-unsafe");
         }
         assert_eq!(
             fs::read(directory.path.join("modules/outside.sql")).unwrap(),
@@ -15203,6 +15444,7 @@ mod tests {
                 "profiles": [{
                     "id": "record-reader",
                     "principalClaim": "registry_principal",
+                    "requiredScopes": "unrestricted",
                 }],
             }],
         });
@@ -15363,10 +15605,11 @@ entities:
 accessProfiles:
   - id: operator
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes: [operations]
     permissions:
       - entity: record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list, patch]
         readableFields: [code]
         writableFields: [code]
@@ -15480,7 +15723,7 @@ accessProfiles:
             let guard = tree.arm();
             let bytes = read_bounded_source_file(
                 &named,
-                "source.project.missing",
+                "breg.source.project-missing",
                 "registry.yaml",
                 AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
             )
@@ -15674,7 +15917,7 @@ actions:
             let entry = SafeEntry::resolve(&named).unwrap();
             let (bytes, metadata) = read_bounded_source_entry_with_identity(
                 &entry,
-                "source.project.missing",
+                "breg.source.project-missing",
                 "registry.yaml",
                 AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
             )
@@ -15734,7 +15977,7 @@ actions:
             let refused = ensure_source_entry_identity(stat, &opened, "registry.yaml")
                 .expect_err("a descriptor that is not the stat'ed entry is refused");
 
-            assert_eq!(refused.code, "source.file.invalid");
+            assert_eq!(refused.code, "breg.source.file-invalid");
             assert_eq!(refused.path, "registry.yaml");
         }
 
@@ -15758,7 +16001,7 @@ fn native_pattern_activation_diagnostics_preserve_field_and_pinned_target_recove
                 entity_id: "person".to_owned(),
                 field_id: "identifier".to_owned(),
             },
-            "field.pattern.syntax_invalid",
+            "breg.field.pattern-syntax-invalid",
             "restore the pre-activation backup",
         ),
         (
@@ -15766,7 +16009,7 @@ fn native_pattern_activation_diagnostics_preserve_field_and_pinned_target_recove
                 entity_id: "person".to_owned(),
                 field_id: "identifier".to_owned(),
             },
-            "field.pattern.existing_rows_invalid",
+            "breg.field.pattern-existing-rows-invalid",
             "retry the exact pinned target",
         ),
     ] {
@@ -15785,6 +16028,54 @@ fn native_pattern_activation_diagnostics_preserve_field_and_pinned_target_recove
         assert!(diagnostic.message.contains("pinned in maintenance"));
         assert!(diagnostic.message.contains(repair));
         assert!(!diagnostic.message.contains("registry_data"));
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn a_refused_backup_binding_document_keeps_the_reader_diagnostics() {
+    let report = registry_breg::migration_plan::read_backup_binding_document(
+        "/backups/binding.json",
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/backup-binding/v1alpha1","kind":"BRegBackupBinding","databaseId":"private-database-canary"}"#,
+    )
+    .expect_err("the previous spelling is refused");
+    for command in ["apply", "plan"] {
+        let refusal = lifecycle_refusal(
+            command,
+            ApplyLifecycleError::Apply(
+                registry_breg::migration::MigrationError::BackupBindingDocument(Box::new(
+                    report.clone(),
+                )),
+            ),
+        );
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        write_refusal(&refusal, OutputFormat::Json, &mut stdout, &mut stderr);
+        let rendered = String::from_utf8(stdout).expect("the report is UTF-8");
+        assert!(!rendered.contains("private-database-canary"), "{rendered}");
+        let value: serde_json::Value = serde_json::from_str(&rendered).expect("the report is JSON");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["command"], command);
+        assert!(
+            value["diagnostics"]
+                .as_array()
+                .expect("diagnostics are a list")
+                .iter()
+                .any(|diagnostic| diagnostic["code"] == "config.removed-key"
+                    && diagnostic["path"] == "/databaseId"
+                    && diagnostic["source"]["file"] == "/backups/binding.json"
+                    && diagnostic["source"]["line"] == 1),
+            "{rendered}"
+        );
+
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        write_refusal(&refusal, OutputFormat::Human, &mut stdout, &mut stderr);
+        let rendered = String::from_utf8(stderr).expect("the report is UTF-8");
+        assert!(
+            rendered.starts_with(&format!("bregctl {command} refused the backup binding.\n")),
+            "{rendered}"
+        );
+        assert!(rendered.contains("config.removed-key"), "{rendered}");
+        assert!(!rendered.contains("private-database-canary"), "{rendered}");
     }
 }
 
@@ -16425,7 +16716,7 @@ fn native_pattern_schema_test_diagnostic_identifies_only_the_authored_field() {
     });
     assert_eq!(report.diagnostics.len(), 1);
     let diagnostic = &report.diagnostics[0];
-    assert_eq!(diagnostic.code, "field.pattern.syntax_invalid");
+    assert_eq!(diagnostic.code, "breg.field.pattern-syntax-invalid");
     assert_eq!(
         diagnostic.path,
         "entities[person].fields[identifier].pattern"

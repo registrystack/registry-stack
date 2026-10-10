@@ -49,7 +49,7 @@ async fn mutate(
     State(service): State<Arc<HttpService>>,
     Extension(binding): Extension<AttachmentRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
     headers: HeaderMap,
@@ -68,9 +68,6 @@ async fn mutate(
             HttpMethod::Patch
         },
     );
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Some(record_id) = path.get("record_id") else {
         return invalid_request();
     };
@@ -210,9 +207,6 @@ async fn attachment_refusal(
     slot_id: &str,
     response: Response,
 ) -> Response {
-    if event.principal.is_none() {
-        return anonymous_refusal(response, AnonymousRefusalReason::MutationRefused);
-    }
     match mutations.record_attachment_refusal(event, slot_id).await {
         Ok(()) => response,
         Err(_) => mutation_problem(MutationError::Unavailable),
@@ -223,14 +217,11 @@ async fn download(
     State(service): State<Arc<HttpService>>,
     Extension(binding): Extension<AttachmentRoute>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     RawQuery(raw_query): RawQuery,
     Path(path): Path<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
-    let claims = claims
-        .map(|Extension(value)| value)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let route = &binding.base;
     let attachment_route = crate::attachment::route(route, &binding.slot, HttpMethod::Get);
     let parsed = parse_download_query(raw_query.as_deref());

@@ -1,11 +1,11 @@
-apiVersion: render.registrystack.org/v1alpha1
+apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
 kind: RenderBundle
 bundleVersion: 1
 documents:
 - id: receipt
   version: 3
-  entry: templates/receipt.typ
-  schema: schemas/receipt.schema.json
+  entryFile: templates/receipt.typ
+  schemaFile: schemas/receipt.schema.json
   labels:
   - ar
   - fr

@@ -22,7 +22,7 @@ fn profile_create_writes_the_strict_https_default_as_an_owner_only_file() {
             "relying-party",
             "--private-key-file",
             "keys/client-private.jwk",
-            "--out",
+            "--output",
         ])
         .arg(&output)
         .output()
@@ -65,7 +65,7 @@ fn local_loopback_and_environment_keys_are_explicit() {
             "--private-key-env",
             "EVIDENCE_CLIENT_PRIVATE_JWK",
             "--local-loopback-discovery",
-            "--out",
+            "--output",
         ])
         .arg(&output)
         .output()
@@ -123,7 +123,7 @@ fn unsafe_transport_paths_and_replacement_are_refused_without_echoing_paths() {
         if loopback {
             command.arg("--local-loopback-discovery");
         }
-        let refused = command.arg("--out").arg(&output).output().unwrap();
+        let refused = command.arg("--output").arg(&output).output().unwrap();
         assert!(!refused.status.success(), "{name} unexpectedly succeeded");
         let diagnostics = format!(
             "{}{}",
@@ -161,7 +161,7 @@ fn profile_creation_enforces_the_sdk_client_identifier_bound() {
                 &client_id,
                 "--private-key-file",
                 "key.jwk",
-                "--out",
+                "--output",
             ])
             .arg(&output)
             .output()
@@ -201,7 +201,7 @@ fn profile_creation_refuses_invalid_expected_service_identities() {
                 "key.jwk",
                 option,
                 &value,
-                "--out",
+                "--output",
             ])
             .arg(&output)
             .output()
@@ -232,7 +232,7 @@ fn the_progressive_client_help_is_complete() {
         "--private-key-file",
         "--private-key-env",
         "--local-loopback-discovery",
-        "--out",
+        "--output",
     ] {
         assert!(help.contains(option), "missing {option}: {help}");
     }
@@ -252,7 +252,7 @@ fn unsafe_profile_permissions_fail_before_network_or_artifact_creation() {
     let refused = command()
         .args(["client", "contracts", "fetch", "--profile"])
         .arg(&profile)
-        .arg("--out")
+        .arg("--output")
         .arg(&out)
         .output()
         .unwrap();
@@ -278,7 +278,7 @@ fn profile_create(output: &Path) -> Output {
             "client",
             "--private-key-file",
             "key.jwk",
-            "--out",
+            "--output",
         ])
         .arg(output)
         .output()
@@ -300,4 +300,38 @@ fn assert_success(output: &Output) {
 
 fn mode(path: &Path) -> u32 {
     fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[test]
+fn the_retired_out_spelling_of_output_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("client.json");
+    for arguments in [
+        vec![
+            "client",
+            "profile",
+            "create",
+            "--base-url",
+            "https://evidence.example.test/",
+            "--client-id",
+            "relying-party",
+            "--private-key-file",
+            "keys/client-private.jwk",
+        ],
+        vec!["client", "contracts", "fetch", "--profile", "profile.json"],
+    ] {
+        let refused = command()
+            .args(&arguments)
+            .arg("--out")
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(!refused.status.success(), "{arguments:?} accepted --out");
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            stderr.contains("evidencectl.usage"),
+            "{arguments:?}: {stderr}"
+        );
+        assert!(!output.exists());
+    }
 }

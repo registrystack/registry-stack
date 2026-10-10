@@ -4,7 +4,9 @@
 
 use std::path::PathBuf;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+
+use crate::check::OutputFormat;
 
 /// Serve one citizen-facing MCP endpoint over a Base Registry Engine.
 #[derive(Debug, Parser)]
@@ -23,10 +25,25 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Validate the runtime configuration and resolve its secrets without opening a socket.
-    Check,
+    /// Check the runtime configuration offline, reading no secret and opening no socket.
+    Check(CheckArgs),
     /// Serve the gateway until it is terminated.
     Serve,
+}
+
+#[derive(Debug, Args)]
+pub struct CheckArgs {
+    /// How to write the findings.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+    pub format: OutputFormat,
+    /// Refuse warnings as well as errors (exit 1).
+    #[arg(long)]
+    pub deny_warnings: bool,
+    /// Substitute `${NAME}` expressions from this environment and check every
+    /// value. Without it, each expression is checked by syntax and position
+    /// only.
+    #[arg(long)]
+    pub environment: bool,
 }
 
 /// The complete clap command tree, built so help and the CLI reference can

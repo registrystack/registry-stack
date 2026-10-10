@@ -245,7 +245,7 @@ async fn a_source_that_is_not_there_reaches_the_author_as_an_evidence_error() {
     assert_eq!(published.len(), 1, "{published:?}");
     let diagnostic = &published[0];
     assert_eq!(diagnostic["source"], json!("evidence"));
-    assert_eq!(diagnostic["code"], json!("evidence/unknown-source"));
+    assert_eq!(diagnostic["code"], json!("evidence.project.unknown-source"));
     // Severity 1 is ERROR, which is the only severity this server publishes.
     assert_eq!(diagnostic["severity"], json!(1));
     assert_eq!(
@@ -328,7 +328,7 @@ async fn a_derivation_created_after_the_project_loads_clears_its_unresolved_refe
     assert_eq!(published.len(), 1, "{published:?}");
     assert_eq!(
         published[0]["code"],
-        json!("evidence/unknown-derivation-file"),
+        json!("evidence.project.unknown-derivation-file"),
         "{published:?}"
     );
 

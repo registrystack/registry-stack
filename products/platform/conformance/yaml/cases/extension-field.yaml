@@ -1,0 +1,13 @@
+id: extension-field
+rules: [CFG-YAML-3, CFG-SEC-3]
+summary: A top-level key starting `x-` is an unknown key whose fix says to write a comment instead.
+mutation:
+  append: |
+    x-conformance: "{marker}"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.unknown-key
+      path: /x-conformance
+      at: {line: 1, column: 1}
+      suggestedAction: Remove the key, and write the note as a comment.

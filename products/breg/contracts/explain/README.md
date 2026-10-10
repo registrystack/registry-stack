@@ -11,7 +11,7 @@ whose `explanation` field carries an envelope plus a subject-specific payload:
   "revision": "...",
   "findings": [],
   "explanation": {
-    "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+    "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
     "kind": "RoutesExplanation",
     "routes": [ "..." ]
   }
@@ -39,6 +39,15 @@ with each group expanded. `recipients` is the recipient set of the scenario's
 states, without the unreachable `superseded`, and a twenty-first enforcement
 layer, `review_outcome`, for the `revise` and `rebase` events.
 
+`v1alpha4` removes what an anonymous access profile once carried, because a
+registry serves authenticated callers only: an immediate-action permission in
+`ActionsExplanation` has no `anonymous` member, and `claimContractError` in
+`AccessExplanation` no longer takes `anonymous_profile_carries_authority`.
+The same version's `AccessExplanation` carries `statisticalDatasets`: for each
+statistical dataset, the access profiles that hold `read-live`, the one that
+holds `publish`, and every profile that reads its releases. The list is empty
+when the project declares no dataset.
+
 | Subject | `--scenario` | `kind` | Schema |
 |---|---|---|---|
 | `model` | n/a | `ModelExplanation` | `ModelExplanation.schema.json` |
@@ -61,7 +70,50 @@ same reason: there is no compiled project to name.
 
 Each schema file is draft 2020-12, self-contained (its own `$defs`, no
 cross-file `$ref`), and is validated against every fixture the gate covers by
-`crates/registry-bregctl/tests/explain_contract.rs`.
+`crates/registry-bregctl/tests/explain_contract.rs`. Its `$id` is its
+identifier in the Registry Stack identifier catalog, named for the kind and
+the version, for example
+`https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha4.schema.json`.
+
+## `x-registry-passthrough`
+
+A schema node that carries `x-registry-passthrough: <reason>` marks a payload
+that `bregctl` writes as the engine holds it (a compiled-model value such as an
+access-route entry) and that this contract version neither describes nor
+promises. The value is a sentence saying why the node is opaque and which
+engine type its shape follows. The annotation is read by the configuration
+conventions lint, `products/platform/scripts/check-config-conventions.py`
+(CFG-SCHEMA-4), which accepts an open object only when it carries the keyword
+with a reason. JSON Schema validators ignore it, so it changes no validation
+result. A consumer must not rely on the shape under a marked node.
+
+## Examples
+
+Each kind registers a minimal valid example in
+`products/platform/config-formats.yaml`: the `explanation` that `bregctl`
+writes for the `products/breg/examples/access-review` project, or with no
+project for `lifecycle`, committed under
+`products/breg/examples/formats/explain/`. `explain_contract.rs` validates
+each against its schema and fails when one differs from what the command
+writes now. Rewrite them from the repository root with:
+
+```bash
+project=products/breg/examples/access-review
+examples=products/breg/examples/formats/explain
+for subject in model access actions change-requests events queries routes; do
+  bregctl --format json explain "$subject" "$project" |
+    jq .explanation >"$examples/$subject-explanation.json"
+done
+bregctl --format json explain access "$project" --scenario "$project/allowed.json" |
+  jq .explanation >"$examples/access-preview.json"
+bregctl --format json explain lifecycle |
+  jq .explanation >"$examples/lifecycle-explanation.json"
+```
+
+The whole report around an explanation is the `breg/ctl-report` format. Its
+example is the report `bregctl --format json explain actions "$project"`
+writes, committed as `products/breg/examples/formats/ctl-report.json`; the
+same test holds it to the command's output byte for byte.
 
 ## What is pinned, what is opaque, and why
 
@@ -69,6 +121,11 @@ A key is **pinned** (named in `required`, typed, `additionalProperties:
 false` on its containing object) when bregctl's `explain_*` function
 reconstructs it key by key: each output key is an explicit line of Rust in
 `lib.rs` that names the key and picks the value.
+
+A pinned integer states a minimum and a maximum: the range of the Rust type
+`bregctl` writes it from, or 0 to 9007199254740991, the largest integer JSON
+carries exactly, where that type is wider. The bound is the type's range
+rather than today's engine constant, so retuning a limit changes no schema.
 
 A key is declared **opaque** (`type: "object"` or `"array"`, with a
 description, and no further `required`/`additionalProperties` constraint)

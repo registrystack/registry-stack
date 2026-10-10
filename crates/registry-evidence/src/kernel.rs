@@ -285,28 +285,33 @@ fn compile_request_parts_limits(
         requirement(configured.json_body),
         RequestPartsBounds {
             maximum_query_pairs: bounded(
-                configured.maximum_query_pairs,
+                configured.maximum_query_pairs.map(|value| value.get()),
                 DEFAULT_MAXIMUM_QUERY_PAIRS,
             )?,
             maximum_query_name_bytes: bounded(
-                configured.maximum_query_name_bytes,
+                configured.maximum_query_name_bytes.map(|value| value.get()),
                 DEFAULT_MAXIMUM_QUERY_NAME_BYTES,
             )?,
             maximum_query_value_bytes: bounded(
-                configured.maximum_query_value_bytes,
+                configured
+                    .maximum_query_value_bytes
+                    .map(|value| value.get()),
                 DEFAULT_MAXIMUM_QUERY_VALUE_BYTES,
             )?,
-            maximum_json_depth: bounded(configured.maximum_json_depth, DEFAULT_MAXIMUM_JSON_DEPTH)?,
+            maximum_json_depth: bounded(
+                configured.maximum_json_depth.map(|value| value.get()),
+                DEFAULT_MAXIMUM_JSON_DEPTH,
+            )?,
             maximum_collection_items: bounded(
-                configured.maximum_collection_items,
+                configured.maximum_collection_items.map(|value| value.get()),
                 DEFAULT_MAXIMUM_COLLECTION_ITEMS,
             )?,
             maximum_string_bytes: bounded(
-                configured.maximum_string_bytes,
+                configured.maximum_string_bytes.map(|value| value.get()),
                 DEFAULT_MAXIMUM_STRING_BYTES,
             )?,
             maximum_normalized_bytes: bounded(
-                configured.maximum_normalized_bytes,
+                configured.maximum_normalized_bytes.map(|value| value.get()),
                 DEFAULT_MAXIMUM_NORMALIZED_BYTES,
             )?,
         },
@@ -322,8 +327,8 @@ fn compile_statement_parameters_limits(
     }
 
     StatementParametersLimits::new(
-        bounded(configured.maximum_parameters)?,
-        bounded(configured.maximum_parameter_value_bytes)?,
+        bounded(configured.maximum_parameters.get())?,
+        bounded(configured.maximum_parameter_value_bytes.get())?,
     )
     .map_err(|_| KernelError::Bundle)
 }
@@ -769,7 +774,8 @@ impl OfflineKernel {
             .ok_or(KernelError::Bundle)?;
         let batch = source.batch().ok_or(KernelError::Bundle)?;
         if selector_items.is_empty()
-            || selector_items.len() > usize::from(batch.maximum_items)
+            || u32::try_from(selector_items.len())
+                .map_or(true, |count| count > batch.maximum_items.get())
             || !batch_selector_items_are_exact(
                 source,
                 &self.bundle.config.source_selector_sets(source_id),
@@ -1132,7 +1138,8 @@ impl OfflineKernel {
         let valid_until = input
             .issued_at
             .checked_add_signed(Duration::seconds(
-                i64::try_from(requirement.validity_seconds).map_err(|_| KernelError::Evidence)?,
+                i64::try_from(requirement.validity_seconds.get())
+                    .map_err(|_| KernelError::Evidence)?,
             ))
             .ok_or(KernelError::Evidence)
             .map(format_utc)?;
@@ -1875,6 +1882,10 @@ impl<I: Iterator> ExactlyOne for I {}
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};

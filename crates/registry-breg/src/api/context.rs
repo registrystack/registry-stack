@@ -89,6 +89,29 @@ pub struct VerifiedRequestClaims {
     recipients: BTreeSet<String>,
 }
 
+/// The verified claims of an authenticated caller, as a handler extractor.
+///
+/// A request that reaches a handler without verified claims is refused as
+/// unauthenticated, so a route served without the authentication layer fails
+/// closed instead of treating the caller as someone with no authority.
+pub(crate) struct Authenticated(pub(crate) VerifiedRequestClaims);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Authenticated {
+    type Rejection = axum::response::Response;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<VerifiedRequestClaims>()
+            .cloned()
+            .map(Self)
+            .ok_or_else(crate::auth::authentication_refused)
+    }
+}
+
 impl VerifiedRequestClaims {
     pub fn authenticated(
         principal_claim: impl Into<String>,
@@ -192,24 +215,6 @@ impl VerifiedRequestClaims {
     /// and every group containing it. Empty for an unmapped client.
     pub(crate) fn recipients(&self) -> &BTreeSet<String> {
         &self.recipients
-    }
-
-    #[must_use]
-    pub fn anonymous() -> Self {
-        Self {
-            principal_claim: None,
-            principal: None,
-            scopes: BTreeSet::new(),
-            purpose: None,
-            direct_claims: BTreeMap::new(),
-            actor_kind: None,
-            requester_client: None,
-            actor_subject: None,
-            grant: None,
-            grant_subjects: BTreeMap::new(),
-            human_identity: None,
-            recipients: BTreeSet::new(),
-        }
     }
 
     pub(crate) fn principal_claim(&self) -> Option<&str> {

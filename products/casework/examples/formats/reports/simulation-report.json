@@ -1,0 +1,37 @@
+{
+  "ok": true,
+  "command": "simulate",
+  "status": "complete",
+  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "clock": {
+    "atRiskAt": "2026-09-11T10:00:00Z",
+    "calendar": "office",
+    "dueAt": "2026-09-14T10:00:00Z",
+    "dueState": "atRisk",
+    "eligibleReminders": [
+      "due-soon"
+    ],
+    "eligibleSteps": [],
+    "holidayRevision": 7,
+    "holidaySet": "office-holidays",
+    "id": "review-deadline"
+  },
+  "databaseAccess": false,
+  "diagnostics": [],
+  "fixture": "friday-review",
+  "kind": "SimulationReport",
+  "networkAccess": false,
+  "policyVersion": "1",
+  "projectId": "regional-review",
+  "routing": {
+    "because": "The request's governed region is north.",
+    "queue": "northern-review",
+    "ruleId": "northern-requests"
+  },
+  "source": "regional-register",
+  "subject": {
+    "entity": "regional-correction",
+    "id": "request-0042",
+    "version": "1"
+  }
+}

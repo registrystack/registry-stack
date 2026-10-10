@@ -17,7 +17,7 @@ accessProfiles:
     requiredScopes: [records:read, membership:use]
     permissions:
       - entity: facility
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list, lookup, snapshot, revisions]
         readableFields: [label]
         filterableFields: [label]
@@ -46,11 +46,11 @@ submitted principal values as authority.
 
 Every listed membership boundary and ordinary `rowBoundaries` predicate must
 hold. Declare `rowBoundaries` explicitly even when membership is the only row
-restriction; `rowBoundaries: []` adds no direct claim predicate and leaves the
+restriction; `rowBoundaries: unrestricted` adds no direct claim predicate and leaves the
 membership checks in force. Up to eight membership boundaries are supported.
 The declared fields
-are authorization inputs, not an additional readable-field grant. Anonymous
-profiles cannot use membership boundaries. The root profile must satisfy the
+are authorization inputs, not an additional readable-field grant. The root
+profile must satisfy the
 membership entity's mandatory scopes and purposes. The current boundary does
 not carry additional direct row requirements from that source, so a membership
 entity with mandatory `rowBoundaries` is rejected at compilation.

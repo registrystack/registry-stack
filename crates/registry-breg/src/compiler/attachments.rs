@@ -16,14 +16,14 @@ pub(super) fn validate(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
     let base = format!("entities[id={}].attachments", entity.id);
     if !entity.attachments.is_empty() && entity.change_request.is_none() {
         errors.push(Diagnostic::error(
-            "attachment.entity.not_request",
+            "breg.attachment.entity-not-request",
             &base,
             "attachment slots require a change-request entity",
         ));
     }
     if entity.attachments.len() > MAX_ATTACHMENT_SLOTS {
         errors.push(Diagnostic::error(
-            "attachment.slots.bounds_invalid",
+            "breg.attachment.slots-bounds-invalid",
             &base,
             "a request entity supports at most eight attachment slots",
         ));
@@ -56,21 +56,21 @@ pub(super) fn validate(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             || fields.contains(&slot.id)
         {
             errors.push(Diagnostic::error(
-                "attachment.id.collision",
+                "breg.attachment.id-collision",
                 format!("{path}.id"),
                 "an attachment ID must not collide with a stored, derived, API, or server-owned field name",
             ));
         }
         if !ids.insert(&slot.id) {
             errors.push(Diagnostic::error(
-                "attachment.id.duplicate",
+                "breg.attachment.id-duplicate",
                 format!("{path}.id"),
                 "an attachment slot ID is duplicated",
             ));
         }
         if slot.maximum_bytes == 0 || slot.maximum_bytes > MAX_ATTACHMENT_BYTES {
             errors.push(Diagnostic::error(
-                "attachment.maximum_bytes.bounds_invalid",
+                "breg.attachment.maximum-bytes-bounds-invalid",
                 format!("{path}.maximumBytes"),
                 "attachment maximumBytes must be between 1 and 16777216 (16 MiB)",
             ));
@@ -78,7 +78,7 @@ pub(super) fn validate(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
         if slot.content_types.is_empty() || slot.content_types.len() > MAX_ATTACHMENT_CONTENT_TYPES
         {
             errors.push(Diagnostic::error(
-                "attachment.content_types.bounds_invalid",
+                "breg.attachment.content-types-bounds-invalid",
                 format!("{path}.contentTypes"),
                 "an attachment slot requires between one and sixteen content types",
             ));
@@ -88,14 +88,14 @@ pub(super) fn validate(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             let type_path = format!("{path}.contentTypes[{type_index}]");
             if !valid_content_type(content_type) {
                 errors.push(Diagnostic::error(
-                    "attachment.content_type.invalid",
+                    "breg.attachment.content-type-invalid",
                     &type_path,
                     "an attachment content type must be a lowercase concrete type/subtype without parameters or wildcards",
                 ));
             }
             if !types.insert(content_type) {
                 errors.push(Diagnostic::error(
-                    "attachment.content_type.duplicate",
+                    "breg.attachment.content-type-duplicate",
                     type_path,
                     "attachment content types must be unique",
                 ));
@@ -140,7 +140,7 @@ pub(super) fn validate_profile(
         ] {
             if fields.contains(&slot.id) {
                 errors.push(Diagnostic::error(
-                    "attachment.access.processing_unsupported",
+                    "breg.attachment.access-processing-unsupported",
                     format!("{base}.{member}[value={}]", slot.id),
                     "attachment slots cannot be filtered or sorted",
                 ));
@@ -149,24 +149,10 @@ pub(super) fn validate_profile(
         for (index, boundary) in profile.row_boundaries.iter().enumerate() {
             if boundary.field == slot.id {
                 errors.push(Diagnostic::error(
-                    "attachment.access.processing_unsupported",
+                    "breg.attachment.access-processing-unsupported",
                     format!("{base}.rowBoundaries[{index}].field"),
                     "attachment slots cannot be row-boundary inputs",
                 ));
-            }
-        }
-        if profile.anonymous {
-            for (member, fields) in [
-                ("readableFields", &profile.readable_fields),
-                ("writableFields", &profile.writable_fields),
-            ] {
-                if fields.contains(&slot.id) {
-                    errors.push(Diagnostic::error(
-                        "attachment.access.authentication_required",
-                        format!("{base}.{member}[value={}]", slot.id),
-                        "attachment metadata and content require authenticated request access",
-                    ));
-                }
             }
         }
     }

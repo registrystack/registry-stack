@@ -114,10 +114,10 @@ fn wasm_project() -> Value {
             }
           }],
           "accessProfiles":[{
-            "id":"registrar","default":true,"principalClaim":"registry_principal",
+            "id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":[{
               "action":"register-person","operations":["invoke"],
-              "targets":[{"entity":"person","rowBoundaries":[]}],
+              "targets":[{"entity":"person","rowBoundaries":"unrestricted"}],
               "results":["person"]
             }]
           }]
@@ -220,7 +220,7 @@ fn a_missing_module_asset_reports_the_authored_path() {
     let failure = compile_project_with_assets(&project, &[], &[], CompileProfile::Authoring)
         .map(|_| ())
         .expect_err("a declared module without its asset is refused");
-    let diagnostic = first_code(&failure, "action.handler.module_asset_missing");
+    let diagnostic = first_code(&failure, "breg.action.handler-module-asset-missing");
     assert_eq!(diagnostic.path, "actions[register-person].handler.module");
     assert!(
         diagnostic.message.contains("wasm/handler.wasm"),
@@ -235,7 +235,7 @@ fn a_module_over_the_structural_ceiling_is_refused_before_validation() {
     let failure = compile_with_module(wasm_project(), "wasm/handler.wasm", over_budget)
         .map(|_| ())
         .expect_err("a module beyond the structural ceiling is refused");
-    let diagnostic = first_code(&failure, "action.handler.module_bound");
+    let diagnostic = first_code(&failure, "breg.action.handler-module-bound");
     assert_eq!(diagnostic.path, "actions[register-person].handler.module");
     // The refusal names the structural ceiling: the ceiling every build and
     // package enforces, not an operator's execution-time configuration.
@@ -270,7 +270,7 @@ fn wat_text_is_not_admitted_as_a_module_binary() {
     )
     .map(|_| ())
     .expect_err("WebAssembly text is not a module binary");
-    let diagnostic = first_code(&failure, "action.handler.module_invalid");
+    let diagnostic = first_code(&failure, "breg.action.handler-module-invalid");
     assert_eq!(diagnostic.path, "actions[register-person].handler.module");
 }
 
@@ -289,7 +289,7 @@ fn a_module_with_a_disallowed_import_is_refused_by_name() {
     let failure = compile_with_module(wasm_project(), "wasm/handler.wasm", binary(wat))
         .map(|_| ())
         .expect_err("a module with an import is refused");
-    let diagnostic = first_code(&failure, "action.handler.module_import_unsupported");
+    let diagnostic = first_code(&failure, "breg.action.handler-module-import-unsupported");
     assert_eq!(diagnostic.path, "actions[register-person].handler.module");
     assert!(
         diagnostic.message.contains("\"env\"") && diagnostic.message.contains("\"log\""),
@@ -311,7 +311,7 @@ fn a_module_missing_a_required_export_is_refused_by_name() {
     let failure = compile_with_module(wasm_project(), "wasm/handler.wasm", binary(wat))
         .map(|_| ())
         .expect_err("a module missing result_len is refused");
-    let diagnostic = first_code(&failure, "action.handler.module_export_missing");
+    let diagnostic = first_code(&failure, "breg.action.handler-module-export-missing");
     assert_eq!(diagnostic.path, "actions[register-person].handler.module");
     assert!(
         diagnostic.message.contains("result_len"),
@@ -335,7 +335,7 @@ fn a_module_with_an_unexpected_export_is_refused_by_name() {
     let failure = compile_with_module(wasm_project(), "wasm/handler.wasm", binary(wat))
         .map(|_| ())
         .expect_err("a module with an extra export is refused");
-    let diagnostic = first_code(&failure, "action.handler.module_export_unexpected");
+    let diagnostic = first_code(&failure, "breg.action.handler-module-export-unexpected");
     assert!(
         diagnostic.message.contains("helper"),
         "the diagnostic names the unexpected export: {}",
@@ -357,7 +357,7 @@ fn a_module_with_a_wrong_export_signature_is_refused_by_name() {
     let failure = compile_with_module(wasm_project(), "wasm/handler.wasm", binary(wat))
         .map(|_| ())
         .expect_err("a wrong-signature handle export is refused");
-    let diagnostic = first_code(&failure, "action.handler.module_export_type");
+    let diagnostic = first_code(&failure, "breg.action.handler-module-export-type");
     assert!(
         diagnostic.message.contains("handle"),
         "the diagnostic names the mistyped export: {}",
@@ -375,7 +375,7 @@ fn wasm_handler_field_discipline_is_reported_per_backend() {
     let failure = parse_project_json(&serde_json::to_vec(&with_script).unwrap())
         .map(|_| ())
         .expect_err("a WASM handler cannot declare a Rhai script");
-    let diagnostic = first_code(&failure, "source.shape.invalid");
+    let diagnostic = first_code(&failure, "breg.source.shape-invalid");
     assert!(
         diagnostic.message.contains("unknown field `script`"),
         "the refusal does not name the member the author wrote: {}",
@@ -388,7 +388,7 @@ fn wasm_handler_field_discipline_is_reported_per_backend() {
     let failure = compile_with_module(bad_path, "wasm/handler.wasm", binary(MINIMAL_ABI_WAT))
         .map(|_| ())
         .expect_err("a non-wasm module path is refused");
-    let diagnostic = first_code(&failure, "action.handler.module_source_invalid");
+    let diagnostic = first_code(&failure, "breg.action.handler-module-source-invalid");
     assert_eq!(diagnostic.path, "actions[register-person].handler.module");
 }
 
@@ -399,7 +399,7 @@ fn the_v2_abi_stays_refused_for_wasm_handlers_under_the_feature() {
     let failure = compile_with_module(project, "wasm/handler.wasm", binary(MINIMAL_ABI_WAT))
         .map(|_| ())
         .expect_err("the Evidence-enabled v2 ABI stays out of scope for WASM");
-    let diagnostic = first_code(&failure, "action.handler.wasm_abi_unsupported");
+    let diagnostic = first_code(&failure, "breg.action.handler-wasm-abi-unsupported");
     assert_eq!(diagnostic.path, "actions[register-person].handler.kind");
 }
 
@@ -425,7 +425,7 @@ fn the_per_package_wasm_module_count_is_bounded() {
         }));
         permissions.push(json!({
             "action": id, "operations":["invoke"],
-            "targets":[{"entity":"person","rowBoundaries":[]}],
+            "targets":[{"entity":"person","rowBoundaries":"unrestricted"}],
             "results":["person"]
         }));
     }
@@ -434,7 +434,7 @@ fn the_per_package_wasm_module_count_is_bounded() {
     let failure = compile_with_module(project, "wasm/handler.wasm", binary(MINIMAL_ABI_WAT))
         .map(|_| ())
         .expect_err("a package beyond the module-count ceiling is refused");
-    let diagnostic = first_code(&failure, "action.handler.modules_bound");
+    let diagnostic = first_code(&failure, "breg.action.handler-modules-bound");
     assert_eq!(
         diagnostic.path,
         "actions[register-person-16].handler.module"

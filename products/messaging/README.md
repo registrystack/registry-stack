@@ -186,8 +186,12 @@ effect on restart after `apply`. Every
 on a refusal, 2 on a usage error, and 3 when a file, secret, or database could
 not be reached. A human failure is one `error[CODE] PATH: MESSAGE` line on
 standard error with a `next:` line after it. A `--format json` report opens with
-`ok`, `command`, and `status`, and a failure lists `diagnostics`; a successful
+`ok`, `command`, and `status`, then names its format: `apiVersion` is
+`id.registrystack.org/formats/messaging/ctl-report/v1alpha1` and `kind` is
+`MessagingCtlReport`. A failure lists `diagnostics`; a successful
 `preview` is the exception and prints the HTTP preview's body unwrapped.
+`examples/formats/ctl-report.json` is the report `check` writes for the
+starter project.
 `MESSAGING_LOG` accepts `error`, `warn`, or `info` and nothing else.
 
 `messagingctl messages list` and `show` report messages with the recipient

@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 use std::{
     fs,
     os::unix::fs::PermissionsExt as _,
@@ -698,7 +702,8 @@ impl Fixture {
         private_file(&root.join(".evidence/dev/runtime.yaml"), b"runtime", 0o400);
         let canonical = fs::canonicalize(&root).expect("canonical project");
         let state = json!({
-            "schema": "registry.evidencectl.dev-state/v6",
+            "apiVersion": "id.registrystack.org/formats/evidence/dev-state/v6",
+            "kind": "EvidenceDevState",
             "status": "stopped",
             "project": canonical,
             "runtimePath": canonical.join(".evidence/dev/runtime.yaml"),
@@ -708,7 +713,6 @@ impl Fixture {
             "namePrefix": "evidence-dev",
             "tokenUrl": "http://127.0.0.1:8081/oauth2/token",
             "accessTokenAudience": "urn:registrystack:evidence:local:gateway",
-            "caller": null,
             "accessPolicies": [],
             "questions": [
                 {
@@ -739,8 +743,7 @@ impl Fixture {
                         "form": "boolean"
                     }]
                 }
-            ],
-            "failure": null
+            ]
         });
         private_file(
             &root.join(".evidence/dev/state.json"),

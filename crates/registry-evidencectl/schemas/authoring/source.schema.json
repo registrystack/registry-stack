@@ -1,0 +1,21 @@
+{
+  "$id": "https://id.registrystack.org/schemas/evidence/source/source.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/source/v1alpha1",
+      "type": "string"
+    },
+    "kind": {
+      "const": "EvidenceSource",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "title": "Evidence source",
+  "type": "object",
+  "x-registry-passthrough": "A source of the Evidence bundle grammar; `evidencectl check` validates it against bundle.schema.yaml after the compile."
+}

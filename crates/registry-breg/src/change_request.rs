@@ -115,12 +115,12 @@ fn compile_on_approved(
     );
     match (&request.on_approved.mode, &request.on_approved.executor) {
         (ChangeRequestOnApprovedModeSource::Manual, Some(_)) => errors.push(Diagnostic::error(
-            "change_request.on_approved.executor_forbidden",
+            "breg.change-request.on-approved-executor-forbidden",
             format!("{path}.executor"),
             "manual application cannot declare an executor",
         )),
         (ChangeRequestOnApprovedModeSource::Automatic, None) => errors.push(Diagnostic::error(
-            "change_request.on_approved.executor_required",
+            "breg.change-request.on-approved-executor-required",
             format!("{path}.executor"),
             "automatic application requires a logical executor",
         )),
@@ -186,7 +186,7 @@ fn compile_planner(
     let script_path = format!("{planner_path}.script");
     if source.abi != CHANGE_REQUEST_PLAN_ABI_V1 {
         errors.push(Diagnostic::error(
-            "change_request.planner.abi_invalid",
+            "breg.change-request.planner-abi-invalid",
             format!("{planner_path}.abi"),
             "the planner ABI is not supported",
         ));
@@ -196,7 +196,7 @@ fn compile_planner(
         // validation could misreport the script: WASM planners are out of
         // scope for this release and have no compiled representation.
         errors.push(Diagnostic::error(
-            "change_request.planner.kind_unsupported",
+            "breg.change-request.planner-kind-unsupported",
             format!("{planner_path}.kind"),
             "WASM change-request planners are not supported in this release",
         ));
@@ -204,7 +204,7 @@ fn compile_planner(
     }
     if !valid_planner_path(&source.script) {
         errors.push(Diagnostic::error(
-            "change_request.planner.source_invalid",
+            "breg.change-request.planner-source-invalid",
             script_path.as_str(),
             "the planner script must be a bounded relative .rhai path",
         ));
@@ -214,14 +214,14 @@ fn compile_planner(
         let request_field_path = format!("{request_fields_path}[field={field_id}]");
         if !declared.insert(field_id.clone()) {
             errors.push(Diagnostic::error(
-                "change_request.planner.request_field_duplicate",
+                "breg.change-request.planner-request-field-duplicate",
                 request_field_path.as_str(),
                 "planner request fields must be duplicate-free",
             ));
         }
         if !request_entity.fields.contains_key(field_id) {
             errors.push(Diagnostic::error(
-                "change_request.planner.request_field_unknown",
+                "breg.change-request.planner-request-field-unknown",
                 request_field_path.as_str(),
                 "a planner request field is not declared on the request entity",
             ));
@@ -232,7 +232,7 @@ fn compile_planner(
             .is_some_and(|field| field.encryption.is_some())
         {
             errors.push(Diagnostic::error(
-                "change_request.planner.request_field_encrypted",
+                "breg.change-request.planner-request-field-encrypted",
                 request_field_path,
                 "a planner request field cannot be encrypted",
             ));
@@ -240,7 +240,7 @@ fn compile_planner(
     }
     if source.writes.is_empty() {
         errors.push(Diagnostic::error(
-            "change_request.planner.writes_empty",
+            "breg.change-request.planner-writes-empty",
             writes_path.as_str(),
             "a planner must declare a non-empty write ceiling",
         ));
@@ -269,7 +269,7 @@ fn compile_planner(
         let write_path = format!("{writes_path}[{write_index}]");
         if (write.target.from_field.is_some() as u8 + write.target.entity.is_some() as u8) != 1 {
             errors.push(Diagnostic::error(
-                "change_request.planner.write_target_invalid",
+                "breg.change-request.planner-write-target-invalid",
                 format!("{write_path}.target"),
                 "a planner write target must name exactly one request reference or create entity",
             ));
@@ -283,7 +283,7 @@ fn compile_planner(
             (Some(field_id), None, Operation::Patch) => {
                 let Some(field) = request_entity.fields.get(field_id) else {
                     errors.push(Diagnostic::error(
-                        "change_request.planner.write_reference_unknown",
+                        "breg.change-request.planner-write-reference-unknown",
                         format!("{write_path}.target.fromField"),
                         "a planner write target refers to an unknown request field",
                     ));
@@ -291,7 +291,7 @@ fn compile_planner(
                 };
                 if !declared.contains(field_id) {
                     errors.push(Diagnostic::error(
-                        "change_request.planner.write_reference_undeclared",
+                        "breg.change-request.planner-write-reference-undeclared",
                         format!("{write_path}.target.fromField"),
                         "an existing target reference must be present in planner requestFields",
                     ));
@@ -302,7 +302,7 @@ fn compile_planner(
                     }
                     _ => {
                         errors.push(Diagnostic::error(
-                            "change_request.planner.write_reference_type",
+                            "breg.change-request.planner-write-reference-type",
                             format!("{write_path}.target.fromField"),
                             "an existing target must use a typed request reference",
                         ));
@@ -313,7 +313,7 @@ fn compile_planner(
             (None, Some(entity_id), Operation::Create) => (entity_id.clone(), None),
             _ => {
                 errors.push(Diagnostic::error(
-                    "change_request.planner.write_operation_invalid",
+                    "breg.change-request.planner-write-operation-invalid",
                     format!("{write_path}.operation"),
                     "patch writes require fromField and create writes require entity",
                 ));
@@ -327,7 +327,7 @@ fn compile_planner(
                 format!("{write_path}.target.fromField")
             };
             errors.push(Diagnostic::error(
-                "change_request.planner.write_entity_unknown",
+                "breg.change-request.planner-write-entity-unknown",
                 target_path,
                 "a planner write targets an unknown entity",
             ));
@@ -341,7 +341,7 @@ fn compile_planner(
             },
             operation: write.operation,
             set: BTreeMap::new(),
-            clear: BTreeSet::new(),
+            clear: Default::default(),
         };
         if compile_target(
             source_entity,
@@ -359,7 +359,7 @@ fn compile_planner(
         }
         if write.fields.is_empty() {
             errors.push(Diagnostic::error(
-                "change_request.planner.write_fields_empty",
+                "breg.change-request.planner-write-fields-empty",
                 format!("{write_path}.fields"),
                 "a planner write ceiling must name at least one field",
             ));
@@ -371,14 +371,14 @@ fn compile_planner(
         for field_id in &write.fields {
             if !fields.insert(field_id.clone()) {
                 errors.push(Diagnostic::error(
-                    "change_request.planner.write_field_duplicate",
+                    "breg.change-request.planner-write-field-duplicate",
                     format!("{write_path}.fields[field={field_id}]"),
                     "planner write fields must be duplicate-free",
                 ));
             }
             let Some(field) = target_entity.fields.get(field_id) else {
                 errors.push(Diagnostic::error(
-                    "change_request.planner.write_field_unknown",
+                    "breg.change-request.planner-write-field-unknown",
                     format!("{write_path}.fields[field={field_id}]"),
                     "a planner write field is not declared on its target entity",
                 ));
@@ -386,7 +386,7 @@ fn compile_planner(
             };
             if field.encryption.is_some() {
                 errors.push(Diagnostic::error(
-                    "change_request.planner.write_field_encrypted",
+                    "breg.change-request.planner-write-field-encrypted",
                     format!("{write_path}.fields[field={field_id}]"),
                     "a planner write ceiling cannot name an encrypted target field",
                 ));
@@ -394,7 +394,7 @@ fn compile_planner(
             }
             if input_classification > field.classification {
                 errors.push(Diagnostic::error(
-                    "change_request.planner.classification_ceiling",
+                    "breg.change-request.planner-classification-ceiling",
                     format!("{write_path}.fields[field={field_id}]"),
                     "planner inputs cannot flow to a less classified target field",
                 ));
@@ -428,7 +428,7 @@ fn compile_planner(
                 .collect::<BTreeSet<_>>();
             if !required_target_fields.is_subset(&fields) {
                 errors.push(Diagnostic::error(
-                    "change_request.planner.create_fields_incomplete",
+                    "breg.change-request.planner-create-fields-incomplete",
                     format!("{write_path}.fields"),
                     "a create write ceiling must include every required target field",
                 ));
@@ -449,7 +449,7 @@ fn compile_planner(
             })
         {
             errors.push(Diagnostic::error(
-                "change_request.planner.write_duplicate",
+                "breg.change-request.planner-write-duplicate",
                 write_path.as_str(),
                 "planner write ceilings must be unique by symbolic target and operation",
             ));
@@ -469,7 +469,7 @@ fn compile_planner(
             > usize::from(MAX_CHANGE_REQUEST_FIELD_MUTATIONS)
     {
         errors.push(Diagnostic::error(
-            "change_request.planner.write_ceiling",
+            "breg.change-request.planner-write-ceiling",
             writes_path.as_str(),
             "the planner write ceiling exceeds the supported resource bounds",
         ));
@@ -477,7 +477,7 @@ fn compile_planner(
     match maximum_planner_snapshot_bytes(request_entity, &writes) {
         Some(bytes) if bytes <= u64::from(MAX_CHANGE_REQUEST_SNAPSHOT_BYTES) => {}
         _ => errors.push(Diagnostic::error(
-            "change_request.planner.snapshot_ceiling",
+            "breg.change-request.planner-snapshot-ceiling",
             writes_path.as_str(),
             "the planner write ceiling cannot satisfy the fixed snapshot-size bound",
         )),
@@ -487,7 +487,7 @@ fn compile_planner(
         .find(|asset| asset.module == source_module && asset.path == source.script)
     else {
         errors.push(Diagnostic::error(
-            "change_request.planner.source_missing",
+            "breg.change-request.planner-source-missing",
             script_path.as_str(),
             "the planner script must be supplied as an owned compilation asset",
         ));
@@ -495,7 +495,7 @@ fn compile_planner(
     };
     if asset.bytes.is_empty() || asset.bytes.len() > MAX_CHANGE_REQUEST_PLANNER_SOURCE_BYTES {
         errors.push(Diagnostic::error(
-            "change_request.planner.source_bound",
+            "breg.change-request.planner-source-bound",
             script_path.as_str(),
             "the planner source exceeds its fixed byte bound",
         ));
@@ -503,7 +503,7 @@ fn compile_planner(
     }
     let Ok(script) = std::str::from_utf8(&asset.bytes) else {
         errors.push(Diagnostic::error(
-            "change_request.planner.source_encoding",
+            "breg.change-request.planner-source-encoding",
             script_path.as_str(),
             "the planner source must be UTF-8",
         ));
@@ -511,7 +511,7 @@ fn compile_planner(
     };
     if crate::rhai_planner::ChangeRequestPlannerRuntime::compile_source(script).is_err() {
         errors.push(Diagnostic::error(
-            "change_request.planner.entrypoint",
+            "breg.change-request.planner-entrypoint",
             script_path.as_str(),
             "the planner source must compile with exactly one public fn plan(ctx) entry point",
         ));
@@ -614,7 +614,7 @@ pub(crate) fn compile_change_requests(
                 plan.planner.is_none()
                     && plan.on_approved.mode
                         == crate::model::CompiledChangeRequestOnApprovedMode::Manual
-                    && referenced_entities == profile.submitter_targets
+                    && referenced_entities == *profile.submitter_targets
                     && references.iter().all(|(_, from_field)| {
                         // Admission reads each exact target identifier from the
                         // request record, so an absent value would only surface
@@ -639,13 +639,12 @@ pub(crate) fn compile_change_requests(
                                         && target_profile.require_consent.is_empty()
                                 })
                     })
-                    && !profile.anonymous
                     && !profile.operations.contains(&Operation::Batch)
                     && !profile.operations.contains(&Operation::Import)
             });
             if !valid {
                 errors.push(Diagnostic::error(
-                    "change_request.submitter_targets.invalid",
+                    "breg.change-request.submitter-targets-invalid",
                     format!("{}.submitterTargets", profile_path(&entity.id, &profile.id)),
                     "submitterTargets requires manual application and exactly the fixed existing effect and application-guard reference targets; each reference must be required, readable, and writable wherever the profile authors the request, and each non-request target needs a same-profile get grant without membership boundaries or consent checks",
                 ));
@@ -704,7 +703,7 @@ fn validate_planner_assets(
         .collect::<BTreeSet<_>>();
     for _ in supplied.difference(&declared) {
         errors.push(Diagnostic::error(
-            "change_request.planner.asset_undeclared",
+            "breg.change-request.planner-asset-undeclared",
             "modules[].assets[]",
             "a Rhai asset is not declared by a change-request planner, action handler, or hook handler at the same ownership origin",
         ));
@@ -721,7 +720,7 @@ fn validate_change_controlled_direct_writes(
                 format!("{}.changeControl.requiredFor", entity_path(&entity.id));
             if control.required_for.is_empty() {
                 errors.push(Diagnostic::error(
-                    "change_control.required_for.empty",
+                    "breg.change-control.required-for-empty",
                     required_for_path.as_str(),
                     "change control must name at least one controlled mutation operation",
                 ));
@@ -729,7 +728,7 @@ fn validate_change_controlled_direct_writes(
             for operation in &control.required_for {
                 if !is_mutation_operation(*operation) {
                     errors.push(Diagnostic::error(
-                        "change_control.operation.unsupported",
+                        "breg.change-control.operation-unsupported",
                         format!("{required_for_path}[value={}]", operation_id(*operation)),
                         "change control can require only finite mutation operations",
                     ));
@@ -746,7 +745,7 @@ fn validate_change_controlled_direct_writes(
                         }));
                 if direct {
                     errors.push(Diagnostic::error(
-                        "change_control.direct_write_grant",
+                        "breg.change-control.direct-write-grant",
                         format!("{}.operations", profile_path(&entity.id, &profile.id)),
                         "a controlled mutation operation cannot remain directly granted; to load new records under change control, grant `import` in place of `batch` or `create`",
                     ));
@@ -788,7 +787,7 @@ fn compile_preconditions(
         })
     {
         errors.push(Diagnostic::error(
-            "change_request.preconditions.bounds",
+            "breg.change-request.preconditions-bounds",
             &base,
             "application preconditions exceed the finite target, Evidence, predicate, or byte ceiling",
         ));
@@ -816,7 +815,7 @@ fn compile_preconditions(
         validate_id(&target.id, &format!("{path}.id"), errors);
         if !target_ids.insert(target.id.clone()) {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.target_duplicate",
+                "breg.change-request.preconditions-target-duplicate",
                 &path,
                 "precondition target identifiers must be duplicate-free",
             ));
@@ -824,7 +823,7 @@ fn compile_preconditions(
         }
         if effect_ids.contains(&target.id) {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.target_effect_collision",
+                "breg.change-request.preconditions-target-effect-collision",
                 format!("{path}.id"),
                 "precondition target identifiers must not collide with effect identifiers",
             ));
@@ -832,7 +831,7 @@ fn compile_preconditions(
         }
         let Some(from_field) = request_entity.fields.get(&target.from_field) else {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.target_field_unknown",
+                "breg.change-request.preconditions-target-field-unknown",
                 format!("{path}.fromField"),
                 "a precondition target must use a declared request reference field",
             ));
@@ -842,7 +841,7 @@ fn compile_preconditions(
             || !matches!(&from_field.field_type, FieldTypeSource::Reference { target: entity, .. } if entity == &target.entity)
         {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.target_reference_invalid",
+                "breg.change-request.preconditions-target-reference-invalid",
                 format!("{path}.fromField"),
                 "a precondition target must use a required request reference field for its exact entity",
             ));
@@ -850,7 +849,7 @@ fn compile_preconditions(
         }
         let Some(target_entity) = entities.get(&target.entity) else {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.target_entity_unknown",
+                "breg.change-request.preconditions-target-entity-unknown",
                 format!("{path}.entity"),
                 "a precondition target must name a declared entity",
             ));
@@ -858,7 +857,7 @@ fn compile_preconditions(
         };
         if target.requires.is_empty() {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.target_empty",
+                "breg.change-request.preconditions-target-empty",
                 format!("{path}.requires"),
                 "a precondition target must declare at least one finite predicate",
             ));
@@ -890,7 +889,7 @@ fn compile_preconditions(
         validate_id(&item.id, &format!("{path}.id"), errors);
         if !evidence_ids.insert(item.id.clone()) {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.evidence_duplicate",
+                "breg.change-request.preconditions-evidence-duplicate",
                 &path,
                 "Evidence precondition identifiers must be duplicate-free",
             ));
@@ -902,7 +901,7 @@ fn compile_preconditions(
             Ok(capability) => capability,
             Err(()) => {
                 errors.push(Diagnostic::error(
-                    "change_request.preconditions.evidence_invalid",
+                    "breg.change-request.preconditions-evidence-invalid",
                     &path,
                     "require one exact signed-JWS audience-scoped reviewed contract, request-origin selectors, unique typed scalar outputs, and observation age 1..300 seconds",
                 ));
@@ -929,7 +928,7 @@ fn compile_preconditions(
                     .collect::<BTreeSet<_>>()
             {
                 errors.push(Diagnostic::error(
-                    "change_request.preconditions.selector_fields_invalid",
+                    "breg.change-request.preconditions-selector-fields-invalid",
                     format!("{path}.subjects[{role}].selectors"),
                     "an Evidence subject must bind exactly every field in its reviewed selector profile",
                 ));
@@ -974,7 +973,7 @@ fn compile_preconditions(
                         })
                     }) {
                         errors.push(Diagnostic::error(
-                            "change_request.preconditions.selector_binding_invalid",
+                            "breg.change-request.preconditions-selector-binding-invalid",
                             format!(
                                 "{path}.subjects[{role}].selectors[{selector_field_id}]"
                             ),
@@ -984,7 +983,7 @@ fn compile_preconditions(
                     }
                     if registry_field.is_some_and(|field| field.encryption.is_some()) {
                         errors.push(Diagnostic::error(
-                            "change_request.preconditions.selector_field_encrypted",
+                            "breg.change-request.preconditions-selector-field-encrypted",
                             format!(
                                 "{path}.subjects[{role}].selectors[{selector_field_id}]"
                             ),
@@ -1016,7 +1015,7 @@ fn compile_preconditions(
                             .is_some_and(|candidate| candidate.encryption.is_some())
                         {
                             errors.push(Diagnostic::error(
-                                "change_request.preconditions.evidence_requirement_encrypted",
+                                "breg.change-request.preconditions-evidence-requirement-encrypted",
                                 format!("{path}.requires[output={}]", requirement.output),
                                 "an Evidence requirement cannot compare an encrypted request field",
                             ));
@@ -1055,7 +1054,7 @@ fn compile_preconditions(
                         }
                         _ => {
                             errors.push(Diagnostic::error(
-                                "change_request.preconditions.evidence_requirement_invalid",
+                                "breg.change-request.preconditions-evidence-requirement-invalid",
                                 format!("{path}.requires[output={}]", requirement.output),
                                 "an Evidence output predicate must declare exactly one typed literal or required scalar request field",
                             ));
@@ -1094,7 +1093,7 @@ fn compile_preconditions(
             .collect::<BTreeSet<_>>();
         if fields.len() > crate::model::MAX_TARGET_CONTEXT_FIELDS {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.target_fields_exceeded",
+                "breg.change-request.preconditions-target-fields-exceeded",
                 format!("{base}.targets[id={}]", target.id),
                 "a guard cannot bind more than 128 distinct predicate and Evidence selector fields",
             ));
@@ -1121,7 +1120,7 @@ fn compile_predicates(
         let path = format!("{base}[field={}]", source.field);
         if !fields.insert(source.field.clone()) {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.predicate_duplicate",
+                "breg.change-request.preconditions-predicate-duplicate",
                 &path,
                 "a precondition can test a stored field only once",
             ));
@@ -1129,7 +1128,7 @@ fn compile_predicates(
         }
         let Some(target_field) = target_entity.fields.get(&source.field) else {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.predicate_field_unknown",
+                "breg.change-request.preconditions-predicate-field-unknown",
                 format!("{path}.field"),
                 "a precondition predicate must name a stored field",
             ));
@@ -1137,7 +1136,7 @@ fn compile_predicates(
         };
         if !scalar_field(target_field) {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.predicate_field_invalid",
+                "breg.change-request.preconditions-predicate-field-invalid",
                 format!("{path}.field"),
                 "a precondition predicate must use a scalar stored field",
             ));
@@ -1145,7 +1144,7 @@ fn compile_predicates(
         }
         if target_field.encryption.is_some() {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.predicate_field_encrypted",
+                "breg.change-request.preconditions-predicate-field-encrypted",
                 format!("{path}.field"),
                 "a precondition predicate cannot name an encrypted field",
             ));
@@ -1158,7 +1157,7 @@ fn compile_predicates(
             + usize::from(source.at_most.is_some());
         let expected = if choices != 1 {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.predicate_operator_invalid",
+                "breg.change-request.preconditions-predicate-operator-invalid",
                 &path,
                 "declare exactly one literal equality, request-field equality, or current UTC date comparison",
             ));
@@ -1166,7 +1165,7 @@ fn compile_predicates(
         } else if let Some(value) = &source.equals {
             if !predicate_literal_valid(value, target_field) {
                 errors.push(Diagnostic::error(
-                    "change_request.preconditions.predicate_value_invalid",
+                    "breg.change-request.preconditions-predicate-value-invalid",
                     format!("{path}.equals"),
                     "a literal predicate must use a scalar value valid for its stored field",
                 ));
@@ -1182,7 +1181,7 @@ fn compile_predicates(
                 .is_some_and(|request_field| request_field.encryption.is_some())
             {
                 errors.push(Diagnostic::error(
-                    "change_request.preconditions.predicate_request_field_encrypted",
+                    "breg.change-request.preconditions-predicate-request-field-encrypted",
                     format!("{path}.equalsFromRequestField"),
                     "a request-field equality cannot name an encrypted request field",
                 ));
@@ -1201,7 +1200,7 @@ fn compile_predicates(
                 })
             {
                 errors.push(Diagnostic::error(
-                    "change_request.preconditions.predicate_request_field_invalid",
+                    "breg.change-request.preconditions-predicate-request-field-invalid",
                     format!("{path}.equalsFromRequestField"),
                     "request-field equality requires an exact compatible scalar field",
                 ));
@@ -1213,7 +1212,7 @@ fn compile_predicates(
         } else if let Some(value) = source.at_least {
             if target_field.field_type != FieldTypeSource::Int64 {
                 errors.push(Diagnostic::error(
-                    "change_request.preconditions.predicate_numeric_invalid",
+                    "breg.change-request.preconditions-predicate-numeric-invalid",
                     &path,
                     "inclusive numeric predicates require an int64 field",
                 ));
@@ -1223,7 +1222,7 @@ fn compile_predicates(
         } else if let Some(value) = source.at_most {
             if target_field.field_type != FieldTypeSource::Int64 {
                 errors.push(Diagnostic::error(
-                    "change_request.preconditions.predicate_numeric_invalid",
+                    "breg.change-request.preconditions-predicate-numeric-invalid",
                     &path,
                     "inclusive numeric predicates require an int64 field",
                 ));
@@ -1233,7 +1232,7 @@ fn compile_predicates(
         } else {
             if !allow_current_date || target_field.field_type != FieldTypeSource::Date {
                 errors.push(Diagnostic::error(
-                    "change_request.preconditions.predicate_current_date_invalid",
+                    "breg.change-request.preconditions-predicate-current-date-invalid",
                     format!("{path}.currentDate"),
                     "current UTC date comparisons require a date field",
                 ));
@@ -1293,14 +1292,14 @@ fn compile_request_entity(
     let request = source.change_request.as_ref()?;
     if source.mutation_mode != MutationMode::Mutable {
         errors.push(Diagnostic::error(
-            "change_request.mutation_mode.invalid",
+            "breg.change-request.mutation-mode-invalid",
             format!("{}.changeRequest", entity_path(&request_entity.id)),
             "a change-request entity must be mutable so draft revisions can be edited",
         ));
     }
     if source.change_control.is_some() {
         errors.push(Diagnostic::error(
-            "change_request.change_control_conflict",
+            "breg.change-request.change-control-conflict",
             format!("{}.changeControl", entity_path(&request_entity.id)),
             "a change-request entity cannot also declare target change control",
         ));
@@ -1311,7 +1310,7 @@ fn compile_request_entity(
         .any(|profile| profile.operations.contains(&Operation::Tombstone))
     {
         errors.push(Diagnostic::error(
-            "change_request.tombstone_forbidden",
+            "breg.change-request.tombstone-forbidden",
             format!(
                 "{}.accessProfiles[].operations",
                 entity_path(&request_entity.id)
@@ -1321,7 +1320,7 @@ fn compile_request_entity(
     }
     if request.effects.is_empty() == request.planner.is_none() {
         errors.push(Diagnostic::error(
-            "change_request.plan.exclusive",
+            "breg.change-request.plan-exclusive",
             format!("{}.changeRequest", entity_path(&request_entity.id)),
             "a change-request capability must declare exactly one of effects or planner",
         ));
@@ -1386,7 +1385,7 @@ fn compile_request_entity(
         });
         if combined.is_none_or(|bytes| bytes > u64::from(MAX_CHANGE_REQUEST_SNAPSHOT_BYTES)) {
             errors.push(Diagnostic::error(
-                "change_request.preconditions.bounds",
+                "breg.change-request.preconditions-bounds",
                 format!(
                     "{}.changeRequest.application.preconditions",
                     entity_path(&request_entity.id)
@@ -1415,7 +1414,7 @@ fn compile_request_entity(
         .any(|profile| profile.operations.contains(&Operation::SubmitRequest))
     {
         errors.push(Diagnostic::error(
-            "change_request.submit_operation.missing",
+            "breg.change-request.submit-operation-missing",
             format!(
                 "{}.accessProfiles[].operations",
                 entity_path(&request_entity.id)
@@ -1486,7 +1485,7 @@ fn compile_effects(
         validate_id(&id, &format!("{path}.id"), errors);
         if !effect_ids.insert(id.clone()) {
             errors.push(Diagnostic::error(
-                "change_request.effect.id_duplicate",
+                "breg.change-request.effect-id-duplicate",
                 format!("{path}.id"),
                 "change-request effect identifiers must be duplicate-free",
             ));
@@ -1494,7 +1493,7 @@ fn compile_effects(
         if effect.operation == Operation::Create {
             if effect.id.is_none() {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.create_id_required",
+                    "breg.change-request.effect-create-id-required",
                     format!("{path}.id"),
                     "create effects require an explicit identifier for reserved-record references",
                 ));
@@ -1529,7 +1528,7 @@ fn compile_effects(
         };
         if effect.set.is_empty() && effect.clear.is_empty() {
             errors.push(Diagnostic::error(
-                "change_request.effect.empty",
+                "breg.change-request.effect-empty",
                 path.as_str(),
                 "a change-request effect must set or clear at least one field",
             ));
@@ -1539,7 +1538,7 @@ fn compile_effects(
         for (field, value) in &effect.set {
             let Some(target_field) = target_entity.fields.get(field) else {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.field_unknown",
+                    "breg.change-request.effect-field-unknown",
                     format!("{path}.set[field={field}]"),
                     "a change-request effect writes an unknown stored target field",
                 ));
@@ -1547,7 +1546,7 @@ fn compile_effects(
             };
             if target_field.encryption.is_some() {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.field_encrypted",
+                    "breg.change-request.effect-field-encrypted",
                     format!("{path}.set[field={field}]"),
                     "an encrypted target field cannot be set through a change request",
                 ));
@@ -1587,7 +1586,7 @@ fn compile_effects(
         for field in &effect.clear {
             let Some(target_field) = target_entity.fields.get(field) else {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.field_unknown",
+                    "breg.change-request.effect-field-unknown",
                     format!("{path}.clear[field={field}]"),
                     "a change-request effect clears an unknown stored target field",
                 ));
@@ -1595,7 +1594,7 @@ fn compile_effects(
             };
             if target_field.encryption.is_some() {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.field_encrypted",
+                    "breg.change-request.effect-field-encrypted",
                     format!("{path}.clear[field={field}]"),
                     "an encrypted target field cannot be cleared through a change request",
                 ));
@@ -1603,14 +1602,14 @@ fn compile_effects(
             }
             if effect.operation == Operation::Create {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.clear_on_create",
+                    "breg.change-request.effect-clear-on-create",
                     format!("{path}.clear[field={field}]"),
                     "create effects cannot clear target fields",
                 ));
             }
             if target_field.required {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.clear_required",
+                    "breg.change-request.effect-clear-required",
                     format!("{path}.clear[field={field}]"),
                     "required target fields cannot be cleared",
                 ));
@@ -1664,7 +1663,7 @@ fn compile_target(
         effect.target.from_field.as_ref(),
     ) {
         errors.push(Diagnostic::error(
-            "change_request.effect.target.invalid",
+            "breg.change-request.effect-target-invalid",
             format!("{path}.target"),
             "effect target must name exactly one entity or request reference field",
         ));
@@ -1674,7 +1673,7 @@ fn compile_target(
         Operation::Create => {
             let Some(entity_id) = &effect.target.entity else {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.target.invalid",
+                    "breg.change-request.effect-target-invalid",
                     format!("{path}.target"),
                     "create effects must target a declared entity for reserved identity",
                 ));
@@ -1682,7 +1681,7 @@ fn compile_target(
             };
             let Some(target_entity) = entities.get(entity_id) else {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.target_unknown",
+                    "breg.change-request.effect-target-unknown",
                     format!("{path}.target.entity"),
                     "a change-request effect targets an unknown entity",
                 ));
@@ -1690,7 +1689,7 @@ fn compile_target(
             };
             if request_entity_ids.contains(entity_id) {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.nested_request_target",
+                    "breg.change-request.effect-nested-request-target",
                     format!("{path}.target.entity"),
                     "change-request effects cannot target another change-request entity",
                 ));
@@ -1698,7 +1697,7 @@ fn compile_target(
             }
             if !is_change_controlled(target_entity, Operation::Create) {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.uncontrolled_target",
+                    "breg.change-request.effect-uncontrolled-target",
                     format!("{path}.operation"),
                     "a change-request effect can mutate only a target operation declared in changeControl.requiredFor",
                 ));
@@ -1713,7 +1712,7 @@ fn compile_target(
         Operation::Patch => {
             let Some(field_id) = &effect.target.from_field else {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.target.invalid",
+                    "breg.change-request.effect-target-invalid",
                     format!("{path}.target.fromField"),
                     "patch effects must target a request reference field",
                 ));
@@ -1721,7 +1720,7 @@ fn compile_target(
             };
             let Some(field) = request_entity.fields.get(field_id) else {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.target_field_unknown",
+                    "breg.change-request.effect-target-field-unknown",
                     format!("{path}.target.fromField"),
                     "effect target refers to an unknown request field",
                 ));
@@ -1729,7 +1728,7 @@ fn compile_target(
             };
             let FieldTypeSource::Reference { target, .. } = &field.field_type else {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.target_field_type",
+                    "breg.change-request.effect-target-field-type",
                     format!("{path}.target.fromField"),
                     "patch effect targets must come from a typed request reference field",
                 ));
@@ -1738,7 +1737,7 @@ fn compile_target(
             let target_entity = entities.get(target)?;
             if request_entity_ids.contains(target) {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.nested_request_target",
+                    "breg.change-request.effect-nested-request-target",
                     format!("{path}.target.fromField"),
                     "change-request effects cannot target another change-request entity",
                 ));
@@ -1746,14 +1745,14 @@ fn compile_target(
             }
             if target_entity.mutation_mode != MutationMode::Mutable {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.operation_unavailable",
+                    "breg.change-request.effect-operation-unavailable",
                     format!("{path}.operation"),
                     "patch effects require a mutable target entity",
                 ));
             }
             if !is_change_controlled(target_entity, Operation::Patch) {
                 errors.push(Diagnostic::error(
-                    "change_request.effect.uncontrolled_target",
+                    "breg.change-request.effect-uncontrolled-target",
                     format!("{path}.operation"),
                     "a change-request effect can mutate only a target operation declared in changeControl.requiredFor",
                 ));
@@ -1768,7 +1767,7 @@ fn compile_target(
         _ => {
             let _ = (source, id);
             errors.push(Diagnostic::error(
-                "change_request.effect.operation_unsupported",
+                "breg.change-request.effect-operation-unsupported",
                 format!("{path}.operation"),
                 "change-request effects support only create and patch operations",
             ));
@@ -1790,7 +1789,7 @@ fn compile_value(
 ) -> Option<CompiledChangeRequestValue> {
     if !exactly_one(value.from_field.as_ref(), value.from_effect.as_ref()) {
         errors.push(Diagnostic::error(
-            "change_request.effect.value.invalid",
+            "breg.change-request.effect-value-invalid",
             format!("{path}.set[field={target_field}]"),
             "set values must name exactly one request field or create effect",
         ));
@@ -1799,7 +1798,7 @@ fn compile_value(
     if let Some(field_id) = &value.from_field {
         let Some(field) = request_entity.fields.get(field_id) else {
             errors.push(Diagnostic::error(
-                "change_request.effect.value_field_unknown",
+                "breg.change-request.effect-value-field-unknown",
                 format!("{path}.set[field={target_field}]"),
                 "set value refers to an unknown request field",
             ));
@@ -1807,7 +1806,7 @@ fn compile_value(
         };
         if field.encryption.is_some() {
             errors.push(Diagnostic::error(
-                "change_request.effect.value_field_encrypted",
+                "breg.change-request.effect-value-field-encrypted",
                 format!("{path}.set[field={target_field}]"),
                 "an encrypted request field cannot flow into a change-request effect",
             ));
@@ -1815,14 +1814,14 @@ fn compile_value(
         }
         if !field.required {
             errors.push(Diagnostic::error(
-                "change_request.effect.value_nullable",
+                "breg.change-request.effect-value-nullable",
                 format!("{path}.set[field={target_field}]"),
                 "mapped set values must come from required request fields so null cannot mean leave unchanged",
             ));
         }
         if !compatible_field_types(&field.field_type, target_type) {
             errors.push(Diagnostic::error(
-                "change_request.effect.value_type_mismatch",
+                "breg.change-request.effect-value-type-mismatch",
                 format!("{path}.set[field={target_field}]"),
                 "mapped request field type is not compatible with the target field",
             ));
@@ -1834,7 +1833,7 @@ fn compile_value(
     let effect_id = value.from_effect.as_ref()?;
     let Some(target_entity_id) = create_targets.get(effect_id) else {
         errors.push(Diagnostic::error(
-            "change_request.effect.value_effect_unknown",
+            "breg.change-request.effect-value-effect-unknown",
             format!("{path}.set[field={target_field}]"),
             "fromEffect must refer to a declared create effect",
         ));
@@ -1849,7 +1848,7 @@ fn compile_value(
         }
         FieldTypeSource::Reference { .. } => {
             errors.push(Diagnostic::error(
-                "change_request.effect.value_reference_mismatch",
+                "breg.change-request.effect-value-reference-mismatch",
                 format!("{path}.set[field={target_field}]"),
                 "fromEffect reserved identity does not match the target reference field",
             ));
@@ -1858,7 +1857,7 @@ fn compile_value(
         _ => {
             let _ = source;
             errors.push(Diagnostic::error(
-                "change_request.effect.value_reference_required",
+                "breg.change-request.effect-value-reference-required",
                 format!("{path}.set[field={target_field}]"),
                 "fromEffect can populate only typed reference fields",
             ));
@@ -1879,13 +1878,13 @@ fn remember_write(
     if let Some(existing) = writes.insert(key, effect_id.to_owned()) {
         if existing != effect_id {
             errors.push(Diagnostic::error(
-                "change_request.effect.overlapping_write",
+                "breg.change-request.effect-overlapping-write",
                 path,
                 "change-request effects cannot write the same target field more than once",
             ));
         } else {
             errors.push(Diagnostic::error(
-                "change_request.effect.overlapping_write",
+                "breg.change-request.effect-overlapping-write",
                 path,
                 "a change-request effect cannot both set and clear the same target field",
             ));
@@ -1905,7 +1904,7 @@ fn order_effects(
     }
     if errors
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.effect.dependency_cycle")
+        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-dependency-cycle")
     {
         return None;
     }
@@ -1929,7 +1928,7 @@ fn visit_effect(
         Some(VisitState::Done) => return,
         Some(VisitState::Visiting) => {
             errors.push(Diagnostic::error(
-                "change_request.effect.dependency_cycle",
+                "breg.change-request.effect-dependency-cycle",
                 format!("{}.changeRequest.effects[id={id}]", entity_path(entity_id)),
                 "reserved-create references cannot contain dependency cycles",
             ));
@@ -1967,7 +1966,7 @@ fn validate_plan_bounds(
         .len();
     if target_count > usize::from(MAX_CHANGE_REQUEST_TARGETS) {
         errors.push(Diagnostic::error(
-            "change_request.bounds.targets",
+            "breg.change-request.bounds-targets",
             effects_path.as_str(),
             "a change-request plan exceeds the supported target-record ceiling",
         ));
@@ -1975,7 +1974,7 @@ fn validate_plan_bounds(
     let mutation_count: usize = effects.iter().map(|effect| effect.mutations.len()).sum();
     if mutation_count > usize::from(MAX_CHANGE_REQUEST_FIELD_MUTATIONS) {
         errors.push(Diagnostic::error(
-            "change_request.bounds.field_mutations",
+            "breg.change-request.bounds-field-mutations",
             effects_path.as_str(),
             "a change-request plan exceeds the supported field-mutation ceiling",
         ));
@@ -1983,12 +1982,12 @@ fn validate_plan_bounds(
     match maximum_snapshot_bytes(request_entity, entities, effects) {
         Some(bytes) if bytes <= u64::from(MAX_CHANGE_REQUEST_SNAPSHOT_BYTES) => {}
         Some(_) => errors.push(Diagnostic::error(
-            "change_request.bounds.snapshot_bytes",
+            "breg.change-request.bounds-snapshot-bytes",
             effects_path.as_str(),
             "a change-request plan exceeds the supported snapshot-size ceiling",
         )),
         None => errors.push(Diagnostic::error(
-            "change_request.bounds.snapshot_unknown",
+            "breg.change-request.bounds-snapshot-unknown",
             effects_path.as_str(),
             "a change-request plan contains a field whose snapshot size cannot be bounded",
         )),
@@ -2025,7 +2024,7 @@ fn compile_apply_permissions(
             && !profile.operations.contains(&Operation::ApplyRequest)
         {
             errors.push(Diagnostic::error(
-                "change_request.apply_target.operation_required",
+                "breg.change-request.apply-target-operation-required",
                 format!("{profile_base}.operations"),
                 "apply target permissions require apply_request authority",
             ));
@@ -2035,7 +2034,7 @@ fn compile_apply_permissions(
                 format!("{profile_base}.applyTargets[entity={}]", target.entity);
             let Some(target_entity) = entities.get(&target.entity) else {
                 errors.push(Diagnostic::error(
-                    "change_request.apply_target.unknown",
+                    "breg.change-request.apply-target-unknown",
                     format!("{target_permission_path}.entity"),
                     "an apply permission targets an unknown entity",
                 ));
@@ -2072,7 +2071,7 @@ fn compile_apply_permissions(
     });
     if !target_entities.is_empty() && !covered {
         errors.push(Diagnostic::error(
-            "change_request.apply_targets.incomplete",
+            "breg.change-request.apply-targets-incomplete",
             format!(
                 "{}.accessProfiles[].applyTargets",
                 entity_path(&request_entity.id)
@@ -2106,7 +2105,7 @@ fn compile_presence_permissions(
                 );
                 let Some(targets) = target_by_request.get(&grant.request_type) else {
                     errors.push(Diagnostic::error(
-                        "change_request.presence.request_type_unknown",
+                        "breg.change-request.presence-request-type-unknown",
                         format!("{presence_path}.requestType"),
                         "a request-presence permission refers to an unknown request type",
                     ));
@@ -2130,60 +2129,11 @@ fn compile_presence_permissions(
                 );
                 if !targets.contains(&target_entity.id) {
                     errors.push(Diagnostic::error(
-                        "change_request.presence.target_unaffected",
+                        "breg.change-request.presence-target-unaffected",
                         format!("{presence_path}.requestType"),
                         "a request-presence permission must name a request type that can affect the granted target entity",
                     ));
                     continue;
-                }
-                if profile.anonymous {
-                    // Presence processes the request's existence and target
-                    // linkage even when no intake values are disclosed.
-                    let public_links = plans.get(&grant.request_type).is_some_and(|plan| {
-                        let declarative_links_are_public = plan
-                            .effects
-                            .iter()
-                            .filter(|effect| effect.target.entity_id == target_entity.id)
-                            .all(|effect| match &effect.target.binding {
-                                CompiledChangeRequestTargetBinding::Existing { from_field } => {
-                                    request_entity.fields.get(from_field).is_some_and(|field| {
-                                        field.classification == Classification::Public
-                                    })
-                                }
-                                CompiledChangeRequestTargetBinding::ReservedCreate { .. } => true,
-                            });
-                        let planner_links_are_public =
-                            plan.planner.as_ref().is_none_or(|planner| {
-                                planner
-                                    .writes
-                                    .iter()
-                                    .filter(|write| write.target_entity_id == target_entity.id)
-                                    .all(|write| {
-                                        write.target_from_field.as_ref().is_none_or(|from_field| {
-                                            request_entity.fields.get(from_field).is_some_and(
-                                                |field| {
-                                                    field.classification == Classification::Public
-                                                },
-                                            )
-                                        })
-                                    })
-                            });
-                        declarative_links_are_public && planner_links_are_public
-                    });
-                    if request_entity.classification != Classification::Public || !public_links {
-                        errors.push(Diagnostic::error(
-                            "change_request.presence.anonymous_non_public",
-                            presence_path.as_str(),
-                            "anonymous request presence requires a public request type and public target-link fields",
-                        ));
-                    }
-                    if !grant.row_boundaries.is_empty() {
-                        errors.push(Diagnostic::error(
-                            "change_request.presence.anonymous_claim_boundary",
-                            format!("{presence_path}.rowBoundaries"),
-                            "anonymous request presence cannot depend on verified claim boundaries",
-                        ));
-                    }
                 }
                 if let Some(plan) = plans.get_mut(&grant.request_type) {
                     plan.presence_permissions
@@ -2237,7 +2187,7 @@ fn validate_row_boundaries(
             ))
         {
             errors.push(Diagnostic::error(
-                "change_request.permission.row_boundary_invalid",
+                "breg.change-request.permission-row-boundary-invalid",
                 path,
                 "change-request permission row boundaries must be direct, non-empty, and duplicate-free",
             ));
@@ -2247,7 +2197,7 @@ fn validate_row_boundaries(
         }
         let Some(field) = entity.fields.get(&boundary.field) else {
             errors.push(Diagnostic::error(
-                "change_request.permission.row_boundary_field_unknown",
+                "breg.change-request.permission-row-boundary-field-unknown",
                 path,
                 "a change-request permission row boundary refers to an unknown field",
             ));
@@ -2258,7 +2208,7 @@ fn validate_row_boundaries(
             FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }
         ) {
             errors.push(Diagnostic::error(
-                "change_request.permission.row_boundary_type_unsupported",
+                "breg.change-request.permission-row-boundary-type-unsupported",
                 path,
                 "CRS84 point and structured fields cannot be change-request row-boundary fields",
             ));
@@ -2554,10 +2504,15 @@ fn authority_payload<const N: usize>(
                 .intersection(&operations)
                 .copied()
                 .collect::<BTreeSet<_>>();
+            // A profile once carried an `anonymous` member. A project that
+            // set it cannot compile without changing, so the member is false
+            // in every project that did not change. It stays in the
+            // fingerprint input at that value, so an engine upgrade keeps the
+            // identity of every request type whose project did not change.
             (
                 profile.id.clone(),
                 json!({
-                    "anonymous": profile.anonymous,
+                    "anonymous": false,
                     "principalClaim": profile.principal_claim,
                     "requiredScopes": profile.required_scopes,
                     "requiredPurposes": profile.required_purposes,
@@ -2668,7 +2623,7 @@ fn validate_id(value: &str, path: &str, errors: &mut Vec<Diagnostic>) {
         });
     if !valid {
         errors.push(Diagnostic::error(
-            "identifier.invalid",
+            "breg.identifier.invalid",
             path,
             "an identifier must use the closed lowercase identifier grammar",
         ));
@@ -2750,11 +2705,11 @@ mod tests {
         for (on_approved, expected_code) in [
             (
                 json!({"mode": "manual", "executor": "registry-applier"}),
-                "change_request.on_approved.executor_forbidden",
+                "breg.change-request.on-approved-executor-forbidden",
             ),
             (
                 json!({"mode": "automatic"}),
-                "change_request.on_approved.executor_required",
+                "breg.change-request.on-approved-executor-required",
             ),
         ] {
             let request = request(json!({"mode": "none"}), Some(on_approved));
@@ -2790,7 +2745,7 @@ mod tests {
         );
         assert!(errors
             .iter()
-            .all(|diagnostic| diagnostic.code == "identifier.invalid"));
+            .all(|diagnostic| diagnostic.code == "breg.identifier.invalid"));
     }
 
     #[test]

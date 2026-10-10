@@ -63,7 +63,7 @@ pub(crate) fn reader_entities(plan: &Plan) -> Vec<&PlannedEntity> {
 }
 
 /// The fields classified above their entity, which `check` reports as
-/// `access.profile.higher_classification` for every profile reading them.
+/// `breg.access.profile-higher-classification` for every profile reading them.
 /// This mixes two distinct causes: a field the model marks sensitive inside
 /// an entity that is not `restricted`, and an ordinarily `internal` field
 /// (the generated identifier, or a property the model does not mark
@@ -124,7 +124,7 @@ fn sensitive_note(plan: &Plan) -> Option<String> {
         ("the fields", "them")
     };
     Some(format!(
-        "`check` also reports `access.profile.higher_classification` for {names}: {model} \
+        "`check` also reports `breg.access.profile-higher-classification` for {names}: {model} \
          marks {noun} sensitive, so the derivation classified {pronoun} `restricted` inside \
          an entity that is not, and `{OPERATOR_PROFILE}` reads {pronoun} anyway. Keep the \
          finding as a reminder of what that profile discloses, or raise the entity's \
@@ -147,7 +147,7 @@ fn public_mismatch_note(plan: &Plan) -> Option<String> {
         ("they", "sit", "carry", "them")
     };
     Some(format!(
-        "`check` also reports `access.profile.higher_classification` for {}: {subject} \
+        "`check` also reports `breg.access.profile-higher-classification` for {}: {subject} \
          {sit} in an entity the selection classified `public`, but {subject} still {carry} \
          the derivation's ordinary `internal` classification, since {} does not mark \
          {pronoun} sensitive, so `{OPERATOR_PROFILE}` reads {pronoun} anyway. Keep the \
@@ -285,8 +285,20 @@ fn registry(plan: &Plan) -> String {
                 scalar(&entity.identifier.id)
             ),
         );
-        yaml.line(3, "fields:");
-        for field in entity.all_fields() {
+        // A field the projection cannot describe is left out, and an entity
+        // with none leaves out `fields`: an empty value would be null.
+        let projected = entity
+            .all_fields()
+            .filter(|field| {
+                field.concept_uri.is_some()
+                    && (matches!(field.kind, FieldKind::Reference { .. })
+                        || field.kind.manifest_scalar())
+            })
+            .collect::<Vec<_>>();
+        if !projected.is_empty() {
+            yaml.line(3, "fields:");
+        }
+        for field in projected {
             match (&field.kind, &field.concept_uri) {
                 (FieldKind::Reference { .. }, Some(uri)) => {
                     yaml.entry(4, "- id", &field.id);
@@ -420,9 +432,12 @@ fn registry(plan: &Plan) -> String {
         "A token selects one profile per request, and that profile decides everything the \
          request may touch. `operator` may create, read, list, and patch every entity; it is \
          the profile `bregctl dev` and the journeys use first. `check` reports \
-         `access.profile.unrestricted_collection` for it: it can list every record, and a \
+         `breg.access.profile-unrestricted-collection` for it: it can list every record, and a \
          caller-supplied filter is not authorization. That is intended for a single \
-         operations team; close it with a `rowBoundaries` entry or by removing `list`.",
+         operations team; close it with a `rowBoundaries` entry or by removing `list`. \
+         `breg.access.profile-writable-row-boundary` follows for a bound field it can write: \
+         confirm that moving records between callers' rows is intended, or drop the field \
+         from `writableFields`.",
     );
     if let Some(note) = sensitive_note(plan) {
         yaml.comment(0, &note);
@@ -448,7 +463,7 @@ fn registry(plan: &Plan) -> String {
             .map(|field| field.id.as_str())
             .collect();
         yaml.entry(3, "- entity", &entity.id);
-        yaml.line(4, "rowBoundaries: []");
+        yaml.line(4, "rowBoundaries: unrestricted");
         yaml.line(4, "operations: [create, get, list, patch]");
         yaml.line(4, &format!("readableFields: {}", flow_list(&all)));
         yaml.line(4, &format!("writableFields: {}", flow_list(&all)));
@@ -479,7 +494,7 @@ fn registry(plan: &Plan) -> String {
                 .map(|field| field.id.as_str())
                 .collect();
             yaml.entry(3, "- entity", &entity.id);
-            yaml.line(4, "rowBoundaries: []");
+            yaml.line(4, "rowBoundaries: unrestricted");
             yaml.line(4, "operations: [get, list]");
             yaml.line(4, &format!("readableFields: {}", flow_list(&readable)));
             yaml.line(
@@ -621,6 +636,10 @@ fn runtime_example(plan: &Plan) -> String {
 
 fn dev_clients(plan: &Plan) -> String {
     let mut yaml = Yaml::default();
+    yaml.line(
+        0,
+        "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json",
+    );
     yaml.comment(
         0,
         "Local callers for `bregctl dev`. The stock local identity provider that `dev` \
@@ -634,7 +653,11 @@ fn dev_clients(plan: &Plan) -> String {
          fresh private key per client under `.breg/dev/credentials/`; nothing here is a \
          credential, and none of it belongs in a deployment.",
     );
-    yaml.line(0, "version: 1");
+    yaml.line(
+        0,
+        "apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1",
+    );
+    yaml.line(0, "kind: BRegDevClients");
     yaml.line(0, "clients:");
     yaml.entry(1, "- id", OPERATOR_PROFILE);
     yaml.line(2, &format!("accessProfiles: [{OPERATOR_PROFILE}]"));
@@ -697,7 +720,7 @@ fn fixture_id(prefix: &str, name: &str) -> String {
 }
 
 /// The capture id a create step for `entity_id` registers, and the id a
-/// later step's `recordRef` names to read the same record back.
+/// later step's `recordCapture` names to read the same record back.
 fn capture_id(entity_id: &str) -> String {
     fixture_id("example-", entity_id)
 }
@@ -717,6 +740,10 @@ fn open_journey(yaml: &mut Yaml, index: usize) {
 
 fn journeys(plan: &Plan) -> String {
     let mut yaml = Yaml::default();
+    yaml.line(
+        0,
+        "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json",
+    );
     yaml.comment(
         0,
         "Project journeys: the requests `bregctl test` replays over real HTTP, with real \
@@ -734,10 +761,13 @@ fn journeys(plan: &Plan) -> String {
          earlier journey. A selection large enough to exceed one journey's step bound is split \
          across journeys named `first-records`, `first-records-2`, and so on.",
     );
-    yaml.line(0, "apiVersion: registry.registrystack.org/breg-journeys/v1");
+    yaml.line(
+        0,
+        "apiVersion: id.registrystack.org/formats/breg/journeys/v1",
+    );
+    yaml.line(0, "kind: BRegJourneys");
     yaml.line(0, "journeys:");
 
-    let mut operator_claims_declared = false;
     let mut journey_index = 1usize;
     let mut steps_in_journey = 0usize;
     let mut created: BTreeSet<&str> = BTreeSet::new();
@@ -755,9 +785,9 @@ fn journeys(plan: &Plan) -> String {
         yaml.line(3, &format!("- id: {}", fixture_id("create-", &entity.id)));
         yaml.entry(4, "entity", &entity.id);
         yaml.entry(4, "accessProfile", OPERATOR_PROFILE);
-        operator_claims(&mut yaml, plan, &mut operator_claims_declared);
+        operator_claims(&mut yaml, plan);
         yaml.line(4, "request:");
-        yaml.line(5, "operation: create");
+        yaml.line(5, "type: create");
         yaml.line(5, "data:");
         for field in entity.all_fields() {
             let Some(value) = example_value(plan, field, &identifier_value, &created) else {
@@ -780,11 +810,11 @@ fn journeys(plan: &Plan) -> String {
         yaml.line(3, &format!("- id: {}", fixture_id("get-", &entity.id)));
         yaml.entry(4, "entity", &entity.id);
         yaml.entry(4, "accessProfile", OPERATOR_PROFILE);
-        yaml.line(4, "claims: *operator_claims");
+        operator_claims(&mut yaml, plan);
         yaml.line(
             4,
             &format!(
-                "request: {{operation: get, recordRef: {}}}",
+                "request: {{type: get, recordCapture: {}}}",
                 scalar(&capture)
             ),
         );
@@ -799,14 +829,13 @@ fn journeys(plan: &Plan) -> String {
         yaml.line(3, &format!("- id: {}", fixture_id("list-", &entity.route)));
         yaml.entry(4, "entity", &entity.id);
         yaml.entry(4, "accessProfile", OPERATOR_PROFILE);
-        yaml.line(4, "claims: *operator_claims");
-        yaml.line(4, "request: {operation: list}");
+        operator_claims(&mut yaml, plan);
+        yaml.line(4, "request: {type: list}");
         yaml.line(4, "expect: {outcome: success, status: 200, count: 1}");
         created.insert(entity.id.as_str());
         steps_in_journey += ENTITY_JOURNEY_STEPS;
     }
 
-    let mut reader_claims_declared = false;
     for entity in reader_entities(plan) {
         if steps_in_journey + 1 > FIXTURE_MAX_STEPS_PER_JOURNEY {
             journey_index += 1;
@@ -822,32 +851,22 @@ fn journeys(plan: &Plan) -> String {
         );
         yaml.entry(4, "entity", &entity.id);
         yaml.entry(4, "accessProfile", READER_PROFILE);
-        if reader_claims_declared {
-            yaml.line(4, "claims: *reader_claims");
-        } else {
-            yaml.line(4, "claims: &reader_claims");
-            yaml.entry(5, "principal", &reader_principal(plan));
-            yaml.line(5, &format!("scopes: [{}]", scalar(&read_scope(plan))));
-            yaml.line(5, "purpose: registry-reporting");
-            reader_claims_declared = true;
-        }
-        yaml.line(4, "request: {operation: list}");
+        yaml.line(4, "claims:");
+        yaml.entry(5, "principal", &reader_principal(plan));
+        yaml.line(5, &format!("scopes: [{}]", scalar(&read_scope(plan))));
+        yaml.line(5, "purpose: registry-reporting");
+        yaml.line(4, "request: {type: list}");
         yaml.line(4, "expect: {outcome: success, status: 200, count: 1}");
         steps_in_journey += 1;
     }
     yaml.finish()
 }
 
-fn operator_claims(yaml: &mut Yaml, plan: &Plan, declared: &mut bool) {
-    if *declared {
-        yaml.line(4, "claims: *operator_claims");
-        return;
-    }
-    yaml.line(4, "claims: &operator_claims");
+fn operator_claims(yaml: &mut Yaml, plan: &Plan) {
+    yaml.line(4, "claims:");
     yaml.entry(5, "principal", &operator_principal(plan));
     yaml.line(5, &format!("scopes: [{}]", scalar(&operate_scope(plan))));
     yaml.line(5, "purpose: registry-operations");
-    *declared = true;
 }
 
 /// The entities in an order that places a reference's target before the
@@ -910,7 +929,7 @@ fn example_value(
             if !created.contains(target.as_str()) {
                 return None;
             }
-            format!("{{recordRef: {}}}", scalar(&capture_id(target)))
+            format!("{{recordCapture: {}}}", scalar(&capture_id(target)))
         }
         FieldKind::Structured { schema, .. } => {
             serde_json::to_string(&example_structured(schema)).expect("a value serializes")
@@ -1220,7 +1239,7 @@ fn readme(plan: &Plan) -> String {
     }
     let _ = writeln!(
         out,
-        "\n`bregctl check .` reports `access.profile.unrestricted_collection` for each \
+        "\n`bregctl check .` reports `breg.access.profile-unrestricted-collection` for each \
          profile: it can list a whole collection, and a caller-supplied filter is not \
          authorization. Leave the findings while you explore; before a production package, \
          bind a `rowBoundaries` entry to whatever field carries your registry's tenancy, or \
@@ -1459,6 +1478,10 @@ pub(crate) fn scalar(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use std::path::PathBuf;
 
     use registry_breg::fixtures::validate_fixture_journeys;
@@ -1611,8 +1634,8 @@ mod tests {
             .collect();
         assert!(
             findings.iter().all(|code| {
-                code == "access.profile.unrestricted_collection"
-                    || code == "access.profile.higher_classification"
+                code == "breg.access.profile-unrestricted-collection"
+                    || code == "breg.access.profile-higher-classification"
             }),
             "{findings:?}"
         );
@@ -1620,7 +1643,7 @@ mod tests {
         assert_eq!(
             findings
                 .iter()
-                .filter(|code| *code == "access.profile.higher_classification")
+                .filter(|code| *code == "breg.access.profile-higher-classification")
                 .count(),
             elevated.len(),
             "{findings:?}"
@@ -1782,12 +1805,12 @@ mod tests {
             if let Some(capture) = step["capture"].as_str() {
                 assert!(!capture.contains('_'), "{capture}");
             }
-            if let Some(record_ref) = step["request"]["recordRef"].as_str() {
+            if let Some(record_ref) = step["request"]["recordCapture"].as_str() {
                 assert!(!record_ref.contains('_'), "{record_ref}");
             }
             if let Some(data) = step["request"]["data"].as_object() {
                 for value in data.values() {
-                    if let Some(record_ref) = value.get("recordRef").and_then(Value::as_str) {
+                    if let Some(record_ref) = value.get("recordCapture").and_then(Value::as_str) {
                         assert!(!record_ref.contains('_'), "{record_ref}");
                     }
                 }
@@ -1974,6 +1997,22 @@ mod tests {
     }
 
     #[test]
+    fn the_dev_clients_and_journeys_open_with_their_schema_modeline() {
+        let (plan, selection) = starter_plan("household");
+        let files = render(&plan, &selection);
+        for (path, schema) in [
+            ("dev-clients.yaml", "dev-clients/dev-clients.v1alpha1"),
+            ("tests/journeys.yaml", "journeys/journeys.v1"),
+        ] {
+            let text = String::from_utf8(files[path].clone()).expect("UTF-8");
+            let expected = format!(
+                "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/{schema}.schema.json"
+            );
+            assert_eq!(text.lines().next(), Some(expected.as_str()), "{path}");
+        }
+    }
+
+    #[test]
     fn the_dev_clients_bind_the_profiles_the_journeys_use() {
         let (plan, selection) = starter_plan("household");
         let files = render(&plan, &selection);
@@ -1983,7 +2022,11 @@ mod tests {
         assert!(header.contains("testBindings"), "{header}");
         assert!(header.contains("'Explicit teaching clients'"), "{header}");
         let clients = yaml(&files, "dev-clients.yaml");
-        assert_eq!(clients["version"], 1);
+        assert_eq!(
+            clients["apiVersion"],
+            "id.registrystack.org/formats/breg/dev-clients/v1alpha1"
+        );
+        assert_eq!(clients["kind"], "BRegDevClients");
         let clients = clients["clients"].as_array().expect("clients");
         assert_eq!(clients.len(), 2);
         assert_eq!(clients[0]["accessProfiles"][0], OPERATOR_PROFILE);
@@ -2017,7 +2060,7 @@ mod tests {
             .find(|step| step["id"] == "create-group-membership")
             .expect("membership create");
         assert_eq!(
-            membership["request"]["data"]["person"]["recordRef"],
+            membership["request"]["data"]["person"]["recordCapture"],
             "example-person"
         );
         assert!(steps
@@ -2064,8 +2107,8 @@ mod tests {
 
     #[test]
     fn the_readme_names_what_no_field_links_and_the_concepts_that_would() {
-        let document = "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
-             kind: ModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
+        let document = "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
+             kind: BRegModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
              entities:\n  - concept: Household\n    properties:\n      - name: name\n\
              \x20 - concept: Person\n    properties:\n      - name: given_name\n\
              \x20 - concept: School\n    properties:\n      - name: name\n";
@@ -2103,8 +2146,8 @@ mod tests {
         let (linked, _) = starter_plan("household");
         assert!(!readme(&linked).contains("## What is not linked"));
 
-        let document = "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
-             kind: ModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
+        let document = "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
+             kind: BRegModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
              entities:\n  - concept: Household\n    properties:\n      - name: name\n\
              \x20 - concept: Person\n    properties:\n      - name: given_name\n\
              \x20 - concept: GroupMembership\n    properties:\n      - name: person\n      - name: group\n\

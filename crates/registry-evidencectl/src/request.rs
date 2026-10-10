@@ -172,12 +172,44 @@ struct ProgressiveSubjectInput {
     value: ProgressiveSelectorValue,
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
 enum ProgressiveSelectorValue {
     String(String),
     Integer(i64),
     Boolean(bool),
+}
+
+impl<'de> Deserialize<'de> for ProgressiveSelectorValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ValueVisitor;
+
+        impl serde::de::Visitor<'_> for ValueVisitor {
+            type Value = ProgressiveSelectorValue;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a string, an integer, or a boolean")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(ProgressiveSelectorValue::String(value.to_owned()))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(ProgressiveSelectorValue::Integer(value))
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                i64::try_from(value)
+                    .map(ProgressiveSelectorValue::Integer)
+                    .map_err(|_| E::invalid_value(serde::de::Unexpected::Unsigned(value), &self))
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(ProgressiveSelectorValue::Boolean(value))
+            }
+        }
+
+        deserializer.deserialize_any(ValueVisitor)
+    }
 }
 
 impl From<ProgressiveSelectorValue> for SelectorValue {
@@ -1107,6 +1139,26 @@ fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selector_values_read_by_node_kind_and_refuse_the_rest() {
+        let read = |text: &str| serde_json::from_str::<ProgressiveSelectorValue>(text);
+        assert!(matches!(
+            read("\"a\""),
+            Ok(ProgressiveSelectorValue::String(_))
+        ));
+        assert!(matches!(
+            read("-3"),
+            Ok(ProgressiveSelectorValue::Integer(-3))
+        ));
+        assert!(matches!(
+            read("true"),
+            Ok(ProgressiveSelectorValue::Boolean(true))
+        ));
+        for refused in ["1.5", "null", "[1]", "{\"a\": 1}", "18446744073709551615"] {
+            assert!(read(refused).is_err(), "{refused} must be refused");
+        }
+    }
+
     use super::*;
 
     fn progressive_args(subject: Vec<&str>, subjects_file: Option<PathBuf>) -> PrepareArgs {

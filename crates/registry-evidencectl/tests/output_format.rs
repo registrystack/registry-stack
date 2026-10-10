@@ -32,7 +32,6 @@ fn assert_json_format_refusal(arguments: &[&str], expected_command: &str) {
 const HUMAN_ONLY_COMMANDS: &[(&str, &[&str])] = &[
     ("target new", &["target", "new", "target", "--local"]),
     ("source mock generate", &["source", "mock", "generate"]),
-    ("source mock check", &["source", "mock", "check"]),
     ("source mock serve", &["source", "mock", "serve"]),
     ("source detach", &["source", "detach", "records"]),
     (
@@ -289,13 +288,13 @@ fn source_comparison_failures_emit_exactly_one_json_document() {
 }
 
 fn malformed_source_export(root: &Path) -> std::path::PathBuf {
-    const SOURCE: &str = "transport: http-json\nconnection: remote\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{profile: record-code, fields: [code]}]\n  prepareScript: adapters/lookup-prepare.rhai\n  adapterParametersSchema: schemas/lookup-parameters.yaml\nresponseSchema: schemas/lookup-response.yaml\nfactSchema: schemas/lookup-facts.yaml\nextractScript: adapters/lookup-extract.rhai\n";
+    const SOURCE: &str = "apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nconnection: remote\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{profile: record-code, fields: [code]}]\n  prepareScript: adapters/lookup-prepare.rhai\n  adapterParametersSchema: schemas/lookup-parameters.yaml\nresponseSchema: schemas/lookup-response.yaml\nfactSchema: schemas/lookup-facts.yaml\nextractScript: adapters/lookup-extract.rhai\n";
     let export = root.join("export");
     let artifacts = [
         ("sources/lookup.yaml", SOURCE),
         (
             "selectors/record-code.yaml",
-            "fields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n",
+            "apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1\nkind: EvidenceSelector\nfields: {code: {type: string, minimumBytes: 1, maximumBytes: 128}}\n",
         ),
         (
             "schemas/lookup-parameters.yaml",
@@ -321,12 +320,13 @@ fn malformed_source_export(root: &Path) -> std::path::PathBuf {
         fs::write(path, contents).expect("source artifact");
     }
     let manifest = serde_json::json!({
-        "formatVersion": 1,
+        "apiVersion": "id.registrystack.org/formats/breg/evidence-source-export/v1alpha1",
+        "kind": "BRegEvidenceSourceExport",
         "sourceId": "lookup",
         "provenance": {"producer": "output-format-test", "revision": "malformed"},
         "artifacts": artifacts.map(|(path, contents)| serde_json::json!({
             "path": path,
-            "sha256": hex::encode(Sha256::digest(contents.as_bytes())),
+            "digest": format!("sha256:{}", hex::encode(Sha256::digest(contents.as_bytes()))),
         })),
     });
     fs::write(
@@ -343,7 +343,7 @@ fn malformed_source_export(root: &Path) -> std::path::PathBuf {
 fn legacy_json_flags_fail_with_one_json_document() {
     let cases: &[&[&str]] = &[
         &["target", "explain", "missing", "--json"],
-        &["fixtures", "run", "--project", "missing", "--json"],
+        &["fixtures", "run", "missing", "--json"],
         &["doctor", "--project", "missing", "--json"],
     ];
     let directory = tempfile::tempdir().expect("temporary working directory");

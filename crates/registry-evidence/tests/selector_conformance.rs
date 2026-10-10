@@ -1,4 +1,8 @@
 //! Full-path conformance for the frozen Version 1 selector matrix.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -1686,7 +1690,7 @@ fn assert_invalid_bundle(mutate: impl FnOnce(&mut String)) {
     make_read_only(&bundle_root);
     assert!(matches!(
         Bundle::load(&bundle_root),
-        Err(BundleError::Config(_))
+        Err(BundleError::Refused(_))
     ));
 }
 

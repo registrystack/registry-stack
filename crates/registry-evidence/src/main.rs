@@ -16,16 +16,17 @@ use chrono_tz::Tz;
 use clap::Parser;
 use p256::ecdsa::SigningKey;
 use rand_core::OsRng;
-use registry_evidence::cli::{Cli, Command, ExplainFormat};
+use registry_evidence::cli::{Cli, Command, ExplainFormat, OutputFormat};
 use registry_evidence::{
     audit::{last_local_audit_operation, EvidenceAuditError},
     bundle::{
         ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument, SourceExtract,
     },
+    check::{check_runtime_file, OfflineCheck},
     config::{
-        AcquisitionConfig, ArtifactPath, AssuranceProfile, ConceptForm, ConfigError,
-        EvidenceConfig, OutboundTlsConfig, RequirementConfig, SchemaFault, SelectorInput,
-        StageRole,
+        AcquisitionConfig, ArtifactPath, AssuranceProfile, BurstShortfall, ConceptForm,
+        ConfigError, EvidenceConfig, OutboundTlsConfig, RequirementConfig, SchemaFault,
+        SelectorInput, StageRole,
     },
     kernel::{
         EvidenceConstruction, EvidenceScope, KernelError, KernelOutcome, OfflineKernel,
@@ -34,7 +35,7 @@ use registry_evidence::{
     local_verification::{prepare_local_relying_procedure, LocalRelyingProcedureInput},
     model::{
         JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference, SelectorValue,
-        SubjectBinding,
+        SubjectBinding, EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
     },
     problem::ProblemCode,
     rhai_runtime::{DerivedConceptValue, DerivedValue},
@@ -59,15 +60,20 @@ use registry_evidence::{
         json_type, name_list, object_keys, CategoryClass, FindingCode, FixtureReport, FixtureTrace,
         ReasonCode, ResultClass, ResultClassification, Stage, StageStatus, ValueClass,
     },
+    verification_policy::{
+        check_policy, read_holder_bound_policy, read_verification_policy, PolicyKind,
+    },
     verifier::{
         verify_flattened_jws, verify_flattened_jws_report, verify_sd_jwt_vc_presentation_report,
-        verify_sd_jwt_vc_report, EvidenceVerificationPolicy, EvidenceVerificationPolicyDocument,
-        HolderBoundPresentationPolicyDocument, VerificationError,
+        verify_sd_jwt_vc_report, EvidenceVerificationPolicy, VerificationError,
     },
 };
 use registry_platform_audit::{require_audit_under, AuditError, PersistentRootFault};
 use registry_platform_config::SecretProvidersConfig;
-use registry_platform_crypto::{canonicalize_json, parse_json_strict, LocalJwkSigner, PrivateJwk};
+use registry_platform_crypto::{
+    canonicalize_json, parse_json_strict, LocalJwkSigner, PrivateJwk, TransitInitializationError,
+};
+use registry_platform_yaml::{Report, Severity};
 use serde_json::{Map as JsonMap, Value};
 use zeroize::Zeroizing;
 
@@ -125,6 +131,9 @@ enum CommandError {
     /// diagnostic to the same value-free shape as the rest of `check`.
     AuditRoot(PersistentRootFault),
     Service(String),
+    /// The shared configuration reader refused a configuration file. Its
+    /// diagnostics are printed unchanged after one sentence naming the step.
+    Refused(Box<Report>),
 }
 
 impl fmt::Display for CommandError {
@@ -145,6 +154,11 @@ impl fmt::Display for CommandError {
             }
             Self::AuditRoot(fault) => write!(formatter, "audit destination check failed: {fault}"),
             Self::Service(reason) => write!(formatter, "service failed: {reason}"),
+            Self::Refused(report) => write!(
+                formatter,
+                "the configuration reader refused the configuration\n{}",
+                report.render_human().trim_end()
+            ),
         }
     }
 }
@@ -170,8 +184,10 @@ async fn main() -> ExitCode {
         std::env::args_os().skip(1),
         runtime_environment_set,
     ) {
+        // A removed flag or environment variable is a usage error, the exit
+        // a flag clap does not know gets.
         eprintln!("evidence: {refusal}");
-        return ExitCode::FAILURE;
+        return ExitCode::from(2);
     }
     let cli = Cli::parse();
     match run(cli).await {
@@ -187,83 +203,23 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     match cli.command {
         Command::Check {
             runtime_config,
+            format,
+            deny_warnings,
+            environment,
             require_runtime_dependencies,
             require_audit_under: audit_root,
             without_audit_lock,
-        } => {
-            // The inputs are captured once. Every proof below, and the runtime
-            // the dependency check initializes, reads this capture rather than
-            // the pathname again, so what passed is what gets opened.
-            let deployment =
-                DeploymentInputs::load(&runtime_config).map_err(deployment_load_error)?;
-            let runtime = deployment.runtime().clone();
-            let bundle = Arc::new(deployment.bundle().clone());
-            OfflineKernel::compile(Arc::clone(&bundle))
-                .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
-            let source_plans = compile_source_plans(&bundle, &runtime)?;
-            let stale_sources = source_plans
-                .iter()
-                .filter(|(_, source)| source.extract_is_stale(Utc::now()))
-                .map(|(source_id, _)| source_id.clone())
-                .collect::<Vec<_>>();
-            if !stale_sources.is_empty() {
-                return Err(CommandError::StaleExtracts(stale_sources));
-            }
-            // Deployment secret material is validated exactly as startup
-            // validates it, without opening the audit destination, so a
-            // deployment the server would refuse fails check instead of first
-            // start.
-            // Source credentials stay unresolved: readiness owns them.
-            let secrets =
-                runtime.config.secret_providers.resolver().map_err(|_| {
-                    runtime_initialization_error(RuntimeInitializationError::Secrets)
-                })?;
-            validate_secret_material(&bundle, &runtime.config, &secrets)
-                .await
-                .map_err(runtime_initialization_error)?;
-            if require_runtime_dependencies {
-                // The deployment owns storage persistence and declares the root
-                // it mounts; Evidence owns where the audit file resolves.
-                // Proving containment before the writer opens keeps the two
-                // boundaries separate and never relaxes the writability proof
-                // below. A stdout destination has no file to contain, so the
-                // flag is refused rather than silently satisfied.
-                if let Some(root) = audit_root.as_deref() {
-                    let audit_path = runtime.config.audit.path.as_deref().ok_or(CliError(
-                        "--require-audit-under needs a file audit destination; this runtime writes audit to stdout",
-                    ))?;
-                    require_audit_under(Path::new(audit_path), root)
-                        .map_err(CommandError::AuditRoot)?;
-                }
-                let available = if without_audit_lock {
-                    // The candidate shares the running writer's audit path, so
-                    // the lock is that writer's. Everything else is proved.
-                    EvidenceRuntime::check_dependencies_without_audit_lock(deployment)
-                        .await
-                        .map_err(runtime_initialization_error)?
-                } else {
-                    let serving = EvidenceRuntime::initialize_from(deployment)
-                        .await
-                        .map_err(runtime_initialization_error)?;
-                    serving.key_source_ready().await && serving.ready().await
-                };
-                if !available {
-                    return Err(CliError("a required runtime dependency is unavailable").into());
-                }
-            }
-            println!(
-                "Evidence package {} passed check ({} requirements)",
-                bundle.package_digest(),
-                bundle.config.requirements.len()
-            );
-            // A warning, not a refusal: a burst below the largest batch is a
-            // deliberate cap on some deployments. It names configured numbers
-            // and the key to change, never a request value.
-            if let Some(shortfall) = bundle.config.burst_shortfall() {
-                eprintln!("evidence: warning: {shortfall}");
-            }
-            Ok(ExitCode::SUCCESS)
-        }
+        } => Ok(run_check(CheckRequest {
+            runtime_config,
+            format,
+            deny_warnings,
+            environment,
+            dependencies: require_runtime_dependencies.then_some(DependencyProof {
+                audit_root,
+                without_audit_lock,
+            }),
+        })
+        .await),
         Command::Evaluate {
             runtime_config,
             fixture,
@@ -402,8 +358,10 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             Ok(ExitCode::SUCCESS)
         }
         Command::RenderDiscoveryDescription { config } => {
-            let bytes = fs::read(config).map_err(|_| DISCOVERY_CONFIG_UNREADABLE)?;
-            let config = EvidenceConfig::parse_yaml(&bytes).map_err(discovery_config_invalid)?;
+            let bytes = fs::read(&config).map_err(|_| DISCOVERY_CONFIG_UNREADABLE)?;
+            let config = EvidenceConfig::parse_yaml(&bytes).map_err(|error| {
+                discovery_config_invalid(error.in_file(&config.display().to_string()))
+            })?;
             // Configuration validation projects the publication before it
             // accepts the document, so every projection refusal is already
             // reported as an invalid configuration and this call cannot fail
@@ -421,8 +379,12 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         }
         Command::Serve { runtime_config } => {
             install_operational_logging();
+            // The inputs are loaded here rather than inside the runtime so a
+            // refused configuration reports its diagnostics, not only a class.
+            let deployment =
+                DeploymentInputs::load(&runtime_config).map_err(deployment_load_error)?;
             let runtime = Arc::new(
-                EvidenceRuntime::initialize(&runtime_config)
+                EvidenceRuntime::initialize_from(deployment)
                     .await
                     .map_err(runtime_initialization_error)?,
             );
@@ -454,6 +416,23 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 &policy,
                 at.as_deref(),
             )?)
+        }
+        Command::CheckPolicy {
+            verification_policy,
+            holder_bound_policy,
+            format,
+            deny_warnings,
+        } => {
+            let (path, kind) = match (verification_policy, holder_bound_policy) {
+                (Some(path), None) => (path, PolicyKind::Verification),
+                (None, Some(path)) => (path, PolicyKind::HolderBound),
+                _ => {
+                    return Err(CommandError::Cli(CliError(
+                        "check-policy requires exactly one policy file",
+                    )))
+                }
+            };
+            Ok(run_check_policy(&path, kind, format, deny_warnings))
         }
         Command::VerifyPresentation {
             sd_jwt_vc_presentation,
@@ -508,9 +487,461 @@ const DISCOVERY_OUTPUT_UNWRITABLE: CliError =
 /// contract clause and, for a bound violation, the closed field label it
 /// applies to.
 fn discovery_config_invalid(error: ConfigError) -> CommandError {
+    if let ConfigError::Refused(report) = error {
+        return CommandError::Refused(report);
+    }
     CommandError::Deployment(
         "discovery description configuration is not valid Evidence configuration",
         ArtifactFault::new("evidence.yaml", error.fault()),
+    )
+}
+
+/// One `evidence check` invocation.
+struct CheckRequest {
+    runtime_config: PathBuf,
+    format: OutputFormat,
+    deny_warnings: bool,
+    environment: bool,
+    /// The target-host proof `--require-runtime-dependencies` asks for.
+    dependencies: Option<DependencyProof>,
+}
+
+struct DependencyProof {
+    audit_root: Option<PathBuf>,
+    without_audit_lock: bool,
+}
+
+/// The `apiVersion` and `kind` of the `evidence/ctl-report` format, which
+/// `evidencectl` reports carry too. The runtime cannot depend on
+/// `registry-evidencectl`, so `evidencectl` holds the same two strings and a
+/// test there keeps them equal.
+const CHECK_REPORT_API_VERSION: &str = "id.registrystack.org/formats/evidence/ctl-report/v1alpha1";
+const CHECK_REPORT_KIND: &str = "EvidenceCtlReport";
+
+/// The `evidence check --format json` document: the ctl report envelope
+/// around the CFG-DIAG-1 diagnostics.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckReport<'a> {
+    ok: bool,
+    command: &'static str,
+    status: &'static str,
+    api_version: &'static str,
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    package_digest: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requirements: Option<usize>,
+    files_checked: usize,
+    diagnostics: Value,
+}
+
+/// Run the offline check, then the target-host proof when it was asked for
+/// and the offline check found no error, and report everything found.
+///
+/// Exit 0 when no error was reported, 1 when the configuration was refused
+/// (or a warning was reported under `--deny-warnings`), and 3 when something
+/// the check depends on could not be read or reached.
+async fn run_check(request: CheckRequest) -> ExitCode {
+    let mut check = check_runtime_file(&request.runtime_config, request.environment);
+    let mut accepted = None;
+    if let Some(bundle) = check.bundle().cloned() {
+        let bundle = Arc::new(bundle);
+        let mut compiled = true;
+        if let Err(error) = OfflineKernel::compile(Arc::clone(&bundle)) {
+            push_command_error(
+                &mut check,
+                "evidence.bundle.compile-refused",
+                kernel_compile_error("bundle compilation failed", error),
+            );
+            compiled = false;
+        }
+        if let Err(error) = compile_bundle_source_plans(&bundle) {
+            push_command_error(&mut check, "evidence.source.plan-refused", error);
+            compiled = false;
+        }
+        // A warning, not a refusal: a burst below the largest batch is a
+        // deliberate cap on some deployments. It names the ceiling and the
+        // key to change, never a configured value.
+        if let Some(shortfall) = bundle.config.burst_shortfall() {
+            let ceiling = match shortfall {
+                BurstShortfall::RequestBatch => {
+                    format!("{EVIDENCE_REQUEST_BATCH_MAX_ITEMS}, the request batch item ceiling")
+                }
+                BurstShortfall::HolderBoundBatch => "holderBoundBatchMaxSize".to_owned(),
+            };
+            check.push_bundle_member(
+                Severity::Warning,
+                "evidence.bundle.burst-below-largest-request",
+                "/rateLimits/burstPerPrincipal",
+                format!(
+                    "the burst is below {ceiling}, the largest request cost this bundle admits: \
+                     a request batch or holder-bound release that costs more than the burst is \
+                     always refused as evidence.invalid_request"
+                ),
+                format!(
+                    "Raise rateLimits.burstPerPrincipal to at least {ceiling}, unless capping \
+                     those requests is intended."
+                ),
+            );
+        }
+        if compiled {
+            accepted = Some(bundle);
+        }
+    }
+    if let Some(proof) = &request.dependencies {
+        if !check.has_errors() && !check.is_unavailable() {
+            if let Err(error) = prove_runtime_dependencies(&request.runtime_config, proof).await {
+                push_dependency_error(&mut check, error);
+            }
+        }
+    }
+
+    let report = check.report();
+    let refused = check.has_errors() || (request.deny_warnings && report.warning_count() > 0);
+    let (status, exit) = if check.is_unavailable() {
+        ("operational-failure", ExitCode::from(3))
+    } else if refused {
+        ("domain-refusal", ExitCode::FAILURE)
+    } else {
+        ("complete", ExitCode::SUCCESS)
+    };
+    // The package is reported as passing only when the check as a whole
+    // passed, so `--deny-warnings` never prints a success line.
+    let accepted = accepted.filter(|_| status == "complete");
+    match request.format {
+        OutputFormat::Json => {
+            let document = CheckReport {
+                ok: status == "complete",
+                command: "check",
+                status,
+                api_version: CHECK_REPORT_API_VERSION,
+                kind: CHECK_REPORT_KIND,
+                package_digest: accepted.as_deref().map(Bundle::package_digest),
+                requirements: accepted
+                    .as_deref()
+                    .map(|bundle| bundle.config.requirements.len()),
+                files_checked: report.files_checked().unwrap_or(1),
+                diagnostics: report.to_json_value(),
+            };
+            match serde_json::to_string(&document) {
+                Ok(text) => println!("{text}"),
+                Err(_) => {
+                    eprintln!("evidence: the check report could not be written");
+                    return ExitCode::from(3);
+                }
+            }
+        }
+        OutputFormat::Human => {
+            if let Some(bundle) = &accepted {
+                println!(
+                    "Evidence package {} passed check ({} requirements)",
+                    bundle.package_digest(),
+                    bundle.config.requirements.len()
+                );
+            }
+            eprint!("{}", report.render_human());
+        }
+    }
+    exit
+}
+
+/// Check one verification policy offline and report every problem found.
+///
+/// Exit 0 when the policy reads as its verify command reads it, 1 when it
+/// was refused (or, with `deny_warnings`, warned about), and 3 when the file
+/// could not be read.
+fn run_check_policy(
+    path: &Path,
+    kind: PolicyKind,
+    format: OutputFormat,
+    deny_warnings: bool,
+) -> ExitCode {
+    let check = check_policy(path, kind);
+    let report = &check.report;
+    let (status, exit) = if check.unavailable {
+        ("operational-failure", ExitCode::from(3))
+    } else if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+        ("domain-refusal", ExitCode::FAILURE)
+    } else {
+        ("complete", ExitCode::SUCCESS)
+    };
+    match format {
+        OutputFormat::Json => {
+            let document = CheckReport {
+                ok: status == "complete",
+                command: "check-policy",
+                status,
+                api_version: CHECK_REPORT_API_VERSION,
+                kind: CHECK_REPORT_KIND,
+                package_digest: None,
+                requirements: None,
+                files_checked: report.files_checked().unwrap_or(1),
+                diagnostics: report.to_json_value(),
+            };
+            match serde_json::to_string(&document) {
+                Ok(text) => println!("{text}"),
+                Err(_) => {
+                    eprintln!("evidence: the check report could not be written");
+                    return ExitCode::from(3);
+                }
+            }
+        }
+        OutputFormat::Human => {
+            if status == "complete" {
+                let label = match kind {
+                    PolicyKind::Verification => "verification policy",
+                    PolicyKind::HolderBound => "holder-bound verification policy",
+                };
+                println!("Evidence {label} passed check");
+            }
+            eprint!("{}", report.render_human());
+        }
+    }
+    exit
+}
+
+/// Prove what startup proves on the target host, from a fresh capture of the
+/// deployment inputs.
+async fn prove_runtime_dependencies(
+    runtime_config: &Path,
+    proof: &DependencyProof,
+) -> Result<(), CommandError> {
+    // The inputs are captured once. Every proof below, and the runtime the
+    // dependency check initializes, reads this capture rather than the
+    // pathname again, so what passed is what gets opened.
+    let deployment = DeploymentInputs::load(runtime_config).map_err(deployment_load_error)?;
+    let runtime = deployment.runtime().clone();
+    let bundle = Arc::new(deployment.bundle().clone());
+    let source_plans = compile_source_plans(&bundle, &runtime)?;
+    let stale_sources = source_plans
+        .iter()
+        .filter(|(_, source)| source.extract_is_stale(Utc::now()))
+        .map(|(source_id, _)| source_id.clone())
+        .collect::<Vec<_>>();
+    if !stale_sources.is_empty() {
+        return Err(CommandError::StaleExtracts(stale_sources));
+    }
+    // Deployment secret material is validated exactly as startup validates
+    // it, before the audit destination is opened.
+    // Source credentials stay unresolved here: readiness owns them.
+    let secrets = runtime
+        .config
+        .secret_providers
+        .resolver()
+        .map_err(|_| runtime_initialization_error(RuntimeInitializationError::Secrets))?;
+    validate_secret_material(&bundle, &runtime.config, &secrets)
+        .await
+        .map_err(runtime_initialization_error)?;
+    // The deployment owns storage persistence and declares the root it
+    // mounts; Evidence owns where the audit file resolves. Proving
+    // containment before the writer opens keeps the two boundaries separate
+    // and never relaxes the writability proof below. A stdout destination has
+    // no file to contain, so the flag is refused rather than silently
+    // satisfied.
+    if let Some(root) = proof.audit_root.as_deref() {
+        let audit_path = runtime
+            .config
+            .audit
+            .path
+            .as_deref()
+            .ok_or(AUDIT_ROOT_WITHOUT_FILE)?;
+        require_audit_under(Path::new(audit_path), root).map_err(CommandError::AuditRoot)?;
+    }
+    let available = if proof.without_audit_lock {
+        // The candidate shares the running writer's audit path, so the lock is
+        // that writer's. Everything else is proved.
+        EvidenceRuntime::check_dependencies_without_audit_lock(deployment)
+            .await
+            .map_err(runtime_initialization_error)?
+    } else {
+        let serving = EvidenceRuntime::initialize_from(deployment)
+            .await
+            .map_err(runtime_initialization_error)?;
+        serving.key_source_ready().await && serving.ready().await
+    };
+    if !available {
+        return Err(CliError(DEPENDENCY_UNAVAILABLE).into());
+    }
+    Ok(())
+}
+
+const AUDIT_ROOT_WITHOUT_FILE: CliError = CliError(
+    "--require-audit-under needs a file audit destination; this runtime writes audit to stdout",
+);
+const DEPENDENCY_UNAVAILABLE: &str = "a required runtime dependency is unavailable";
+const DEPLOYMENT_UNAVAILABLE: &str = "deployment input is unavailable";
+const DEPLOYMENT_NOT_IMMUTABLE: &str = "deployment input is not immutable";
+const SECRETS_UNAVAILABLE: &str = "runtime secret initialization failed";
+const SOURCES_UNAVAILABLE: &str = "runtime source initialization failed";
+const RATE_LIMIT_UNAVAILABLE: &str = "runtime rate-limit initialization failed";
+
+/// Report a failure of the offline check's compilation step as one
+/// diagnostic under `code`.
+fn push_command_error(check: &mut OfflineCheck, code: &str, error: CommandError) {
+    const ACTION: &str = "Correct the artifact the message names and rebuild the package with `evidencectl package`.";
+    match error {
+        CommandError::Deployment(_, fault) => check.push_artifact_fault(code, &fault, ACTION),
+        CommandError::Refused(report) => check.extend(*report),
+        other => check.push_deployment(Severity::Error, code, other.to_string(), ACTION),
+    }
+}
+
+/// Report a failure of the target-host proof as one diagnostic about the
+/// deployment. A dependency that could not be read or reached makes the check
+/// exit 3; a deployment input the runtime refuses makes it exit 1.
+fn push_dependency_error(check: &mut OfflineCheck, error: CommandError) {
+    let unavailable = |check: &mut OfflineCheck, code: &str, message: String, action: &str| {
+        check.mark_unavailable();
+        check.push_deployment(Severity::Error, code, message, action);
+    };
+    match error {
+        CommandError::Deployment(message, fault) if message == DEPLOYMENT_NOT_IMMUTABLE => check
+            .push_artifact_fault(
+                "evidence.deployment.not-immutable",
+                &fault,
+                "Make the file read-only for every user, or mount it on a read-only filesystem.",
+            ),
+        CommandError::Deployment(_, fault) => check.push_artifact_fault(
+            "evidence.deployment.invalid-input",
+            &fault,
+            "Correct the deployment input the message names, then run the check again.",
+        ),
+        CommandError::Refused(report) => check.extend(*report),
+        CommandError::Package(error) => check.push_deployment(
+            Severity::Error,
+            "evidence.deployment.package-refused",
+            error.naming_root_as("package.root").to_string(),
+            "Deploy the whole package directory `evidencectl package` built, unchanged.",
+        ),
+        CommandError::StaleExtracts(sources) => unavailable(
+            check,
+            "evidence.deployment.stale-extract",
+            CommandError::StaleExtracts(sources).to_string(),
+            "Publish a current extract for each named source, or bind one in sourceExtracts.",
+        ),
+        CommandError::Audit(message, fault) => {
+            let action = match &fault {
+                AuditInitializationFault::Configuration => {
+                    "Correct the audit block in the runtime file."
+                }
+                AuditInitializationFault::Secret => {
+                    "Provision the audit hash key the audit block references, and make it readable by this user."
+                }
+                AuditInitializationFault::Storage | AuditInitializationFault::File(_) => {
+                    "Make the audit destination writable by this user and free of another writer, as the message says."
+                }
+            };
+            // An out-of-range audit block is refused input; a key, a file,
+            // or storage this host could not use is an unavailable
+            // dependency.
+            if fault == AuditInitializationFault::Configuration {
+                check.push_deployment(
+                    Severity::Error,
+                    "evidence.deployment.audit-refused",
+                    format!("{message}: {fault}"),
+                    action,
+                );
+            } else {
+                unavailable(
+                    check,
+                    "evidence.deployment.audit-unavailable",
+                    format!("{message}: {fault}"),
+                    action,
+                );
+            }
+        }
+        // A signing key this host could not read, or a provider that did not
+        // serve it, is an unavailable dependency. A key that is served but is
+        // not the one the bundle governs is refused input.
+        CommandError::Signing(fault) => {
+            let message = CommandError::Signing(fault).to_string();
+            let action = "Provision the signing key the signer block names, as the message says.";
+            if signing_dependency_unavailable(fault) {
+                unavailable(check, "evidence.deployment.signing-unavailable", message, action);
+            } else {
+                check.push_deployment(
+                    Severity::Error,
+                    "evidence.deployment.signing-refused",
+                    message,
+                    action,
+                );
+            }
+        }
+        CommandError::AuditRoot(fault) => check.push_deployment(
+            Severity::Error,
+            "evidence.deployment.audit-outside-root",
+            CommandError::AuditRoot(fault).to_string(),
+            "Point audit.path at a file under the directory --require-audit-under names, or mount persistent storage there.",
+        ),
+        CommandError::Cli(error) if error == AUDIT_ROOT_WITHOUT_FILE => check.push_deployment(
+            Severity::Error,
+            "evidence.deployment.audit-not-a-file",
+            error.to_string(),
+            "Set audit.path to a file, or leave out --require-audit-under.",
+        ),
+        CommandError::Cli(error) => {
+            let message = error.to_string();
+            match error.0 {
+                DEPLOYMENT_UNAVAILABLE => unavailable(
+                    check,
+                    "evidence.deployment.unavailable",
+                    message,
+                    "Make the runtime file, the package, and the files they name readable by this user.",
+                ),
+                SECRETS_UNAVAILABLE => unavailable(
+                    check,
+                    "evidence.deployment.secret-unavailable",
+                    message,
+                    "Provision every secret the runtime file references, readable by this user and by no other.",
+                ),
+                SOURCES_UNAVAILABLE => unavailable(
+                    check,
+                    "evidence.deployment.source-unavailable",
+                    message,
+                    "Provision the source credentials and trust the sources need, then run the check again.",
+                ),
+                RATE_LIMIT_UNAVAILABLE => unavailable(
+                    check,
+                    "evidence.deployment.rate-limit-unavailable",
+                    message,
+                    "Correct the rateLimits block, then run the check again.",
+                ),
+                DEPENDENCY_UNAVAILABLE => unavailable(
+                    check,
+                    "evidence.deployment.dependency-unavailable",
+                    message,
+                    "Make the signer and every source and token issuer reachable from this host, then run the check again.",
+                ),
+                _ => check.push_deployment(
+                    Severity::Error,
+                    "evidence.deployment.refused",
+                    message,
+                    "Correct the deployment the message names, then run the check again.",
+                ),
+            }
+        }
+        CommandError::Service(reason) => unavailable(
+            check,
+            "evidence.deployment.unavailable",
+            reason,
+            "Run the check again on the target host.",
+        ),
+    }
+}
+
+/// Whether a signing fault means the key or its provider could not be reached
+/// or read from this host, rather than that what it served is refused.
+fn signing_dependency_unavailable(fault: SigningInitializationFault) -> bool {
+    matches!(
+        fault,
+        SigningInitializationFault::LocalKey
+            | SigningInitializationFault::Transit(
+                TransitInitializationError::Unavailable
+                    | TransitInitializationError::Refused
+                    | TransitInitializationError::ProviderFailed
+                    | TransitInitializationError::InvalidResponse
+            )
     )
 }
 
@@ -521,12 +952,14 @@ fn discovery_config_invalid(error: ConfigError) -> CommandError {
 /// `evidence check` names a file, a schema path, and a text location instead
 /// of only a class. Public HTTP problems are unaffected and stay generic.
 fn deployment_load_error(error: BundleError) -> CommandError {
-    if let BundleError::Package(error) = error {
-        return CommandError::Package(error);
-    }
+    let error = match error {
+        BundleError::Package(error) => return CommandError::Package(error),
+        BundleError::Refused(report) => return CommandError::Refused(report),
+        other => other,
+    };
     let message = match &error {
-        BundleError::Unavailable => "deployment input is unavailable",
-        BundleError::NotImmutable(_) => "deployment input is not immutable",
+        BundleError::Unavailable => DEPLOYMENT_UNAVAILABLE,
+        BundleError::NotImmutable(_) => DEPLOYMENT_NOT_IMMUTABLE,
         BundleError::UnsupportedEntry => "deployment contains an unsupported entry",
         BundleError::InvalidPath => "deployment contains an invalid path binding",
         BundleError::UnknownFile(_) => "deployment artifact closure is invalid",
@@ -534,7 +967,9 @@ fn deployment_load_error(error: BundleError) -> CommandError {
         BundleError::Config(_) => "deployment configuration is invalid",
         BundleError::InvalidArtifact(_) => "deployment artifact is invalid",
         BundleError::InvalidScript(_) => "deployment script is invalid",
-        BundleError::Package(_) => unreachable!("package errors returned above"),
+        BundleError::Package(_) | BundleError::Refused(_) => {
+            unreachable!("package errors and reader refusals returned above")
+        }
     };
     match error.artifact_fault() {
         Some(fault) => CommandError::Deployment(message, fault.clone()),
@@ -561,19 +996,13 @@ fn runtime_initialization_error(error: RuntimeInitializationError) -> CommandErr
         RuntimeInitializationError::Bundle => {
             CliError("runtime bundle initialization failed").into()
         }
-        RuntimeInitializationError::Secrets => {
-            CliError("runtime secret initialization failed").into()
-        }
+        RuntimeInitializationError::Secrets => CliError(SECRETS_UNAVAILABLE).into(),
         RuntimeInitializationError::Audit(fault) => {
             CommandError::Audit("runtime audit initialization failed", fault)
         }
         RuntimeInitializationError::Signing(fault) => CommandError::Signing(fault),
-        RuntimeInitializationError::Source => {
-            CliError("runtime source initialization failed").into()
-        }
-        RuntimeInitializationError::RateLimit => {
-            CliError("runtime rate-limit initialization failed").into()
-        }
+        RuntimeInitializationError::Source => CliError(SOURCES_UNAVAILABLE).into(),
+        RuntimeInitializationError::RateLimit => CliError(RATE_LIMIT_UNAVAILABLE).into(),
         RuntimeInitializationError::IssuerTrust => CliError(
             "runtime authentication initialization failed: the access-token issuer TLS trust profile does not resolve to a bound certificate bundle trusted beside the system roots",
         )
@@ -963,9 +1392,13 @@ fn verify_stored_response(
         parse_json_strict(&read_verification_input(jwks_path)?).map_err(|_| VERIFY_MALFORMED)?,
     )
     .map_err(|_| VERIFY_MALFORMED)?;
-    let document: EvidenceVerificationPolicyDocument =
-        serde_norway::from_slice(&read_verification_input(policy_path)?)
-            .map_err(|_| VERIFY_MALFORMED)?;
+    // The command reports only the closed class; `evidence check-policy`
+    // reports where the policy is wrong.
+    let document = read_verification_policy(
+        &policy_path.display().to_string(),
+        &read_verification_input(policy_path)?,
+    )
+    .map_err(|_| VERIFY_MALFORMED)?;
     // A policy stating a time bound the contract forbids is an unusable input
     // document. Reading it already refuses it; this is the same refusal for the
     // conversion, and both are the malformed-input class rather than a
@@ -1049,9 +1482,11 @@ fn verify_stored_presentation(
     .map_err(|_| VERIFY_MALFORMED)?;
     // The holder-bound document is closed and declares its own mode, so a
     // Version 1 policy never parses here and this policy never parses there.
-    let document: HolderBoundPresentationPolicyDocument =
-        serde_norway::from_slice(&read_verification_input(policy_path)?)
-            .map_err(|_| VERIFY_MALFORMED)?;
+    let document = read_holder_bound_policy(
+        &policy_path.display().to_string(),
+        &read_verification_input(policy_path)?,
+    )
+    .map_err(|_| VERIFY_MALFORMED)?;
     // As on the Version 1 path, a policy stating a bound the contract forbids
     // is an unusable input document rather than a verification outcome.
     let policy = document
@@ -1258,34 +1693,25 @@ async fn evaluate_fixture(
         .fixtures
         .get(fixture_name)
         .ok_or(CliError("fixture artifact is not captured by the bundle"))?;
-    let fixture = serde_json::to_value(fixture)
-        .map_err(|_| CliError("fixture contract is not representable"))?;
     let object = fixture
         .as_object()
         .ok_or(CliError("fixture contract must be an object"))?;
     if object.get("synthetic_only") != Some(&Value::Bool(true)) {
         return Err(CliError("fixture is not an approved synthetic definition"));
     }
+    // A fixture that declares itself a coequal acceptance definition is run
+    // as one; every other fixture is a reference fixture.
     if object.get("coequal_acceptance_definition") != Some(&Value::Bool(true)) {
-        if object
-            .get("fixture")
-            .and_then(Value::as_str)
-            .is_some_and(|id| id.starts_with("registry.evidence.reference.") && id.ends_with("/v1"))
-        {
-            return evaluate_reference_fixture(
-                bundle,
-                kernel,
-                source_plans,
-                signer.as_ref(),
-                requirement,
-                (object, selected_case),
-                trace,
-            )
-            .await;
-        }
-        return Err(CliError(
-            "fixture is not an approved synthetic acceptance definition",
-        ));
+        return evaluate_reference_fixture(
+            bundle,
+            kernel,
+            source_plans,
+            signer.as_ref(),
+            requirement,
+            (object, selected_case),
+            trace,
+        )
+        .await;
     }
     trace.declare_canaries(declared_canaries(
         object,
@@ -2216,13 +2642,7 @@ async fn evaluate_reference_fixture(
     refuse_replayed_statement_stages(&bundle.config, &requirement.acquisition)?;
     require_exact_keys(
         fixture,
-        &[
-            "fixture",
-            "synthetic_only",
-            "common",
-            "cases",
-            "privacyExpectation",
-        ],
+        &["synthetic_only", "common", "cases", "privacyExpectation"],
     )?;
     trace.declare_canaries(declared_canaries(
         fixture,
@@ -3952,11 +4372,9 @@ fn validate_reference_parameter_mutation(
         }
         parameters.insert(name.clone(), value.clone());
     }
-    disposable.config = serde_json::from_value(config)
+    let mutated = serde_json::to_vec(&config)
         .map_err(|_| CliError("reference parameter mutation is invalid"))?;
-    disposable
-        .config
-        .validate()
+    disposable.config = registry_evidence::config::EvidenceConfig::parse_yaml(&mutated)
         .map_err(|_| CliError("reference parameter mutation broke configuration"))?;
     let disposable = Arc::new(disposable);
     let kernel = OfflineKernel::compile(Arc::clone(&disposable))
@@ -4725,8 +5143,12 @@ fn validate_companion_rejection(
         })
         .ok_or(CliError("fixture companion-bundle label is invalid"))?;
     require_expected(case, "bundle-rejection")?;
-    let matrix: Value = serde_norway::from_slice(ANTI_RECONSTRUCTION_FIXTURE)
-        .map_err(|_| CliError("anti-reconstruction fixture is invalid"))?;
+    let matrix: Value = registry_platform_yaml::Reader::new("anti-reconstruction.yaml")
+        .scan(ANTI_RECONSTRUCTION_FIXTURE)
+        .ok()
+        .flatten()
+        .map(|root| root.to_json_value())
+        .ok_or(CliError("anti-reconstruction fixture is invalid"))?;
     let rejected = matrix
         .get("rejected_bundles")
         .and_then(Value::as_array)
@@ -4774,7 +5196,9 @@ fn validate_companion_rejection(
         .iter_mut()
         .find(|candidate| candidate.id == requirement.id)
         .ok_or(CliError("fixture requirement is missing"))?;
-    original.disclosure_guard.families = vec![shared_family.to_owned()];
+    original.disclosure_guard.families =
+        registry_platform_yaml::UniqueList::new(vec![shared_family.to_owned()])
+            .expect("a single family is distinct");
     for index in 1..definitions.len() {
         let suffix = format!(":fixture-companion-{index}");
         let handle_suffix = format!("-fixture-companion-{index}");
@@ -4782,7 +5206,9 @@ fn validate_companion_rejection(
         companion.handle.push_str(&handle_suffix);
         companion.id.push_str(&suffix);
         companion.evidence_type.push_str(&suffix);
-        companion.disclosure_guard.families = vec![shared_family.to_owned()];
+        companion.disclosure_guard.families =
+            registry_platform_yaml::UniqueList::new(vec![shared_family.to_owned()])
+                .expect("a single family is distinct");
         companion.derivation.script = registry_evidence::config::ArtifactPath::parse(&format!(
             "derivations/fixture-companion-{index}.rhai"
         ))
@@ -5111,6 +5537,10 @@ fn safe_fixture_name(path: &Path) -> Result<&str, CliError> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
     use clap::CommandFactory as _;
     use registry_evidence::config::SubjectBindingMode;
@@ -5231,14 +5661,18 @@ mod tests {
     #[tokio::test]
     async fn render_discovery_description_reports_an_invalid_configuration() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        for (name, document) in [
+        for (name, document, expected_code, expected_line) in [
             (
                 "unparsable-publication.yaml",
                 "version: 1\nservice: [parcel-owner-lookup\n",
+                "yaml.unexpected-end",
+                3,
             ),
             (
                 "foreign-publication.yaml",
                 "version: 1\nunknownSetting: parcel-owner-lookup\n",
+                "config.unknown-key",
+                2,
             ),
         ] {
             let path = directory.path().join(name);
@@ -5248,15 +5682,19 @@ mod tests {
                 .await
                 .expect_err("a document that is not Evidence configuration is refused");
 
-            let CommandError::Deployment(message, artifact) = &error else {
-                panic!("an invalid configuration reports its class: {error}");
+            let CommandError::Refused(report) = &error else {
+                panic!("an invalid configuration reports the reader's diagnostics: {error}");
             };
-            assert_eq!(*message, DISCOVERY_CONFIG_INVALID.0);
-            assert_eq!(artifact.artifact(), "evidence.yaml");
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == expected_code)
+                .unwrap_or_else(|| panic!("{name}: no {expected_code}"));
+            let source = diagnostic.source.as_ref().expect("a position");
+            assert_eq!(source.file, path.display().to_string());
+            assert_eq!(source.line, Some(expected_line), "{name}");
             let rendered = error.to_string();
-            for content in [name, "unknownSetting", "parcel-owner-lookup"] {
-                assert!(!rendered.contains(content), "{rendered}");
-            }
+            assert!(!rendered.contains("parcel-owner-lookup"), "{rendered}");
         }
     }
 
@@ -5298,7 +5736,14 @@ mod tests {
             .expect("the acceptance configuration is accepted as written");
         let refusal = EvidenceConfig::parse_yaml(document.as_bytes())
             .expect_err("an unprojectable publication is not accepted as configuration");
-        assert_eq!(refusal.fault().cause(), "URI is invalid");
+        let ConfigError::Refused(report) = &refusal else {
+            panic!("the reader did not refuse the publication: {refusal}");
+        };
+        assert_eq!(
+            report.diagnostics()[0].code,
+            "evidence.bundle.invalid-issuer"
+        );
+        assert_eq!(report.diagnostics()[0].path, "/issuer/id");
 
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("unprojectable-publication.yaml");
@@ -5308,12 +5753,15 @@ mod tests {
             .await
             .expect_err("a publication the shared profile refuses is not compiled");
 
-        let CommandError::Deployment(message, artifact) = &error else {
-            panic!("an unprojectable publication reports its class: {error}");
+        let CommandError::Refused(report) = &error else {
+            panic!("an unprojectable publication reports the reader's diagnostics: {error}");
         };
-        assert_eq!(*message, DISCOVERY_CONFIG_INVALID.0);
-        assert_eq!(artifact.artifact(), "evidence.yaml");
-        assert_eq!(artifact.fault().cause(), "URI is invalid");
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.code, "evidence.bundle.invalid-issuer");
+        assert_eq!(diagnostic.path, "/issuer/id");
+        let source = diagnostic.source.as_ref().expect("a position");
+        assert_eq!(source.file, path.display().to_string());
+        assert_eq!(source.line, Some(7));
     }
 
     #[test]
@@ -5457,8 +5905,10 @@ mod tests {
             ),
         ] {
             let document = verification_policy_document(&format!("form: {written}"));
-            let policy: EvidenceVerificationPolicyDocument = serde_norway::from_str(&document)
-                .unwrap_or_else(|error| panic!("`{written}` is a policy form: {error}"));
+            let policy = read_verification_policy("policy.yaml", document.as_bytes())
+                .unwrap_or_else(|report| {
+                    panic!("`{written}` is a policy form: {}", report.render_human())
+                });
             assert_eq!(
                 policy
                     .try_into_policy(Utc::now())
@@ -5482,7 +5932,7 @@ mod tests {
         ] {
             let document = verification_policy_document(&format!("form: {written}"));
             assert!(
-                serde_norway::from_str::<EvidenceVerificationPolicyDocument>(&document).is_err(),
+                read_verification_policy("policy.yaml", document.as_bytes()).is_err(),
                 "`{written}` is not a policy form but parsed as one"
             );
         }
@@ -5898,7 +6348,9 @@ mod tests {
             "type": "https://id.example.invalid/problems/fixture-canary",
             "code": "fixture.canary"
         });
-        bundle.config = serde_json::from_value(config).expect("declared config parses");
+        bundle.config =
+            EvidenceConfig::parse_yaml(&serde_json::to_vec(&config).expect("JSON serializes"))
+                .expect("declared config parses");
         bundle.config.validate().expect("declared config validates");
 
         let bundle = Arc::new(bundle);
@@ -6154,7 +6606,9 @@ mod tests {
             "search": REFERENCE_CHAINED_SEARCH,
             "fetch": REFERENCE_CHAINED_FETCH,
         });
-        bundle.config = serde_json::from_value(config).expect("chained config parses");
+        bundle.config =
+            EvidenceConfig::parse_yaml(&serde_json::to_vec(&config).expect("JSON serializes"))
+                .expect("chained config parses");
         bundle.config.validate().expect("chained config validates");
         set_tree_mode(directory.path(), 0o755, 0o444);
         (Arc::new(bundle), fixture)
@@ -6178,15 +6632,17 @@ mod tests {
             .acquisition;
         assert_eq!(refuse_replayed_statement_stages(&statement, single), Ok(()));
 
-        let mut chained =
-            serde_json::to_value(&statement).expect("the statement config is representable");
-        let fetch = chained["sources"][STATEMENT_SOURCE].clone();
-        chained["sources"]
-            .as_object_mut()
-            .expect("sources are an object")
+        // The duplicated source is reached by no grant, which the bundle
+        // rules refuse, so it is added to the typed configuration.
+        let mut chained = statement.clone();
+        let fetch = chained
+            .sources
+            .get(STATEMENT_SOURCE)
+            .expect("the statement source is declared")
+            .clone();
+        chained
+            .sources
             .insert(format!("{STATEMENT_SOURCE}-fetch"), fetch);
-        let chained: EvidenceConfig =
-            serde_json::from_value(chained).expect("the duplicated config parses");
         assert_eq!(
             refuse_replayed_statement_stages(
                 &chained,
@@ -6255,7 +6711,9 @@ mod tests {
             "search": STATEMENT_SOURCE,
             "fetch": format!("{STATEMENT_SOURCE}-fetch"),
         });
-        bundle.config = serde_json::from_value(config).expect("the chained config parses");
+        bundle.config =
+            EvidenceConfig::parse_yaml(&serde_json::to_vec(&config).expect("JSON serializes"))
+                .expect("the chained config parses");
         bundle
             .config
             .validate()
@@ -6449,10 +6907,20 @@ mod tests {
             Ok(valid_config.sources.len())
         );
 
-        let invalid = valid.replacen("timeoutMilliseconds: 3000", "timeoutMilliseconds: 0", 1);
-        assert_ne!(invalid, valid, "fixture mutation must remain effective");
-        let invalid_config: EvidenceConfig =
-            serde_norway::from_str(&invalid).expect("closed typed shape deserializes");
+        // A base URL carrying a path is refused when the bundle is read, so
+        // the typed configuration is changed after reading to prove source
+        // plan compilation refuses it too.
+        let mut invalid_config = valid_config.clone();
+        let registry_evidence::config::SourceConfig::HttpJson { base_url, .. } = invalid_config
+            .sources
+            .values_mut()
+            .next()
+            .expect("the fixture declares a source")
+        else {
+            panic!("the fixture's first source is an HTTP source");
+        };
+        *base_url = registry_platform_yaml::Url::new("https://registry.example.invalid/records")
+            .expect("the shared URL type accepts the text");
         assert_eq!(
             compile_source_plans_with_runtime(
                 &invalid_config,
@@ -6504,7 +6972,7 @@ mod tests {
         );
         let expected_cases = bundle.fixtures[fixture.to_str().expect("fixture path")]
             .get("cases")
-            .and_then(serde_norway::Value::as_sequence)
+            .and_then(Value::as_array)
             .expect("cases")
             .len();
         assert_eq!(
@@ -6665,7 +7133,7 @@ mod tests {
             );
             let expected_cases = bundle.fixtures[fixture.to_str().expect("fixture path")]
                 .get("cases")
-                .and_then(serde_norway::Value::as_sequence)
+                .and_then(Value::as_array)
                 .expect("cases")
                 .len();
             assert_eq!(
@@ -6859,7 +7327,7 @@ mod tests {
             );
             let expected_cases = bundle.fixtures[fixture.to_str().expect("fixture path")]
                 .get("cases")
-                .and_then(serde_norway::Value::as_sequence)
+                .and_then(Value::as_array)
                 .expect("cases")
                 .len();
             assert_eq!(
@@ -6940,7 +7408,7 @@ mod tests {
                 let fixture = Path::new(fixture_path.as_str());
                 let expected_cases = bundle.fixtures[fixture_path.as_str()]
                     .get("cases")
-                    .and_then(serde_norway::Value::as_sequence)
+                    .and_then(Value::as_array)
                     .expect("cases")
                     .len();
                 assert_eq!(

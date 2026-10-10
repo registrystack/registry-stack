@@ -112,6 +112,7 @@ const PROJECT: &str = r#"{
       "id":"steward",
       "default":true,
       "principalClaim":"sub",
+      "requiredScopes":"unrestricted",
       "permissions":[
         {
           "entity":"asset-site",
@@ -141,6 +142,7 @@ const PROJECT: &str = r#"{
       "id":"submitter",
       "default":true,
       "principalClaim":"sub",
+      "requiredScopes":"unrestricted",
       "permissions":[
         {
           "entity":"correction-request",
@@ -159,6 +161,7 @@ const PROJECT: &str = r#"{
     {
       "id":"standing-agent",
       "principalClaim":"sub",
+      "requiredScopes":"unrestricted",
       "permissions":[
         {
           "entity":"correction-request",
@@ -174,6 +177,7 @@ const PROJECT: &str = r#"{
     {
       "id":"reviewer",
       "principalClaim":"sub",
+      "requiredScopes":"unrestricted",
       "requiredPurposes":["review"],
       "permissions":[
         {
@@ -187,6 +191,7 @@ const PROJECT: &str = r#"{
     {
       "id":"applier",
       "principalClaim":"sub",
+      "requiredScopes":"unrestricted",
       "requiredPurposes":["apply"],
       "permissions":[
         {

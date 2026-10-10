@@ -163,7 +163,7 @@ if [[ -z "$database_url" ]]; then
 fi
 
 project="$run_dir/project"
-"$schedulingctl" check --deny-findings "$project" >/dev/null
+"$schedulingctl" check "$project" >/dev/null
 "$schedulingctl" test "$project" >/dev/null
 "$schedulingctl" package "$project" --output "$run_dir/package" >/dev/null
 "$schedulingctl" apply --runtime-config "$run_dir/runtime.yaml" --operator-reference demo >/dev/null

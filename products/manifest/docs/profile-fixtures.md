@@ -9,9 +9,9 @@ For basic manifest validation (schema version, field format, reference integrity
 A profile fixture is a pair of files in a `profiles/<profile-id>/` directory:
 
 - `profile.yaml`: the profile descriptor (schema version `registry-manifest-profile/v1`). It
-  declares required concept IRIs, required identifiers, codelist expectations, cardinality
-  expectations per entity field, runtime-only keys that must not appear in a portable manifest,
-  and a list of fixture paths to validate.
+  declares the artifacts the profile reads, required concept IRIs, required identifiers,
+  codelist expectations, cardinality expectations per entity field, the conformance checks it
+  names, and a list of fixture paths to validate.
 - `fixtures/metadata.yaml`: a portable manifest (schema version `registry-manifest/v1`) that
   the validator checks against the profile descriptor.
 
@@ -79,12 +79,17 @@ Each subdirectory that contains a `profile.yaml` is a profile entry.
 cargo run --locked -p registry-manifest-cli -- validate-profiles profiles
 ```
 
-The validator scans every subdirectory for `profile.yaml`, validates the descriptor schema,
-then validates every fixture manifest listed in that descriptor.
+The validator scans every subdirectory for `profile.yaml`, reads each descriptor, reads every
+fixture manifest the descriptor lists with the same checks as `validate`, then checks each
+fixture against the descriptor's expectations. A YAML file under the directory that is neither
+a descriptor nor a listed fixture is reported as a warning, since no check reads it.
 
-On success, the command exits with code 0 and prints a summary line for each profile.
+On success, the command exits with code 0 and prints
+`validated <n> profile descriptors and fixtures` and a summary line.
 
-On failure, it prints structured errors describing which check failed and where.
+On a refusal, it prints one sentence and every finding to standard error and exits 1. It exits
+3 when a descriptor, fixture, or directory cannot be read. Add `--deny-warnings` to refuse
+warnings too, and `--format json` for a machine-readable report.
 
 ### 3. Run validate-profiles on a subset of profiles
 
@@ -103,24 +108,36 @@ This validates only the profiles in `/tmp/profile-check` rather than the full su
 
 ### 4. Understand the failure output
 
-Each failure line includes:
+Each finding is printed as:
 
-- The profile descriptor path or fixture path where the error was found.
-- The check ID that failed (for example, `example-civil-registration.required_concepts`).
-- A description of what was expected and what was found.
+```text
+error[manifest.profile.required-concept-missing] profiles/example/profile.yaml:12:11 /required_concepts/0/iri
+  no field of the fixture references this concept
+  next: Reference the concept from a field's concepts list in the fixture.
+  note: profiles/example/fixtures/metadata.yaml the fixture checked against this expectation
+```
 
-Common failure types:
+The first line names the code, the file, line, and column, and the member's JSON Pointer. An
+expectation a fixture does not meet is placed at the expectation in the descriptor, and its
+`note:` line names the fixture.
 
-- **Missing required concept IRI**: the fixture manifest does not reference an IRI that the
-  profile marks as required. Add the concept to the appropriate entity in the manifest.
-- **Missing required identifier**: the fixture manifest does not include the required identifier
-  name and kind for the expected entity.
-- **Codelist code not found**: the fixture manifest's codelist for a given ID does not include
-  a required code value.
-- **Cardinality mismatch**: the field appears too few or too many times for the entity.
-- **Runtime-only key present**: the fixture manifest contains a key that must not appear in a
-  portable manifest (a manifest that carries only static metadata and no deployment-specific
-  bindings). Examples: `source`, `table`, `scope`, `url_env`.
+Common findings:
+
+- **`manifest.profile.claim-missing`**: the fixture does not list the profile's `id` and
+  `version` under its `profiles`. Add them.
+- **`manifest.profile.required-concept-missing`**: no field of the fixture references an IRI
+  the profile marks as required. Add the concept to the appropriate field in the manifest.
+- **`manifest.profile.identifier-missing`**: the fixture's entity does not declare the required
+  identifier name and kind.
+- **`manifest.profile.codelist-mismatch`**: the fixture declares no codelist with the expected
+  ID, or its codelist does not hold a required code.
+- **`manifest.profile.cardinality-mismatch`**: the field appears too few or too many times in
+  the entity.
+- **`manifest.profile.missing-fixture`** and **`manifest.profile.fixture-path-escapes`**: a
+  listed fixture path does not exist, or does not stay inside the profile's directory.
+- **`manifest.metadata.runtime-only-key`**: the fixture manifest contains a key that must not
+  appear in a portable manifest (a manifest that carries only static metadata and no
+  deployment-specific bindings). Examples: `source`, `table`, `scope`, `url_env`.
   Remove the key; it belongs in service configuration, not in a portable fixture.
 
 The authoritative list of disallowed runtime keys is in [Registry Manifest reference](./reference.md).
@@ -164,20 +181,20 @@ manifest validation.
 
 ## Troubleshooting
 
-### "schema_version mismatch" on profile.yaml
+### `config.unknown-variant` at `/schema_version` on profile.yaml
 
 The profile descriptor must declare `schema_version: registry-manifest-profile/v1`.
 Do not use `registry-manifest/v1` (which is the manifest schema version) in the descriptor.
 
-### "missing required concept" on a concept you believe is present
+### `manifest.profile.required-concept-missing` on a concept you believe is present
 
 Check the IRI spelling exactly.
 The validator matches concept IRIs as strings, so a namespace prefix mismatch
 (`person:Person.identifier` versus `person:person.identifier`) causes a miss.
-Confirm the IRI in the profile descriptor matches the IRI as it appears in the fixture manifest
-after vocabulary prefix expansion.
+Prefixes are not expanded: write the IRI in the profile descriptor exactly as it appears in
+the fixture manifest's `concepts` list.
 
-### "runtime-only key present" in fixture
+### `manifest.metadata.runtime-only-key` in fixture
 
 Remove keys such as `source`, `source_id`, `table`, `scope`, `url`, `url_env`, `file_path`,
 `query`, `required_filters`, `rows_scope`, `bindings`, `capabilities`, `column`, or

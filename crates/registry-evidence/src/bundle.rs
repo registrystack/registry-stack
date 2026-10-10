@@ -16,6 +16,7 @@ use registry_platform_crypto::{
     canonicalize_json, PublicJwk, SigningAlgorithm as ProviderSigningAlgorithm,
 };
 use registry_platform_sqlite::{CapturedSnapshot, ErrorKind as SqliteErrorKind};
+use registry_platform_yaml::{Reader, Report};
 use rhai::{Engine, AST};
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -23,11 +24,11 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use serde_norway::Value as YamlValue;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use url::Url;
 
 use crate::config::{
-    ArtifactPath, ConceptConfig, ConceptForm, EvidenceConfig, OrderedMap, RequirementConfig,
-    RuntimeConfig, SchemaFault, SelectorField, TextLocation, SOURCE_BATCH_CAPABILITY,
+    ArtifactPath, ConceptConfig, ConceptForm, ConfigError, EvidenceConfig, OrderedMap,
+    RequirementConfig, RuntimeConfig, SchemaFault, SelectorField, TextLocation,
+    SOURCE_BATCH_CAPABILITY,
 };
 
 pub const MAX_BUNDLE_FILES: usize = 1_024;
@@ -53,7 +54,7 @@ const OIDC: &str = "oidc";
 const ACTIVE_PUBLIC_JWK_FILE: &str = "activePublicJwkFile";
 const PUBLISHED_PUBLIC_JWK_FILES: &str = "publishedPublicJwkFiles";
 const REVOKED_KEY_IDS: &str = "revokedKeyIds";
-const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
 /// Bytes folded into an extract's digest per read. An extract is sized by the
 /// register it holds rather than by a byte cap, so it is digested in chunks of
 /// this size and never held whole.
@@ -87,6 +88,11 @@ pub enum BundleError {
     Package(PackageError),
     #[error("the Evidence deployment configuration is invalid: {0}")]
     Config(ArtifactFault),
+    /// The shared configuration reader refused a configuration file. The
+    /// report carries the reader's diagnostics unchanged, each naming the
+    /// file as it was given or found, the path, the position, and the fix.
+    #[error("{}", crate::config::render_refusal(.0))]
+    Refused(Box<Report>),
     #[error("an Evidence bundle artifact is invalid: {0}")]
     InvalidArtifact(ArtifactFault),
     #[error("an Evidence Rhai script is invalid: {0}")]
@@ -186,6 +192,15 @@ impl fmt::Display for ArtifactFault {
             return fmt::Display::fmt(&self.fault, formatter);
         }
         write!(formatter, "artifact {}: {}", self.artifact, self.fault)
+    }
+}
+
+/// A configuration refusal from `file`, or the value-free fault of `artifact`
+/// when the failure is not the reader's.
+fn configuration_error(artifact: &str, file: &Path, error: ConfigError) -> BundleError {
+    match error.in_file(&file.display().to_string()) {
+        ConfigError::Refused(report) => BundleError::Refused(report),
+        other => BundleError::Config(ArtifactFault::new(artifact, other.fault())),
     }
 }
 
@@ -300,7 +315,7 @@ pub struct Bundle {
     pub scripts: BTreeMap<String, CompiledScript>,
     pub fact_schemas: BTreeMap<String, JsonValue>,
     pub codelists: BTreeMap<String, Codelist>,
-    pub fixtures: BTreeMap<String, YamlValue>,
+    pub fixtures: BTreeMap<String, JsonValue>,
     pub active_public_jwk: PublicJwk,
     pub published_public_jwks: BTreeMap<String, PublicJwk>,
 }
@@ -418,9 +433,7 @@ impl RuntimeDocument {
         // `${NAME}` in a string value reads the process environment; the
         // loader refuses it in a secret reference and under secretProviders.
         let loaded = RuntimeConfig::parse_yaml_with(&bytes, |name| std::env::var(name).ok())
-            .map_err(|error| {
-                BundleError::Config(ArtifactFault::new(RUNTIME_FILE, error.fault()))
-            })?;
+            .map_err(|error| configuration_error(RUNTIME_FILE, path, error))?;
         let config = loaded.config;
         if let Some(file) = &config.secret_providers.file {
             validate_secret_root(&file.root)?;
@@ -529,11 +542,27 @@ impl Bundle {
         Self::load_verified(root, &verified)
     }
 
+    /// Load a verified package as it is found, without requiring it to be
+    /// frozen, for an offline check.
+    ///
+    /// Everything else deployment applies to the package applies here.
+    pub fn load_as_found(root: &Path, verified: &VerifiedPackage) -> Result<Self, BundleError> {
+        Self::load_captured(root, verified, Capture::AsFound)
+    }
+
     fn load_verified(root: &Path, verified: &VerifiedPackage) -> Result<Self, BundleError> {
-        let files = capture_bundle_files(root, verified)?;
+        Self::load_captured(root, verified, Capture::Frozen)
+    }
+
+    fn load_captured(
+        root: &Path,
+        verified: &VerifiedPackage,
+        capture: Capture,
+    ) -> Result<Self, BundleError> {
+        let files = capture_bundle_files(root, verified, capture)?;
         let config_bytes = files.get(CONFIG_FILE).ok_or(BundleError::Unavailable)?;
         let config = EvidenceConfig::parse_yaml(config_bytes)
-            .map_err(|error| BundleError::Config(ArtifactFault::new(CONFIG_FILE, error.fault())))?;
+            .map_err(|error| configuration_error(CONFIG_FILE, &root.join(CONFIG_FILE), error))?;
         validate_file_closure(&config, &files)?;
         let expected_description = crate::discovery::render(&config)
             .map_err(|_| invalid_artifact("the provider discovery description is invalid"))?;
@@ -561,9 +590,9 @@ impl Bundle {
         let scripts = load_scripts(&config, &files)?;
         let fact_schemas = load_fact_schemas(&config, &files)?;
         validate_prior_fact_bindings(&config, &fact_schemas)?;
-        let codelists = load_codelists(&config, &files)?;
+        let codelists = load_codelists(root, &config, &files)?;
         validate_codelist_references(&config, &codelists)?;
-        let fixtures = load_fixtures(&config, &files)?;
+        let fixtures = load_fixtures(root, &config, &files)?;
         let (active_public_jwk, published_public_jwks) = load_public_jwks(&config, &files)?;
         let requirement_revisions = compute_requirement_revisions(&config, &files)?;
 
@@ -630,7 +659,7 @@ impl Bundle {
         self.codelists.get(path.as_str())
     }
 
-    pub fn fixture(&self, path: &ArtifactPath) -> Option<&YamlValue> {
+    pub fn fixture(&self, path: &ArtifactPath) -> Option<&JsonValue> {
         self.fixtures.get(path.as_str())
     }
 }
@@ -653,15 +682,29 @@ fn package_error(error: PackageError) -> BundleError {
     BundleError::Package(error.naming_root_as("package.root"))
 }
 
+/// Whether capture refuses a writable bundle.
+///
+/// Deployment serves only a frozen package. An offline check reads the package
+/// as it is found, so an operator can check it before freezing it; the digest
+/// checks against the verified package apply either way.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum Capture {
+    Frozen,
+    AsFound,
+}
+
 fn capture_bundle_files(
     root: &Path,
     verified: &VerifiedPackage,
+    capture: Capture,
 ) -> Result<BTreeMap<String, Vec<u8>>, BundleError> {
     let root_metadata = fs::symlink_metadata(root).map_err(|_| BundleError::Unavailable)?;
     if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
         return Err(BundleError::InvalidPath);
     }
-    let filesystem_read_only = filesystem_is_read_only(root)?;
+    // An as-found capture treats the package as if its filesystem were read
+    // only, which is what every writability check below already honours.
+    let filesystem_read_only = capture == Capture::AsFound || filesystem_is_read_only(root)?;
     validate_read_only(
         &root_metadata,
         filesystem_read_only,
@@ -1202,13 +1245,8 @@ fn reviewed_bucket_codelist_paths<'a>(
             .iter()
             .filter(|(path, _)| path.starts_with("codelists/"))
             .filter_map(|(path, bytes)| {
-                let document = std::str::from_utf8(bytes)
-                    .ok()
-                    .and_then(|text| serde_norway::from_str::<YamlValue>(text).ok())?;
-                let mapping = document.as_mapping()?;
-                (mapping.get("id").and_then(YamlValue::as_str) == Some(identifier)
-                    && mapping.get("version").and_then(YamlValue::as_str) == Some(version))
-                .then(|| path.clone())
+                let (declared_id, declared_version) = crate::codelist::declared_identity(bytes)?;
+                (declared_id == identifier && declared_version == version).then(|| path.clone())
             })
             .collect::<Vec<_>>();
         if matches.len() != 1 {
@@ -1235,9 +1273,12 @@ fn reviewed_schema_paths<'a>(
             .iter()
             .filter(|(path, _)| path.starts_with("schemas/"))
             .filter_map(|(path, bytes)| {
-                let document = std::str::from_utf8(bytes)
+                // A schema that does not read is refused by its own load.
+                let document = Reader::new(path.as_str())
+                    .scan(bytes)
                     .ok()
-                    .and_then(|text| serde_norway::from_str::<JsonValue>(text).ok())?;
+                    .flatten()?
+                    .to_json_value();
                 (document.get("$id").and_then(JsonValue::as_str) == Some(identifier))
                     .then(|| path.clone())
             })
@@ -1678,10 +1719,14 @@ fn load_fact_schema(
     let bytes = files
         .get(path)
         .ok_or(invalid_artifact("missing fact schema"))?;
-    let text =
-        std::str::from_utf8(bytes).map_err(|_| invalid_artifact("fact schema is not UTF-8"))?;
-    let schema: JsonValue = serde_norway::from_str(text)
-        .map_err(|_| invalid_artifact("fact schema YAML is invalid"))?;
+    // A fact schema is JSON Schema written in the shared YAML subset, so the
+    // reader positions any structural problem; the schema grammar itself is
+    // checked below.
+    let schema = Reader::new(path)
+        .scan(bytes)
+        .map_err(|report| BundleError::Refused(Box::new(report)))?
+        .ok_or(invalid_artifact("fact schema is empty"))?
+        .to_json_value();
     validate_closed_schema(&schema, role)?;
     JSONSchema::options()
         .with_draft(Draft::Draft202012)
@@ -2048,6 +2093,7 @@ fn schema_const_is_bounded(value: &JsonValue) -> bool {
 }
 
 fn load_codelists(
+    root: &Path,
     config: &EvidenceConfig,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<BTreeMap<String, Codelist>, BundleError> {
@@ -2074,128 +2120,25 @@ fn load_codelists(
     paths.extend(reviewed_bucket_codelist_paths(all_concepts(config), files)?);
     let mut codelists = BTreeMap::new();
     for path in paths {
-        let codelist = load_codelist(&path, files).map_err(|error| error.in_artifact(&path))?;
+        let codelist =
+            load_codelist(root, &path, files).map_err(|error| error.in_artifact(&path))?;
         codelists.insert(path, codelist);
     }
     Ok(codelists)
 }
 
-fn load_codelist(path: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<Codelist, BundleError> {
+/// Read one codelist the configuration references. A refusal names the file
+/// as it sits under the bundle root.
+fn load_codelist(
+    root: &Path,
+    path: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<Codelist, BundleError> {
     let bytes = files
         .get(path)
         .ok_or(invalid_artifact("missing codelist"))?;
-    let text = std::str::from_utf8(bytes).map_err(|_| invalid_artifact("codelist is not UTF-8"))?;
-    let document: CodelistDocument =
-        serde_norway::from_str(text).map_err(|_| invalid_artifact("codelist YAML is invalid"))?;
-    document.validate()
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum CodelistDocument {
-    Codes(CodeCodelistDocument),
-    Mapping(MappingCodelistDocument),
-}
-
-impl CodelistDocument {
-    fn validate(self) -> Result<Codelist, BundleError> {
-        match self {
-            Self::Codes(document) => document.validate(),
-            Self::Mapping(document) => document.validate(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CodeCodelistDocument {
-    id: String,
-    version: String,
-    codes: Vec<String>,
-}
-
-impl CodeCodelistDocument {
-    fn validate(self) -> Result<Codelist, BundleError> {
-        validate_codelist_header(&self.id, &self.version)?;
-        validate_code_collection(&self.codes)?;
-        Ok(Codelist::Codes {
-            id: self.id,
-            version: self.version,
-            codes: self.codes,
-        })
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MappingCodelistDocument {
-    id: String,
-    version: String,
-    entries: BTreeMap<String, String>,
-    allowed_outputs: Vec<String>,
-}
-
-impl MappingCodelistDocument {
-    fn validate(self) -> Result<Codelist, BundleError> {
-        validate_codelist_header(&self.id, &self.version)?;
-        if self.entries.is_empty() || self.entries.len() > 4_096 {
-            return Err(invalid_artifact("codelist entry count is invalid"));
-        }
-        validate_code_collection(&self.allowed_outputs)?;
-        for (input, output) in &self.entries {
-            validate_code(input)?;
-            validate_code(output)?;
-            if !self.allowed_outputs.contains(output) {
-                return Err(invalid_artifact("codelist mapping output is not allowed"));
-            }
-        }
-        Ok(Codelist::Mapping {
-            id: self.id,
-            version: self.version,
-            entries: self.entries,
-            allowed_outputs: self.allowed_outputs,
-        })
-    }
-}
-
-fn validate_codelist_header(id: &str, version: &str) -> Result<(), BundleError> {
-    if id.len() > 512
-        || Url::parse(id).is_err()
-        || version.is_empty()
-        || version.len() > 128
-        || version.contains('\0')
-    {
-        return Err(invalid_artifact("codelist identity is invalid"));
-    }
-    Ok(())
-}
-
-fn validate_code_collection(codes: &[String]) -> Result<(), BundleError> {
-    if codes.is_empty() || codes.len() > 4_096 {
-        return Err(invalid_artifact("codelist code count is invalid"));
-    }
-    let mut seen = BTreeSet::new();
-    for code in codes {
-        validate_code(code)?;
-        if !seen.insert(code.as_str()) {
-            return Err(invalid_artifact("codelist code is duplicated"));
-        }
-    }
-    Ok(())
-}
-
-fn validate_code(code: &str) -> Result<(), BundleError> {
-    let bytes = code.as_bytes();
-    if bytes.is_empty()
-        || bytes.len() > 128
-        || !bytes[0].is_ascii_alphanumeric()
-        || !bytes[1..]
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
-    {
-        return Err(invalid_artifact("codelist code is invalid"));
-    }
-    Ok(())
+    crate::codelist::read_codelist(&root.join(path).display().to_string(), bytes)
+        .map_err(|report| BundleError::Refused(Box::new(report)))
 }
 
 fn validate_codelist_references(
@@ -2255,9 +2198,10 @@ fn validate_codelist_references(
 }
 
 fn load_fixtures(
+    root: &Path,
     config: &EvidenceConfig,
     files: &BTreeMap<String, Vec<u8>>,
-) -> Result<BTreeMap<String, YamlValue>, BundleError> {
+) -> Result<BTreeMap<String, JsonValue>, BundleError> {
     let mut fixtures = BTreeMap::new();
     for requirement in &config.requirements {
         let Some(fixture_path) = &requirement.fixtures else {
@@ -2271,122 +2215,27 @@ fn load_fixtures(
             .sources
             .get(requirement.initial_source())
             .is_some_and(|source| source.unresolved_problem().is_some());
-        let fixture = load_fixture(path, files, declared_unresolved)
-            .map_err(|error| error.in_artifact(path))?;
+        let fixture = load_fixture(root, path, files, declared_unresolved)?;
         fixtures.insert(path.to_owned(), fixture);
     }
     Ok(fixtures)
 }
 
 fn load_fixture(
+    root: &Path,
     path: &str,
     files: &BTreeMap<String, Vec<u8>>,
     declared_unresolved: bool,
-) -> Result<YamlValue, BundleError> {
+) -> Result<JsonValue, BundleError> {
     let bytes = files
         .get(path)
         .ok_or(invalid_artifact("fixture file is missing"))?;
-    let text =
-        std::str::from_utf8(bytes).map_err(|_| invalid_artifact("fixture file is not UTF-8"))?;
-    let fixture: YamlValue =
-        serde_norway::from_str(text).map_err(|_| invalid_artifact("fixture YAML is invalid"))?;
-    validate_fixture_coverage(&fixture, declared_unresolved)?;
-    Ok(fixture)
-}
-
-fn validate_fixture_coverage(
-    fixture: &YamlValue,
-    declared_unresolved: bool,
-) -> Result<(), BundleError> {
-    let root = fixture
-        .as_mapping()
-        .ok_or(invalid_artifact("fixture root must be a mapping"))?;
-    if root.get("synthetic_only").and_then(YamlValue::as_bool) != Some(true) {
-        return Err(invalid_artifact("fixtures must be synthetic-only"));
-    }
-    let cases = root
-        .get("cases")
-        .and_then(YamlValue::as_sequence)
-        .ok_or(invalid_artifact("fixture cases are missing"))?;
-    if cases.is_empty() || cases.len() > 256 {
-        return Err(invalid_artifact("fixture case count is invalid"));
-    }
-    let mut ids = BTreeSet::new();
-    let mut categories = FixtureCategories::default();
-    for case in cases {
-        let id = case
-            .as_mapping()
-            .and_then(|mapping| mapping.get("id"))
-            .and_then(YamlValue::as_str)
-            .ok_or(invalid_artifact("fixture case id is missing"))?;
-        if id.is_empty() || id.len() > 128 || !ids.insert(id) {
-            return Err(invalid_artifact("fixture case id is invalid or duplicated"));
-        }
-        let mapping = case
-            .as_mapping()
-            .ok_or(invalid_artifact("fixture case must be a mapping"))?;
-        let fixture_declares_unresolved = match mapping.get("declaredUnresolved") {
-            Some(YamlValue::Bool(true)) if declared_unresolved => true,
-            Some(YamlValue::Bool(true)) => {
-                return Err(invalid_artifact(
-                    "fixture declared unresolved without a source declaration",
-                ));
-            }
-            Some(_) => {
-                return Err(invalid_artifact(
-                    "fixture declared-unresolved marker must be true",
-                ));
-            }
-            None => false,
-        };
-        categories.observe(id, fixture_declares_unresolved);
-    }
-    if !categories.complete() {
-        return Err(invalid_artifact("fixture category coverage is incomplete"));
-    }
-    Ok(())
-}
-
-#[derive(Default)]
-struct FixtureCategories {
-    positive: bool,
-    negative: bool,
-    boundary: bool,
-    missing: bool,
-    no_match: bool,
-    ambiguous: bool,
-    source_failure: bool,
-    anti_reconstruction: bool,
-}
-
-impl FixtureCategories {
-    fn observe(&mut self, id: &str, declared_unresolved: bool) {
-        self.positive |= id == "positive";
-        self.negative |= id.starts_with("negative");
-        self.boundary |= id.starts_with("boundary");
-        self.missing |= id.starts_with("missing");
-        self.no_match |= id == "no-match";
-        self.ambiguous |= id.starts_with("ambiguous");
-        // The configured source has already collapsed its hidden no-match and
-        // ambiguous states into one exact transport outcome. Evidence cannot
-        // truthfully label the fixture as either branch, so the neutral case
-        // proves the public behavior shared by both completeness categories.
-        self.no_match |= declared_unresolved;
-        self.ambiguous |= declared_unresolved;
-        self.source_failure |= id == "source-failure";
-        self.anti_reconstruction |= id == "anti-reconstruction";
-    }
-
-    fn complete(&self) -> bool {
-        self.positive
-            && self.negative
-            && self.boundary
-            && self.missing
-            && self.no_match
-            && self.ambiguous
-            && self.source_failure
-            && self.anti_reconstruction
-    }
+    crate::fixture::read_fixture(
+        &root.join(path).display().to_string(),
+        bytes,
+        declared_unresolved,
+    )
+    .map_err(|report| BundleError::Refused(Box::new(report)))
 }
 
 fn load_public_jwks(
@@ -2554,15 +2403,53 @@ fn validate_runtime_bindings(
     bundle: &EvidenceConfig,
     runtime: &RuntimeConfig,
 ) -> Result<(), BundleError> {
+    match runtime_binding_findings(bundle, runtime).into_iter().next() {
+        Some(finding) => Err(finding.error),
+        None => Ok(()),
+    }
+}
+
+/// One way the runtime file fails to bind the bundle it names.
+///
+/// The pointer is the runtime-file member the operator edits to repair it, and
+/// the action says how. The error is the one deployment refuses with.
+#[derive(Debug, Clone)]
+pub struct BindingFinding {
+    pub code: &'static str,
+    pub pointer: String,
+    pub error: BundleError,
+    pub action: &'static str,
+}
+
+/// Every way the runtime file fails to bind the bundle, in the order deployment
+/// checks them, so an offline check reports them all and deployment refuses
+/// with the first.
+pub fn runtime_binding_findings(
+    bundle: &EvidenceConfig,
+    runtime: &RuntimeConfig,
+) -> Vec<BindingFinding> {
+    let mut findings = Vec::new();
+    let mut find =
+        |code: &'static str, pointer: String, error: BundleError, action: &'static str| {
+            findings.push(BindingFinding {
+                code,
+                pointer,
+                error,
+                action,
+            });
+        };
     let signer_matches_assurance = match bundle.assurance_profile {
         crate::config::AssuranceProfile::Local => runtime.signer.is_local_jwk(),
         crate::config::AssuranceProfile::Production
         | crate::config::AssuranceProfile::EvidenceGrade => runtime.signer.is_transit(),
     };
     if !signer_matches_assurance {
-        return Err(invalid_artifact(
-            "runtime signer kind does not match the bundle assurance profile",
-        ));
+        find(
+            "evidence.runtime.signer-assurance-mismatch",
+            "/signer/kind".to_owned(),
+            invalid_artifact("runtime signer kind does not match the bundle assurance profile"),
+            "Write kind: local-jwk for a local bundle, or kind: transit for a production or evidence-grade bundle.",
+        );
     }
     // A governed reference resolves only through a provider the operator
     // enabled, so the bundle cannot reach the process environment unless the
@@ -2582,24 +2469,33 @@ fn validate_runtime_bindings(
             &bundle.audit.key.hash_key_ref,
             &bundle.subject_binding.secret_ref,
         ]);
-    for reference in governed_refs {
-        if runtime
+    if governed_refs.into_iter().any(|reference| {
+        runtime
             .secret_providers
             .check_reference("secretProviders", reference.as_str())
             .is_err()
-        {
-            return Err(invalid_artifact(
+    }) {
+        find(
+            "evidence.runtime.secret-provider-not-enabled",
+            "/secretProviders".to_owned(),
+            invalid_artifact(
                 "a bundle secret reference names a provider the runtime secretProviders does not enable",
-            ));
-        }
+            ),
+            "Enable every provider the bundle's secret references name under secretProviders.",
+        );
     }
     let audit_ref = &bundle.audit.key.hash_key_ref;
     let subject_ref = &bundle.subject_binding.secret_ref;
     if let Some(signing_ref) = runtime.signer.private_key_ref() {
         if signing_ref == audit_ref || signing_ref == subject_ref {
-            return Err(invalid_artifact(
-                "the local signing key reference must be distinct from audit and subject-binding references",
-            ));
+            find(
+                "evidence.runtime.signing-key-shared",
+                "/signer/privateKeyRef".to_owned(),
+                invalid_artifact(
+                    "the local signing key reference must be distinct from audit and subject-binding references",
+                ),
+                "Reference a signing key no other bundle secret reference names.",
+            );
         }
     }
     let secret_root = runtime
@@ -2621,9 +2517,14 @@ fn validate_runtime_bindings(
             .into_iter()
             .any(|path| path == audit_path)
         {
-            return Err(invalid_artifact(
-                "the audit file path must not resolve to configured secret material",
-            ));
+            find(
+                "evidence.runtime.audit-path-is-secret",
+                "/audit/path".to_owned(),
+                invalid_artifact(
+                    "the audit file path must not resolve to configured secret material",
+                ),
+                "Write an audit path outside the secret root.",
+            );
         }
     }
     // The binding is exact in both directions, but the two directions are
@@ -2644,17 +2545,30 @@ fn validate_runtime_bindings(
         .trust_profiles
         .keys()
         .collect::<BTreeSet<_>>();
-    if let Some(unbound) = required.difference(&configured).next() {
-        return Err(trust_profile_fault(
-            unbound,
-            "the runtime configuration does not bind a TLS trust profile the bundle names",
-        ));
+    for unbound in required.difference(&configured) {
+        find(
+            "evidence.runtime.trust-profile-unbound",
+            "/outboundTls/trustProfiles".to_owned(),
+            trust_profile_fault(
+                unbound,
+                "the runtime configuration does not bind a TLS trust profile the bundle names",
+            ),
+            "Bind the trust profile the bundle names under outboundTls.trustProfiles, with its CA bundle file.",
+        );
     }
-    if let Some(unused) = configured.difference(&required).next() {
-        return Err(trust_profile_fault(
-            unused,
-            "the runtime configuration binds a TLS trust profile the bundle does not name",
-        ));
+    for unused in configured.difference(&required) {
+        find(
+            "evidence.runtime.trust-profile-unused",
+            format!(
+                "/outboundTls/trustProfiles/{}",
+                registry_platform_yaml::escape_pointer_segment(unused)
+            ),
+            trust_profile_fault(
+                unused,
+                "the runtime configuration binds a TLS trust profile the bundle does not name",
+            ),
+            "Remove the trust profile, or name it from a bundle source or the issuer.",
+        );
     }
     // Extracts bind exactly, in both directions, and each direction says which
     // profile is at fault. An unbound profile is a deployment that cannot
@@ -2666,17 +2580,30 @@ fn validate_runtime_bindings(
         .filter_map(|(_, source)| source.extract_profile())
         .collect::<BTreeSet<_>>();
     let bound_extracts = runtime.source_extracts.keys().collect::<BTreeSet<_>>();
-    if let Some(unbound) = named_extracts.difference(&bound_extracts).next() {
-        return Err(invalid_artifact(
-            "the runtime configuration binds no file for a source extract profile the bundle names",
-        )
-        .in_artifact(&source_extract_artifact(unbound)));
+    for unbound in named_extracts.difference(&bound_extracts) {
+        find(
+            "evidence.runtime.source-extract-unbound",
+            "/sourceExtracts".to_owned(),
+            invalid_artifact(
+                "the runtime configuration binds no file for a source extract profile the bundle names",
+            )
+            .in_artifact(&source_extract_artifact(unbound)),
+            "Bind the extract profile the bundle names under sourceExtracts, with the path of its extract file.",
+        );
     }
-    if let Some(unused) = bound_extracts.difference(&named_extracts).next() {
-        return Err(invalid_artifact(
-            "the runtime configuration binds a source extract profile no bundle source names",
-        )
-        .in_artifact(&source_extract_artifact(unused)));
+    for unused in bound_extracts.difference(&named_extracts) {
+        find(
+            "evidence.runtime.source-extract-unused",
+            format!(
+                "/sourceExtracts/{}",
+                registry_platform_yaml::escape_pointer_segment(unused)
+            ),
+            invalid_artifact(
+                "the runtime configuration binds a source extract profile no bundle source names",
+            )
+            .in_artifact(&source_extract_artifact(unused)),
+            "Remove the extract binding, or name the profile from a bundle source.",
+        );
     }
     // The operator half of the acquisition gate, and the half that gates.
     // A bundle declaring the kinds it needs states an intent beside the
@@ -2684,28 +2611,28 @@ fn validate_runtime_bindings(
     // may serve them. Silence means no, so a deployment that never heard of a
     // gated form refuses the bundle here, before it serves anything, rather
     // than acquiring from sources nobody enabled it to reach.
-    for requirement in &bundle.requirements {
-        if requirement
+    let requirement_capability_missing = bundle.requirements.iter().any(|requirement| {
+        requirement
             .acquisition
             .required_capability()
             .is_some_and(|capability| !runtime.enables_acquisition_capability(capability))
-        {
-            return Err(invalid_artifact(
-                "the runtime configuration does not enable an acquisition capability the bundle requires",
-            ));
-        }
-    }
-    if bundle
+    });
+    let batch_capability_missing = bundle
         .acquisition_capabilities
         .iter()
         .any(|capability| capability == SOURCE_BATCH_CAPABILITY)
-        && !runtime.enables_acquisition_capability(SOURCE_BATCH_CAPABILITY)
-    {
-        return Err(invalid_artifact(
-            "the runtime configuration does not enable an acquisition capability the bundle requires",
-        ));
+        && !runtime.enables_acquisition_capability(SOURCE_BATCH_CAPABILITY);
+    if requirement_capability_missing || batch_capability_missing {
+        find(
+            "evidence.runtime.acquisition-capability-missing",
+            "/acquisitionCapabilities".to_owned(),
+            invalid_artifact(
+                "the runtime configuration does not enable an acquisition capability the bundle requires",
+            ),
+            "List every gated acquisition kind the bundle requires under acquisitionCapabilities.",
+        );
     }
-    Ok(())
+    findings
 }
 
 /// The secret root is the one immutability check whose subject is outside the
@@ -2735,7 +2662,7 @@ fn validate_secret_root(path: &Path) -> Result<(), BundleError> {
     Ok(())
 }
 
-fn validate_ca_bundle(bytes: &[u8]) -> Result<(), BundleError> {
+pub(crate) fn validate_ca_bundle(bytes: &[u8]) -> Result<(), BundleError> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| invalid_artifact("TLS CA bundle is not UTF-8 PEM"))?;
     let mut in_certificate = false;
@@ -3181,6 +3108,10 @@ fn sha256_label(hasher: Sha256) -> Result<String, BundleError> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
     use crate::config::AssuranceProfile;
     use crate::kernel::OfflineKernel;
@@ -3237,9 +3168,7 @@ mod tests {
         let source_id = requirement.acquisition.initial_source().to_owned();
         let mut document = serde_json::to_value(&config).unwrap();
         let project = |document: &JsonValue| {
-            let candidate: EvidenceConfig = serde_json::from_value(document.clone()).unwrap();
-            candidate
-                .validate()
+            let candidate = EvidenceConfig::parse_yaml(&serde_json::to_vec(document).unwrap())
                 .expect("each compared candidate is valid");
             canonical_projection(&candidate, &requirement).unwrap()
         };
@@ -3389,7 +3318,7 @@ mod tests {
         )
         .expect("replace a verified artifact");
         set_tree_mode(directory.path(), 0o555, 0o444);
-        let error = capture_bundle_files(directory.path(), &verified)
+        let error = capture_bundle_files(directory.path(), &verified, Capture::Frozen)
             .expect_err("consumer capture refuses replaced bytes");
         let fault = error.artifact_fault().expect("the artifact is named");
         assert_eq!(fault.artifact(), "derivations/adult-status.rhai");
@@ -3948,36 +3877,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fixture_coverage_is_case_neutral_but_complete() {
-        let fixture: YamlValue = serde_norway::from_str(
-            "synthetic_only: true\ncases:\n  - {id: positive}\n  - {id: negative-a}\n  - {id: boundary-a}\n  - {id: missing-a}\n  - {id: no-match}\n  - {id: ambiguous}\n  - {id: source-failure}\n  - {id: anti-reconstruction}\n",
-        )
-        .expect("fixture parses");
-        assert!(validate_fixture_coverage(&fixture, false).is_ok());
-    }
-
-    /// A provider that deliberately collapses hidden no-match and ambiguity
-    /// into one configured wire outcome leaves Evidence no truthful basis for
-    /// inventing two extraction responses. The one neutral, data-free case is
-    /// therefore sufficient for both public-collapse coverage categories.
-    #[test]
-    fn declared_unresolved_fixture_neutrally_covers_hidden_lookup_categories() {
-        let fixture: YamlValue = serde_norway::from_str(
-            "synthetic_only: true\ncases:\n  - {id: positive}\n  - {id: negative-a}\n  - {id: boundary-a}\n  - {id: missing-a}\n  - {id: unresolved, declaredUnresolved: true}\n  - {id: source-failure}\n  - {id: anti-reconstruction}\n",
-        )
-        .expect("fixture parses");
-
-        assert!(validate_fixture_coverage(&fixture, true).is_ok());
-        assert!(validate_fixture_coverage(&fixture, false).is_err());
-
-        let false_marker: YamlValue = serde_norway::from_str(
-            "synthetic_only: true\ncases:\n  - {id: positive}\n  - {id: negative-a}\n  - {id: boundary-a}\n  - {id: missing-a}\n  - {id: unresolved, declaredUnresolved: false}\n  - {id: source-failure}\n  - {id: anti-reconstruction}\n",
-        )
-        .expect("fixture parses");
-        assert!(validate_fixture_coverage(&false_marker, true).is_err());
-    }
-
     #[cfg(unix)]
     #[test]
     fn local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete() {
@@ -4063,13 +3962,44 @@ mod tests {
             let error = Bundle::load(directory.path()).expect_err(&format!(
                 "{profile} bundle loaded with incomplete fixture coverage"
             ));
-            assert!(
-                error
-                    .to_string()
-                    .contains("fixture category coverage is incomplete"),
-                "{profile} failed for an unexpected reason: {error}"
+            let BundleError::Refused(report) = &error else {
+                panic!("{profile} failed for an unexpected reason: {error}");
+            };
+            assert_eq!(
+                report
+                    .diagnostics()
+                    .iter()
+                    .map(|diagnostic| diagnostic.code.as_str())
+                    .collect::<Vec<_>>(),
+                ["evidence.fixture.incomplete-coverage"],
+                "{profile} failed for an unexpected reason"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fact_schema_outside_the_yaml_subset_is_refused_at_its_line() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("adult-status", directory.path());
+        let schema_path = directory.path().join("schemas/facts.schema.yaml");
+        let mut schema = fs::read_to_string(&schema_path).expect("fact schema reads");
+        schema.push_str("type: object\n");
+        fs::write(&schema_path, schema).expect("fact schema writes");
+        refresh_package_envelope(directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+
+        let error = Bundle::load(directory.path()).expect_err("duplicate key loaded");
+        let BundleError::Refused(report) = &error else {
+            panic!("fact schema failed for an unexpected reason: {error}");
+        };
+        let [diagnostic] = report.diagnostics() else {
+            panic!("expected one diagnostic");
+        };
+        assert_eq!(diagnostic.code, "yaml.duplicate-key");
+        let source = diagnostic.source.as_ref().expect("positioned diagnostic");
+        assert_eq!(source.file, "schemas/facts.schema.yaml");
+        assert_eq!(source.line, Some(6));
     }
 
     #[test]
@@ -5167,13 +5097,15 @@ outboundTls:
         let self_enabling = format!("{ACCEPTANCE}secretProviders:\n  environment: {{}}\n");
         let error = EvidenceConfig::parse_yaml(self_enabling.as_bytes())
             .expect_err("a bundle may not declare a secret provider");
+        let ConfigError::Refused(report) = error else {
+            panic!("the reader did not refuse the bundle: {error}");
+        };
         let appended_line = ACCEPTANCE.lines().count() + 1;
-        assert!(
-            error
-                .to_string()
-                .contains(&format!("unknown field (line {appended_line} column 1)")),
-            "{error}"
-        );
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.code, "config.unknown-key");
+        assert_eq!(diagnostic.path, "/secretProviders");
+        let source = diagnostic.source.as_ref().expect("a position");
+        assert_eq!((source.line, source.column), (Some(appended_line), Some(1)));
     }
 
     /// A deployment that does not opt into a capability must not acquire one

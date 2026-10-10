@@ -360,8 +360,7 @@ struct EventDestinationConfig {
 
 impl EventDestinationConfig {
     fn from_raw(logical_id: &str, raw: RawEventDestinationConfig) -> ConfigResult<Self> {
-        let hmac_sha256_key_ref =
-            parse_secret_reference(raw.hmac_sha256_key_ref).ok_or(EventDestinationConfigError)?;
+        let hmac_sha256_key_ref = raw.hmac_sha256_key_ref;
         let tls = raw
             .tls
             .map(EventDestinationTlsConfig::from_raw)
@@ -504,14 +503,8 @@ struct EventDestinationTlsConfig {
 
 impl EventDestinationTlsConfig {
     fn from_raw(raw: RawEventDestinationTlsConfig) -> ConfigResult<Self> {
-        let ca_bundle_ref = raw
-            .ca_bundle_ref
-            .map(parse_secret_reference)
-            .transpose_option()?;
-        let client_identity_ref = raw
-            .client_identity_ref
-            .map(parse_secret_reference)
-            .transpose_option()?;
+        let ca_bundle_ref = raw.ca_bundle_ref;
+        let client_identity_ref = raw.client_identity_ref;
         if ca_bundle_ref.is_none() && client_identity_ref.is_none() {
             return Err(EventDestinationConfigError);
         }
@@ -519,20 +512,6 @@ impl EventDestinationTlsConfig {
             ca_bundle_ref,
             client_identity_ref,
         })
-    }
-}
-
-trait TransposeOption<T> {
-    fn transpose_option(self) -> ConfigResult<Option<T>>;
-}
-
-impl<T> TransposeOption<T> for Option<Option<T>> {
-    fn transpose_option(self) -> ConfigResult<Option<T>> {
-        match self {
-            Some(Some(value)) => Ok(Some(value)),
-            Some(None) => Err(EventDestinationConfigError),
-            None => Ok(None),
-        }
     }
 }
 
@@ -544,13 +523,6 @@ struct EventDestinationDeliveryCeilings {
 
 impl EventDestinationDeliveryCeilings {
     fn from_raw(raw: RawEventDestinationDeliveryCeilings) -> ConfigResult<Self> {
-        if !(MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS..=MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS)
-            .contains(&raw.attempt_timeout_milliseconds)
-            || raw.maximum_attempts == 0
-            || raw.maximum_attempts > MAX_WEBHOOK_ATTEMPTS
-        {
-            return Err(EventDestinationConfigError);
-        }
         Ok(Self {
             attempt_timeout_milliseconds: raw.attempt_timeout_milliseconds,
             maximum_attempts: raw.maximum_attempts,
@@ -635,7 +607,7 @@ pub(crate) struct RawEventDestinationConfig {
     /// Explicitly allowed private network ranges in canonical CIDR notation.
     allowed_private_cidrs: Vec<String>,
     /// Runtime secret reference for the receiver's shared HMAC-SHA-256 key.
-    hmac_sha256_key_ref: String,
+    hmac_sha256_key_ref: SecretReference,
     /// Highest permitted classification, including fields used only in event conditions.
     classification_ceiling: Classification,
     /// Optional private CA and client identity secret references for HTTPS.
@@ -649,12 +621,16 @@ pub(crate) struct RawEventDestinationConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawEventDestinationTlsConfig {
-    /// PEM CA bundle secret reference, when the receiver uses a private certificate authority.
-    #[serde(default)]
-    ca_bundle_ref: Option<String>,
-    /// PEM client identity secret reference for mutual TLS.
-    #[serde(default)]
-    client_identity_ref: Option<String>,
+    /// PEM CA bundle secret reference, when the receiver uses a private
+    /// certificate authority. Omitted, the platform's trusted roots verify
+    /// the receiver. At least one of `caBundleRef` and `clientIdentityRef`
+    /// is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ca_bundle_ref: Option<SecretReference>,
+    /// PEM client identity secret reference for mutual TLS. Omitted, the
+    /// registry presents no client certificate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    client_identity_ref: Option<SecretReference>,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -662,13 +638,25 @@ struct RawEventDestinationTlsConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawEventDestinationDeliveryCeilings {
     /// Maximum time allowed for one attempt, in milliseconds.
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u32::<_, MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS, MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::BoundedU32<MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS, MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS>"
+        )
+    )]
     attempt_timeout_milliseconds: u32,
     /// Maximum total attempts in one delivery generation, including the first attempt.
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_WEBHOOK_ATTEMPTS as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, { MAX_WEBHOOK_ATTEMPTS as u32 }>")
+    )]
     maximum_attempts: u8,
-}
-
-fn parse_secret_reference(value: String) -> Option<SecretReference> {
-    SecretReference::parse(value).ok()
 }
 
 fn parse_private_cidrs(raw: Vec<String>) -> ConfigResult<Vec<IpNet>> {

@@ -1,0 +1,12 @@
+id: tab-indentation
+rules: [CFG-YAML-8]
+summary: A tab used for indentation is refused at the start of its line.
+mutation:
+  append: "conformanceTab:\n\tvalue: one\n"
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.tab-indentation
+      path: /conformanceTab
+      at: {line: 2, column: 1}
+      suggestedAction: Indent with spaces.

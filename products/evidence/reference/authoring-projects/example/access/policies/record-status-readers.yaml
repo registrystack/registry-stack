@@ -1,0 +1,5 @@
+apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1
+kind: EvidenceAccessPolicy
+id: record-status-readers
+questions:
+  - record-status

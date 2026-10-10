@@ -22,10 +22,7 @@
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-z][a-z0-9_-]*$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "required": [
@@ -82,34 +79,201 @@
       ],
       "type": "object"
     },
+    "AccessProfileSource": {
+      "additionalProperties": false,
+      "properties": {
+        "actorKind": {
+          "$ref": "#/$defs/ActorKindSource"
+        },
+        "allowCount": {
+          "type": "boolean"
+        },
+        "allowDataExport": {
+          "default": false,
+          "type": "boolean"
+        },
+        "applyTargets": {
+          "items": {
+            "$ref": "#/$defs/ApplyTargetPermissionSource"
+          },
+          "type": "array"
+        },
+        "default": {
+          "default": false,
+          "type": "boolean"
+        },
+        "filterableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "type": "string"
+        },
+        "lookups": {
+          "items": {
+            "$ref": "#/$defs/LookupPermissionSource"
+          },
+          "type": "array"
+        },
+        "membershipBoundaries": {
+          "items": {
+            "$ref": "#/$defs/MembershipBoundarySource"
+          },
+          "type": "array"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "principalClaim": {
+          "type": "string"
+        },
+        "provenanceFields": {
+          "items": {
+            "$ref": "#/$defs/ProvenanceFieldSource"
+          },
+          "type": "array"
+        },
+        "readPaths": {
+          "items": {
+            "$ref": "#/$defs/ReadPathPermissionSource"
+          },
+          "type": "array"
+        },
+        "readableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "readableRequestFields": {
+          "description": "Readable change-request decision detail.",
+          "items": {
+            "$ref": "#/$defs/RequestMetadataFieldSource"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requestPresence": {
+          "items": {
+            "$ref": "#/$defs/RequestPresencePermissionSource"
+          },
+          "type": "array"
+        },
+        "requestVisibility": {
+          "$ref": "#/$defs/RequestVisibilitySource"
+        },
+        "requesterClients": {
+          "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requireConsent": {
+          "items": {
+            "$ref": "#/$defs/ConsentRequirementSource"
+          },
+          "type": "array"
+        },
+        "requiredPurposes": {
+          "description": "The verified token's purpose must match one listed value. Omit to accept every purpose.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requiredScopes": {
+          "$ref": "#/$defs/RequiredScopes",
+          "description": "The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present."
+        },
+        "revisionAccess": {
+          "default": false,
+          "type": "boolean"
+        },
+        "rowBoundaries": {
+          "$ref": "#/$defs/RowBoundaries",
+          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
+        },
+        "sortableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "spatialQueries": {
+          "$ref": "#/$defs/SpatialQueryPermissionSource"
+        },
+        "submitterTargets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "taskGrant": {
+          "$ref": "#/$defs/CompiledTaskGrantSource"
+        },
+        "writableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "requiredScopes",
+        "operations",
+        "rowBoundaries"
+      ],
+      "type": "object"
+    },
     "AccessRequirementsSource": {
       "additionalProperties": false,
       "description": "Compile-time requirements, not grants. Profiles must explicitly satisfy them.",
       "properties": {
         "allowedPurposes": {
-          "default": [],
-          "description": "When nonempty, every profile must restrict purpose to a nonempty subset of these values. Empty imposes no purpose requirement.",
+          "description": "Every profile must restrict purpose to a subset of these values. Omit to demand no purpose.",
           "items": {
             "type": "string"
           },
+          "minItems": 1,
           "type": "array",
           "uniqueItems": true
         },
         "requiredScopes": {
-          "default": [],
-          "description": "Every profile must require all these scopes. Requirements never grant access.",
+          "description": "Every profile must require all these scopes. Requirements never grant access. Omit to demand no scope.",
           "items": {
             "type": "string"
           },
+          "minItems": 1,
           "type": "array",
           "uniqueItems": true
         },
         "rowBoundaries": {
-          "default": [],
-          "description": "Every profile must include these exact field, verified-claim, and operator bindings.",
+          "description": "Every profile must include these exact field, verified-claim, and operator bindings. Omit to demand no row boundary.",
           "items": {
             "$ref": "#/$defs/RowBoundarySource"
           },
+          "minItems": 1,
           "type": "array"
         }
       },
@@ -127,10 +291,7 @@
           "uniqueItems": true
         },
         "id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "operation": {
           "$ref": "#/$defs/Operation"
@@ -160,7 +321,8 @@
         },
         "maximumObservationAgeSeconds": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 300,
+          "minimum": 1,
           "type": "integer"
         },
         "outputs": {
@@ -193,7 +355,7 @@
       "type": "object"
     },
     "ActionHandlerKindSource": {
-      "description": "The authored action-handler backend. The wasm backend is admitted when\nthis build of the compiler carries the `wasm` cargo feature, which\nvalidates a declared WASM handler module against the platform guest\nABI at compile time; without that feature a declared WASM handler is\nrefused with the pinned `action.handler.wasm_build_unsupported`\ndiagnostic.",
+      "description": "The authored action-handler backend. The wasm backend is admitted when\nthis build of the compiler carries the `wasm` cargo feature, which\nvalidates a declared WASM handler module against the platform guest\nABI at compile time; without that feature a declared WASM handler is\nrefused with the pinned `breg.action.handler-wasm-build-unsupported`\ndiagnostic.",
       "enum": [
         "rhai",
         "wasm"
@@ -232,10 +394,7 @@
         },
         "module": {
           "description": "The WASM handler module path, project-local. Declared for wasm\nhandlers only; the compiler enforces the pairing with the declared\nbackend.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "refusals": {
           "default": [],
@@ -246,10 +405,7 @@
         },
         "script": {
           "description": "The Rhai handler script path. Declared for rhai handlers only; the\ncompiler enforces the pairing with the declared backend.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "writes": {
           "items": {
@@ -310,12 +466,14 @@
           "properties": {
             "maxLength": {
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 1000000,
+              "minimum": 1,
               "type": "integer"
             },
             "minLength": {
               "default": 0,
               "format": "uint32",
+              "maximum": 1000000,
               "minimum": 0,
               "type": "integer"
             },
@@ -334,7 +492,8 @@
           "properties": {
             "maxLength": {
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 10000000,
+              "minimum": 1,
               "type": "integer"
             },
             "type": {
@@ -363,26 +522,20 @@
         {
           "properties": {
             "maximum": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "minimum": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "precision": {
-              "format": "uint8",
-              "maximum": 255,
-              "minimum": 0,
+              "format": "uint32",
+              "maximum": 38,
+              "minimum": 1,
               "type": "integer"
             },
             "scale": {
-              "format": "uint8",
-              "maximum": 255,
+              "format": "uint32",
+              "maximum": 38,
               "minimum": 0,
               "type": "integer"
             },
@@ -480,18 +633,11 @@
         {
           "properties": {
             "bbox": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Crs84BboxSource"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/Crs84BboxSource"
             },
             "precision": {
-              "format": "uint8",
-              "maximum": 255,
+              "format": "uint32",
+              "maximum": 9,
               "minimum": 0,
               "type": "integer"
             },
@@ -510,10 +656,13 @@
           "properties": {
             "maxBytes": {
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 1048576,
+              "minimum": 1,
               "type": "integer"
             },
-            "schema": true,
+            "schema": {
+              "x-registry-foreign": "json-schema-2020-12"
+            },
             "type": {
               "const": "structured",
               "type": "string"
@@ -529,10 +678,7 @@
       ],
       "properties": {
         "apiName": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -555,12 +701,11 @@
     "ActionRequirementSource": {
       "additionalProperties": false,
       "properties": {
-        "equals": true,
+        "equals": {
+          "$ref": "#/$defs/DataLiteral"
+        },
         "equalsInput": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "field": {
           "type": "string"
@@ -579,14 +724,7 @@
       "additionalProperties": false,
       "properties": {
         "consentIssuer": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ConsentIssuerSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/ConsentIssuerSource",
           "description": "Required when the action creates consent-record rows."
         },
         "effects": {
@@ -603,14 +741,7 @@
           "type": "array"
         },
         "handler": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ActionHandlerSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ActionHandlerSource"
         },
         "id": {
           "type": "string"
@@ -639,16 +770,10 @@
       "additionalProperties": false,
       "properties": {
         "entity": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "fromField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "type": "object"
@@ -657,18 +782,37 @@
       "additionalProperties": false,
       "properties": {
         "fromEffect": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "fromField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
+      "type": "object"
+    },
+    "ActorKindSource": {
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "ApplyTargetPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "rowBoundaries": {
+          "$ref": "#/$defs/RowBoundaries",
+          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
+        }
+      },
+      "required": [
+        "entity",
+        "rowBoundaries"
+      ],
       "type": "object"
     },
     "AttachmentSlotSource": {
@@ -688,7 +832,8 @@
         },
         "maximumBytes": {
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 16777216,
+          "minimum": 1,
           "type": "integer"
         },
         "required": {
@@ -709,13 +854,14 @@
       "properties": {
         "maximumBytes": {
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 2097152,
+          "minimum": 1,
           "type": "integer"
         },
         "maximumItems": {
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
+          "format": "uint32",
+          "maximum": 100,
+          "minimum": 1,
           "type": "integer"
         }
       },
@@ -735,11 +881,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -755,15 +897,7 @@
           "$ref": "#/$defs/BooleanFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -822,10 +956,7 @@
           "uniqueItems": true
         },
         "id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "operation": {
           "$ref": "#/$defs/Operation"
@@ -852,24 +983,19 @@
       "properties": {
         "atLeast": {
           "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
         },
         "atMost": {
           "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
         },
         "equals": true,
         "equalsFromRequestField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "output": {
           "type": "string"
@@ -888,7 +1014,8 @@
         },
         "maximumObservationAgeSeconds": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 300,
+          "minimum": 1,
           "type": "integer"
         },
         "provider": {
@@ -996,10 +1123,7 @@
       "additionalProperties": false,
       "properties": {
         "executor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "mode": {
           "$ref": "#/$defs/ChangeRequestOnApprovedModeSource",
@@ -1054,16 +1178,10 @@
       "additionalProperties": false,
       "properties": {
         "entity": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "fromField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "type": "object"
@@ -1123,34 +1241,24 @@
       "properties": {
         "atLeast": {
           "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
         },
         "atMost": {
           "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
         },
         "currentDate": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChangeRequestCurrentDatePredicateSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ChangeRequestCurrentDatePredicateSource"
         },
-        "equals": true,
+        "equals": {
+          "$ref": "#/$defs/DataLiteral"
+        },
         "equalsFromRequestField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "field": {
           "type": "string"
@@ -1202,7 +1310,8 @@
         {
           "$ref": "#/$defs/ChangeRequestNoReviewSource"
         }
-      ]
+      ],
+      "description": "Either a required review, naming `authority` and `policyId`, or\n`mode: none`. The members present select the form; a review mixing the two\nforms is refused."
     },
     "ChangeRequestSelectorSource": {
       "oneOf": [
@@ -1267,14 +1376,7 @@
           }
         },
         "planner": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChangeRequestPlannerSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ChangeRequestPlannerSource"
         },
         "retention": {
           "$ref": "#/$defs/ChangeRequestRetentionSource",
@@ -1295,16 +1397,10 @@
       "additionalProperties": false,
       "properties": {
         "entity": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "fromField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "type": "object"
@@ -1313,16 +1409,10 @@
       "additionalProperties": false,
       "properties": {
         "fromEffect": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "fromField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "type": "object"
@@ -1343,6 +1433,45 @@
         "greater_than_or_equal"
       ],
       "type": "string"
+    },
+    "CompiledTaskGrantPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "collection": {
+          "type": "string"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/Operation"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "collection",
+        "operations"
+      ],
+      "type": "object"
+    },
+    "CompiledTaskGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "permissions": {
+          "items": {
+            "$ref": "#/$defs/CompiledTaskGrantPermissionSource"
+          },
+          "type": "array"
+        },
+        "sourceIssuer": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceIssuer",
+        "permissions"
+      ],
+      "type": "object"
     },
     "ConsentDecisionSource": {
       "additionalProperties": false,
@@ -1432,6 +1561,25 @@
       ],
       "type": "object"
     },
+    "ConsentRequirementSource": {
+      "additionalProperties": false,
+      "description": "A consent check ANDed into one read permission.",
+      "properties": {
+        "on": {
+          "description": "The permission entity's field the consent subject references; `id` is\nthe row's own identity.",
+          "type": "string"
+        },
+        "record": {
+          "description": "The consent-record entity checked.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "record",
+        "on"
+      ],
+      "type": "object"
+    },
     "ConsentValiditySource": {
       "additionalProperties": false,
       "description": "Validity of a consent decision. Every give expires within `maxDuration`.",
@@ -1446,10 +1594,7 @@
         },
         "until": {
           "description": "An optional timestamp field ending the give earlier than `maxDuration`.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "required": [
@@ -1470,11 +1615,7 @@
               "type": "array"
             },
             "id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "unique",
@@ -1484,10 +1625,7 @@
               "items": {
                 "$ref": "#/$defs/UniqueWhenPredicate"
               },
-              "type": [
-                "array",
-                "null"
-              ]
+              "type": "array"
             }
           },
           "required": [
@@ -1500,11 +1638,7 @@
           "additionalProperties": false,
           "properties": {
             "id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "compare",
@@ -1535,31 +1669,23 @@
               "type": "string"
             },
             "id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "int_range",
               "type": "string"
             },
             "maximum": {
-              "default": null,
               "format": "int64",
-              "type": [
-                "integer",
-                "null"
-              ]
+              "maximum": 9223372036854775807,
+              "minimum": -9223372036854775808,
+              "type": "integer"
             },
             "minimum": {
-              "default": null,
               "format": "int64",
-              "type": [
-                "integer",
-                "null"
-              ]
+              "maximum": 9223372036854775807,
+              "minimum": -9223372036854775808,
+              "type": "integer"
             }
           },
           "required": [
@@ -1575,11 +1701,7 @@
               "type": "string"
             },
             "id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "vocabulary",
@@ -1603,18 +1725,10 @@
           "additionalProperties": false,
           "properties": {
             "endField": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "temporal-non-overlap",
@@ -1627,11 +1741,7 @@
               "type": "array"
             },
             "startField": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           "required": [
@@ -1676,22 +1786,10 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "bbox": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Crs84BboxSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/Crs84BboxSource"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -1700,8 +1798,8 @@
           "type": "string"
         },
         "precision": {
-          "format": "uint8",
-          "maximum": 255,
+          "format": "uint32",
+          "maximum": 9,
           "minimum": 0,
           "type": "integer"
         },
@@ -1713,15 +1811,7 @@
           "$ref": "#/$defs/Crs84PointFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -1731,6 +1821,15 @@
         "precision"
       ],
       "type": "object"
+    },
+    "DataLiteral": {
+      "description": "A record value: null, a boolean, a number, or text.",
+      "type": [
+        "null",
+        "boolean",
+        "number",
+        "string"
+      ]
     },
     "DateFieldKindSchema": {
       "enum": [
@@ -1742,11 +1841,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -1759,15 +1854,7 @@
           "type": "string"
         },
         "lookup": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FieldLookupSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/FieldLookupSource"
         },
         "required": {
           "default": false,
@@ -1777,15 +1864,7 @@
           "$ref": "#/$defs/DateFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -1805,11 +1884,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -1822,34 +1897,18 @@
           "type": "string"
         },
         "lookup": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FieldLookupSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/FieldLookupSource"
         },
         "maximum": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "minimum": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "precision": {
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
+          "format": "uint32",
+          "maximum": 38,
+          "minimum": 1,
           "type": "integer"
         },
         "required": {
@@ -1857,8 +1916,8 @@
           "type": "boolean"
         },
         "scale": {
-          "format": "uint8",
-          "maximum": 255,
+          "format": "uint32",
+          "maximum": 38,
           "minimum": 0,
           "type": "integer"
         },
@@ -1866,15 +1925,7 @@
           "$ref": "#/$defs/DecimalFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -1910,12 +1961,14 @@
           "properties": {
             "maxLength": {
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 1000000,
+              "minimum": 1,
               "type": "integer"
             },
             "minLength": {
               "default": 0,
               "format": "uint32",
+              "maximum": 1000000,
               "minimum": 0,
               "type": "integer"
             },
@@ -1934,7 +1987,8 @@
           "properties": {
             "maxLength": {
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 10000000,
+              "minimum": 1,
               "type": "integer"
             },
             "type": {
@@ -1963,26 +2017,20 @@
         {
           "properties": {
             "maximum": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "minimum": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "precision": {
-              "format": "uint8",
-              "maximum": 255,
-              "minimum": 0,
+              "format": "uint32",
+              "maximum": 38,
+              "minimum": 1,
               "type": "integer"
             },
             "scale": {
-              "format": "uint8",
-              "maximum": 255,
+              "format": "uint32",
+              "maximum": 38,
               "minimum": 0,
               "type": "integer"
             },
@@ -2080,18 +2128,11 @@
         {
           "properties": {
             "bbox": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Crs84BboxSource"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/Crs84BboxSource"
             },
             "precision": {
-              "format": "uint8",
-              "maximum": 255,
+              "format": "uint32",
+              "maximum": 9,
               "minimum": 0,
               "type": "integer"
             },
@@ -2110,10 +2151,13 @@
           "properties": {
             "maxBytes": {
               "format": "uint32",
-              "minimum": 0,
+              "maximum": 1048576,
+              "minimum": 1,
               "type": "integer"
             },
-            "schema": true,
+            "schema": {
+              "x-registry-foreign": "json-schema-2020-12"
+            },
             "type": {
               "const": "structured",
               "type": "string"
@@ -2129,10 +2173,7 @@
       ],
       "properties": {
         "apiName": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -2182,36 +2223,23 @@
     "EntityExtensionSource": {
       "additionalProperties": false,
       "properties": {
+        "accessProfiles": {
+          "default": [],
+          "description": "Module profile contributions, read through the sentinels a project profile uses.",
+          "items": {
+            "$ref": "#/$defs/AccessProfileSource"
+          },
+          "type": "array"
+        },
         "accessRequirements": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AccessRequirementsSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/AccessRequirementsSource",
           "description": "Add mandatory requirements only when the entity has none; replacing them is refused."
         },
         "changeControl": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChangeControlSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ChangeControlSource"
         },
         "changeRequest": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChangeRequestSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ChangeRequestSource"
         },
         "constraints": {
           "default": [],
@@ -2237,14 +2265,7 @@
           "type": "array"
         },
         "geojson": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GeoJsonSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/GeoJsonSource"
         },
         "hooks": {
           "default": [],
@@ -2282,25 +2303,19 @@
       "additionalProperties": false,
       "properties": {
         "accessLog": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AccessLogSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/AccessLogSource",
           "description": "Subject-facing record access history, separate from the operational audit."
         },
+        "accessProfiles": {
+          "default": [],
+          "description": "Module profile contributions, read through the sentinels a project profile uses.",
+          "items": {
+            "$ref": "#/$defs/AccessProfileSource"
+          },
+          "type": "array"
+        },
         "accessRequirements": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AccessRequirementsSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/AccessRequirementsSource",
           "description": "Mandatory request-access requirements checked against every profile, including module contributions."
         },
         "attachments": {
@@ -2311,49 +2326,20 @@
           "type": "array"
         },
         "batch": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BatchSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/BatchSource"
         },
         "changeControl": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChangeControlSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ChangeControlSource"
         },
         "changeRequest": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChangeRequestSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ChangeRequestSource"
         },
         "classification": {
           "$ref": "#/$defs/Classification",
           "default": "internal"
         },
         "consentRecord": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ConsentRecordSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/ConsentRecordSource",
           "description": "Declares this entity's rows as subject-issued consent decisions that\n`requireConsent` permissions check before returning a subject's row."
         },
         "constraints": {
@@ -2377,14 +2363,7 @@
           "type": "array"
         },
         "geojson": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GeoJsonSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/GeoJsonSource"
         },
         "hooks": {
           "default": [],
@@ -2425,15 +2404,7 @@
           "type": "array"
         },
         "temporal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TemporalSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/TemporalSource"
         },
         "tombstone": {
           "default": false,
@@ -2449,14 +2420,14 @@
       "type": "object"
     },
     "EventConditionSource": {
-      "description": "Closed Version 1 event selection language.\n\nA tagged shape leaves room for a later, separately governed rule ABI\nwithout turning fields into an ad hoc expression language.",
+      "description": "Closed Version 1 event selection language.\n\nA tagged shape leaves room for a later, separately governed rule ABI\nwithout turning fields into an ad hoc expression language. The shared\nreader's union helper decodes it, so an error inside a variant keeps its\nposition and a `null` comparison literal is read as a value (CFG-SCHEMA-8,\nCFG-EMPTY-1).",
       "oneOf": [
         {
           "additionalProperties": false,
           "properties": {
             "afterEquals": {
               "additionalProperties": {
-                "$ref": "#/$defs/EventScalarValue"
+                "$ref": "#/$defs/DataLiteral"
               },
               "default": {},
               "description": "Required values after the change. Valid with created and patched triggers.",
@@ -2464,7 +2435,7 @@
             },
             "beforeEquals": {
               "additionalProperties": {
-                "$ref": "#/$defs/EventScalarValue"
+                "$ref": "#/$defs/DataLiteral"
               },
               "default": {},
               "description": "Required values before the change. Valid with patched and tombstoned triggers.",
@@ -2519,23 +2490,6 @@
           "type": "object"
         }
       ]
-    },
-    "EventScalarValue": {
-      "anyOf": [
-        {
-          "type": "null"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "string"
-        }
-      ],
-      "description": "A comparison literal in the closed field-condition language.\n\nObjects and arrays are refused during source parsing. The compiler then\nvalidates each scalar against the declared Registry field type."
     },
     "EventTrigger": {
       "enum": [
@@ -2638,10 +2592,7 @@
           "properties": {
             "abi": {
               "description": "The handler ABI the script speaks.",
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "rhai",
@@ -2664,10 +2615,7 @@
           "properties": {
             "abi": {
               "description": "The handler ABI the module speaks.",
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "wasm",
@@ -2725,14 +2673,7 @@
       "description": "One declared hook on an entity.\n\nThe shape is [`registry_platform_hooks::HookDeclaration`] with `trigger`\nand `when` closed to the vocabulary this compiler validates, and with\n`handler` optional. A hook that declares no handler is still recorded in\nthe outbox and delivered nowhere; production compilation refuses that.\n\nEntity hooks run after the triggering transaction commits, so `phase` is\nwritten and the compiler refuses any value it cannot run.",
       "properties": {
         "handler": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HookHandlerSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/HookHandlerSource",
           "description": "Governed, destination-neutral delivery. `destinationId` is a key in\nruntime `eventDestinations`; the project carries no URL or secret, and\ndeployment configuration may tighten the bounds it binds but cannot\nsupply or widen this authority. Production compilation requires it."
         },
         "id": {
@@ -2745,10 +2686,7 @@
         },
         "principal": {
           "description": "The access profile a proposal from this hook is applied under.\nOptional: a hook that declares none is a non-proposing hook, and a\nproposal from one is refused and dead-lettered at delivery time.\nDeclaring none is not an authoring error.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "projection": {
           "description": "Declared field identifiers to include in `values`. System event metadata is included separately.",
@@ -2763,14 +2701,7 @@
           "description": "Committed record change that can produce this hook."
         },
         "when": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EventConditionSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/EventConditionSource",
           "description": "Optional field tests, combined with AND. Omit to run on every matching trigger."
         }
       },
@@ -2811,11 +2742,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -2831,21 +2758,72 @@
           "$ref": "#/$defs/Int64FieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
         "id",
         "type",
         "classification"
+      ],
+      "type": "object"
+    },
+    "LookupPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "claimMapping": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "selector": {
+          "type": "string"
+        },
+        "valueOrigin": {
+          "$ref": "#/$defs/LookupValueOrigin"
+        }
+      },
+      "required": [
+        "selector",
+        "valueOrigin"
+      ],
+      "type": "object"
+    },
+    "LookupValueOrigin": {
+      "enum": [
+        "request",
+        "verified_claim"
+      ],
+      "type": "string"
+    },
+    "MembershipBoundarySource": {
+      "additionalProperties": false,
+      "description": "A one-hop current membership requirement, combined with every other row boundary.\nThe root field and membership key must reference the same entity. The active\nfield is Boolean, and principalField matches the profile's verified principal.",
+      "properties": {
+        "activeField": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "membershipEntity": {
+          "type": "string"
+        },
+        "membershipKeyField": {
+          "type": "string"
+        },
+        "principalField": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "membershipEntity",
+        "membershipKeyField",
+        "principalField",
+        "activeField"
       ],
       "type": "object"
     },
@@ -2903,6 +2881,55 @@
         }
       ]
     },
+    "ProvenanceFieldSource": {
+      "enum": [
+        "kind",
+        "reasonCode",
+        "reasonText",
+        "sourceReferences"
+      ],
+      "type": "string"
+    },
+    "ReadPathPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "allowCount": {
+          "default": false,
+          "type": "boolean"
+        },
+        "filterableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "path": {
+          "type": "string"
+        },
+        "readableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sortableFields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
     "ReadPathSource": {
       "additionalProperties": false,
       "properties": {
@@ -2943,11 +2970,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -2970,15 +2993,7 @@
           "$ref": "#/$defs/ReferenceFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -2988,6 +3003,74 @@
         "target"
       ],
       "type": "object"
+    },
+    "RequestMetadataFieldSource": {
+      "description": "Fields of request decision metadata governed separately from stored record fields.",
+      "enum": [
+        "actor_reference",
+        "reason",
+        "review_state"
+      ],
+      "type": "string"
+    },
+    "RequestPresencePermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "requestType": {
+          "type": "string"
+        },
+        "rowBoundaries": {
+          "$ref": "#/$defs/RowBoundaries",
+          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
+        }
+      },
+      "required": [
+        "requestType",
+        "rowBoundaries"
+      ],
+      "type": "object"
+    },
+    "RequestVisibilitySource": {
+      "const": "owner",
+      "description": "Expose only requests created by the current authenticated principal.",
+      "type": "string"
+    },
+    "RequiredScopes": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Require no scope.",
+          "type": "string"
+        },
+        {
+          "description": "Require every listed scope.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ],
+      "description": "The scopes a token must carry to select a profile: the keyword\n`unrestricted`, or a list of at least one scope."
+    },
+    "RowBoundaries": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Reach every row.",
+          "type": "string"
+        },
+        {
+          "description": "Reach the rows every listed boundary binds to the caller's claims.",
+          "items": {
+            "$ref": "#/$defs/RowBoundarySource"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ],
+      "description": "The rows a permission reaches: the keyword `unrestricted`, or a list of at\nleast one row boundary."
     },
     "RowBoundarySource": {
       "additionalProperties": false,
@@ -3028,6 +3111,31 @@
       ],
       "type": "object"
     },
+    "SpatialBboxPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumLatitudeSpanDegrees": {
+          "type": "number"
+        },
+        "maximumLongitudeSpanDegrees": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "maximumLongitudeSpanDegrees",
+        "maximumLatitudeSpanDegrees"
+      ],
+      "type": "object"
+    },
+    "SpatialQueryPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "$ref": "#/$defs/SpatialBboxPermissionSource"
+        }
+      },
+      "type": "object"
+    },
     "StringFieldKindSchema": {
       "enum": [
         "string"
@@ -3038,11 +3146,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -3055,33 +3159,23 @@
           "type": "string"
         },
         "lookup": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FieldLookupSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/FieldLookupSource"
         },
         "maxLength": {
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 1000000,
+          "minimum": 1,
           "type": "integer"
         },
         "minLength": {
           "default": 0,
           "format": "uint32",
+          "maximum": 1000000,
           "minimum": 0,
           "type": "integer"
         },
         "pattern": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "required": {
           "default": false,
@@ -3091,15 +3185,7 @@
           "$ref": "#/$defs/StringFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -3120,11 +3206,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -3137,39 +3219,26 @@
           "type": "string"
         },
         "lookup": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FieldLookupSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/FieldLookupSource"
         },
         "maxBytes": {
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 1048576,
+          "minimum": 1,
           "type": "integer"
         },
         "required": {
           "default": false,
           "type": "boolean"
         },
-        "schema": true,
+        "schema": {
+          "x-registry-foreign": "json-schema-2020-12"
+        },
         "type": {
           "$ref": "#/$defs/StructuredFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -3214,11 +3283,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -3231,27 +3296,16 @@
           "type": "string"
         },
         "lookup": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FieldLookupSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/FieldLookupSource"
         },
         "maxLength": {
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 10000000,
+          "minimum": 1,
           "type": "integer"
         },
         "pattern": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "required": {
           "default": false,
@@ -3261,15 +3315,7 @@
           "$ref": "#/$defs/TextFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -3290,11 +3336,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -3310,15 +3352,7 @@
           "$ref": "#/$defs/TimestampFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -3408,11 +3442,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -3428,15 +3458,7 @@
           "$ref": "#/$defs/UuidFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -3463,11 +3485,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -3483,15 +3501,7 @@
           "$ref": "#/$defs/VocabularyCodeFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         },
         "values": {
           "default": [],
@@ -3513,7 +3523,7 @@
       "type": "object"
     }
   },
-  "$id": "https://id.registrystack.org/schemas/breg/authoring/registry-module.v1alpha1.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {

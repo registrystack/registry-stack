@@ -15,6 +15,13 @@ crates. These live outside the main workspace (see the root `Cargo.toml`
 - `sdjwt_issuance` — SD-JWT issuance input parsing (`registry-platform-sdjwt`).
 - `sqlite_statement` — bounded reviewed-statement parsing and offline
   authorization (`registry-platform-sqlite`).
+- `yaml_reader`: the shared configuration reader over arbitrary bytes: the
+  YAML subset, the envelope, and substitution, checking that every code is
+  registered, every position is 1-based, and no substituted value reaches a
+  diagnostic (`registry-platform-yaml`).
+- `yaml_decode`: typed decoding through the same reader, into a document
+  type that uses every shared value type and union recipe
+  (`registry-platform-yaml`).
 
 Each target fuzzes the crate's real exported deserializer or entry point
 directly, never a locally re-declared mirror struct that could drift from the
@@ -40,6 +47,10 @@ committed to git under descriptive filenames. The `.gitignore` here excludes
 entries; if a generated input is worth keeping permanently, copy it into the
 seed corpus under a descriptive name instead of committing the raw generated
 filename.
+
+Seeds nested hundreds or thousands of levels deep (the `deep-*` seeds under
+`yaml_reader/`) carry no `.yaml` extension, so repository-wide YAML tooling
+skips them: CodeQL's YAML indexer overflows its stack on them.
 
 ## CI wiring
 

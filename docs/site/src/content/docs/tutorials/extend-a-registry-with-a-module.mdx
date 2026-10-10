@@ -64,29 +64,27 @@ bregctl check tutorial-work/project
 ```
 
 ```text test-expect
-Authoring check passed.
-  revision  sha256:<digest>
-
-  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
-           this profile can list all rows, subject only to query bounds; caller filters
-           are not authorization. Add a claim-bound row restriction or review this
-           registry-wide access
-  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
-           this profile has no claim-bound row restriction for its granted operations;
-           requestVisibility owner limits request reads only, and other lifecycle rules
-           still apply. Review this registry-wide access
-
-0 errors, 2 findings.
+Authoring check passed; registry revision sha256:<digest>.
+warning[breg.access.profile-unrestricted-collection] tutorial-work/project/registry.yaml:141:24 /accessProfiles/0/permissions/1/rowBoundaries
+  this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+warning[breg.access.profile-unrestricted-rows] tutorial-work/project/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
+  this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
+  next: Review the finding, and change the source if the behavior it describes is not intended.
+0 errors, 2 warnings in 4 files
 ```
 
 This is the project the first tutorial started as a registry, so the entity, fields, and profiles are
 the ones you used over HTTP, in the files [init wrote](../first-breg/#what-init-wrote).
-The `revision` line is the digest of the compiled project; it changes with every edit you make.
+The registry revision is the digest of the compiled project; it changes with every edit you make.
 
-A finding is advice the compiler attaches to a result that succeeded: an error stops a command, a finding does not.
+Each diagnostic names its severity and code, the file, line, and column it is about, and the path inside
+that file, then says what it found and what to do next.
+A warning is advice attached to a check that passed: an error stops a command, a warning does not.
+`init` printed the same two, labelled `finding`.
 The first says the `operator` profile can list every row, which is intended for a registry-wide operations team,
 and the second says the `evidence-source` profile can look up any record by its code.
-Every command in this tutorial that succeeds repeats both findings, so treat them as expected and read past them to the result.
+Every command in this tutorial that succeeds repeats both, so treat them as expected and read past them to the result.
 A check that is refused prints its errors instead, and you will meet one when you change the module.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files() and check(); crates/registry-breg/src/access.rs. */}
@@ -145,7 +143,7 @@ Check the project:
 bregctl check tutorial-work/project
 ```
 
-The command prints `Authoring check passed.`, a new `revision`, and the findings.
+The command prints `Authoring check passed;` with a new registry revision, and the same two warnings.
 `filterableFields` is unchanged on purpose: a note is something an operator reads and writes,
 not something a list is filtered by.
 
@@ -174,17 +172,17 @@ bregctl check tutorial-work/project
 ```
 
 ```text test-expect
-bregctl check refused.
-
-  error    module.lock.digest_mismatch  project.modules[].digest
-           an authored module does not match its locked digest
-  error    module.lock.version_mismatch  project.modules[].version
-           an authored module does not match its locked version
-
-2 errors, 0 findings.
+bregctl check refused the project.
+error[breg.module.lock-digest-mismatch] tutorial-work/project/registry.yaml:200:13 /modules/0/digest
+  an authored module does not match its locked digest
+  next: Run bregctl project lock against this project, then review the module lock change it records.
+error[breg.module.lock-version-mismatch] tutorial-work/project/registry.yaml:199:14 /modules/0/version
+  an authored module does not match its locked version
+  next: Run bregctl project lock against this project, then review the module lock change it records.
+2 errors, 0 warnings in 4 files
 ```
 
-A stale digest is an error, not a finding.
+A stale digest is an error, not a warning.
 The project still pins version `0.1.0` and the old content, and the compiler refuses to build a model from a
 module that differs from what was reviewed.
 
@@ -213,7 +211,7 @@ bregctl check tutorial-work/project
 }
 ```
 
-`check` then prints `Authoring check passed.` with the findings and nothing else.
+`check` then prints `Authoring check passed;` with the two warnings and nothing else.
 Open the `modules` entry in `registry.yaml` again: both the version and the digest changed.
 Rerun `project lock` after every module edit, and review a changed digest together with the module source it now pins.
 
@@ -309,7 +307,7 @@ Testing a project against a database and packaging it come next.
 | Symptom | Next move |
 | --- | --- |
 | `generate` reports `output.destination.invalid` | The output directory must not exist yet. Choose a new path, or remove the one left by an earlier run. |
-| `check` reports `module.lock.digest_mismatch` or `module.lock.version_mismatch` | You edited a module after its last lock. Run `bregctl project lock tutorial-work/project`, then check again. |
+| `check` reports `breg.module.lock-digest-mismatch` or `breg.module.lock-version-mismatch` | You edited a module after its last lock. Run `bregctl project lock tutorial-work/project`, then check again. |
 | `check` cannot parse `registry.yaml` after your edit | Compare the indentation of the lines you changed with their neighbours; the grant lists sit eight spaces in. |
 | `bregctl` is not found | Put the installers' directory, `~/.local/bin` unless you changed it, back on `PATH` in this terminal. |
 | The running registry does not show `internalNote` | Expected: it serves the package `bregctl dev` built when it first started. Activating a changed package is covered in [Deploy a registry](../../operate/breg/). |

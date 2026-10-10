@@ -33,8 +33,6 @@ const EXCHANGE_GENERATION: &str = "breg-mcp-v1";
 /// Why the outbound half could not be configured.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum OutboundError {
-    #[error("{0} is not a usable URL")]
-    Url(&'static str),
     #[error("the gateway client credential could not be configured")]
     Credential(#[source] TokenError),
 }
@@ -66,11 +64,9 @@ impl Outbound {
         gateway_resource: &str,
         key: PrivateJwk,
     ) -> Result<Self, OutboundError> {
-        let base_url =
-            Url::parse(&registry.base_url).map_err(|_| OutboundError::Url("registry.baseUrl"))?;
-        let token_endpoint = Url::parse(&exchange.token_endpoint)
-            .map_err(|_| OutboundError::Url("exchange.tokenEndpoint"))?;
-        let timeout = Duration::from_millis(registry.request_timeout_milliseconds);
+        let base_url = registry.base_url.to_url();
+        let token_endpoint = exchange.token_endpoint.to_url();
+        let timeout = Duration::from_millis(registry.attempt_timeout_milliseconds.get());
         let actor = PrivateKeyJwt::new(
             client_config(
                 &token_endpoint,
@@ -84,12 +80,19 @@ impl Outbound {
         .map_err(OutboundError::Credential)?;
         let outbound = Self {
             base_url,
-            audience: registry.audience.clone(),
-            scopes: registry.scopes.clone(),
+            audience: registry.audience.as_str().to_owned(),
+            scopes: registry
+                .scopes
+                .iter()
+                .map(|scope| scope.as_str().to_owned())
+                .collect(),
             token_endpoint,
-            client_id: exchange.client_id.clone(),
+            client_id: exchange.client_id.to_string(),
             key,
-            assertion_audience: exchange.assertion_audience.clone(),
+            assertion_audience: exchange
+                .assertion_audience
+                .as_ref()
+                .map(ToString::to_string),
             gateway_resource: gateway_resource.to_owned(),
             timeout,
             actor: Arc::new(actor),
@@ -206,6 +209,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+    use crate::config::tests::outbound_sections;
 
     const AUDIENCE: &str = "urn:breg:citizen-address-correction";
     const RESOURCE: &str = "https://gateway.example.test/mcp";
@@ -240,24 +244,10 @@ mod tests {
             .exchange_profile(ExchangeProfile::Conformant)
             .start()
             .await;
-        let outbound = Outbound::new(
-            &RegistryConfig {
-                base_url: "http://127.0.0.1:9/".to_owned(),
-                access_profile: "citizen-agent".to_owned(),
-                audience: AUDIENCE.to_owned(),
-                scopes: vec![SCOPE.to_owned()],
-                request_timeout_milliseconds: 5_000,
-            },
-            &ExchangeConfig {
-                token_endpoint: server.token_endpoint(),
-                client_id: GATEWAY.to_owned(),
-                private_key_ref: "secret:file/unused".to_owned(),
-                assertion_audience: None,
-            },
-            RESOURCE,
-            key,
-        )
-        .expect("outbound configures");
+        let (registry, exchange) =
+            outbound_sections("http://127.0.0.1:9/", &server.token_endpoint());
+        let outbound =
+            Outbound::new(&registry, &exchange, RESOURCE, key).expect("outbound configures");
         Fixture {
             server,
             outbound,

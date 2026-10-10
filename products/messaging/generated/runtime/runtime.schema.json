@@ -2,42 +2,35 @@
   "$defs": {
     "AuditConfig": {
       "additionalProperties": false,
-      "description": "The key for the keyed references an audit record carries in place of raw\nidentifiers, written `audit.hashKeyRef` beside the product's own audit\nsettings.",
+      "description": "Where the audit journal is written and the key its hashes are made with.",
       "properties": {
         "destination": {
           "$ref": "#/$defs/AuditDestinationKind",
-          "default": "file"
+          "default": "file",
+          "description": "Where audit entries go: a rotated `file` (the default) or `stdout`."
         },
         "hashKeyRef": {
           "$ref": "#/$defs/SecretReference",
-          "description": "Secret reference to the audit hash key.",
-          "pattern": "^secret:(?:env|file)/"
+          "description": "Secret reference to the audit hash key."
         },
         "path": {
-          "default": null,
+          "description": "The absolute path of the active audit file, for `destination: file`.",
           "pattern": "^/",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
-        "retainDays": {
-          "default": null,
+        "retentionDays": {
+          "description": "How many days a sealed audit file is kept.",
           "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "maximum": 36500,
+          "minimum": 1,
+          "type": "integer"
         },
         "rotateBytes": {
-          "default": null,
+          "description": "The size at which the active file is sealed and a new one begun.",
           "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": "integer"
         }
       },
       "required": [
@@ -72,37 +65,43 @@
       ],
       "type": "object"
     },
+    "CallbackBodyEncoding": {
+      "description": "How an `hmac-sha256-body` tag is encoded in its header.",
+      "enum": [
+        "hex",
+        "base64"
+      ],
+      "type": "string"
+    },
     "CallbackVerifierConfig": {
-      "description": "How the provider's delivery callbacks are authenticated, from a closed set of algorithms. Required exactly when the package declares `receipts: callback`; there is no unauthenticated kind.",
+      "description": "How the runtime authenticates one provider's inbound delivery callbacks,\nclosed and tagged by `type` in kebab-case.",
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "HMAC-SHA1 over `url` and the request's query, followed by the form parameters sorted by name, base64 in `header`.",
+          "description": "HMAC-SHA1 over the full external callback URL with the request's form\nparameters sorted by key and appended as `key` then `value` with no\ndelimiter, base64 in `header`. The `form-sms-gateway` example provider\npackage documents the provider scheme this matches.",
           "properties": {
             "header": {
+              "description": "The header carrying the signature.",
               "maxLength": 128,
               "minLength": 1,
               "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
               "type": "string"
             },
-            "kind": {
+            "secretRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
               "const": "hmac-sha1-url-form",
               "type": "string"
             },
-            "secretRef": {
-              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": "string"
-            },
             "url": {
-              "description": "The external callback URL the provider was given and signs, exactly as given, without a query or fragment.",
-              "maxLength": 2048,
-              "minLength": 1,
-              "pattern": "^https?://[^?#]+$",
-              "type": "string"
+              "$ref": "#/$defs/Url",
+              "description": "The external callback URL the provider was given and signs, as it\nwas given: scheme, host, any port, and path, without a query or\nfragment. The route appends the request's own query string. A\nproxy may rewrite what the runtime receives, so the runtime never\nreconstructs this URL from the request.",
+              "pattern": "^https?://[^/?#]+/[^?#]*$"
             }
           },
           "required": [
-            "kind",
+            "type",
             "url",
             "header",
             "secretRef"
@@ -111,32 +110,28 @@
         },
         {
           "additionalProperties": false,
-          "description": "HMAC-SHA256 over the raw request body, in `header` as `encoding`.",
+          "description": "HMAC-SHA256 over the raw request body, encoded in `header` as\n`encoding`.",
           "properties": {
             "encoding": {
-              "enum": [
-                "hex",
-                "base64"
-              ],
-              "type": "string"
+              "$ref": "#/$defs/CallbackBodyEncoding"
             },
             "header": {
+              "description": "The header carrying the signature.",
               "maxLength": 128,
               "minLength": 1,
               "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
               "type": "string"
             },
-            "kind": {
-              "const": "hmac-sha256-body",
-              "type": "string"
-            },
             "secretRef": {
-              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "hmac-sha256-body",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "header",
             "encoding",
             "secretRef"
@@ -145,19 +140,18 @@
         },
         {
           "additionalProperties": false,
-          "description": "A secret random token as the last segment of the callback path.",
+          "description": "A secret random token carried in the callback path, for gateways that\ncan only be given a URL.",
           "properties": {
-            "kind": {
-              "const": "path-token",
-              "type": "string"
-            },
             "tokenRef": {
-              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "path-token",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "tokenRef"
           ],
           "type": "object"
@@ -177,14 +171,12 @@
       "description": "The PostgreSQL connection a stateful runtime uses. Both URLs are secret\nreferences and may name the same secret.",
       "properties": {
         "migrationUrlRef": {
-          "description": "Secret reference to the migration connection URL.",
-          "pattern": "^secret:(?:env|file)/",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the migration connection URL."
         },
         "runtimeUrlRef": {
-          "description": "Secret reference to the least-privileged runtime connection URL.",
-          "pattern": "^secret:(?:env|file)/",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the least-privileged runtime connection URL."
         },
         "testOnlyPlaintext": {
           "default": false,
@@ -192,13 +184,8 @@
           "type": "boolean"
         },
         "trustedRootCertificateRef": {
-          "default": null,
-          "description": "Secret reference to a PEM root certificate the connection trusts.",
-          "pattern": "^secret:(?:env|file)/",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to a PEM root certificate the connection trusts.\nAbsent, the connection trusts the platform's root certificates."
         }
       },
       "required": [
@@ -207,10 +194,22 @@
       ],
       "type": "object"
     },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
     "EnvironmentSecretProviderConfig": {
       "additionalProperties": false,
       "description": "The environment secret provider. It takes no settings.",
       "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
     },
     "FileSecretProviderConfig": {
       "additionalProperties": false,
@@ -228,19 +227,19 @@
       "type": "object"
     },
     "HttpProviderAuthentication": {
-      "description": "How a send authenticates to the provider. The credential is added by\nRust after the prepare script returns; no script ever sees it.",
+      "description": "How a send authenticates to the provider, chosen by `type`. The\ncredential is added by Rust after the prepare script returns; no script\never sees it.",
       "oneOf": [
         {
           "additionalProperties": false,
           "description": "No credential. Only for a loopback development provider.",
           "properties": {
-            "kind": {
+            "type": {
               "const": "none",
               "type": "string"
             }
           },
           "required": [
-            "kind"
+            "type"
           ],
           "type": "object"
         },
@@ -248,19 +247,19 @@
           "additionalProperties": false,
           "description": "`Authorization: Basic` over the two resolved values.",
           "properties": {
-            "kind": {
+            "passwordRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
               "const": "basic",
               "type": "string"
             },
-            "passwordRef": {
-              "type": "string"
-            },
             "usernameRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             }
           },
           "required": [
-            "kind",
+            "type",
             "usernameRef",
             "passwordRef"
           ],
@@ -270,22 +269,19 @@
           "additionalProperties": false,
           "description": "`Authorization: <scheme> <token>`. Absent, the scheme is `Bearer`,\nthe only one the destination substrate presents today.",
           "properties": {
-            "kind": {
-              "const": "static-authorization",
+            "scheme": {
               "type": "string"
             },
-            "scheme": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "tokenRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "static-authorization",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "tokenRef"
           ],
           "type": "object"
@@ -297,16 +293,16 @@
             "headerName": {
               "type": "string"
             },
-            "kind": {
+            "type": {
               "const": "static-api-key",
               "type": "string"
             },
             "valueRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             }
           },
           "required": [
-            "kind",
+            "type",
             "headerName",
             "valueRef"
           ],
@@ -316,19 +312,19 @@
           "additionalProperties": false,
           "description": "The resolved value in the named query parameter, appended after the\nscript's own target.",
           "properties": {
-            "kind": {
-              "const": "static-api-key-query",
-              "type": "string"
-            },
             "parameterName": {
               "type": "string"
             },
-            "valueRef": {
+            "type": {
+              "const": "static-api-key-query",
               "type": "string"
+            },
+            "valueRef": {
+              "$ref": "#/$defs/SecretReference"
             }
           },
           "required": [
-            "kind",
+            "type",
             "parameterName",
             "valueRef"
           ],
@@ -339,30 +335,28 @@
           "description": "AWS Signature Version 4 for a JSON API. Rust signs the final request;\ncredentials are never exposed to provider scripts.",
           "properties": {
             "accessKeyIdRef": {
-              "type": "string"
-            },
-            "kind": {
-              "const": "aws-sigv4",
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "region": {
               "type": "string"
             },
             "secretAccessKeyRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "service": {
               "type": "string"
             },
             "sessionTokenRef": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "$ref": "#/$defs/SecretReference",
+              "description": "The session token for temporary credentials. Omitted, the request\nis signed without one."
+            },
+            "type": {
+              "const": "aws-sigv4",
+              "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "region",
             "service",
             "accessKeyIdRef",
@@ -375,64 +369,48 @@
           "description": "An OAuth 2.0 client-credentials bearer token, fetched from\n`tokenEndpoint` and cached.",
           "properties": {
             "assumedLifetimeSeconds": {
-              "description": "The lifetime assumed when the token response carries no\n`expires_in`. Absent, `expires_in` is required.",
+              "description": "The lifetime assumed, in seconds, when the token response carries\nno `expires_in`. Omitted, `expires_in` is required.",
               "format": "uint64",
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
+              "maximum": 86400,
+              "minimum": 10,
+              "type": "integer"
             },
             "audience": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "clientIdRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "clientSecretRef": {
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "credentialPlacement": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/CredentialPlacement"
-                },
-                {
-                  "type": "null"
-                }
-              ],
+              "$ref": "#/$defs/CredentialPlacement",
               "description": "Where the client secret travels. The token request carries it in\nthe form body; `basic-header` is refused until the substrate can\nplace it there."
             },
-            "kind": {
-              "const": "oauth2-client-credentials",
-              "type": "string"
-            },
             "maximumCacheSeconds": {
+              "description": "The longest a fetched token is reused, in seconds.",
               "format": "uint64",
-              "minimum": 0,
+              "maximum": 86400,
+              "minimum": 10,
               "type": "integer"
             },
             "resource": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "scope": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "tokenEndpoint": {
+              "$ref": "#/$defs/Url"
+            },
+            "type": {
+              "const": "oauth2-client-credentials",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "tokenEndpoint",
             "clientIdRef",
             "clientSecretRef",
@@ -468,8 +446,7 @@
               "type": "string"
             },
             "uri": {
-              "pattern": "^https?://",
-              "type": "string"
+              "$ref": "#/$defs/Url"
             }
           },
           "required": [
@@ -483,8 +460,7 @@
           "description": "Read the key set from a secret, for deployments without network access\nto the issuer.",
           "properties": {
             "documentRef": {
-              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "kind": {
               "const": "static",
@@ -526,14 +502,19 @@
       ],
       "type": "string"
     },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "OidcConfig": {
       "additionalProperties": false,
-      "description": "The OIDC issuer a runtime accepts access tokens from: the exact `iss`\nvalue, the `aud` value a token must carry, and where the issuer's signing\nkeys come from, written under `authentication.oidc` beside the product's\nown token rules.",
+      "description": "The OIDC issuer whose access tokens this runtime accepts, the clients it\nadmits, and the claim carrying their scopes.",
       "properties": {
         "allowedClients": {
-          "default": [],
           "description": "Client identifiers whose access tokens are admitted. A runtime decides\nwhether an empty list is acceptable in production.",
           "items": {
+            "minLength": 1,
             "type": "string"
           },
           "minItems": 1,
@@ -548,16 +529,15 @@
               "type": "string"
             },
             "maxItems": 16,
-            "minItems": 1,
             "type": "array",
             "uniqueItems": true
           },
-          "default": {},
-          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. An empty map applies no rule. Once a\nclient is listed, a token it exchanged is accepted only for one of\nthat client's declared authorities.",
+          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client. Once a client is listed, a\ntoken it exchanged is accepted only for one of that client's declared\nauthorities.",
           "maxProperties": 64,
+          "minProperties": 1,
           "propertyNames": {
-            "maxLength": 128,
-            "minLength": 1
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 128
           },
           "type": "object"
         },
@@ -568,9 +548,8 @@
           "type": "string"
         },
         "issuer": {
-          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL.",
-          "pattern": "^https?://",
-          "type": "string"
+          "$ref": "#/$defs/Url",
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL."
         },
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
@@ -586,7 +565,8 @@
       },
       "required": [
         "issuer",
-        "audience"
+        "audience",
+        "allowedClients"
       ],
       "type": "object"
     },
@@ -595,12 +575,8 @@
       "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package digest the runtime must\nfind there. The package digest is the digest of the package's\n`SHA256SUMS` file; see [`crate::package`].",
       "properties": {
         "expectedDigest": {
-          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage.",
-          "pattern": "^sha256:[0-9a-f]{64}$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/Digest",
+          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage."
         },
         "root": {
           "description": "Absolute path of the package directory.",
@@ -635,7 +611,7 @@
       "type": "object"
     },
     "ProviderConnection": {
-      "description": "One provider's runtime half. The package declares the provider's kind,\nand for an `http` provider its scripts; the two halves must name the same\nkind.",
+      "description": "One provider's runtime half. The package declares the provider's type,\nand for an `http` provider its scripts; the two halves must name the same\ntype.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -646,55 +622,45 @@
               "items": {
                 "type": "string"
               },
+              "maxItems": 16,
               "type": "array"
             },
-            "attemptTimeoutSeconds": {
-              "default": 30,
+            "attemptTimeoutMilliseconds": {
+              "default": 30000,
+              "description": "How long one attempt may take, from 1000 to 60000 milliseconds;\nomitted, 30000.",
               "format": "uint64",
-              "minimum": 0,
+              "maximum": 60000,
+              "minimum": 1000,
               "type": "integer"
             },
             "authentication": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/SmtpAuthentication"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/SmtpAuthentication"
             },
             "host": {
               "description": "The relay's DNS name or IP literal. It is resolved once per attempt and\nis the name TLS verifies the relay's certificate against.",
-              "type": "string"
-            },
-            "kind": {
-              "const": "smtp",
               "type": "string"
             },
             "port": {
               "description": "Defaults to 587 for `starttls` and 465 for `implicit`; required for\n`development-loopback`.",
               "format": "uint16",
               "maximum": 65535,
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
+              "minimum": 1,
+              "type": "integer"
             },
             "tls": {
               "$ref": "#/$defs/SmtpTlsMode"
             },
             "trustedRootCertificateRef": {
-              "description": "A PEM root certificate trusted in addition to the public web roots,\nfor a relay behind a private certificate authority.",
-              "type": [
-                "string",
-                "null"
-              ]
+              "$ref": "#/$defs/SecretReference",
+              "description": "A PEM root certificate trusted in addition to the public web roots,\nfor a relay behind a private certificate authority."
+            },
+            "type": {
+              "const": "smtp",
+              "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "host",
             "tls"
           ],
@@ -702,76 +668,72 @@
         },
         {
           "additionalProperties": false,
-          "description": "Boxed: an `http` connection is several times the size of an `smtp`\none.",
+          "description": "Runtime settings for one HTTP provider.",
           "properties": {
             "acknowledgeQueryStringContent": {
+              "default": false,
               "description": "Required, and only allowed, when the package sends with `get`: the\nmessage content travels in the query string, where provider access\nlogs keep it.",
               "type": "boolean"
             },
             "allowedPrivateCidrs": {
-              "description": "Exact RFC 1918, CGNAT, or unique-local networks an `https` provider may\nresolve into, for an in-country gateway on a private network. Every\nother non-public address is refused.",
+              "default": [],
+              "description": "Exact RFC 1918, CGNAT, or unique-local networks an `https` provider may\nresolve into, for an in-country gateway on a private network. Every\nother non-public address is refused. Omitted, the provider may resolve\nonly to public addresses.",
               "items": {
                 "type": "string"
               },
+              "maxItems": 16,
               "type": "array"
+            },
+            "attemptTimeoutMilliseconds": {
+              "description": "One send's whole budget in milliseconds: resolution, connection,\nrequest, and response.",
+              "format": "uint64",
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
             },
             "authentication": {
               "$ref": "#/$defs/HttpProviderAuthentication"
             },
             "baseUrl": {
-              "description": "The provider's origin and path prefix, ending in `/`. Every request\ntarget a script returns is relative to it and stays under it.\n`https` in production; `http` only to a loopback host.",
-              "type": "string"
+              "$ref": "#/$defs/Url",
+              "description": "The provider's origin and path prefix, ending in `/`. Every request\ntarget a script returns is relative to it and stays under it.\n`https` in production; `http` only to a loopback host."
             },
             "callbackVerifier": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/CallbackVerifierConfig"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/CallbackVerifierConfig",
+              "description": "How the provider's delivery callbacks are authenticated. Required\nexactly when the package declares `receipts: callback`."
             },
-            "concurrencyLimit": {
-              "description": "The most sends this deployment has in flight to the provider, at most\nthe package's declared `capabilities.concurrencyLimit`.",
+            "maximumConcurrentRequests": {
+              "description": "The most sends this deployment has in flight to the provider, at most\nthe package's declared `capabilities.maximumConcurrentRequests`.",
               "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
+              "maximum": 64,
+              "minimum": 1,
               "type": "integer"
-            },
-            "kind": {
-              "const": "http",
-              "type": "string"
             },
             "maximumResponseBytes": {
               "description": "The largest response body read, at most 1 MiB.",
               "format": "uint64",
-              "minimum": 0,
+              "maximum": 1048576,
+              "minimum": 1,
               "type": "integer"
             },
             "redirects": {
               "$ref": "#/$defs/RedirectPolicy"
             },
-            "timeoutMilliseconds": {
-              "description": "One send's whole budget: resolution, connection, request, and\nresponse, at most 10000.",
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
             "tlsTrustProfile": {
-              "description": "The operator-declared trust bundle the provider's certificate may\nchain to. Its roots are trusted in addition to the system roots, not\ninstead of them. The runtime resolves the name to PEM and passes it to\n[`HttpProviderSettings::activate`].",
-              "type": [
-                "string",
-                "null"
-              ]
+              "$ref": "#/$defs/LocalId",
+              "description": "The operator-declared trust bundle the provider's certificate may\nchain to, by its name under `tlsTrustProfiles`. Its roots are trusted\nin addition to the system roots, not instead of them. The runtime\nresolves the name to PEM and passes it to\n[`HttpProviderSettings::activate`]."
+            },
+            "type": {
+              "const": "http",
+              "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "baseUrl",
-            "timeoutMilliseconds",
+            "attemptTimeoutMilliseconds",
             "maximumResponseBytes",
-            "concurrencyLimit",
+            "maximumConcurrentRequests",
             "redirects",
             "authentication"
           ],
@@ -790,7 +752,7 @@
       "additionalProperties": false,
       "description": "Retention periods the retention sweep enforces. Every value is deployment\nconfiguration: a jurisdiction's retention schedule approves the deployed\nnumbers, and the audit journal records them at startup.",
       "properties": {
-        "payloadDays": {
+        "payloadRetentionDays": {
           "default": 7,
           "description": "How long a message's rendered payload and recipient contact are kept,\nfrom 1 to 30 days.",
           "format": "uint16",
@@ -798,7 +760,7 @@
           "minimum": 1,
           "type": "integer"
         },
-        "recordDays": {
+        "recordRetentionDays": {
           "default": 90,
           "description": "How long the content-free message record is kept, at least as long as\nthe payload and at most ten years.",
           "format": "uint16",
@@ -806,7 +768,7 @@
           "minimum": 1,
           "type": "integer"
         },
-        "submissionReceiptDays": {
+        "submissionReceiptRetentionDays": {
           "default": 7,
           "description": "How long a submission receipt stays replayable under its idempotency\nkey, from one day to the record period.",
           "format": "uint16",
@@ -844,25 +806,11 @@
       "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
       "properties": {
         "environment": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
           "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
         },
         "file": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FileSecretProviderConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/FileSecretProviderConfig",
           "description": "Enables `secret:file/name` references, read from files under `root`."
         }
       },
@@ -878,10 +826,10 @@
       "description": "The credential pair the relay authenticates, as `secret:` references.",
       "properties": {
         "passwordRef": {
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         },
         "usernameRef": {
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         }
       },
       "required": [
@@ -923,22 +871,125 @@
       "description": "A PEM bundle of one or more certificate authorities, held in the secret\nprovider so it is read under the same file checks as every credential.",
       "properties": {
         "bundleRef": {
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         }
       },
       "required": [
         "bundleRef"
       ],
       "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
     }
   },
   "$id": "https://id.registrystack.org/schemas/messaging/runtime/runtime.v1alpha1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "authentication": {
+            "properties": {
+              "oidc": {
+                "properties": {
+                  "jwksSource": {
+                    "properties": {
+                      "documentRef": {
+                        "pattern": "^secret:env/"
+                      }
+                    },
+                    "required": [
+                      "documentRef"
+                    ]
+                  }
+                },
+                "required": [
+                  "jwksSource"
+                ]
+              }
+            },
+            "required": [
+              "oidc"
+            ]
+          }
+        },
+        "required": [
+          "authentication"
+        ]
+      },
+      "then": {
+        "properties": {
+          "secretProviders": {
+            "properties": {
+              "environment": {
+                "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+              }
+            },
+            "required": [
+              "environment"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "authentication": {
+            "properties": {
+              "oidc": {
+                "properties": {
+                  "jwksSource": {
+                    "properties": {
+                      "documentRef": {
+                        "pattern": "^secret:file/"
+                      }
+                    },
+                    "required": [
+                      "documentRef"
+                    ]
+                  }
+                },
+                "required": [
+                  "jwksSource"
+                ]
+              }
+            },
+            "required": [
+              "oidc"
+            ]
+          }
+        },
+        "required": [
+          "authentication"
+        ]
+      },
+      "then": {
+        "properties": {
+          "secretProviders": {
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/FileSecretProviderConfig"
+              }
+            },
+            "required": [
+              "file"
+            ]
+          }
+        }
+      }
+    }
+  ],
   "description": "The operator runtime configuration document.",
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/messaging-runtime/v1alpha1",
+      "const": "id.registrystack.org/formats/messaging/runtime/v1alpha1",
       "type": "string"
     },
     "audit": {
@@ -973,15 +1024,7 @@
       "$ref": "#/$defs/PrivateListenerConfig"
     },
     "metricsListener": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ListenerConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
+      "$ref": "#/$defs/ListenerConfig"
     },
     "package": {
       "$ref": "#/$defs/PackageConfig"
@@ -991,15 +1034,13 @@
         "$ref": "#/$defs/ProviderConnection"
       },
       "description": "The runtime half of each package provider, by provider id: where the\nprovider is and how the runtime authenticates to it. A package\nprovider with no entry has no transport, and its messages fail with\n`provider-unconfigured`.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
       "type": "object"
     },
     "retention": {
-      "$ref": "#/$defs/RetentionConfig",
-      "default": {
-        "payloadDays": 7,
-        "recordDays": 90,
-        "submissionReceiptDays": 7
-      }
+      "$ref": "#/$defs/RetentionConfig"
     },
     "secretProviders": {
       "$ref": "#/$defs/SecretProvidersConfig"
@@ -1008,7 +1049,11 @@
       "additionalProperties": {
         "$ref": "#/$defs/TlsTrustProfileConfig"
       },
-      "description": "Named PEM bundles an `http` provider's `tlsTrustProfile` trusts in\naddition to the system roots.",
+      "description": "Named PEM bundles an `http` provider's `tlsTrustProfile` trusts in\naddition to the system roots, at most 64.",
+      "maxProperties": 64,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
       "type": "object"
     }
   },
@@ -1020,7 +1065,8 @@
     "secretProviders",
     "database",
     "authentication",
-    "audit"
+    "audit",
+    "identity"
   ],
   "title": "Registry Messaging runtime configuration",
   "type": "object"

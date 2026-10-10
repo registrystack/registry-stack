@@ -4033,9 +4033,10 @@ mod tests {
                     "id": "caseworker",
                     "default": true,
                     "principalClaim": "principal",
+                    "requiredScopes": "unrestricted",
                     "permissions": [{
                         "entity": "case",
-                        "rowBoundaries": [],
+                        "rowBoundaries": "unrestricted",
                         "operations": ["get", "list", "create", "patch"],
                         "readableFields": ["secret"],
                         "writableFields": ["secret"]

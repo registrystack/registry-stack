@@ -1,0 +1,12 @@
+id: substitution-in-text-accepted
+rules: [CFG-SEC-2, CFG-CHECK-1, CFG-SEC-3]
+summary: A substitution expression in an operator file's text member is accepted, and the check does not print the variable's value.
+appliesTo:
+  audiences: [operator]
+mutation:
+  member:
+    role: optionalText
+    value: '"${REGISTRY_CONFORMANCE_VALUE}"'
+expect:
+  exit: 0
+  diagnostics: []

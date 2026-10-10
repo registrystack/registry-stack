@@ -1,73 +1,55 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/discovery/schema/runtime-v1alpha1.json",
-  "title": "Registry Discovery runtime configuration",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["apiVersion", "kind", "listener", "package", "limits", "logLevel"],
-  "properties": {
-    "apiVersion": {"const": "registry.registrystack.org/discovery-runtime/v1alpha1"},
-    "kind": {"const": "DiscoveryRuntimeConfig"},
-    "listener": {
-      "type": "object",
+  "$defs": {
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "ListenerBind": {
+      "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ListenerConfig": {
       "additionalProperties": false,
-      "required": ["bind"],
+      "description": "The listener of a runtime that declares no TLS or exposure settings.",
       "properties": {
         "bind": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "description": "An IPv4 or bracketed IPv6 SocketAddr literal. Port zero is valid and requests an ephemeral listener, matching Rust SocketAddr parsing.",
-          "allOf": [
-            {"$ref": "#/$defs/socketPort"},
-            {
-              "anyOf": [
-                {"$ref": "#/$defs/ipv4SocketHost"},
-                {"$ref": "#/$defs/ipv6HexSocketHost"},
-                {"$ref": "#/$defs/ipv6MixedSocketHost"}
-              ]
-            }
-          ]
+          "$ref": "#/$defs/ListenerBind"
         }
-      }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
     },
-    "package": {
-      "type": "object",
+    "LogLevel": {
+      "enum": [
+        "error",
+        "warn",
+        "info"
+      ],
+      "type": "string"
+    },
+    "PackageConfig": {
       "additionalProperties": false,
-      "required": ["root"],
+      "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package digest the runtime must\nfind there. The package digest is the digest of the package's\n`SHA256SUMS` file; see [`crate::package`].",
       "properties": {
-        "root": {
-          "type": "string",
-          "pattern": "^/",
-          "not": {"pattern": "(^|/)\\.{1,2}(/|$)"},
-          "description": "Absolute path of the package directory."
-        },
         "expectedDigest": {
-          "type": ["string", "null"],
-          "pattern": "^sha256:[0-9a-f]{64}$",
-          "description": "Optional digest of the package SHA256SUMS file."
+          "$ref": "#/$defs/Digest",
+          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage."
+        },
+        "root": {
+          "description": "Absolute path of the package directory.",
+          "pattern": "^/",
+          "type": "string"
         }
-      }
-    },
-    "limits": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["maximumRequestBytes", "maximumResponseBytes", "maximumResultRecords", "maximumResultAlternatives", "requestTimeoutSeconds", "shutdownTimeoutSeconds"],
-      "properties": {
-        "maximumRequestBytes": {"type": "integer", "minimum": 1, "maximum": 16777216},
-        "maximumResponseBytes": {"type": "integer", "minimum": 65536, "maximum": 16777216},
-        "maximumResultRecords": {"type": "integer", "minimum": 1, "maximum": 10000},
-        "maximumResultAlternatives": {"type": "integer", "minimum": 1, "maximum": 1000},
-        "requestTimeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 300},
-        "shutdownTimeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 300}
-      }
-    },
-    "logLevel": {"enum": ["error", "warn", "info"]}
-  },
-  "$defs": {
-    "socketPort": {
-      "description": "A decimal u16 port, including zero and Rust-compatible leading zeroes.",
-      "pattern": ":0*(?:[0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
     },
     "ipv4SocketHost": {
       "description": "Four canonical decimal IPv4 octets followed by a decimal port.",
@@ -80,6 +62,139 @@
     "ipv6MixedSocketHost": {
       "description": "A bracketed IPv6 literal whose final 32 bits use canonical dotted-decimal IPv4 notation, followed by a decimal port.",
       "pattern": "^\\[(?:(?:[0-9A-Fa-f]{1,4}:){6}|::(?:[0-9A-Fa-f]{1,4}:){5}|(?:[0-9A-Fa-f]{1,4})?::(?:[0-9A-Fa-f]{1,4}:){4}|(?:(?:[0-9A-Fa-f]{1,4}:){0,1}[0-9A-Fa-f]{1,4})?::(?:[0-9A-Fa-f]{1,4}:){3}|(?:(?:[0-9A-Fa-f]{1,4}:){0,2}[0-9A-Fa-f]{1,4})?::(?:[0-9A-Fa-f]{1,4}:){2}|(?:(?:[0-9A-Fa-f]{1,4}:){0,3}[0-9A-Fa-f]{1,4})?::[0-9A-Fa-f]{1,4}:|(?:(?:[0-9A-Fa-f]{1,4}:){0,4}[0-9A-Fa-f]{1,4})?::)(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)\\]:[0-9]+$"
+    },
+    "socketPort": {
+      "description": "A decimal u16 port, including zero and Rust-compatible leading zeroes.",
+      "pattern": ":0*(?:[0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
     }
-  }
+  },
+  "$id": "https://id.registrystack.org/schemas/discovery/runtime/runtime.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The operator runtime configuration document.",
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/discovery-runtime/v1alpha1",
+      "type": "string"
+    },
+    "kind": {
+      "const": "DiscoveryRuntimeConfig",
+      "type": "string"
+    },
+    "limits": {
+      "additionalProperties": false,
+      "description": "The bounds the service applies to every request and response.",
+      "properties": {
+        "maximumRequestBytes": {
+          "description": "Largest request body, in bytes, the service reads.",
+          "format": "uint64",
+          "maximum": 16777216,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumResponseBytes": {
+          "description": "Largest response body, in bytes, the service writes.",
+          "format": "uint64",
+          "maximum": 16777216,
+          "minimum": 65536,
+          "type": "integer"
+        },
+        "maximumResultAlternatives": {
+          "description": "Most evidence-type alternatives one response returns.",
+          "format": "uint64",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumResultRecords": {
+          "description": "Most service records one response returns.",
+          "format": "uint64",
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "requestTimeoutSeconds": {
+          "description": "Time allowed to handle one inbound request, in seconds.",
+          "format": "uint64",
+          "maximum": 300,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "shutdownTimeoutSeconds": {
+          "description": "Time allowed to drain in-flight requests on shutdown, in seconds.",
+          "format": "uint64",
+          "maximum": 300,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maximumRequestBytes",
+        "maximumResponseBytes",
+        "maximumResultRecords",
+        "maximumResultAlternatives",
+        "requestTimeoutSeconds",
+        "shutdownTimeoutSeconds"
+      ],
+      "type": "object"
+    },
+    "listener": {
+      "$ref": "#/$defs/ListenerConfig",
+      "allOf": [
+        {
+          "properties": {
+            "bind": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/socketPort"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ipv4SocketHost"
+                    },
+                    {
+                      "$ref": "#/$defs/ipv6HexSocketHost"
+                    },
+                    {
+                      "$ref": "#/$defs/ipv6MixedSocketHost"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "logLevel": {
+      "$ref": "#/$defs/LogLevel",
+      "description": "The least severe event the service logs."
+    },
+    "package": {
+      "$ref": "#/$defs/PackageConfig",
+      "allOf": [
+        {
+          "properties": {
+            "root": {
+              "not": {
+                "pattern": "(^|/)\\.{1,2}(/|$)"
+              }
+            }
+          }
+        }
+      ],
+      "description": "The package directory `discoveryctl package` built."
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "listener",
+    "package",
+    "limits",
+    "logLevel"
+  ],
+  "title": "Registry Discovery runtime configuration",
+  "type": "object"
 }

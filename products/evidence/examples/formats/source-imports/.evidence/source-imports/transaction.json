@@ -1,0 +1,14 @@
+{
+  "apiVersion": "id.registrystack.org/formats/evidence/source-import-journal/v1alpha1",
+  "kind": "EvidenceSourceImportJournal",
+  "operations": [
+    {
+      "path": "sources/registry-status.yaml",
+      "before": null,
+      "after": {
+        "text": "extractScript: adapters/registry-status.rhai\n",
+        "mode": 420
+      }
+    }
+  ]
+}

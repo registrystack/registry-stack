@@ -7,8 +7,9 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::contract::{
-    AccessProfileSource, FieldTypeSource, Operation, RegistryProject,
+    AccessProfileSource, DatasetOperation, FieldTypeSource, Operation, RegistryProject,
     StatisticalPeriodGranularitySource, StatisticalPeriodSource, StatisticalValiditySource,
+    MAX_EXACT_JSON_INTEGER,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{
@@ -20,7 +21,6 @@ use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal};
 use crate::statistics::{period_for_code, DisclosureParameters, PeriodGranularity};
 
 pub const MAX_STATISTICAL_CELLS_PER_PERIOD: usize = 10_000;
-const MAX_EXACT_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 
 pub(super) fn compile(
     project: &RegistryProject,
@@ -29,12 +29,12 @@ pub(super) fn compile(
     let mut errors = Vec::new();
     let mut compiled = BTreeMap::new();
     let mut seen = BTreeSet::new();
+    validate_permission_datasets(project, &mut errors);
     for source in &project.statistical_datasets {
         let root = format!("statisticalDatasets[id={}]", source.id);
-        super::validate_id(&source.id, &format!("{root}.id"), &mut errors);
         if !seen.insert(source.id.clone()) {
             errors.push(error(
-                "statistical_dataset.id.duplicate",
+                "breg.statistical-dataset.id-duplicate",
                 &format!("{root}.id"),
                 &source.id,
                 "use a unique statistical dataset id",
@@ -43,7 +43,7 @@ pub(super) fn compile(
         }
         let Some(unit) = entities.get(&source.unit) else {
             errors.push(error(
-                "statistical_dataset.unit.unknown",
+                "breg.statistical-dataset.unit-unknown",
                 &format!("{root}.unit"),
                 &source.id,
                 &format!("declare the unit entity `{}`", source.unit),
@@ -55,7 +55,7 @@ pub(super) fn compile(
             Ok(filter) => Some(filter),
             Err(_) => {
                 errors.push(error(
-                    "statistical_dataset.population.invalid",
+                    "breg.statistical-dataset.population-invalid",
                     &format!("{root}.population"),
                     &source.id,
                     "write population with the supported $filter grammar",
@@ -72,51 +72,84 @@ pub(super) fn compile(
         referenced_fields.extend(dimensions.iter().map(|dimension| dimension.field.clone()));
         validate_referenced_fields(source, unit, &referenced_fields, &root, &mut errors);
 
-        let live_profiles = unique_profiles(
-            &source.live,
-            &format!("{root}.live[]"),
-            &source.id,
-            "list each live profile once",
-            &mut errors,
-        );
-        let releases = source.releases.as_ref().map(|release| {
-            let readers = unique_profiles(
-                &release.readers,
-                &format!("{root}.releases.readers[]"),
-                &source.id,
-                "list each release reader once",
-                &mut errors,
-            );
-            if readers.is_empty() {
-                errors.push(error(
-                    "statistical_dataset.releases.readers_empty",
-                    &format!("{root}.releases.readers"),
-                    &source.id,
-                    "name at least one release reader profile",
-                ));
-            }
-            CompiledStatisticalReleases {
-                publisher: release.publisher.clone(),
-                readers,
-            }
-        });
-        if live_profiles.is_empty() && releases.is_none() {
+        let grants = DatasetGrants::of(project, &source.id);
+        for profile in &grants.repeated {
             errors.push(error(
-                "statistical_dataset.grants.empty",
+                "breg.statistical-dataset.profile-duplicate",
                 &root,
                 &source.id,
-                "declare live profiles, releases, or both",
+                &format!(
+                    "name the dataset in one permission of access profile `{profile}` and list every operation there"
+                ),
+            ));
+        }
+        let live_profiles = grants.read_live.clone();
+        let mut publishers = grants.publish.iter();
+        let releases = match (publishers.next(), publishers.next()) {
+            (None, _) => {
+                if !grants.read_releases.is_empty() {
+                    errors.push(error(
+                        "breg.statistical-dataset.publisher-missing",
+                        &root,
+                        &source.id,
+                        &format!(
+                            "no access profile publishes it, so there are no releases to read: grant publish to one access profile, or remove read-releases from {}",
+                            quoted(&grants.read_releases)
+                        ),
+                    ));
+                }
+                None
+            }
+            (Some(publisher), None) => {
+                // The runtime lets a live reader and the publisher read
+                // releases, so each says so in its own permission.
+                for profile in live_profiles.iter().chain([publisher]) {
+                    if !grants.read_releases.contains(profile) {
+                        errors.push(error(
+                            "breg.statistical-dataset.read-releases-required",
+                            &root,
+                            &source.id,
+                            &format!(
+                                "access profile `{profile}` reads its releases because it reads live counts or publishes: add read-releases to the profile's permission on the dataset"
+                            ),
+                        ));
+                    }
+                }
+                Some(CompiledStatisticalReleases {
+                    publisher: publisher.clone(),
+                    readers: grants
+                        .read_releases
+                        .iter()
+                        .filter(|profile| {
+                            *profile != publisher && !live_profiles.contains(*profile)
+                        })
+                        .cloned()
+                        .collect(),
+                })
+            }
+            (Some(_), Some(_)) => {
+                errors.push(error(
+                    "breg.statistical-dataset.publisher-multiple",
+                    &root,
+                    &source.id,
+                    &format!(
+                        "grant publish to one access profile; {} hold it",
+                        quoted(&grants.publish)
+                    ),
+                ));
+                None
+            }
+        };
+        let granted = grants.holders();
+        if granted.is_empty() {
+            errors.push(error(
+                "breg.statistical-dataset.grants-empty",
+                &root,
+                &source.id,
+                "grant read-live, publish, or read-releases on the dataset in an access profile's permissions",
             ));
         }
 
-        let mut granted = live_profiles.clone();
-        if let Some(releases) = &releases {
-            granted.insert(releases.publisher.clone());
-            granted.extend(releases.readers.iter().cloned());
-        }
-        for profile in &granted {
-            validate_named_profile(project, profile, &source.id, &root, &mut errors);
-        }
         let access_profiles = granted
             .iter()
             .filter_map(|profile_id| {
@@ -156,7 +189,7 @@ pub(super) fn compile(
         let disclosure_source = source.disclosure.as_ref();
         if disclosure_source.is_none() {
             errors.push(error(
-                "statistical_dataset.disclosure.missing",
+                "breg.statistical-dataset.disclosure-missing",
                 &format!("{root}.disclosure"),
                 &source.id,
                 "declare minimumCount and roundingBase",
@@ -164,7 +197,7 @@ pub(super) fn compile(
         }
         if disclosure_source.is_none_or(|disclosure| disclosure.minimum_count < 2) {
             errors.push(error(
-                "statistical_dataset.disclosure.minimum_count",
+                "breg.statistical-dataset.disclosure-minimum-count",
                 &format!("{root}.disclosure.minimumCount"),
                 &source.id,
                 "set minimumCount to at least 2",
@@ -174,7 +207,7 @@ pub(super) fn compile(
             .is_some_and(|disclosure| disclosure.minimum_count > MAX_EXACT_JSON_INTEGER)
         {
             errors.push(error(
-                "statistical_dataset.disclosure.minimum_count_exceeded",
+                "breg.statistical-dataset.disclosure-minimum-count-exceeded",
                 &format!("{root}.disclosure.minimumCount"),
                 &source.id,
                 &format!("set minimumCount to at most {MAX_EXACT_JSON_INTEGER}"),
@@ -182,7 +215,7 @@ pub(super) fn compile(
         }
         if disclosure_source.is_none_or(|disclosure| disclosure.rounding_base < 2) {
             errors.push(error(
-                "statistical_dataset.disclosure.rounding_base",
+                "breg.statistical-dataset.disclosure-rounding-base",
                 &format!("{root}.disclosure.roundingBase"),
                 &source.id,
                 "set roundingBase to at least 2",
@@ -192,7 +225,7 @@ pub(super) fn compile(
             .is_some_and(|disclosure| disclosure.rounding_base > MAX_EXACT_JSON_INTEGER)
         {
             errors.push(error(
-                "statistical_dataset.disclosure.rounding_base_exceeded",
+                "breg.statistical-dataset.disclosure-rounding-base-exceeded",
                 &format!("{root}.disclosure.roundingBase"),
                 &source.id,
                 &format!("set roundingBase to at most {MAX_EXACT_JSON_INTEGER}"),
@@ -203,7 +236,7 @@ pub(super) fn compile(
         });
         if cell_count.is_none_or(|cells| cells > MAX_STATISTICAL_CELLS_PER_PERIOD) {
             errors.push(error(
-                "statistical_dataset.cells.exceeded",
+                "breg.statistical-dataset.cells-exceeded",
                 &format!("{root}.dimensions"),
                 &source.id,
                 &format!(
@@ -264,7 +297,7 @@ pub(super) fn compile(
                 .is_none_or(|bytes| bytes > super::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES)
         }) {
             errors.push(error(
-                "statistical_dataset.document.exceeded",
+                "breg.statistical-dataset.document-exceeded",
                 &format!("{root}.dimensions"),
                 &source.id,
                 &format!(
@@ -275,9 +308,9 @@ pub(super) fn compile(
             continue;
         }
         compiled.insert(
-            source.id.clone(),
+            source.id.to_string(),
             CompiledStatisticalDataset {
-                id: source.id.clone(),
+                id: source.id.to_string(),
                 unit_entity_id: source.unit.clone(),
                 population: source.population.clone(),
                 period,
@@ -441,7 +474,7 @@ fn authentication_profile(
                 entities.get(&permission.entity).map(|entity| {
                     crate::contract::CompiledTaskGrantPermissionSource {
                         collection: entity.route.clone(),
-                        operations: permission.operations.clone(),
+                        operations: permission.operations.clone().into(),
                     }
                 })
             })
@@ -454,19 +487,18 @@ fn authentication_profile(
     AccessProfileSource {
         id: profile.id.clone(),
         default: profile.default,
-        anonymous: profile.anonymous,
         actor_kind: profile.actor_kind,
         requester_clients: profile.requester_clients.clone(),
         task_grant,
         principal_claim: profile.principal_claim.clone(),
         required_scopes: profile.required_scopes.clone(),
         required_purposes: profile.required_purposes.clone(),
-        operations: BTreeSet::new(),
-        readable_fields: BTreeSet::new(),
-        readable_request_fields: BTreeSet::new(),
-        writable_fields: BTreeSet::new(),
-        filterable_fields: BTreeSet::new(),
-        sortable_fields: BTreeSet::new(),
+        operations: Default::default(),
+        readable_fields: Default::default(),
+        readable_request_fields: Default::default(),
+        writable_fields: Default::default(),
+        filterable_fields: Default::default(),
+        sortable_fields: Default::default(),
         spatial_queries: None,
         row_boundaries: Vec::new(),
         membership_boundaries: Vec::new(),
@@ -475,7 +507,7 @@ fn authentication_profile(
         lookups: Vec::new(),
         read_paths: Vec::new(),
         apply_targets: Vec::new(),
-        submitter_targets: BTreeSet::new(),
+        submitter_targets: Default::default(),
         request_presence: Vec::new(),
         allow_count: false,
         revision_access: false,
@@ -512,7 +544,7 @@ fn compile_period(
                         fields.insert(temporal.end_field.clone());
                     } else {
                         errors.push(error(
-                            "statistical_dataset.period.temporal_missing",
+                            "breg.statistical-dataset.period-temporal-missing",
                             &format!("{root}.period.validity"),
                             &source.id,
                             &format!(
@@ -535,7 +567,7 @@ fn compile_period(
     let granularity = granularity(granularity_source);
     if !valid_period_code(first_period, granularity) {
         errors.push(error(
-            "statistical_dataset.period.first_period",
+            "breg.statistical-dataset.period-first-period",
             &format!("{root}.period.firstPeriod"),
             &source.id,
             "use a valid firstPeriod matching the declared granularity",
@@ -589,7 +621,7 @@ fn compile_dimensions(
         let path = format!("{root}.dimensions[]");
         if !seen.insert(field_id) {
             errors.push(error(
-                "statistical_dataset.dimension.duplicate",
+                "breg.statistical-dataset.dimension-duplicate",
                 &path,
                 &source.id,
                 &format!("list dimension `{field_id}` once"),
@@ -598,7 +630,7 @@ fn compile_dimensions(
         }
         if matches!(field_id.as_str(), "period" | "value" | "status") {
             errors.push(error(
-                "statistical_dataset.dimension.reserved",
+                "breg.statistical-dataset.dimension-reserved",
                 &path,
                 &source.id,
                 &format!("rename dimension field `{field_id}` because the CSV column is reserved"),
@@ -606,7 +638,7 @@ fn compile_dimensions(
         }
         let Some((field_type, required)) = field(unit, field_id) else {
             errors.push(error(
-                "statistical_dataset.field.unknown",
+                "breg.statistical-dataset.field-unknown",
                 &path,
                 &source.id,
                 &format!(
@@ -624,7 +656,7 @@ fn compile_dimensions(
             FieldTypeSource::VocabularyCode { vocabulary, values } => {
                 if values.iter().any(|value| value.starts_with('_')) {
                     errors.push(error(
-                        "statistical_dataset.dimension.code_reserved",
+                        "breg.statistical-dataset.dimension-code-reserved",
                         &path,
                         &source.id,
                         &format!(
@@ -641,7 +673,7 @@ fn compile_dimensions(
             }
             _ => {
                 errors.push(error(
-                    "statistical_dataset.dimension.type",
+                    "breg.statistical-dataset.dimension-type",
                     &path,
                     &source.id,
                     &format!("make dimension field `{field_id}` boolean or vocabulary-code"),
@@ -669,7 +701,7 @@ fn validate_referenced_fields(
     for field_id in fields {
         let Some((field_type, _)) = field(unit, field_id) else {
             errors.push(error(
-                "statistical_dataset.field.unknown",
+                "breg.statistical-dataset.field-unknown",
                 root,
                 &source.id,
                 &format!(
@@ -685,7 +717,7 @@ fn validate_referenced_fields(
             .is_some_and(|field| field.encryption.is_some())
         {
             errors.push(error(
-                "statistical_dataset.field.encrypted",
+                "breg.statistical-dataset.field-encrypted",
                 root,
                 &source.id,
                 &format!("use an unencrypted field instead of `{field_id}`"),
@@ -705,40 +737,12 @@ fn validate_referenced_fields(
         };
         if is_period_field && !matches!(field_type, FieldTypeSource::Date) {
             errors.push(error(
-                "statistical_dataset.period.field_type",
+                "breg.statistical-dataset.period-field-type",
                 root,
                 &source.id,
                 &format!("make period or validity field `{field_id}` a date"),
             ));
         }
-    }
-}
-
-fn validate_named_profile(
-    project: &RegistryProject,
-    profile_id: &str,
-    dataset: &str,
-    root: &str,
-    errors: &mut Vec<Diagnostic>,
-) {
-    match project
-        .access_profiles
-        .iter()
-        .find(|profile| profile.id == profile_id)
-    {
-        None => errors.push(error(
-            "statistical_dataset.profile.unknown",
-            root,
-            dataset,
-            &format!("declare access profile `{profile_id}`"),
-        )),
-        Some(profile) if profile.anonymous => errors.push(error(
-            "statistical_dataset.profile.anonymous",
-            root,
-            dataset,
-            &format!("replace anonymous profile `{profile_id}` with an authenticated profile"),
-        )),
-        Some(_) => {}
     }
 }
 
@@ -752,7 +756,7 @@ fn validate_count_grant(
 ) {
     let Some(grant) = unit.access_profiles.get(profile_id) else {
         errors.push(error(
-            "statistical_dataset.count_grant.missing",
+            "breg.statistical-dataset.count-grant-missing",
             root,
             &source.id,
             &format!(
@@ -764,7 +768,7 @@ fn validate_count_grant(
     };
     if !grant.operations.contains(&Operation::List) {
         errors.push(error(
-            "statistical_dataset.count_grant.list_required",
+            "breg.statistical-dataset.count-grant-list-required",
             root,
             &source.id,
             &format!(
@@ -775,7 +779,7 @@ fn validate_count_grant(
     }
     if !grant.allow_count {
         errors.push(error(
-            "statistical_dataset.count_grant.count_required",
+            "breg.statistical-dataset.count-grant-count-required",
             root,
             &source.id,
             &format!("set allowCount for profile `{profile_id}` on `{}`", unit.id),
@@ -783,7 +787,7 @@ fn validate_count_grant(
     }
     if !grant.require_consent.is_empty() {
         errors.push(error(
-            "statistical_dataset.count_grant.consent",
+            "breg.statistical-dataset.count-grant-consent",
             root,
             &source.id,
             &format!("remove requireConsent from profile `{profile_id}` for dataset counts"),
@@ -792,7 +796,7 @@ fn validate_count_grant(
     for field in referenced_fields {
         if !grant.filterable_fields.contains(field) {
             errors.push(error(
-                "statistical_dataset.count_grant.field_not_filterable",
+                "breg.statistical-dataset.count-grant-field-not-filterable",
                 root,
                 &source.id,
                 &format!("add field `{field}` to filterableFields for profile `{profile_id}`"),
@@ -817,7 +821,7 @@ fn validate_publisher_independence(
             .is_some_and(|requirements| !requirements.row_boundaries.is_empty())
         {
             errors.push(error(
-                "statistical_dataset.publisher.entity_row_boundary",
+                "breg.statistical-dataset.publisher-entity-row-boundary",
                 root,
                 &source.id,
                 &format!(
@@ -827,7 +831,7 @@ fn validate_publisher_independence(
         }
         let Some(grant) = entity.access_profiles.get(publisher) else {
             errors.push(error(
-                "statistical_dataset.publisher.dependency_grant_missing",
+                "breg.statistical-dataset.publisher-dependency-grant-missing",
                 root,
                 &source.id,
                 &format!("grant publisher `{publisher}` access to dependency entity `{entity_id}`"),
@@ -836,7 +840,7 @@ fn validate_publisher_independence(
         };
         if dependency_select_operations(grant).is_empty() {
             errors.push(error(
-                "statistical_dataset.publisher.dependency_read_required",
+                "breg.statistical-dataset.publisher-dependency-read-required",
                 root,
                 &source.id,
                 &format!(
@@ -859,7 +863,7 @@ fn validate_publisher_independence(
         };
         if let Some(member) = violation {
             errors.push(error(
-                "statistical_dataset.publisher.caller_dependent",
+                "breg.statistical-dataset.publisher-caller-dependent",
                 root,
                 &source.id,
                 &format!(
@@ -1111,23 +1115,83 @@ fn source_field_definition<'a>(
         })
 }
 
-fn unique_profiles(
-    values: &[String],
-    path: &str,
-    dataset: &str,
-    fix: &str,
-    errors: &mut Vec<Diagnostic>,
-) -> BTreeSet<String> {
-    let profiles = values.iter().cloned().collect::<BTreeSet<_>>();
-    if profiles.len() != values.len() {
-        errors.push(error(
-            "statistical_dataset.profile.duplicate",
-            path,
-            dataset,
-            fix,
-        ));
+/// Which access profiles hold each operation on one statistical dataset.
+#[derive(Default)]
+struct DatasetGrants {
+    read_live: BTreeSet<String>,
+    publish: BTreeSet<String>,
+    read_releases: BTreeSet<String>,
+    /// Profiles that name the dataset in more than one permission.
+    repeated: BTreeSet<String>,
+}
+
+impl DatasetGrants {
+    fn of(project: &RegistryProject, dataset: &str) -> Self {
+        let mut grants = Self::default();
+        for profile in &project.access_profiles {
+            let mut named = false;
+            for permission in &profile.dataset_permissions {
+                if permission.dataset.as_str() != dataset {
+                    continue;
+                }
+                if named {
+                    grants.repeated.insert(profile.id.clone());
+                }
+                named = true;
+                for operation in &permission.operations {
+                    match operation {
+                        DatasetOperation::ReadLive => &mut grants.read_live,
+                        DatasetOperation::Publish => &mut grants.publish,
+                        DatasetOperation::ReadReleases => &mut grants.read_releases,
+                    }
+                    .insert(profile.id.clone());
+                }
+            }
+        }
+        grants
     }
+
+    fn holders(&self) -> BTreeSet<String> {
+        self.read_live
+            .iter()
+            .chain(&self.publish)
+            .chain(&self.read_releases)
+            .cloned()
+            .collect()
+    }
+}
+
+fn quoted(profiles: &BTreeSet<String>) -> String {
     profiles
+        .iter()
+        .map(|profile| format!("`{profile}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A dataset permission names a dataset the project declares.
+fn validate_permission_datasets(project: &RegistryProject, errors: &mut Vec<Diagnostic>) {
+    for profile in &project.access_profiles {
+        for permission in &profile.dataset_permissions {
+            if !project
+                .statistical_datasets
+                .iter()
+                .any(|dataset| dataset.id == permission.dataset)
+            {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.permission-dataset-unknown",
+                    format!(
+                        "project.accessProfiles[id={}].permissions[dataset={}].dataset",
+                        profile.id, permission.dataset
+                    ),
+                    &format!(
+                        "access profile `{}` holds a permission on statistical dataset `{}`, which the project does not declare; declare it under statisticalDatasets or remove the permission",
+                        profile.id, permission.dataset
+                    ),
+                ));
+            }
+        }
+    }
 }
 
 fn validate_population(
@@ -1179,7 +1243,7 @@ fn validate_population_expr(
             };
             let Some((field_id, field_type)) = field_by_api_name(entity, api_field) else {
                 errors.push(error(
-                    "statistical_dataset.population.field_unknown",
+                    "breg.statistical-dataset.population-field-unknown",
                     &format!("{root}.population"),
                     &source.id,
                     &format!(
@@ -1192,7 +1256,7 @@ fn validate_population_expr(
             field_bindings.insert(api_field.to_owned(), field_id.to_owned());
             if !population_predicate_valid(predicate, field_type) {
                 errors.push(error(
-                    "statistical_dataset.population.invalid",
+                    "breg.statistical-dataset.population-invalid",
                     &format!("{root}.population"),
                     &source.id,
                     &format!(

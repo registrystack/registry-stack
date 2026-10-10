@@ -1,3 +1,6 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: record-active
 question: Is the registered record active?
 purpose: record-verification
@@ -9,7 +12,7 @@ source:
   ref: registry-status
 answers:
 - concept: active
-  id: urn:example:concept:record-active:active
+  uri: urn:example:concept:record-active:active
   type: boolean
 derivation: derivations/record-active.rhai
 disclosure:

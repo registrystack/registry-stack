@@ -3,41 +3,46 @@
 //! Project loading and the offline init, check, test, and explain reports.
 //!
 //! Everything here runs without a network, a database, or a clock: the
-//! authored policy and its fixtures are read from the project directory,
-//! checked and replayed through the pure core, and rendered as one JSON
-//! report per command.
+//! authored policy, its records, and its fixtures are read from the project
+//! directory through the shared reader, checked and replayed through the
+//! pure core, and rendered as one JSON report per command. A refused project
+//! is the reader's own report, every diagnostic at its position.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result};
 use registry_platform_config::package::{plan_package, write_package};
-use registry_platform_config::sha256_uri;
-use registry_scheduling::config::{package_limits, PACKAGE_COMMAND};
+use registry_platform_config::{sha256_uri, UNAVAILABLE_CODE};
+use registry_platform_yaml::{Decoded, Diagnostic, Report, Source};
+use registry_scheduling::config::{
+    check_runtime, package_limits, startup_report, RuntimeConfig, RuntimeConfigError,
+    PACKAGE_COMMAND,
+};
 use registry_scheduling_core::{
-    parse_fixture_yaml, parse_policy_yaml, CaseStatus, FixtureExpectation, ReplayError,
-    SchedulingDiagnostic, SchedulingFacts, SchedulingFixture, SchedulingPolicy,
-    AUTHORED_POLICY_FILE,
+    findings_report, CaseStatus, FindingArea, FixtureExpectation, ReplayError, SchedulingFacts,
+    SchedulingFixture, SchedulingPolicy, SchedulingRecords, AUTHORED_POLICY_FILE,
+    SCHEDULING_FIXTURE_KIND, SCHEDULING_RECORDS_FILE,
 };
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
 
 use crate::templates;
-
-/// The largest policy or fixture an authoring project may carry.
-const MAXIMUM_INPUT_BYTES: usize = 1024 * 1024;
 
 /// The directory an authored project keeps its replay fixtures in.
 const FIXTURES_DIRECTORY: &str = "fixtures";
 
+/// The code `test` refuses a project with when it has no fixture to replay.
+const NO_FIXTURES_CODE: &str = "scheduling.fixture.none";
+
 pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     let Some(files) = templates::template_files(template) else {
-        bail!(
+        anyhow::bail!(
             "unknown template {template:?}; available templates: standalone-exact-time, standalone-arrival-window"
         );
     };
     match fs::symlink_metadata(project) {
-        Ok(_) => bail!("destination already exists; init never overwrites a project"),
+        Ok(_) => anyhow::bail!("destination already exists; init never overwrites a project"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error).context("checking the project destination"),
     }
@@ -58,6 +63,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     let staging_path = staging.keep();
     fs::rename(&staging_path, project)
         .context("publishing scheduling project without replacement")?;
+    let directory = project.display();
     Ok(json!({
         "ok": true,
         "command": "init",
@@ -66,106 +72,268 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "created": created,
         "next": [
             "Run schedulingctl check PROJECT, then schedulingctl test PROJECT.",
-            "Copy runtime.example.yaml to runtime.yaml, set its absolute paths, run schedulingctl plan --runtime-config runtime.yaml then schedulingctl apply --runtime-config runtime.yaml, apply records.yaml, then run scheduling serve with it.",
+            format!("Copy {directory}/runtime.example.yaml to {directory}/runtime.yaml, set its absolute paths, run schedulingctl check {directory} --runtime-config {directory}/runtime.yaml, run schedulingctl plan --runtime-config {directory}/runtime.yaml then schedulingctl apply --runtime-config {directory}/runtime.yaml, apply records.yaml, then run scheduling serve with it."),
         ],
     }))
 }
 
-pub(super) fn check(project: &Path) -> Result<Value> {
-    let policy = load_policy(project)?;
-    let facts = load_records(project)?;
-    let mut findings = policy.check();
-    if authoring_status(&findings) != "invalid" {
-        crate::records::validate(&facts, &policy)?;
+/// What reading a project found: each document that decoded, and one report
+/// carrying every diagnostic of every file read.
+struct ProjectReading {
+    policy: Option<Decoded<SchedulingPolicy>>,
+    facts: Option<SchedulingFacts>,
+    fixtures: Vec<(PathBuf, SchedulingFixture)>,
+    report: Report,
+}
+
+/// Read `scheduling.yaml`, `records.yaml`, and, with `fixtures` set, every
+/// fixture under `fixtures/`. A file the reader refuses is reported and the
+/// others are still read, so one run names every problem; a file that cannot
+/// be read at all is an error. The records and the fixtures are checked
+/// against the policy only once the policy passes its own checks, so a
+/// broken policy never shows up a second time as findings against them.
+fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
+    let mut report = Report::new(Vec::new());
+    let mut files = 0;
+
+    let policy_path = project.join(AUTHORED_POLICY_FILE);
+    files += 1;
+    let policy = match SchedulingPolicy::decode(
+        &policy_path.display().to_string(),
+        &read_input(&policy_path)?,
+    ) {
+        Ok(decoded) => {
+            report.extend(findings_report(&decoded.document, &decoded.value.check()));
+            Some(decoded)
+        }
+        Err(refusal) => {
+            report.extend(refusal);
+            None
+        }
+    };
+    let checked = policy.as_ref().filter(|_| !report.has_errors());
+
+    let records_path = project.join(SCHEDULING_RECORDS_FILE);
+    files += 1;
+    let facts = match SchedulingRecords::decode(
+        &records_path.display().to_string(),
+        &read_input(&records_path)?,
+    ) {
+        Ok(decoded) => {
+            match checked {
+                Some(policy) => {
+                    let (records, project_findings): (Vec<_>, Vec<_>) = decoded
+                        .value
+                        .facts()
+                        .check(&policy.value)
+                        .into_iter()
+                        .partition(|finding| finding.area == FindingArea::Records);
+                    report.extend(findings_report(&decoded.document, &records));
+                    // An offering's reference to a window the records do not
+                    // carry is a finding against the project file.
+                    for finding in project_findings {
+                        report.push(finding.to_diagnostic(&policy.document));
+                    }
+                }
+                None => report.extend(decoded.document.warnings()),
+            }
+            Some(decoded.value.into_facts())
+        }
+        Err(refusal) => {
+            report.extend(refusal);
+            None
+        }
+    };
+
+    let mut readings = Vec::new();
+    if fixtures {
+        for path in fixture_paths(project)? {
+            files += 1;
+            let relative = path.strip_prefix(project).unwrap_or(&path).to_owned();
+            match SchedulingFixture::decode(&path.display().to_string(), &read_input(&path)?) {
+                Ok(decoded) => {
+                    report.extend(match checked {
+                        Some(policy) => findings_report(
+                            &decoded.document,
+                            &decoded.value.findings(&policy.value),
+                        ),
+                        None => decoded.document.warnings(),
+                    });
+                    readings.push((relative, decoded.value));
+                }
+                Err(refusal) => report.extend(refusal),
+            }
+        }
     }
-    findings.extend(policy.check_window_records(&facts.windows));
-    let status = authoring_status(&findings);
+    if fixtures {
+        files += read_runtime_example(project, checked.map(|policy| &policy.value), &mut report)?;
+    }
+    report.set_files_checked(files);
+    Ok(ProjectReading {
+        policy,
+        facts,
+        fixtures: readings,
+        report,
+    })
+}
+
+/// The runtime configuration example every template ships.
+const RUNTIME_EXAMPLE_FILE: &str = "runtime.example.yaml";
+
+/// Check the project's `runtime.example.yaml` as the runtime reads a runtime
+/// file, without the environment: an expression is checked by syntax only, so
+/// the placeholder paths and deferred secrets an example carries pass. Returns
+/// the number of files read, which is 0 for a project that has no example.
+fn read_runtime_example(
+    project: &Path,
+    policy: Option<&SchedulingPolicy>,
+    report: &mut Report,
+) -> Result<usize> {
+    let example = project.join(RUNTIME_EXAMPLE_FILE);
+    // The loader refuses a path through a symbolic link, and a project may
+    // sit under one.
+    let resolved = match fs::canonicalize(&example) {
+        Ok(resolved) => resolved,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", example.display())),
+    };
+    let resolved_name = resolved.display().to_string();
+    let given = example.display().to_string();
+    let runtime = check_runtime(&resolved, policy, false);
+    report.extend(Report::new(
+        runtime
+            .diagnostics
+            .into_iter()
+            .map(|mut diagnostic| {
+                if let Some(source) = &mut diagnostic.source {
+                    if source.file == resolved_name {
+                        source.file.clone_from(&given);
+                    }
+                }
+                diagnostic
+            })
+            .collect(),
+    ));
+    Ok(1)
+}
+
+/// Every fixture file under `project/fixtures`, in name order. A project
+/// without the directory has no fixtures.
+fn fixture_paths(project: &Path) -> Result<Vec<PathBuf>> {
+    let directory = project.join(FIXTURES_DIRECTORY);
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading {}", directory.display()))
+        }
+    };
+    // An entry the directory cannot hand over is a filesystem failure, not a
+    // fixture that does not exist: swallowing it here would report a partial
+    // replay as a complete, passing one.
+    let mut paths = entries
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .with_context(|| format!("reading an entry of {}", directory.display()))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|path| {
+            matches!(
+                path.extension().and_then(|value| value.to_str()),
+                Some("yaml" | "yml")
+            )
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    Ok(paths)
+}
+
+/// The bytes of one project file. The shared reader decides what they may
+/// hold, so a file that cannot be read at all is the only failure here.
+pub(crate) fn read_input(path: &Path) -> Result<Vec<u8>> {
+    fs::read(path).with_context(|| format!("reading {}", path.display()))
+}
+
+/// A project whose every file read and checked clean.
+struct CheckedProject {
+    policy: SchedulingPolicy,
+    facts: SchedulingFacts,
+    fixtures: Vec<(PathBuf, SchedulingFixture)>,
+    report: Report,
+}
+
+/// Read and check every file of `project`. A refusal is the report naming
+/// every error, or, under `deny_warnings`, every warning too.
+fn checked_project(project: &Path, fixtures: bool, deny_warnings: bool) -> Result<CheckedProject> {
+    let ProjectReading {
+        policy,
+        facts,
+        fixtures,
+        report,
+    } = read_project(project, fixtures)?;
+    match (policy, facts) {
+        (Some(policy), Some(facts)) if !refuses(&report, deny_warnings) => Ok(CheckedProject {
+            policy: policy.value,
+            facts,
+            fixtures,
+            report,
+        }),
+        _ => Err(report.into()),
+    }
+}
+
+/// Whether `report` refuses what it describes: any error does, and with
+/// `deny_warnings` any warning does too.
+fn refuses(report: &Report, deny_warnings: bool) -> bool {
+    report.has_errors() || (deny_warnings && report.warning_count() > 0)
+}
+
+pub(super) fn check(project: &Path, deny_warnings: bool) -> Result<Value> {
+    let checked = checked_project(project, true, deny_warnings)?;
     Ok(json!({
         "ok": true,
         "command": "check",
-        "status": status,
         "project": project,
-        "findings": findings_json(&findings),
-        "effective": effective(&policy, &facts),
+        "filesChecked": checked.report.files_checked(),
+        "diagnostics": checked.report.to_json_value(),
+        "effective": effective(&checked.policy, &checked.facts),
         "networkAccess": false,
         "databaseAccess": false,
     }))
 }
 
-/// A value whose text is outside its grammar (a clock that is not `HH:MM`, a
-/// date that is not `YYYY-MM-DD`) is not unfinished authoring: no addition
-/// makes it valid, only a correction. `invalid` names that instead of
-/// `incomplete`, so a caller can refuse it without opting into
-/// `--deny-findings`.
-fn authoring_status(findings: &[SchedulingDiagnostic]) -> &'static str {
-    if findings
-        .iter()
-        .any(|finding| finding.reason.is_malformed_value())
-    {
-        "invalid"
-    } else if findings.is_empty() {
-        "complete"
-    } else {
-        "incomplete"
-    }
-}
-
 pub(super) fn test(project: &Path) -> Result<Value> {
-    let policy = load_policy(project)?;
-    let facts = load_records(project)?;
-    let mut findings = policy.check();
-    if authoring_status(&findings) != "invalid" {
-        crate::records::validate(&facts, &policy)?;
+    let checked = checked_project(project, true, false)?;
+    if checked.fixtures.is_empty() {
+        let mut diagnostic = Diagnostic::error(
+            NO_FIXTURES_CODE,
+            "",
+            "test replays the fixtures under fixtures/, and the project has none",
+            "Add a SchedulingFixture YAML file under fixtures/, then rerun schedulingctl test PROJECT.",
+        );
+        diagnostic.artifact = Some(SCHEDULING_FIXTURE_KIND.to_owned());
+        diagnostic.source = Some(Source {
+            file: project.join(FIXTURES_DIRECTORY).display().to_string(),
+            line: None,
+            column: None,
+        });
+        let mut report = checked.report;
+        report.push(diagnostic);
+        return Err(report.into());
     }
-    findings.extend(policy.check_window_records(&facts.windows));
-    let authoring_status = authoring_status(&findings);
-    if authoring_status == "invalid" {
-        // A malformed value has no business running fixtures against it: the
-        // authored text does not mean what the offering's evaluators would
-        // read it to mean, so replaying against it would answer a question
-        // the author never asked.
-        return Ok(json!({
-            "ok": true,
-            "command": "test",
-            "project": project,
-            "authoringStatus": authoring_status,
-            "findings": findings_json(&findings),
-            "fixtures": [],
-            "proofBoundary": "offline_synthetic",
-            "productionClosure": false,
-            "networkAccess": false,
-            "databaseAccess": false,
-        }));
-    }
-    let fixture_dir = project.join(FIXTURES_DIRECTORY);
-    // An entry the directory cannot hand over is a filesystem failure, not a
-    // fixture that does not exist: swallowing it here would report a partial
-    // replay as a complete, passing one.
-    let mut paths = fs::read_dir(&fixture_dir)
-        .context("reading fixtures directory")?
-        .map(|entry| {
-            entry
-                .context("reading a fixtures directory entry")
-                .map(|entry| entry.path())
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("yaml"))
-        .collect::<Vec<_>>();
-    paths.sort();
-    if paths.is_empty() {
-        bail!("test requires at least one YAML fixture");
-    }
-    let mut reports = Vec::new();
-    for path in paths {
-        reports.push(run_fixture(project, &policy, &path)?);
-    }
+    let reports = checked
+        .fixtures
+        .iter()
+        .map(|(file, fixture)| run_fixture(file, &checked.policy, fixture))
+        .collect::<Result<Vec<_>>>()?;
     Ok(json!({
         "ok": true,
         "command": "test",
         "project": project,
-        "authoringStatus": authoring_status,
-        "findings": findings_json(&findings),
+        "filesChecked": checked.report.files_checked(),
+        "diagnostics": checked.report.to_json_value(),
         "fixtures": reports,
         "proofBoundary": "offline_synthetic",
         "productionClosure": false,
@@ -175,23 +343,7 @@ pub(super) fn test(project: &Path) -> Result<Value> {
 }
 
 pub(super) fn explain(project: &Path) -> Result<Value> {
-    let policy = load_policy(project)?;
-    let facts = load_records(project)?;
-    let mut findings = policy.check();
-    if authoring_status(&findings) != "invalid" {
-        crate::records::validate(&facts, &policy)?;
-    }
-    findings.extend(policy.check_window_records(&facts.windows));
-    if !findings.is_empty() {
-        bail!(
-            "explain requires a policy that passes its check; run schedulingctl check first. Findings: {}",
-            findings
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let CheckedProject { policy, facts, .. } = checked_project(project, false, false)?;
     let offerings = policy
         .offerings
         .iter()
@@ -237,16 +389,16 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
     Ok(json!({
         "ok": true,
         "command": "explain",
-        "scheduling": {
-            "id": policy.scheduling.id,
-            "version": policy.scheduling.version,
+        "project": {
+            "id": policy.project.id,
+            "version": policy.project.version,
         },
         "policyDigest": policy.policy_digest(),
         "offerings": offerings,
         "windows": windows,
         "holdPolicy": {
             "ttlMinutes": policy.hold_policy.ttl_minutes,
-            "maxPerCaller": policy.hold_policy.max_per_caller,
+            "maximumPerCaller": policy.hold_policy.maximum_per_caller,
             "because": policy.hold_policy.because,
         },
         "networkAccess": false,
@@ -262,21 +414,16 @@ struct PackageContents {
 
 /// Canonicalize the project, check the authored policy, and assemble the one
 /// file a package carries. Performs no writes, so both `package` and
-/// `package_dry_run` share it.
+/// `package_dry_run` share it. A policy that does not pass its checks is
+/// refused with the reader's report, each diagnostic naming the file as the
+/// project path was given.
 fn compute_package(project: &Path) -> Result<PackageContents> {
+    let given = project.join(AUTHORED_POLICY_FILE);
     let project =
         fs::canonicalize(project).context("resolving the Scheduling authoring project")?;
-    let policy_text = read_authoring_input(&project.join(AUTHORED_POLICY_FILE))?;
-    let policy = parse_policy_yaml(&policy_text)
-        .map_err(|error| anyhow!("parsing {AUTHORED_POLICY_FILE} failed at {}", error.path()))?;
-    let findings = policy.check();
-    if !findings.is_empty() {
-        bail!(
-            "the authored policy reports {} finding(s); run schedulingctl check and fix them before packaging",
-            findings.len()
-        );
-    }
-    let inputs = BTreeMap::from([(AUTHORED_POLICY_FILE.to_owned(), policy_text.into_bytes())]);
+    let bytes = read_input(&project.join(AUTHORED_POLICY_FILE))?;
+    SchedulingPolicy::read(&given.display().to_string(), &bytes)?;
+    let inputs = BTreeMap::from([(AUTHORED_POLICY_FILE.to_owned(), bytes)]);
     Ok(PackageContents { project, inputs })
 }
 
@@ -347,14 +494,14 @@ pub(super) fn package_dry_run(project: &Path, revision: Option<&str>) -> Result<
     }))
 }
 
-fn run_fixture(project: &Path, policy: &SchedulingPolicy, path: &Path) -> Result<Value> {
-    let relative: PathBuf = path.strip_prefix(project).unwrap_or(path).to_owned();
-    let fixture = load_fixture(path)?;
-    // A calendar gap or fold is invisible to `check`: an opening carries no
-    // timezone, only a fixture's location record does, so authoring can
-    // never see this coming. Report it the way any other fixture failure is
-    // reported instead of refusing the whole command over a fixture whose
-    // policy `check` already called complete.
+fn run_fixture(
+    relative: &Path,
+    policy: &SchedulingPolicy,
+    fixture: &SchedulingFixture,
+) -> Result<Value> {
+    // A calendar gap or fold the check did not reach is reported the way any
+    // other fixture failure is reported, instead of refusing the whole
+    // command over one fixture.
     let outcomes = match fixture.replay(policy) {
         Err(ReplayError::Calendar(error)) => {
             return Ok(json!({
@@ -413,70 +560,202 @@ fn expected_summary(expect: &FixtureExpectation) -> String {
             "admitted onto {} for {units} unit(s)",
             resource.as_deref().unwrap_or("the window")
         ),
-        FixtureExpectation::Refused { code } => format!("refused {code}"),
+        FixtureExpectation::Refused { code } => format!("refused {}", code.code()),
     }
-}
-
-fn load_policy(project: &Path) -> Result<SchedulingPolicy> {
-    let bytes = read_authoring_input(&project.join(AUTHORED_POLICY_FILE))?;
-    parse_policy_yaml(&bytes).with_context(|| format!("parsing {AUTHORED_POLICY_FILE}"))
-}
-
-fn load_records(project: &Path) -> Result<SchedulingFacts> {
-    let bytes = read_authoring_input(&project.join("records.yaml"))?;
-    crate::records::parse_records(&bytes).context("parsing records.yaml")
-}
-
-fn load_fixture(path: &Path) -> Result<SchedulingFixture> {
-    let bytes = read_authoring_input(path)?;
-    parse_fixture_yaml(&bytes).with_context(|| format!("parsing fixture {}", path.display()))
-}
-
-/// Read one authored input. Authored files are package content, so an
-/// environment expression in one is refused rather than left for a reader to
-/// mistake for substitution, which applies to `runtime.yaml` only.
-pub(super) fn read_authoring_input(path: &Path) -> Result<String> {
-    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    if bytes.len() > MAXIMUM_INPUT_BYTES {
-        bail!("{} exceeds the one MiB authoring limit", path.display());
-    }
-    let text = String::from_utf8(bytes).with_context(|| format!("reading {}", path.display()))?;
-    if let Err(error) =
-        registry_platform_config::reject_environment_expressions_in_authored_yaml(&text)
-    {
-        bail!("{}: {}", path.display(), error.message());
-    }
-    Ok(text)
-}
-
-/// Every check finding as its path and closed reason, ready for a report.
-fn findings_json(findings: &[SchedulingDiagnostic]) -> Vec<Value> {
-    findings
-        .iter()
-        .map(|finding| json!({"path": finding.path, "reason": finding.reason.as_str()}))
-        .collect()
 }
 
 /// The effective policy a check saw: identity, digest, collection sizes and
 /// identifiers, and the hold policy.
 fn effective(policy: &SchedulingPolicy, facts: &SchedulingFacts) -> Value {
-    fn summary<'a>(ids: impl Iterator<Item = &'a String>) -> Value {
-        let all: Vec<&str> = ids.map(String::as_str).collect();
+    fn summary<'a>(ids: impl Iterator<Item = &'a str>) -> Value {
+        let all: Vec<&str> = ids.collect();
         json!({"count": all.len(), "ids": all})
     }
     json!({
-        "schedulingId": policy.scheduling.id,
-        "schedulingVersion": policy.scheduling.version,
+        "projectId": policy.project.id,
+        "projectVersion": policy.project.version,
         "policyDigest": policy.policy_digest(),
-        "services": summary(policy.services.iter().map(|service| &service.id)),
-        "offerings": summary(policy.offerings.iter().map(|offering| &offering.id)),
-        "openings": summary(policy.openings.iter().map(|opening| &opening.id)),
-        "windows": summary(facts.windows.iter().map(|window| &window.id)),
+        "services": summary(policy.services.iter().map(|service| service.id.as_str())),
+        "offerings": summary(policy.offerings.iter().map(|offering| offering.id.as_str())),
+        "openings": summary(policy.openings.iter().map(|opening| opening.id.as_str())),
+        "windows": summary(facts.windows.iter().map(|window| window.id.as_str())),
         "holdPolicy": {
             "ttlMinutes": policy.hold_policy.ttl_minutes,
-            "maxPerCaller": policy.hold_policy.max_per_caller,
+            "maximumPerCaller": policy.hold_policy.maximum_per_caller,
         },
     })
+}
+
+/// A refused runtime file, with every diagnostic its check reported, and
+/// for `check --runtime-config` those of the project beside them.
+#[derive(Debug)]
+pub(crate) struct RuntimeConfigRefusal {
+    pub report: Report,
+    /// The runtime file could not be read at all.
+    pub unavailable: bool,
+}
+
+impl std::fmt::Display for RuntimeConfigRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "the Scheduling runtime configuration was refused"
+        )
+    }
+}
+
+impl std::error::Error for RuntimeConfigRefusal {}
+
+/// Add to `checked`, the project check's outcome, the check of the runtime
+/// file at `runtime_config` as `scheduling serve` reads it: offline, with no
+/// package, database, network, or secret material, and against the
+/// project's policy when that passes its checks. Diagnostics name the file
+/// as it was given, and `deny_warnings` refuses on a warning here as it does
+/// in the project.
+pub(super) fn check_runtime_config(
+    project: &Path,
+    runtime_config: &Path,
+    environment: bool,
+    deny_warnings: bool,
+    checked: Result<Value>,
+) -> Result<Value> {
+    let policy_path = project.join(AUTHORED_POLICY_FILE);
+    let policy = fs::read(&policy_path)
+        .ok()
+        .and_then(|bytes| SchedulingPolicy::read(&policy_path.display().to_string(), &bytes).ok())
+        .map(|decoded| decoded.value);
+    let given = runtime_config.display().to_string();
+    let absolute = absolute_lexical(runtime_config)
+        .context("resolving the --runtime-config path against the working directory")?;
+    let runtime = check_runtime(&absolute, policy.as_ref(), environment);
+    let absolute = absolute.display().to_string();
+    let named = |mut diagnostic: Diagnostic| {
+        if let Some(source) = &mut diagnostic.source {
+            if source.file == absolute {
+                source.file.clone_from(&given);
+            }
+        }
+        for related in &mut diagnostic.related {
+            if related.file == absolute {
+                related.file.clone_from(&given);
+            }
+        }
+        diagnostic
+    };
+    let mut report = Report::new(runtime.diagnostics.into_iter().map(named).collect());
+    report.set_files_checked(1);
+    if !refuses(&report, deny_warnings) {
+        let mut checked = checked?;
+        checked["runtimeConfig"] = json!(given);
+        if let (Some(diagnostics), Value::Array(warnings)) = (
+            checked["diagnostics"].as_array_mut(),
+            report.to_json_value(),
+        ) {
+            // The project check reads its own runtime example, which may be
+            // the file given: a finding it already holds is not repeated.
+            let reported = diagnostics.clone();
+            diagnostics.extend(warnings.into_iter().filter(|w| !reported.contains(w)));
+        }
+        if let Some(files) = checked["filesChecked"].as_u64() {
+            checked["filesChecked"] = json!(files + 1);
+        }
+        return Ok(checked);
+    }
+    let refused = match checked {
+        // The project passed: its warnings and the files it read stay in
+        // the refusal beside the runtime file's diagnostics.
+        Ok(checked) => {
+            let mut project = Report::new(
+                serde_json::from_value(checked["diagnostics"].clone())
+                    .context("reading the project check's diagnostics")?,
+            );
+            if let Some(files) = checked["filesChecked"]
+                .as_u64()
+                .and_then(|files| usize::try_from(files).ok())
+            {
+                project.set_files_checked(files);
+            }
+            project.extend(unreported(report, project.diagnostics()));
+            project
+        }
+        Err(error) => match crate::configuration_report(&error) {
+            Some(project) => {
+                let mut project = project.clone();
+                if project.files_checked().is_none() {
+                    project.set_files_checked(1);
+                }
+                project.extend(unreported(report, project.diagnostics()));
+                project
+            }
+            None => return Err(error),
+        },
+    };
+    Err(RuntimeConfigRefusal {
+        report: refused,
+        unavailable: runtime.unavailable,
+    }
+    .into())
+}
+
+/// `report` without the diagnostics the project check already reported, so a
+/// runtime file that is the project's own example is not reported twice. The
+/// file count is kept.
+fn unreported(report: Report, reported: &[Diagnostic]) -> Report {
+    let files = report.files_checked();
+    let mut kept = Report::new(
+        report
+            .into_diagnostics()
+            .into_iter()
+            .filter(|diagnostic| !reported.contains(diagnostic))
+            .collect(),
+    );
+    if let Some(files) = files {
+        kept.set_files_checked(files);
+    }
+    kept
+}
+
+/// Read the runtime file at `path` as `scheduling serve` does. A refusal of
+/// the file itself carries every rule it breaks, each at its position,
+/// exactly as the runtime prints them at startup.
+pub(crate) fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
+    RuntimeConfig::load(path).map_err(|error| runtime_refusal(path, error))
+}
+
+/// `error`, a refusal of the runtime file at `path` or of the policy it
+/// binds, as the report the runtime prints at startup. The runtime file
+/// that cannot be read at all keeps its message.
+pub(crate) fn runtime_refusal(path: &Path, error: RuntimeConfigError) -> anyhow::Error {
+    let unavailable = matches!(
+        &error,
+        RuntimeConfigError::Load(load)
+            if load.diagnostics().iter().any(|diagnostic| diagnostic.code == UNAVAILABLE_CODE)
+    );
+    match startup_report(path, &error) {
+        Some(report) => RuntimeConfigRefusal {
+            report,
+            unavailable,
+        }
+        .into(),
+        None => anyhow::Error::new(error).context("loading the Scheduling runtime configuration"),
+    }
+}
+
+/// `path` made absolute against the working directory, with `.` and `..`
+/// resolved by name, as the runtime loader requires.
+fn absolute_lexical(path: &Path) -> std::io::Result<PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    let mut normal = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normal.pop();
+            }
+            other => normal.push(other),
+        }
+    }
+    Ok(normal)
 }
 
 #[cfg(test)]
@@ -491,6 +770,41 @@ mod tests {
         let project = root.path().join("project");
         init(&project, template).unwrap();
         (root, project)
+    }
+
+    /// Replace the first `from` in the project file at `relative`.
+    fn edit(project: &Path, relative: &str, from: &str, to: &str) {
+        let path = project.join(relative);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(from), "{relative} carries {from}");
+        fs::write(&path, text.replacen(from, to, 1)).unwrap();
+    }
+
+    /// The report a refused command carries, as `file:line pointer code`
+    /// with the file relative to `project`.
+    fn refusals(project: &Path, error: &anyhow::Error) -> Vec<String> {
+        let report = crate::configuration_report(error)
+            .unwrap_or_else(|| panic!("a positioned refusal, not {error:#}"));
+        report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                let place = diagnostic
+                    .source
+                    .as_ref()
+                    .map_or_else(String::new, |source| {
+                        let file = Path::new(&source.file).strip_prefix(project).map_or_else(
+                            |_| source.file.clone(),
+                            |file| file.display().to_string(),
+                        );
+                        match source.line {
+                            Some(line) => format!("{file}:{line}"),
+                            None => file,
+                        }
+                    });
+                format!("{place} {} {}", diagnostic.path, diagnostic.code)
+            })
+            .collect()
     }
 
     #[test]
@@ -510,6 +824,21 @@ mod tests {
                 "fixtures/household-afternoon.yaml"
             ])
         );
+        // The printed sequence names the runtime file by a path that is
+        // valid from the working directory, beside the example it is copied
+        // from.
+        let runtime = project.join("runtime.yaml").display().to_string();
+        let next = report["next"][1].as_str().unwrap();
+        for command in [
+            format!(
+                "Copy {}/runtime.example.yaml to {runtime}",
+                project.display()
+            ),
+            format!("--runtime-config {runtime}"),
+        ] {
+            assert!(next.contains(&command), "{command:?} not in {next:?}");
+        }
+        assert!(!next.contains("--runtime-config runtime.yaml"), "{next:?}");
         assert!(project.join(AUTHORED_POLICY_FILE).is_file());
         assert!(project.join("runtime.example.yaml").is_file());
         assert!(project.join("records.yaml").is_file());
@@ -574,23 +903,24 @@ mod tests {
             output.join(AUTHORED_POLICY_FILE),
             "the example selects the package it names"
         );
-        assert_eq!(config.retention.attempt_receipt_days, 7);
+        assert_eq!(config.retention.attempt_receipt_retention_days, 7);
         assert!(config.destinations.reminders.is_none());
     }
 
     #[test]
-    fn check_reports_the_effective_policy_and_no_findings_for_a_template() {
+    fn check_reads_every_project_file_and_reports_the_effective_policy() {
         let (_root, project) = initialized("standalone-exact-time");
-        let report = check(&project).unwrap();
+        let report = check(&project, false).unwrap();
         assert_eq!(report["ok"], true);
         assert_eq!(report["command"], "check");
-        assert_eq!(report["status"], "complete");
-        assert_eq!(report["findings"], json!([]));
+        assert_eq!(report["diagnostics"], json!([]));
+        // The policy, the records, both fixtures, and the runtime example.
+        assert_eq!(report["filesChecked"], 5);
         assert_eq!(report["networkAccess"], false);
         assert_eq!(report["databaseAccess"], false);
         let effective = &report["effective"];
-        assert_eq!(effective["schedulingId"], "registry-updates");
-        assert_eq!(effective["schedulingVersion"], 1);
+        assert_eq!(effective["projectId"], "registry-updates");
+        assert_eq!(effective["projectVersion"], "1");
         assert!(effective["policyDigest"]
             .as_str()
             .unwrap()
@@ -603,25 +933,90 @@ mod tests {
         assert_eq!(effective["openings"]["count"], 2);
         assert_eq!(effective["windows"], json!({"count": 0, "ids": []}));
         assert_eq!(effective["holdPolicy"]["ttlMinutes"], 5);
-        assert_eq!(effective["holdPolicy"]["maxPerCaller"], 3);
+        assert_eq!(effective["holdPolicy"]["maximumPerCaller"], 3);
+    }
+
+    /// Every file is read and every refusal is reported at its position in
+    /// one run; a policy that fails its own checks is never checked again
+    /// through the records or the fixtures that rely on it.
+    #[test]
+    fn check_reports_every_refusal_in_every_file_at_its_position() {
+        let (_root, project) = initialized("standalone-arrival-window");
+        edit(
+            &project,
+            AUTHORED_POLICY_FILE,
+            "because: The hall opens on Saturday mornings.",
+            "because: \"  \"",
+        );
+        edit(
+            &project,
+            SCHEDULING_RECORDS_FILE,
+            "locations:",
+            "stray: true\nlocations:",
+        );
+        edit(
+            &project,
+            "fixtures/household-morning.yaml",
+            "now: 2026-10-09T20:00:00Z",
+            "now: 2026-10-09T20:00:00Z\nstray: true",
+        );
+        let error = check(&project, false).unwrap_err();
+        assert_eq!(
+            refusals(&project, &error),
+            [
+                "scheduling.yaml:46 /openings/0/because scheduling.project.invalid-because",
+                "records.yaml:4 /stray config.unknown-key",
+                "fixtures/household-morning.yaml:6 /stray config.unknown-key",
+            ]
+        );
+        let report = crate::configuration_report(&error).unwrap();
+        assert_eq!(report.files_checked(), Some(5));
+    }
+
+    /// The runtime example ships in the project, so a check reads it as the
+    /// runtime reads a runtime file, and a pristine one passes with its
+    /// placeholder paths and deferred secrets.
+    #[test]
+    fn check_refuses_a_runtime_example_the_runtime_would_refuse() {
+        let (_root, project) = initialized("standalone-exact-time");
+        assert_eq!(check(&project, false).unwrap()["filesChecked"], 5);
+        edit(
+            &project,
+            "runtime.example.yaml",
+            "retention:\n",
+            "retention:\n  stray: 1\n",
+        );
+        let error = check(&project, false).unwrap_err();
+        let refused = refusals(&project, &error);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(
+            refused[0].starts_with("runtime.example.yaml:")
+                && refused[0].ends_with(" /retention/stray config.unknown-key"),
+            "{refused:?}"
+        );
+        let report = crate::configuration_report(&error).unwrap();
+        assert_eq!(report.files_checked(), Some(5));
     }
 
     #[test]
-    fn a_policy_because_breach_is_a_finding_pair_with_an_incomplete_status() {
-        let (_root, project) = initialized("standalone-arrival-window");
-        let policy_path = project.join(AUTHORED_POLICY_FILE);
-        let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
-            "because: The hall opens on Saturday mornings.",
-            "because:  ",
-            1,
-        );
-        std::fs::write(&policy_path, broken).unwrap();
-        let report = check(&project).unwrap();
-        assert_eq!(report["status"], "incomplete");
-        assert_eq!(
-            report["findings"],
-            json!([{"path": "openings[0].because", "reason": "invalid-because"}])
-        );
+    fn deny_warnings_refuses_a_report_with_a_warning_only_when_asked() {
+        let mut report = Report::new(Vec::new());
+        assert!(!refuses(&report, true));
+        report.push(Diagnostic::warning(
+            "config.deprecated-api-version",
+            "/apiVersion",
+            "the apiVersion is deprecated",
+            "Write the current apiVersion.",
+        ));
+        assert!(!refuses(&report, false));
+        assert!(refuses(&report, true));
+        report.push(Diagnostic::error(
+            "config.unknown-key",
+            "/stray",
+            "the key is not part of the format",
+            "Remove the key.",
+        ));
+        assert!(refuses(&report, false));
     }
 
     #[test]
@@ -629,7 +1024,8 @@ mod tests {
         let (_root, project) = initialized("standalone-exact-time");
         let report = test(&project).unwrap();
         assert_eq!(report["command"], "test");
-        assert_eq!(report["authoringStatus"], "complete");
+        assert_eq!(report["diagnostics"], json!([]));
+        assert_eq!(report["filesChecked"], 5);
         assert_eq!(report["proofBoundary"], "offline_synthetic");
         assert_eq!(report["productionClosure"], false);
         assert_eq!(report["networkAccess"], false);
@@ -667,27 +1063,19 @@ mod tests {
     }
 
     #[test]
-    fn an_incomplete_policy_still_runs_its_fixtures_and_reports_the_status() {
+    fn a_refused_policy_runs_no_fixture() {
         let (_root, project) = initialized("standalone-arrival-window");
-        let policy_path = project.join(AUTHORED_POLICY_FILE);
-        // A blank because fails the check but never changes what replay does.
-        let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
+        edit(
+            &project,
+            AUTHORED_POLICY_FILE,
             "because: The hall opens on Saturday mornings.",
-            "because:  ",
-            1,
+            "because: \"  \"",
         );
-        std::fs::write(&policy_path, broken).unwrap();
-        let report = test(&project).unwrap();
-        assert_eq!(report["authoringStatus"], "incomplete");
+        let error = test(&project).unwrap_err();
         assert_eq!(
-            report["findings"],
-            json!([{"path": "openings[0].because", "reason": "invalid-because"}])
+            refusals(&project, &error),
+            ["scheduling.yaml:46 /openings/0/because scheduling.project.invalid-because"]
         );
-        assert!(report["fixtures"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|fixture| fixture["status"] == "passed"));
     }
 
     #[test]
@@ -699,44 +1087,40 @@ mod tests {
         // Sunday of 2026-03-08, 02:00-03:00 America/New_York: a nonexistent
         // local time, per registry-platform-calendar's own pinned case.
         let (_root, project) = initialized("standalone-arrival-window");
-        let policy_path = project.join(AUTHORED_POLICY_FILE);
-        let policy_text = std::fs::read_to_string(&policy_path)
-            .unwrap()
-            .replacen("weekdays: [sat]", "weekdays: [sun]", 1)
-            .replacen("startTime: \"08:00\"", "startTime: \"02:00\"", 1)
-            .replacen("endTime: \"12:00\"", "endTime: \"03:00\"", 1)
-            .replacen(
+        for (from, to) in [
+            ("weekdays: [sat]", "weekdays: [sun]"),
+            ("startTime: \"08:00\"", "startTime: \"02:00\""),
+            ("endTime: \"12:00\"", "endTime: \"03:00\""),
+            (
                 "effectiveFrom: \"2026-10-01\"",
                 "effectiveFrom: \"2026-03-08\"",
-                1,
-            )
-            .replacen(
+            ),
+            (
                 "effectiveUntil: \"2026-12-31\"",
                 "effectiveUntil: \"2026-03-08\"",
-                1,
-            );
-        std::fs::write(&policy_path, policy_text).unwrap();
-        let fixture_path = project.join("fixtures/household-morning.yaml");
-        let fixture_text = std::fs::read_to_string(&fixture_path).unwrap().replacen(
+            ),
+        ] {
+            edit(&project, AUTHORED_POLICY_FILE, from, to);
+        }
+        edit(
+            &project,
+            "fixtures/household-morning.yaml",
             "timezone: Asia/Bangkok",
             "timezone: America/New_York",
-            1,
         );
-        std::fs::write(&fixture_path, fixture_text).unwrap();
 
         // check() has no calendar to resolve, so it reports clean.
-        let checked = check(&project).unwrap();
-        assert_eq!(checked["status"], "complete");
-        assert_eq!(checked["findings"], json!([]));
+        let checked = check(&project, false).unwrap();
+        assert_eq!(checked["diagnostics"], json!([]));
 
         // test() replays the calendar and must not let one fixture's
         // calendar refusal abort the whole command: it reports that
         // fixture as failed and names the calendar problem, the same way
         // any other fixture failure is reported.
         let tested = test(&project).unwrap();
-        assert_eq!(tested["authoringStatus"], "complete");
-        let fixtures = tested["fixtures"].as_array().unwrap();
-        let fixture = fixtures
+        let fixture = tested["fixtures"]
+            .as_array()
+            .unwrap()
             .iter()
             .find(|fixture| fixture["name"] == "household-morning")
             .unwrap();
@@ -752,8 +1136,8 @@ mod tests {
         let report = explain(&project).unwrap();
         assert_eq!(report["command"], "explain");
         assert_eq!(
-            report["scheduling"],
-            json!({"id": "household-days", "version": 3})
+            report["project"],
+            json!({"id": "household-days", "version": "3"})
         );
         assert!(report["policyDigest"]
             .as_str()
@@ -773,13 +1157,13 @@ mod tests {
         assert_eq!(windows[0]["start"], "2026-10-10T01:00:00Z");
         assert_eq!(windows[0]["end"], "2026-10-10T03:00:00Z");
         assert_eq!(windows[0]["units"], 3);
-        assert_eq!(windows[0]["unitsPolicy"]["kind"], "perRecipient");
+        assert_eq!(windows[0]["unitsPolicy"]["type"], "per-recipient");
         assert_eq!(
             windows[0]["unitsPolicy"]["subquotas"],
             json!([{"channel": "public", "units": 2}, {"channel": "assisted", "units": 1}])
         );
         assert_eq!(report["holdPolicy"]["ttlMinutes"], 10);
-        assert_eq!(report["holdPolicy"]["maxPerCaller"], 2);
+        assert_eq!(report["holdPolicy"]["maximumPerCaller"], 2);
         assert_eq!(report["networkAccess"], false);
         assert_eq!(report["databaseAccess"], false);
 
@@ -798,48 +1182,106 @@ mod tests {
 
     #[test]
     fn explain_refuses_a_policy_that_fails_its_check() {
-        let (_root, project) = initialized("standalone-exact-time");
-        let policy_path = project.join(AUTHORED_POLICY_FILE);
-        let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
-            "version: 1\n",
-            "version: 0\n",
-            1,
+        let (_root, project) = initialized("standalone-arrival-window");
+        edit(
+            &project,
+            AUTHORED_POLICY_FILE,
+            "because: The hall opens on Saturday mornings.",
+            "because: \"  \"",
         );
-        std::fs::write(&policy_path, broken).unwrap();
         let error = explain(&project).unwrap_err();
-        assert!(error.to_string().contains("passes its check"));
+        assert_eq!(
+            refusals(&project, &error),
+            ["scheduling.yaml:46 /openings/0/because scheduling.project.invalid-because"]
+        );
     }
 
     #[test]
     fn a_project_without_fixtures_cannot_test() {
         let (_root, project) = initialized("standalone-exact-time");
-        // An empty fixtures directory is the authoring error; a missing one is
-        // a filesystem failure the CLI reports separately.
         let fixtures = project.join(FIXTURES_DIRECTORY);
-        for entry in std::fs::read_dir(&fixtures).unwrap() {
-            std::fs::remove_file(entry.unwrap().path()).unwrap();
+        for entry in fs::read_dir(&fixtures).unwrap() {
+            fs::remove_file(entry.unwrap().path()).unwrap();
         }
-        let error = test(&project).unwrap_err();
-        assert!(error.to_string().contains("at least one YAML fixture"));
+        // An empty directory and a missing one are the same authoring gap.
+        for _ in 0..2 {
+            let error = test(&project).unwrap_err();
+            assert_eq!(
+                refusals(&project, &error),
+                ["fixtures  scheduling.fixture.none"]
+            );
+            // A check has nothing to replay, so it passes.
+            assert_eq!(check(&project, false).unwrap()["filesChecked"], 3);
+            fs::remove_dir(&fixtures).unwrap_or(());
+        }
     }
 
     #[test]
-    fn a_missing_or_unparsable_policy_is_a_reading_failure() {
+    fn a_missing_policy_is_a_reading_failure_naming_the_file() {
         let root = tempfile::tempdir().unwrap();
-        let error = check(&root.path().join("nowhere")).unwrap_err();
-        assert!(error.to_string().contains("nowhere"));
-        assert!(error.to_string().contains("scheduling.yaml"));
+        let error = check(&root.path().join("nowhere"), false).unwrap_err();
+        assert!(crate::configuration_report(&error).is_none());
+        let message = format!("{error:#}");
+        assert!(message.contains("nowhere"), "{message}");
+        assert!(message.contains(AUTHORED_POLICY_FILE), "{message}");
+        assert!(error
+            .chain()
+            .any(|cause| cause.downcast_ref::<std::io::Error>().is_some()));
+    }
 
-        let project = root.path().join("project");
-        init(&project, "standalone-exact-time").unwrap();
-        let policy_path = project.join(AUTHORED_POLICY_FILE);
-        let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
-            "holdPolicy:\n",
-            "surprise: true\nholdPolicy:\n",
-            1,
+    /// A runtime file that is the project's own example is read by the
+    /// project check too, and its diagnostics are reported once.
+    #[test]
+    fn check_runtime_config_reports_the_project_example_once() {
+        // The loader refuses a path through a symbolic link, and the system
+        // temporary directory is one on some hosts.
+        let (_root, project) = initialized("standalone-exact-time");
+        let project = project.canonicalize().unwrap();
+        edit(
+            &project,
+            "runtime.example.yaml",
+            "retention:\n",
+            "retention:\n  stray: 1\n",
         );
-        std::fs::write(&policy_path, broken).unwrap();
-        let error = check(&project).unwrap_err();
-        assert!(error.to_string().contains("parsing scheduling.yaml"));
+        let example = project.join("runtime.example.yaml");
+        let error = check_runtime_config(&project, &example, false, false, check(&project, false))
+            .unwrap_err();
+        let refused = refusals(&project, &error);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+    }
+
+    #[test]
+    fn check_runtime_config_names_the_runtime_file_as_given() {
+        // The loader refuses a path through a symbolic link, and the system
+        // temporary directory is one on some hosts.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path().canonicalize().unwrap();
+        let project = root.join("project");
+        init(&project, "standalone-exact-time").unwrap();
+        let runtime = root.join("runtime.yaml");
+        let example = fs::read_to_string(project.join("runtime.example.yaml")).unwrap();
+        fs::write(&runtime, &example).unwrap();
+        let checked =
+            check_runtime_config(&project, &runtime, false, false, check(&project, false)).unwrap();
+        assert_eq!(checked["runtimeConfig"], runtime.display().to_string());
+        assert_eq!(checked["filesChecked"], 6);
+
+        fs::write(
+            &runtime,
+            example.replacen("retention:\n", "retention:\n  stray: 1\n", 1),
+        )
+        .unwrap();
+        let error = check_runtime_config(&project, &runtime, false, false, check(&project, false))
+            .unwrap_err();
+        let refused = refusals(&root, &error);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(
+            refused[0].starts_with("runtime.yaml:")
+                && refused[0].ends_with(" /retention/stray config.unknown-key"),
+            "{refused:?}"
+        );
+        // The refusal still counts the project files the check read.
+        let report = crate::configuration_report(&error).unwrap();
+        assert_eq!(report.files_checked(), Some(6));
     }
 }

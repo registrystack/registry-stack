@@ -78,6 +78,7 @@ const SUBJECT_BINDING_KEY: &[u8] = b"synthetic-interoperability-subject-binding-
 const ADOPTER_ORIGIN: &str = "http://127.0.0.1:18440";
 const ADOPTER_METRICS_ORIGIN: &str = "http://127.0.0.1:18441";
 const SUPPORT_ORIGIN: &str = "http://127.0.0.1:18442";
+const CLIENT_KEY_VARIABLE: &str = "EVIDENCE_OID4VCI_CLIENT_JWK";
 const SUPPORT_TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
 
 const DEFINITIONS: &str = r#"{
@@ -310,30 +311,43 @@ fn write_config(directory: &Path) -> DeliveryConfig {
     let path = directory.join("oid4vci.yaml");
     fs::write(
         &path,
-        r#"
-version: 1
+        r#"apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
+kind: EvidenceOid4vciRuntimeConfig
 credentialIssuer: https://wallet.example.org
 listener:
-  address: 127.0.0.1
-  port: 8090
+  bind: 127.0.0.1:8090
+secretProviders:
+  file:
+    root: /run/secrets/evidence-oid4vci
 evidence:
   baseUrl: https://evidence.example.org
 tokenClient:
   tokenEndpoint: https://mint.example.org/token
   clientId: evidence-oid4vci
-  privateKeyFile: unused-in-wired-test.jwk
+  privateKeyRef: secret:file/unused-in-wired-test.jwk
 offers:
   issuer: https://mint.example.org
   jwksUri: https://mint.example.org/.well-known/jwks.json
   audiences: ["https://wallet.example.org"]
+  authorizedClients: unrestricted
+  requiredScopes: unrestricted
 "#,
     )
     .expect("write fixture deployment");
     DeliveryConfig::load(&path).expect("the fixture deployment loads")
 }
 
+fn canonical_tempdir() -> tempfile::TempDir {
+    // The reader refuses a path through a symbolic link, and the system
+    // temporary directory is one on some hosts.
+    let base = std::env::temp_dir()
+        .canonicalize()
+        .expect("the temporary directory resolves");
+    tempfile::tempdir_in(base).expect("a temporary directory")
+}
+
 fn deployment() -> (tempfile::TempDir, Arc<FixtureIssuer>, TestServer) {
-    let directory = tempfile::tempdir().expect("temporary deployment directory");
+    let directory = canonical_tempdir();
     let issuer = Arc::new(FixtureIssuer::new());
     let service = Arc::new(DeliveryService::with_halves(
         write_config(directory.path()),
@@ -665,27 +679,29 @@ async fn support_evidence(
 
 fn adopter_config() -> String {
     format!(
-        r#"version: 1
+        r#"apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
+kind: EvidenceOid4vciRuntimeConfig
 validationMode: supervised-local-development
 credentialIssuer: {ADOPTER_ORIGIN}
 listener:
-  address: 127.0.0.1
-  port: 18440
+  bind: 127.0.0.1:18440
 metricsListener:
-  address: 127.0.0.1
-  port: 18441
+  bind: 127.0.0.1:18441
+secretProviders:
+  environment: {{}}
 evidence:
   baseUrl: {SUPPORT_ORIGIN}
 tokenClient:
   tokenEndpoint: {SUPPORT_ORIGIN}/token
   clientId: evidence-oid4vci-tutorial
-  privateKeyFile: delivery-client.jwk.json
+  privateKeyRef: secret:env/{CLIENT_KEY_VARIABLE}
 offers:
   issuer: {SUPPORT_ORIGIN}
   jwksUri: {SUPPORT_ORIGIN}/.well-known/jwks.json
   audiences: ["{ADOPTER_ORIGIN}"]
   algorithms: [ES256]
   authorizedClients: [tutorial-operator]
+  requiredScopes: unrestricted
 store:
   maximumOffers: 256
   offerLifetimeSeconds: 300
@@ -765,14 +781,6 @@ impl Drop for ChildGuard {
     }
 }
 
-struct PrivateFileGuard(PathBuf);
-
-impl Drop for PrivateFileGuard {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
 async fn wait_until_ready(client: &reqwest::Client, url: &str) {
     for _ in 0..100 {
         if client
@@ -792,9 +800,7 @@ async fn wait_until_ready(client: &reqwest::Client, url: &str) {
 async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
     let external_root = std::env::var_os("EVIDENCE_OID4VCI_ADOPTER_ROOT").map(PathBuf::from);
     let supplied_config = external_root.is_some();
-    let temporary = external_root
-        .is_none()
-        .then(|| tempfile::tempdir().expect("temporary adopter directory"));
+    let temporary = external_root.is_none().then(canonical_tempdir);
     let root = external_root.unwrap_or_else(|| {
         temporary
             .as_ref()
@@ -805,6 +811,9 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
     fs::create_dir_all(&root).expect("create the adopter directory");
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
         .expect("restrict the adopter directory");
+    // The reader refuses a configuration path through a symbolic link, and a
+    // checkout may sit below one.
+    let root = root.canonicalize().expect("the adopter directory resolves");
     let config_path = root.join("oid4vci.yaml");
     if supplied_config {
         assert_eq!(
@@ -817,18 +826,18 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
     }
     println!("CONFIG COPIED: complete configuration has no untracked inputs");
 
+    // The generated client key reaches only the child processes that read
+    // it, through their environment; it is never written to disk.
     let client_identity = FixtureKey::generate();
-    let client_key_path = root.join("delivery-client.jwk.json");
-    fs::write(&client_key_path, &client_identity.private).expect("write the client identity");
-    fs::set_permissions(&client_key_path, fs::Permissions::from_mode(0o600))
-        .expect("restrict the client identity");
-    let private_key_guard = PrivateFileGuard(client_key_path.clone());
 
     let loaded = DeliveryConfig::load(&config_path).expect("the copied configuration loads");
     assert_eq!(loaded.credential_issuer, ADOPTER_ORIGIN);
     assert_eq!(loaded.evidence.base_url, SUPPORT_ORIGIN);
     assert_eq!(
-        loaded.metrics_listener.as_ref().map(|item| item.port),
+        loaded
+            .metrics_listener
+            .as_ref()
+            .map(|item| item.bind.port()),
         Some(18441)
     );
 
@@ -866,6 +875,7 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
 
     let inspect = Command::new(&binary)
         .env("RUST_LOG", "off")
+        .env(CLIENT_KEY_VARIABLE, &client_identity.private)
         .args(["inspect", "--config"])
         .arg(&config_path)
         .output()
@@ -886,6 +896,7 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
     let mut service = ChildGuard(
         Command::new(&binary)
             .env("RUST_LOG", "off")
+            .env(CLIENT_KEY_VARIABLE, &client_identity.private)
             .args(["serve", "--config"])
             .arg(&config_path)
             .stdout(Stdio::null())
@@ -1085,7 +1096,7 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
     let _ = service.0.wait();
     support_task.abort();
     let _ = support_task.await;
-    drop(private_key_guard);
+    drop(client_identity);
     println!("CLEANUP COMPLETE: generated private material was removed");
 }
 

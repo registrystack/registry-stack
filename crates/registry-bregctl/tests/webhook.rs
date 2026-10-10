@@ -54,7 +54,7 @@ const SAMPLE_EVENT_SOURCE: &str = r#"apiVersion: registry.registrystack.org/v1al
 kind: RegistryProject
 registry:
   id: webhook-sample
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://webhook-sample.example.test
 entities:

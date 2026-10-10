@@ -1,8 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha3/ApplyReport.schema.json",
+  "$id": "https://id.registrystack.org/schemas/casework/apply-report/apply-report.v1alpha3.schema.json",
   "title": "ApplyReport",
   "description": "Versioned JSON report emitted by caseworkctl for apply.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+    },
+    "kind": {
+      "const": "ApplyReport"
+    }
+  },
+  "unevaluatedProperties": false,
   "oneOf": [
     {
       "type": "object",
@@ -52,17 +66,16 @@
         },
         "applyOrder": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 9007199254740991
         },
         "packageDigest": {
-          "type": "string",
-          "pattern": "^sha256:[0-9a-f]{64}$"
+          "$ref": "#/$defs/Digest"
         },
         "predecessorPackageDigest": {
           "oneOf": [
             {
-              "type": "string",
-              "pattern": "^sha256:[0-9a-f]{64}$"
+              "$ref": "#/$defs/Digest"
             },
             {
               "type": "null"
@@ -104,11 +117,12 @@
           "type": "array",
           "items": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 9007199254740991
           }
         },
         "effects": {
-          "type": "object"
+          "$ref": "#/$defs/effects"
         },
         "singleRoleStatement": {
           "type": [
@@ -168,7 +182,6 @@
       "required": [
         "severity",
         "code",
-        "artifact",
         "path",
         "message",
         "suggestedAction"
@@ -191,13 +204,80 @@
         },
         "suggestedAction": {
           "type": "string"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ],
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048577
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048577
+            }
+          }
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "path",
+              "message"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048577
+              },
+              "column": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048577
+              },
+              "path": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     },
-    "findings": {
+    "warnings": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/diagnostic"
+        "allOf": [
+          {
+            "$ref": "#/$defs/diagnostic"
+          },
+          {
+            "properties": {
+              "severity": {
+                "const": "warning"
+              }
+            }
+          }
+        ],
+        "unevaluatedProperties": false
       }
     },
     "activation": {
@@ -221,17 +301,16 @@
         },
         "applyOrder": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 9007199254740991
         },
         "packageDigest": {
-          "type": "string",
-          "pattern": "^sha256:[0-9a-f]{64}$"
+          "$ref": "#/$defs/Digest"
         },
         "predecessorPackageDigest": {
           "oneOf": [
             {
-              "type": "string",
-              "pattern": "^sha256:[0-9a-f]{64}$"
+              "$ref": "#/$defs/Digest"
             },
             {
               "type": "null"
@@ -290,6 +369,147 @@
           "type": "string"
         }
       }
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pinnedWork",
+        "sourceGenerations",
+        "taskTemplates"
+      ],
+      "properties": {
+        "pinnedWork": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verdict",
+            "stranded"
+          ],
+          "properties": {
+            "verdict": {
+              "enum": [
+                "clear",
+                "acknowledged",
+                "refused"
+              ]
+            },
+            "stranded": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/strandedWork"
+              }
+            }
+          }
+        },
+        "sourceGenerations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "sourceId",
+              "change"
+            ],
+            "properties": {
+              "sourceId": {
+                "type": "string"
+              },
+              "change": {
+                "enum": [
+                  "registered",
+                  "unchanged",
+                  "changed"
+                ]
+              }
+            }
+          }
+        },
+        "taskTemplates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "templateId",
+              "templateVersion",
+              "change"
+            ],
+            "properties": {
+              "templateId": {
+                "type": "string"
+              },
+              "templateVersion": {
+                "type": "string"
+              },
+              "change": {
+                "enum": [
+                  "added",
+                  "activated",
+                  "retained",
+                  "deactivated"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "strandedWork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason",
+        "reviews"
+      ],
+      "properties": {
+        "reason": {
+          "enum": [
+            "queue-removed",
+            "profile-removed",
+            "review-kind-changed",
+            "source-removed",
+            "context-field-not-displayed",
+            "displayed-field-not-projected"
+          ]
+        },
+        "queue": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "reviewKind": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "reviews": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "workItems": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
     }
   }
 }

@@ -98,6 +98,8 @@ nothing at all, rather than writing the new ones and stopping partway.
 Create `selectors/person-reference-v1.yaml`:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
 maximumAggregateBytes: 64
 fields:
   person_id:
@@ -110,6 +112,8 @@ Then edit `sources/people.yaml`. Replace every `review-required` marker and bind
 to that selector profile:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
 transport: http-json
 baseUrl: https://registry.example.com
 posture: field-projected
@@ -198,6 +202,8 @@ source values into one bounded fact or a bounded collection.
 Create `questions/adult-status.yaml`:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: adult-status
 question: Is the person at least 18 years old?
 purpose: age-check

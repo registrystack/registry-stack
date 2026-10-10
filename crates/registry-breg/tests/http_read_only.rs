@@ -60,10 +60,11 @@ entities:
 accessProfiles:
   - id: public
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: case
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label]
         filterableFields: [label]
@@ -83,7 +84,7 @@ accessProfiles:
         rowBoundaries:
           - {field: jurisdiction, claim: jurisdictions, operator: in}
       - entity: protected-note
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list]
         readableFields: [text]
         writableFields: [text]
@@ -139,7 +140,7 @@ accessProfiles:
     requiredPurposes: [case-management]
     permissions:
       - entity: household
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, lookup, list]
         readableFields: [household-code, administrative-area, local-household-number]
         filterableFields: [household-code, administrative-area, local-household-number]
@@ -154,7 +155,7 @@ accessProfiles:
             sortableFields: [person-code]
             allowCount: true
       - entity: person
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [sensitive-note]
         filterableFields: [sensitive-note]
@@ -206,7 +207,7 @@ accessProfiles:
     requiredPurposes: [case-management]
     permissions:
       - entity: benefit-record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label, eligibility-score]
 "#;
@@ -216,7 +217,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: discovery-matrix
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 entities:
@@ -254,10 +255,11 @@ entities:
 accessProfiles:
   - id: public
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: public-record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label]
         filterableFields: [label]
@@ -268,13 +270,13 @@ accessProfiles:
     requiredPurposes: [case-management]
     permissions:
       - entity: public-record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label, restricted-canary-field]
         filterableFields: [label]
         sortableFields: [label]
       - entity: protected-ledger
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [classified-status, valid-from, valid-to]
         filterableFields: [classified-status]
@@ -289,7 +291,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: logical-schema-surface
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 entities:
@@ -305,10 +307,11 @@ entities:
 accessProfiles:
   - id: public
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: logical-record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [household-code, household-kind-code]
 vocabularies:
@@ -321,7 +324,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: metadata-labels
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 manifestProjection:
@@ -410,35 +413,37 @@ entities:
 accessProfiles:
   - id: operator
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: permit
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [import-source, source-record-id, permit-number, display-token, valid-from, valid-to]
       - entity: inspection
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [import-source, source-record-id, inspection-code, valid-from, valid-to]
         filterableFields: [inspection-code]
         sortableFields: [inspection-code]
       - entity: finding
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [inspection]
       - entity: certificate
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [import-source, certificate-code]
   - id: redacted-reader
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: inspection
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [import-source, valid-from]
       - entity: finding
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [inspection]
 "#;
@@ -465,10 +470,11 @@ entities:
 accessProfiles:
   - id: map-reader
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [code, location]
         filterableFields: [code]
@@ -477,10 +483,11 @@ accessProfiles:
             maximumLongitudeSpanDegrees: 2
             maximumLatitudeSpanDegrees: 2
   - id: tabular
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [code]
 "#;
@@ -536,7 +543,7 @@ impl SnapshotReadService for RecordingSnapshotReadService {
 const SNAPSHOT_PROJECT: &str = r#"
 apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
-registry: {id: snapshot-surface, version: 1, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
+registry: {id: snapshot-surface, version: "1", defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
 entities:
   - id: assignment
     primaryDataset: test-dataset
@@ -570,7 +577,7 @@ accessProfiles:
     requiredScopes: [registry.read]
     permissions:
       - entity: assignment
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label, starts, ends]
   - id: revision-only
@@ -578,7 +585,7 @@ accessProfiles:
     requiredScopes: [registry.read]
     permissions:
       - entity: assignment
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [revisions]
         revisionAccess: true
         readableFields: [label]
@@ -621,36 +628,37 @@ entities:
 accessProfiles:
   - id: public
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
-      - {entity: placement-correction, rowBoundaries: [], operations: [get, list], readableFields: [target, proposed-site]}
+      - {entity: placement-correction, rowBoundaries: unrestricted, operations: [get, list], readableFields: [target, proposed-site]}
   - id: correction-officer
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
       - entity: placement
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [site]
       - entity: placement-correction
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list, patch, submit_request, apply_request]
         readableFields: [target, proposed-site]
         writableFields: [target, proposed-site]
         applyTargets:
-          - {entity: placement, rowBoundaries: []}
+          - {entity: placement, rowBoundaries: unrestricted}
   - id: checkpoint-reader
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
       - entity: placement
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [site]
       - entity: placement-correction
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [target, proposed-site]
         readableRequestFields: [reason, review_state]
@@ -660,7 +668,7 @@ accessProfiles:
     requiredPurposes: [case-management]
     permissions:
       - entity: placement-correction
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [target, proposed-site]
 "#;
@@ -736,7 +744,7 @@ async fn snapshot_route_requires_its_own_current_authority_and_never_calls_live_
         ])
     );
     for (suffix, claims) in [
-        ("", None),
+        ("", Some(public_claims())),
         ("", Some(caseworker_claims("wrong-purpose"))),
         (
             "?accessProfile=live-only",
@@ -746,7 +754,7 @@ async fn snapshot_route_requires_its_own_current_authority_and_never_calls_live_
             "?accessProfile=revision-only",
             Some(caseworker_claims("case-management")),
         ),
-        ("?snapshot=private-canary", None),
+        ("?snapshot=private-canary", Some(public_claims())),
     ] {
         let response = send_to(
             &app,
@@ -793,20 +801,22 @@ async fn snapshot_route_requires_its_own_current_authority_and_never_calls_live_
     )
     .await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    // A caller that presents no credential names no principal, so its refusal
-    // is counted rather than journaled and never reaches the refusal audit.
+    // A caller that presents no credential is refused as unauthenticated
+    // before any access profile is consulted, so its refusal never reaches the
+    // refusal audit.
     let before = snapshots.refusals.load(Ordering::SeqCst);
     let response = send_to(&app, Method::GET, "/v1/records/assignments:snapshot", None).await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(snapshots.refusals.load(Ordering::SeqCst), before);
 }
 
 #[tokio::test]
 async fn discovery_conceals_the_registry_from_callers_without_a_visible_surface() {
-    // A project with an anonymous profile keeps its anonymous discovery surface.
-    let anonymous = Harness::new(true);
+    // A profile that admits every authenticated principal gives each of them
+    // the discovery surface, and a caller without a credential none of it.
+    let open = Harness::new(true);
     for uri in ["/openapi.json", "/v1/registry"] {
-        let response = anonymous.send(Method::GET, uri, None).await;
+        let response = open.send(Method::GET, uri, Some(public_claims())).await;
         assert_eq!(response.status(), StatusCode::OK, "{uri}");
         assert!(
             body_json(response)
@@ -815,15 +825,31 @@ async fn discovery_conceals_the_registry_from_callers_without_a_visible_surface(
                 .contains("read-surface"),
             "{uri}"
         );
+        let response = open.send(Method::GET, uri, None).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+        assert!(
+            !body_json(response)
+                .await
+                .to_string()
+                .contains("read-surface"),
+            "{uri}"
+        );
     }
 
-    // A project without one refuses discovery exactly as it refuses a record route.
+    // A caller no profile admits is refused discovery exactly as it is refused
+    // a record route.
     let (app, records, snapshots) = snapshot_harness(SNAPSHOT_PROJECT, &[]);
-    let record_route = send_to(&app, Method::GET, "/v1/records/assignments:snapshot", None).await;
+    let record_route = send_to(
+        &app,
+        Method::GET,
+        "/v1/records/assignments:snapshot",
+        Some(public_claims()),
+    )
+    .await;
     assert_eq!(record_route.status(), StatusCode::NOT_FOUND);
     let expected = problem_shape(record_route).await;
     for uri in ["/openapi.json", "/v1/registry", "/v1/schemas/assignment"] {
-        let response = send_to(&app, Method::GET, uri, None).await;
+        let response = send_to(&app, Method::GET, uri, Some(public_claims())).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
         assert_eq!(problem_shape(response).await, expected, "{uri}");
     }
@@ -1057,7 +1083,7 @@ async fn closed_query_grammar_reaches_record_service_as_compiled_query() {
         .send(
             Method::GET,
             "/v1/records/cases?$select=label&$filter=startswith(label,'Visible')&$orderby=label&$top=25",
-            None,
+            Some(public_claims()),
         )
         .await;
     assert_eq!(accepted.status(), StatusCode::OK);
@@ -1084,7 +1110,7 @@ async fn closed_query_grammar_reaches_record_service_as_compiled_query() {
         .send(
             Method::GET,
             "/v1/records/cases?$filter=label%20approximately%20'a'",
-            None,
+            Some(public_claims()),
         )
         .await;
     assert_eq!(bad_operator.status(), StatusCode::BAD_REQUEST);
@@ -1099,7 +1125,9 @@ async fn registry_record_links_preserve_the_configured_deployment_prefix() {
         true,
         Some("https://registry.example.test/registry-a"),
     );
-    let response = harness.send(Method::GET, "/v1/records/cases", None).await;
+    let response = harness
+        .send(Method::GET, "/v1/records/cases", Some(public_claims()))
+        .await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -1107,7 +1135,12 @@ async fn registry_record_links_preserve_the_configured_deployment_prefix() {
         "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </registry-a/v1/schemas/case>; rel=\"describedby\""
     );
 
-    let openapi = body_json(harness.send(Method::GET, "/openapi.json", None).await).await;
+    let openapi = body_json(
+        harness
+            .send(Method::GET, "/openapi.json", Some(public_claims()))
+            .await,
+    )
+    .await;
     assert_eq!(openapi["servers"], json!([{"url": "/registry-a"}]));
 }
 
@@ -1118,7 +1151,7 @@ async fn bbox_reaches_record_service_only_with_declared_spatial_grant() {
         .send_with_accept(
             Method::GET,
             "/v1/records/sites?bbox=100,10,101,11&$filter=code%20eq%20'SITE-A'&$top=25",
-            None,
+            Some(public_claims()),
             Some("application/geo+json"),
         )
         .await;
@@ -1151,7 +1184,7 @@ async fn bbox_reaches_record_service_only_with_declared_spatial_grant() {
             .send_with_accept(
                 Method::GET,
                 "/v1/records/sites?$select=code,location",
-                None,
+                Some(public_claims()),
                 Some(media_type),
             )
             .await;
@@ -1167,7 +1200,12 @@ async fn bbox_reaches_record_service_only_with_declared_spatial_grant() {
             "{media_type}"
         );
     }
-    let openapi = body_json(harness.send(Method::GET, "/openapi.json", None).await).await;
+    let openapi = body_json(
+        harness
+            .send(Method::GET, "/openapi.json", Some(public_claims()))
+            .await,
+    )
+    .await;
     let spatial_success = &openapi["paths"]["/v1/records/sites"]["get"]["responses"]["200"];
     assert!(spatial_success["content"]
         .get("application/geo+json")
@@ -1186,7 +1224,7 @@ async fn bbox_reaches_record_service_only_with_declared_spatial_grant() {
         .send(
             Method::GET,
             "/v1/records/sites?accessProfile=tabular&bbox=100,10,101,11",
-            None,
+            Some(public_claims()),
         )
         .await;
     assert_eq!(undeclared.status(), StatusCode::BAD_REQUEST);
@@ -1194,7 +1232,11 @@ async fn bbox_reaches_record_service_only_with_declared_spatial_grant() {
     assert_eq!(harness.records.calls(), before);
 
     let malformed = harness
-        .send(Method::GET, "/v1/records/sites?bbox=100,10,99,11", None)
+        .send(
+            Method::GET,
+            "/v1/records/sites?bbox=100,10,99,11",
+            Some(public_claims()),
+        )
         .await;
     assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
     assert_eq!(body_json(malformed).await["code"], "query.invalid");
@@ -1208,7 +1250,7 @@ async fn geojson_requires_readable_primary_point_but_select_can_omit_geometry() 
         .send_with_accept(
             Method::GET,
             "/v1/records/sites?$select=code",
-            None,
+            Some(public_claims()),
             Some("application/geo+json"),
         )
         .await;
@@ -1224,7 +1266,7 @@ async fn geojson_requires_readable_primary_point_but_select_can_omit_geometry() 
         .send_with_accept(
             Method::GET,
             "/v1/records/sites?accessProfile=tabular",
-            None,
+            Some(public_claims()),
             Some("application/geo+json"),
         )
         .await;
@@ -1243,7 +1285,7 @@ async fn geojson_accept_negotiation_honors_quality_and_json_preference() {
         .send_with_accept(
             Method::GET,
             "/v1/records/sites",
-            None,
+            Some(public_claims()),
             Some("application/geo+json;q=0, application/json;q=0.5"),
         )
         .await;
@@ -1261,7 +1303,7 @@ async fn geojson_accept_negotiation_honors_quality_and_json_preference() {
         .send_with_accept(
             Method::GET,
             "/v1/records/sites",
-            None,
+            Some(public_claims()),
             Some("application/geo+json;q=0.8, application/json;q=0.9"),
         )
         .await;
@@ -1276,7 +1318,7 @@ async fn geojson_accept_negotiation_honors_quality_and_json_preference() {
         .send_with_accept(
             Method::GET,
             "/v1/records/sites",
-            None,
+            Some(public_claims()),
             Some("application/json;q=0.1, */*;q=0.2, application/geo+json;q=0.9"),
         )
         .await;
@@ -1307,7 +1349,7 @@ async fn bbox_span_grants_use_decimal_semantics_for_fractional_limits() {
         .send_with_accept(
             Method::GET,
             "/v1/records/sites?bbox=0,13.65,0.3,13.85",
-            None,
+            Some(public_claims()),
             Some("application/geo+json"),
         )
         .await;
@@ -1324,7 +1366,7 @@ async fn bbox_span_grants_use_decimal_semantics_for_fractional_limits() {
         .send(
             Method::GET,
             "/v1/records/sites?bbox=0,13.65,0.30000000000000000000000000000000000001,13.85",
-            None,
+            Some(public_claims()),
         )
         .await;
     assert_eq!(
@@ -1341,7 +1383,7 @@ async fn bbox_span_grants_use_decimal_semantics_for_fractional_limits() {
         .send(
             Method::GET,
             "/v1/records/sites?bbox=0,13.65,0.3,13.851",
-            None,
+            Some(public_claims()),
         )
         .await;
     assert_eq!(just_over.status(), StatusCode::BAD_REQUEST);
@@ -1615,7 +1657,7 @@ async fn lookup_route_conceals_a_substituted_access_profile_selection() {
     requiredPurposes: [case-management]
     permissions:
       - entity: household
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [household-code]
 "
@@ -2008,7 +2050,7 @@ async fn continuation_requests_refuse_query_overrides_before_record_io() {
         .send(
             Method::GET,
             "/v1/records/cases?$skiptoken=opaque-token&$select=label",
-            None,
+            Some(public_claims()),
         )
         .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -2033,18 +2075,18 @@ async fn known_route_malformed_query_is_refusal_audited_before_response() {
     assert_eq!(harness.records.refusal_calls(), 1);
 }
 
-/// The same refusal from a caller that presents no credential names no
-/// principal, so it is never appended to the audit journal: an
-/// unauthenticated caller cannot grow the journal.
+/// The same request from a caller that presents no credential is refused as
+/// unauthenticated before its query is read, so it is never appended to the
+/// audit journal: an unauthenticated caller cannot grow the journal.
 #[tokio::test]
-async fn anonymous_malformed_query_is_refused_without_a_refusal_audit() {
+async fn unauthenticated_malformed_query_is_refused_without_a_refusal_audit() {
     let harness = Harness::new(true);
     harness.records.refusal_fails.store(true, Ordering::SeqCst);
     let response = harness
         .send(Method::GET, "/v1/records/cases?$filter=label%20eq", None)
         .await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(body_json(response).await["code"], "query.invalid");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(body_json(response).await["code"], "authentication.refused");
     assert_eq!(harness.records.calls(), 0);
     assert_eq!(harness.records.refusal_calls(), 0);
 }
@@ -2059,7 +2101,7 @@ async fn legacy_query_keys_are_not_accepted() {
         "/v1/records/cases?pageSize=25",
         "/v1/records/cases?cursor=opaque-token",
     ] {
-        let response = harness.send(Method::GET, uri, None).await;
+        let response = harness.send(Method::GET, uri, Some(public_claims())).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
         assert_eq!(body_json(response).await["code"], "query.invalid", "{uri}");
     }
@@ -2070,7 +2112,11 @@ async fn legacy_query_keys_are_not_accepted() {
 async fn count_requires_compiled_permission_and_top_is_bounded() {
     let harness = Harness::new(true);
     let public_count = harness
-        .send(Method::GET, "/v1/records/cases?$count=true", None)
+        .send(
+            Method::GET,
+            "/v1/records/cases?$count=true",
+            Some(public_claims()),
+        )
         .await;
     assert_eq!(public_count.status(), StatusCode::BAD_REQUEST);
     assert_eq!(body_json(public_count).await["code"], "query.invalid");
@@ -2101,7 +2147,7 @@ async fn desc_ordering_and_field_capability_failures_are_value_free() {
         "/v1/records/cases?$filter=secret%20eq%20'DO-NOT-LEAK'",
         "/v1/records/cases?$filter=missing%20eq%20'DO-NOT-LEAK'",
     ] {
-        let response = harness.send(Method::GET, uri, None).await;
+        let response = harness.send(Method::GET, uri, Some(public_claims())).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
         let body = body_json(response).await;
         assert_eq!(body["code"], "query.invalid", "{uri}");
@@ -2123,7 +2169,7 @@ async fn select_refuses_envelope_names_and_filter_grouping_reaches_the_plan() {
         "/v1/records/cases?$select=revision",
         "/v1/records/cases?$select=label,id",
     ] {
-        let response = harness.send(Method::GET, uri, None).await;
+        let response = harness.send(Method::GET, uri, Some(public_claims())).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
         assert_eq!(body_json(response).await["code"], "query.invalid", "{uri}");
     }
@@ -2131,14 +2177,18 @@ async fn select_refuses_envelope_names_and_filter_grouping_reaches_the_plan() {
         .send(
             Method::GET,
             "/v1/records/cases/00000000-0000-4000-8000-000000000001?$select=id",
-            None,
+            Some(public_claims()),
         )
         .await;
     assert_eq!(direct.status(), StatusCode::NOT_FOUND);
     assert_eq!(harness.records.calls(), 0);
 
     let selected_label = harness
-        .send(Method::GET, "/v1/records/cases?$select=label", None)
+        .send(
+            Method::GET,
+            "/v1/records/cases?$select=label",
+            Some(public_claims()),
+        )
         .await;
     assert_eq!(selected_label.status(), StatusCode::OK);
     assert_eq!(
@@ -2547,14 +2597,21 @@ async fn head_is_refused_on_governed_reads_and_answered_only_by_probes() {
     let harness = Harness::new(true);
     harness.readiness.0.store(true, Ordering::SeqCst);
     let record = "/v1/records/cases/00000000-0000-4000-8000-000000000001";
-    let served = harness.send(Method::GET, record, None).await;
+    let served = harness
+        .send(Method::GET, record, Some(public_claims()))
+        .await;
     assert_eq!(served.status(), StatusCode::OK);
     let reads = harness.records.calls();
-    let unaccepted = problem_shape(harness.send(Method::PUT, record, None).await).await;
+    let unaccepted = problem_shape(
+        harness
+            .send(Method::PUT, record, Some(public_claims()))
+            .await,
+    )
+    .await;
     for uri in [record, "/openapi.json", "/v1/registry", "/v1/schemas/case"] {
-        let response = harness.send(Method::GET, uri, None).await;
+        let response = harness.send(Method::GET, uri, Some(public_claims())).await;
         assert_eq!(response.status(), StatusCode::OK, "{uri} is served to GET");
-        let response = harness.send(Method::HEAD, uri, None).await;
+        let response = harness.send(Method::HEAD, uri, Some(public_claims())).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
         assert_eq!(
             response.headers()[CONTENT_TYPE],
@@ -2568,7 +2625,8 @@ async fn head_is_refused_on_governed_reads_and_answered_only_by_probes() {
                 .is_empty(),
             "{uri}"
         );
-        let unaccepted_here = problem_shape(harness.send(Method::PUT, uri, None).await).await;
+        let unaccepted_here =
+            problem_shape(harness.send(Method::PUT, uri, Some(public_claims())).await).await;
         assert_eq!(
             unaccepted_here, unaccepted,
             "{uri} refuses HEAD as it refuses PUT"
@@ -2590,11 +2648,11 @@ async fn head_is_refused_on_governed_reads_and_answered_only_by_probes() {
 #[tokio::test]
 async fn profile_and_resource_concealment_complete_before_record_io() {
     let harness = Harness::new(true);
-    let anonymous_protected = harness
+    let public_protected = harness
         .send(
             Method::GET,
             "/v1/records/notes/00000000-0000-4000-8000-000000000001",
-            None,
+            Some(public_claims()),
         )
         .await;
     let wrong_purpose = caseworker_claims("another-purpose");
@@ -2623,9 +2681,9 @@ async fn profile_and_resource_concealment_complete_before_record_io() {
     assert_eq!(unauthorized.status(), StatusCode::NOT_FOUND);
     assert_eq!(unknown_profile.status(), StatusCode::NOT_FOUND);
     assert_eq!(unknown_resource.status(), StatusCode::NOT_FOUND);
-    assert_eq!(anonymous_protected.status(), StatusCode::NOT_FOUND);
+    assert_eq!(public_protected.status(), StatusCode::NOT_FOUND);
     for response in [
-        &anonymous_protected,
+        &public_protected,
         &unauthorized,
         &unknown_profile,
         &unknown_resource,
@@ -2641,9 +2699,9 @@ async fn profile_and_resource_concealment_complete_before_record_io() {
         assert!(!headers.contains("schemas"));
         assert!(!headers.contains("contexts"));
     }
-    let anonymous_protected = problem_shape(anonymous_protected).await;
+    let public_protected = problem_shape(public_protected).await;
     let unauthorized = problem_shape(unauthorized).await;
-    assert_eq!(anonymous_protected, unauthorized);
+    assert_eq!(public_protected, unauthorized);
     assert_eq!(unauthorized, problem_shape(unknown_profile).await);
     assert_eq!(unauthorized, problem_shape(unknown_resource).await);
     assert_eq!(unauthorized["code"], "resource.not_found");
@@ -2677,7 +2735,7 @@ async fn projection_can_only_reduce_the_authorized_profile() {
         .send(
             Method::GET,
             "/v1/records/cases/00000000-0000-4000-8000-000000000001?$select=label",
-            None,
+            Some(public_claims()),
         )
         .await;
     assert_eq!(public.status(), StatusCode::OK);
@@ -2686,7 +2744,11 @@ async fn projection_can_only_reduce_the_authorized_profile() {
     assert!(!public.to_string().contains("DO-NOT-LEAK"));
 
     let public_list = harness
-        .send(Method::GET, "/v1/records/cases?$select=label", None)
+        .send(
+            Method::GET,
+            "/v1/records/cases?$select=label",
+            Some(public_claims()),
+        )
         .await;
     assert_eq!(public_list.status(), StatusCode::OK);
     let public_list = body_json(public_list).await;
@@ -2704,7 +2766,11 @@ async fn projection_can_only_reduce_the_authorized_profile() {
 
     let before = harness.records.calls();
     let caller_limit = harness
-        .send(Method::GET, "/v1/records/cases?$top=101", None)
+        .send(
+            Method::GET,
+            "/v1/records/cases?$top=101",
+            Some(public_claims()),
+        )
         .await;
     assert_eq!(caller_limit.status(), StatusCode::BAD_REQUEST);
     assert_eq!(harness.records.calls(), before);
@@ -2713,7 +2779,7 @@ async fn projection_can_only_reduce_the_authorized_profile() {
         .send(
             Method::GET,
             "/v1/records/cases/00000000-0000-4000-8000-000000000001?$select=secret",
-            None,
+            Some(public_claims()),
         )
         .await;
     assert_eq!(widening.status(), StatusCode::NOT_FOUND);
@@ -2750,7 +2816,12 @@ async fn projection_can_only_reduce_the_authorized_profile() {
 #[tokio::test]
 async fn discovery_surfaces_share_caller_filtered_routes_and_fields() {
     let harness = Harness::new(true);
-    let public_openapi = body_json(harness.send(Method::GET, "/openapi.json", None).await).await;
+    let public_openapi = body_json(
+        harness
+            .send(Method::GET, "/openapi.json", Some(public_claims()))
+            .await,
+    )
+    .await;
     assert!(public_openapi["paths"].get("/v1/records/cases").is_some());
     assert!(public_openapi["paths"].get("/v1/records/notes").is_none());
     assert_eq!(
@@ -2773,7 +2844,7 @@ async fn discovery_surfaces_share_caller_filtered_routes_and_fields() {
     );
     assert_eq!(
         public_openapi["paths"]["/v1/records/cases"]["get"]["security"],
-        json!([{}])
+        json!([{"bearerAuth": []}])
     );
     assert!(
         public_openapi["paths"]["/v1/records/cases"]["get"]["responses"]["200"]["headers"]
@@ -2809,7 +2880,12 @@ async fn discovery_surfaces_share_caller_filtered_routes_and_fields() {
     );
     assert_no_mutation_methods(&public_openapi);
 
-    let public_metadata = body_json(harness.send(Method::GET, "/v1/registry", None).await).await;
+    let public_metadata = body_json(
+        harness
+            .send(Method::GET, "/v1/registry", Some(public_claims()))
+            .await,
+    )
+    .await;
     assert_eq!(public_metadata["entities"].as_array().unwrap().len(), 1);
     assert_eq!(
         public_metadata["entities"][0]["readableFields"],
@@ -2823,7 +2899,12 @@ async fn discovery_surfaces_share_caller_filtered_routes_and_fields() {
         ])
     );
 
-    let public_schema = body_json(harness.send(Method::GET, "/v1/schemas/case", None).await).await;
+    let public_schema = body_json(
+        harness
+            .send(Method::GET, "/v1/schemas/case", Some(public_claims()))
+            .await,
+    )
+    .await;
     assert!(public_schema["properties"].get("label").is_some());
     assert!(public_schema["properties"].get("secret").is_none());
 
@@ -2859,7 +2940,11 @@ async fn discovery_schema_uses_compiled_api_names_without_widening_disclosure() 
 
     let schema = body_json(
         harness
-            .send(Method::GET, "/v1/schemas/logical-record", None)
+            .send(
+                Method::GET,
+                "/v1/schemas/logical-record",
+                Some(public_claims()),
+            )
             .await,
     )
     .await;
@@ -2879,7 +2964,12 @@ async fn discovery_schema_uses_compiled_api_names_without_widening_disclosure() 
         json!(["householdCode", "householdKind"])
     );
 
-    let openapi = body_json(harness.send(Method::GET, "/openapi.json", None).await).await;
+    let openapi = body_json(
+        harness
+            .send(Method::GET, "/openapi.json", Some(public_claims()))
+            .await,
+    )
+    .await;
     assert_eq!(openapi["components"]["schemas"]["logical-record"], schema);
     let rendered = openapi.to_string();
     for concealed in [
@@ -2904,7 +2994,7 @@ async fn lower_camel_select_resolves_only_compiled_authorized_api_names() {
         .send(
             Method::GET,
             "/v1/records/logical-records/00000000-0000-4000-8000-000000000001?$select=householdCode,householdKind",
-            None,
+            Some(public_claims()),
         )
         .await;
     assert_eq!(selected.status(), StatusCode::OK);
@@ -2922,7 +3012,7 @@ async fn lower_camel_select_resolves_only_compiled_authorized_api_names() {
         "/v1/records/logical-records/00000000-0000-4000-8000-000000000001?$select=privateCanary",
         "/v1/records/logical-records/00000000-0000-4000-8000-000000000001?$select=household-code",
     ] {
-        let refused = harness.send(Method::GET, uri, None).await;
+        let refused = harness.send(Method::GET, uri, Some(public_claims())).await;
         assert_eq!(refused.status(), StatusCode::NOT_FOUND, "{uri}");
         let problem = body_json(refused).await;
         assert_eq!(problem["code"], "resource.not_found");
@@ -2937,7 +3027,7 @@ async fn lower_camel_select_resolves_only_compiled_authorized_api_names() {
         .send(
             Method::GET,
             "/v1/records/logical-records/00000000-0000-4000-8000-000000000001?$select=householdCode,householdCode",
-            None,
+            Some(public_claims()),
         )
         .await;
     assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
@@ -2998,7 +3088,8 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
         cursor_codec(),
     )));
 
-    let public_openapi = body_json(send_to(&app, Method::GET, "/openapi.json", None).await).await;
+    let public_openapi =
+        body_json(send_to(&app, Method::GET, "/openapi.json", Some(public_claims())).await).await;
     assert_eq!(
         public_openapi["paths"]
             .as_object()
@@ -3028,7 +3119,8 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
         public_openapi["components"]["schemas"]["public-record"]["properties"],
         json!({"label": {"type": "string", "minLength": 0, "maxLength": 100}})
     );
-    let public_metadata = body_json(send_to(&app, Method::GET, "/v1/registry", None).await).await;
+    let public_metadata =
+        body_json(send_to(&app, Method::GET, "/v1/registry", Some(public_claims())).await).await;
     assert_eq!(public_metadata["entities"].as_array().unwrap().len(), 1);
     let metadata_artifact = registry
         .artifacts()
@@ -3043,8 +3135,16 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
         public_metadata["entities"][0],
         metadata_response_from_inventory(&registry, "public-record", "public")
     );
-    let public_schema =
-        body_json(send_to(&app, Method::GET, "/v1/schemas/public-record", None).await).await;
+    let public_schema = body_json(
+        send_to(
+            &app,
+            Method::GET,
+            "/v1/schemas/public-record",
+            Some(public_claims()),
+        )
+        .await,
+    )
+    .await;
     assert_eq!(public_schema["properties"].as_object().unwrap().len(), 1);
     assert_eq!(
         public_schema["properties"],
@@ -3244,13 +3344,19 @@ async fn real_router_serves_only_authorized_explicit_revision_routes() {
     let list_path = format!("/v1/records/cases/{record_id}/revisions");
     let detail_path = format!("{list_path}/1");
 
-    let public = send_to(&app, Method::GET, &list_path, None).await;
+    // A caller without a credential is refused before any profile is read, so
+    // its refusal never reaches the journal.
+    let unauthenticated = send_to(&app, Method::GET, &list_path, None).await;
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(revisions.refusals.load(Ordering::SeqCst), 0);
+
+    let public = send_to(&app, Method::GET, &list_path, Some(public_claims())).await;
     assert_eq!(public.status(), StatusCode::NOT_FOUND);
     assert_eq!(revisions.calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         revisions.refusals.load(Ordering::SeqCst),
-        0,
-        "a refusal that names no principal is counted, not journaled"
+        1,
+        "an authenticated caller's refusal is journaled"
     );
 
     let wrong_purpose = send_to(
@@ -3323,7 +3429,8 @@ async fn real_router_serves_only_authorized_explicit_revision_routes() {
     };
     assert_eq!(request_shapes, [(100, None), (1, Some(1))]);
 
-    let public_openapi = body_json(send_to(&app, Method::GET, "/openapi.json", None).await).await;
+    let public_openapi =
+        body_json(send_to(&app, Method::GET, "/openapi.json", Some(public_claims())).await).await;
     assert!(public_openapi["paths"]
         .as_object()
         .expect("paths")
@@ -3620,6 +3727,18 @@ fn caseworker_claims(purpose: &str) -> VerifiedRequestClaims {
     )
 }
 
+/// A verified caller of a `public` profile: a principal and nothing else.
+fn public_claims() -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        "public-reader",
+        BTreeSet::new(),
+        None,
+        BTreeMap::new(),
+    )
+    .expect("public reader claims are valid")
+}
+
 fn registry_principal_claims(purpose: &str) -> VerifiedRequestClaims {
     VerifiedRequestClaims::authenticated(
         "registry_principal",
@@ -3789,12 +3908,6 @@ async fn workspace_metadata_projects_request_field_disclosure_per_caller_profile
         json!(["reason"])
     );
 
-    let anonymous = body_json(harness.send(Method::GET, "/v1/registry", None).await).await;
-    assert_eq!(
-        metadata_operation(&anonymous, "records.placement-correction.get")["readableRequestFields"],
-        json!([]),
-        "anonymous profiles never receive request metadata"
-    );
     assert_eq!(harness.records.calls(), 0);
 }
 
@@ -3865,7 +3978,12 @@ async fn workspace_metadata_names_only_the_readable_target_fields_a_change_reque
 async fn workspace_metadata_title_fields_prefer_readable_unique_text_or_string_before_generic_fallback(
 ) {
     let harness = Harness::from_project(METADATA_LABEL_PROJECT, true);
-    let document = body_json(harness.send(Method::GET, "/v1/registry", None).await).await;
+    let document = body_json(
+        harness
+            .send(Method::GET, "/v1/registry", Some(public_claims()))
+            .await,
+    )
+    .await;
 
     let permit_get = metadata_operation(&document, "records.permit.get");
     assert_eq!(
@@ -3916,7 +4034,7 @@ async fn workspace_metadata_title_fields_prefer_readable_unique_text_or_string_b
             .send(
                 Method::GET,
                 "/v1/registry?accessProfile=redacted-reader",
-                None,
+                Some(public_claims()),
             )
             .await,
     )
@@ -4094,7 +4212,7 @@ async fn workspace_metadata_lookup_claim_origin_exposes_no_private_claim_mapping
 
 #[tokio::test]
 async fn workspace_references_require_independent_same_profile_target_operations() {
-    let source = LOOKUP_PATH_PROJECT.replace("      - entity: person\n        rowBoundaries: []\n        operations: [get, list]", "      - entity: membership\n        rowBoundaries: []\n        operations: [get]\n        readableFields: [person]\n      - entity: person\n        rowBoundaries: []\n        operations: [get, list]");
+    let source = LOOKUP_PATH_PROJECT.replace("      - entity: person\n        rowBoundaries: unrestricted\n        operations: [get, list]", "      - entity: membership\n        rowBoundaries: unrestricted\n        operations: [get]\n        readableFields: [person]\n      - entity: person\n        rowBoundaries: unrestricted\n        operations: [get, list]");
     let harness = Harness::from_project(&source, true);
     let document = body_json(
         harness
@@ -4117,7 +4235,7 @@ async fn workspace_references_require_independent_same_profile_target_operations
         assert_eq!(operation["labelFields"], json!(["sensitive-note"]));
         assert_ne!(operation["operationId"], "records.household.path.people");
     }
-    let path_only = source.replace("      - entity: person\n        rowBoundaries: []\n        operations: [get, list]\n        readableFields: [sensitive-note]\n        filterableFields: [sensitive-note]\n        sortableFields: [sensitive-note]\n", "");
+    let path_only = source.replace("      - entity: person\n        rowBoundaries: unrestricted\n        operations: [get, list]\n        readableFields: [sensitive-note]\n        filterableFields: [sensitive-note]\n        sortableFields: [sensitive-note]\n", "");
     let harness = Harness::from_project(&path_only, true);
     let document = body_json(
         harness
@@ -4139,7 +4257,7 @@ async fn workspace_references_require_independent_same_profile_target_operations
         .any(|operation| operation["readPath"]["id"] == "people"));
     // The no-profile request can have different compiled defaults per route.
     // Even a visible direct operation in another profile cannot label this reference.
-    let other_profile = format!("{path_only}      - entity: person\n        rowBoundaries: []\n        operations: [get, list]\n        readableFields: [sensitive-note]\n");
+    let other_profile = format!("{path_only}      - entity: person\n        rowBoundaries: unrestricted\n        operations: [get, list]\n        readableFields: [sensitive-note]\n");
     let harness = Harness::from_project(&other_profile, true);
     let document = body_json(
         harness
@@ -4197,7 +4315,7 @@ async fn workspace_temporal_capabilities_and_no_store_cover_success_and_refusal(
         "/v1/records/public-records?$top=0",
         "/missing",
     ] {
-        let response = harness.send(Method::GET, uri, None).await;
+        let response = harness.send(Method::GET, uri, Some(public_claims())).await;
         assert_eq!(response.headers()["cache-control"], "no-store", "{uri}");
         assert!(response.headers().contains_key("traceparent"));
     }
@@ -4226,7 +4344,7 @@ async fn public_refusals_name_a_resolvable_problem_type() {
             .send(
                 Method::GET,
                 "/v1/records/cases?$filter=label%20approximately%20'a'",
-                None,
+                Some(public_claims()),
             )
             .await,
         "query.invalid",
@@ -4409,15 +4527,16 @@ accessProfiles:
   - id: caseworker
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: holder
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label, secret]
         filterableFields: [label]
         sortableFields: [label]
       - entity: note
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [text]
         filterableFields: [text]

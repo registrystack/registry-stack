@@ -1,0 +1,110 @@
+{
+  "ok": true,
+  "command": "explain",
+  "status": "complete",
+  "accessProfiles": [
+    {
+      "id": "staff",
+      "principalClaim": "sub",
+      "requiredScopes": [
+        "casework:staff"
+      ],
+      "role": "staff"
+    },
+    {
+      "id": "supervisor",
+      "principalClaim": "sub",
+      "requiredScopes": [
+        "casework:supervisor"
+      ],
+      "role": "supervisor"
+    },
+    {
+      "id": "administrator",
+      "principalClaim": "sub",
+      "requiredScopes": [
+        "casework:admin"
+      ],
+      "role": "administrator"
+    },
+    {
+      "id": "requester",
+      "principalClaim": "sub",
+      "requiredScopes": [
+        "casework:request"
+      ],
+      "role": "requester"
+    }
+  ],
+  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "calendars": [],
+  "clocks": [],
+  "databaseAccess": false,
+  "kind": "ExplainReport",
+  "networkAccess": false,
+  "policyVersion": "1",
+  "projectId": "standalone-decision",
+  "queues": [
+    {
+      "id": "decisions",
+      "label": "Decisions awaiting review"
+    }
+  ],
+  "requests": [],
+  "reviewKinds": [
+    {
+      "contextStrategy": "submitted",
+      "displaySchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reference": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 160,
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary",
+          "reference"
+        ],
+        "type": "object"
+      },
+      "id": "decision",
+      "outcomes": [
+        {
+          "id": "confirmed",
+          "label": "Confirm",
+          "reasonRequired": false,
+          "settlement": "answered"
+        },
+        {
+          "id": "rejected",
+          "label": "Return for correction",
+          "reasonRequired": true,
+          "settlement": "answered"
+        }
+      ],
+      "purpose": "answer",
+      "retention": {
+        "accountabilityDays": 365,
+        "terminalDays": 90
+      },
+      "stages": [
+        {
+          "decidingProfiles": [
+            "staff"
+          ],
+          "excludeInitiator": false,
+          "excludePreviousStageReviewers": false,
+          "id": "answer",
+          "queue": "decisions",
+          "requiredApprovals": 1
+        }
+      ],
+      "version": "1"
+    }
+  ]
+}

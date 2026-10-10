@@ -1,0 +1,24 @@
+# A minimal Version 1 relying-procedure verification policy, read by
+# `evidence verify --policy` and checked by
+# `evidence check-policy --verification-policy verification.policy.yaml`.
+# Every value comes from the relying party's own retained state: the original
+# request and the transaction it accepted, never the response being verified.
+expectedAssuranceProfile: evidence-grade
+issuedBy: https://evidence.example.org
+providedBy: https://registry.example.org
+requirement: https://registry.example.org/requirements/example/v1
+evidenceType: https://registry.example.org/evidence-types/example/v1
+purpose: example.review
+audience: https://relying-party.example.org
+configurationRevision: sha256:0000000000000000000000000000000000000000000000000000000000000000
+requestNonce: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+expectedSubjects:
+  - role: subject
+    binding: urn:evidence:subject:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+expectedOutputs:
+  - handle: example
+    concept: https://registry.example.org/concepts/example
+    required: true
+    form: boolean
+maximumAssertionLifetimeSeconds: 86400
+revokedKeyIds: []

@@ -1,5 +1,8 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/selector/selector.v1alpha1.schema.json
 # A selector profile: the exact input a caller may send with a request, and
 # nothing else. A field that is not declared here cannot reach the source.
+apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
 
 # The ceiling on every declared field together, so a caller cannot enlarge a
 # request by spreading it across fields.

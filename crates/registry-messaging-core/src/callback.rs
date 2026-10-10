@@ -4,11 +4,12 @@
 //!
 //! A deployment names one verifier for each provider's inbound delivery
 //! callback, from a closed set of algorithms, not vendors. `none` is
-//! deliberately not a member of [`CallbackVerifierConfig`]: an operator
-//! cannot configure an unauthenticated callback. A credential never appears
-//! here as a literal value, only as the `secret:` reference the runtime
-//! resolves; the pure functions in this module verify over the resolved
-//! bytes a [`ResolvedCallbackVerifier`] carries, never over a reference.
+//! deliberately not a member of that set: an operator cannot configure an
+//! unauthenticated callback. The runtime reads that configuration, and a
+//! credential never appears in it as a literal value, only as the `secret:`
+//! reference the runtime resolves; the pure functions in this module verify
+//! over the resolved bytes a [`ResolvedCallbackVerifier`] carries, never
+//! over a reference.
 //!
 //! Verification is over a narrow, product-neutral request view
 //! ([`CallbackRequest`]): method, the full external URL the operator
@@ -35,6 +36,7 @@ pub const MAXIMUM_CALLBACK_HEADER_BYTES: usize = 128;
 pub const MAXIMUM_CALLBACK_URL_BYTES: usize = 2048;
 
 /// How an `hmac-sha256-body` tag is encoded in its header.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CallbackBodyEncoding {
@@ -42,101 +44,12 @@ pub enum CallbackBodyEncoding {
     Base64,
 }
 
-/// How the runtime authenticates one provider's inbound delivery callbacks,
-/// closed and tagged in kebab-case like Evidence's authentication kinds.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum CallbackVerifierConfig {
-    /// HMAC-SHA1 over the full external callback URL with the request's form
-    /// parameters sorted by key and appended as `key` then `value` with no
-    /// delimiter, base64 in `header`. The `form-sms-gateway` example provider
-    /// package documents the provider scheme this matches.
-    HmacSha1UrlForm {
-        /// The external callback URL the provider was given and signs, as it
-        /// was given: scheme, host, any port, and path, without a query or
-        /// fragment. The route appends the request's own query string. A
-        /// proxy may rewrite what the runtime receives, so the runtime never
-        /// reconstructs this URL from the request.
-        url: String,
-        header: String,
-        #[serde(rename = "secretRef")]
-        secret_ref: String,
-    },
-    /// HMAC-SHA256 over the raw request body, encoded in `header` as
-    /// `encoding`.
-    HmacSha256Body {
-        header: String,
-        encoding: CallbackBodyEncoding,
-        #[serde(rename = "secretRef")]
-        secret_ref: String,
-    },
-    /// A secret random token carried in the callback path, for gateways that
-    /// can only be given a URL.
-    PathToken {
-        #[serde(rename = "tokenRef")]
-        token_ref: String,
-    },
-}
-
-/// Why a callback verifier configuration cannot be used. Configured header
-/// names are deployment configuration, not secrets, so they are safe to
-/// name; the reference itself never is.
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum CallbackVerifierConfigError {
-    #[error(
-        "callback verifier header must be 1 to {MAXIMUM_CALLBACK_HEADER_BYTES} HTTP token characters"
-    )]
-    InvalidHeader,
-    #[error("callback verifier secretRef must not be empty")]
-    EmptySecretRef,
-    #[error("callback verifier tokenRef must not be empty")]
-    EmptyTokenRef,
-    #[error(
-        "callback verifier url must be an absolute http or https URL of at most \
-         {MAXIMUM_CALLBACK_URL_BYTES} bytes with a host and no credentials, query, or fragment"
-    )]
-    InvalidUrl,
-}
-
-impl CallbackVerifierConfig {
-    /// Check the shape of this configuration. The `secret:` grammar of a
-    /// `secretRef` or `tokenRef`, and whether its provider is enabled, are
-    /// checked by the runtime the way every other `*Ref` field is.
-    pub fn validate(&self) -> Result<(), CallbackVerifierConfigError> {
-        if let Self::HmacSha1UrlForm { url, .. } = self {
-            if !valid_callback_url(url) {
-                return Err(CallbackVerifierConfigError::InvalidUrl);
-            }
-        }
-        match self {
-            Self::HmacSha1UrlForm {
-                header, secret_ref, ..
-            }
-            | Self::HmacSha256Body {
-                header, secret_ref, ..
-            } => {
-                if !valid_header_name(header) {
-                    return Err(CallbackVerifierConfigError::InvalidHeader);
-                }
-                if secret_ref.is_empty() {
-                    return Err(CallbackVerifierConfigError::EmptySecretRef);
-                }
-            }
-            Self::PathToken { token_ref } => {
-                if token_ref.is_empty() {
-                    return Err(CallbackVerifierConfigError::EmptyTokenRef);
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
 /// Whether `value` is an external callback URL a provider can sign: absolute
 /// `http` or `https` with a host, no credentials, query, or fragment, and
 /// already in the normal form it parses back to, so the bytes signed are the
 /// bytes configured.
-fn valid_callback_url(value: &str) -> bool {
+#[must_use]
+pub fn valid_callback_url(value: &str) -> bool {
     if value.is_empty() || value.len() > MAXIMUM_CALLBACK_URL_BYTES {
         return false;
     }
@@ -183,8 +96,8 @@ const fn is_header_token_byte(byte: u8) -> bool {
 }
 
 /// A callback verifier with its secret material resolved to bytes. The
-/// runtime builds one of these from a [`CallbackVerifierConfig`] and the
-/// secret its `secretRef` or `tokenRef` names; this crate never reads a
+/// runtime builds one of these from its callback verifier configuration and
+/// the secret its `secretRef` or `tokenRef` names; this crate never reads a
 /// reference or a secret store itself.
 #[derive(Clone, Copy, Debug)]
 pub enum ResolvedCallbackVerifier<'a> {
@@ -321,7 +234,6 @@ fn header_value<'a>(headers: &[(&'a str, &'a str)], name: &str) -> Option<&'a st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn hmac_sha1_url_form_verifier<'a>(secret: &'a [u8]) -> ResolvedCallbackVerifier<'a> {
         ResolvedCallbackVerifier::HmacSha1UrlForm {
@@ -579,133 +491,6 @@ mod tests {
         assert_eq!(
             verify_callback(&verifier, &missing_token),
             Err(CallbackVerificationRefusal::MissingPathToken)
-        );
-    }
-
-    #[test]
-    fn a_verifier_configuration_document_refuses_none_and_unknown_keys() {
-        // `none` is not a member of the closed set: it fails to parse as any
-        // known `kind`, exactly like an operator typo would.
-        let none_kind = serde_json::from_value::<CallbackVerifierConfig>(json!({"kind": "none"}));
-        assert!(none_kind.is_err());
-
-        let unknown_field = serde_json::from_value::<CallbackVerifierConfig>(json!({
-            "kind": "hmac-sha1-url-form",
-            "url": CALLBACK_URL,
-            "header": "X-Callback-Signature",
-            "secretRef": "secret:env/SMS_CALLBACK_TOKEN",
-            "endpoint": "https://elsewhere.test"
-        }));
-        assert!(unknown_field.is_err());
-
-        let parsed: CallbackVerifierConfig = serde_json::from_value(json!({
-            "kind": "hmac-sha256-body",
-            "header": "X-Signature",
-            "encoding": "hex",
-            "secretRef": "secret:env/PROVIDER_SIGNING_KEY"
-        }))
-        .unwrap();
-        assert!(parsed.validate().is_ok());
-        assert!(matches!(
-            parsed,
-            CallbackVerifierConfig::HmacSha256Body {
-                encoding: CallbackBodyEncoding::Hex,
-                ..
-            }
-        ));
-
-        let path_token: CallbackVerifierConfig = serde_json::from_value(json!({
-            "kind": "path-token",
-            "tokenRef": "secret:env/CALLBACK_TOKEN"
-        }))
-        .unwrap();
-        assert!(path_token.validate().is_ok());
-    }
-
-    #[test]
-    fn a_verifier_configuration_is_checked_for_shape() {
-        assert_eq!(
-            CallbackVerifierConfig::HmacSha1UrlForm {
-                url: CALLBACK_URL.to_owned(),
-                header: String::new(),
-                secret_ref: "secret:env/TOKEN".to_owned(),
-            }
-            .validate(),
-            Err(CallbackVerifierConfigError::InvalidHeader)
-        );
-        assert_eq!(
-            CallbackVerifierConfig::HmacSha1UrlForm {
-                url: CALLBACK_URL.to_owned(),
-                header: "X-Signature\r\n".to_owned(),
-                secret_ref: "secret:env/TOKEN".to_owned(),
-            }
-            .validate(),
-            Err(CallbackVerifierConfigError::InvalidHeader)
-        );
-        assert_eq!(
-            CallbackVerifierConfig::HmacSha1UrlForm {
-                url: CALLBACK_URL.to_owned(),
-                header: "X-Signature".to_owned(),
-                secret_ref: String::new(),
-            }
-            .validate(),
-            Err(CallbackVerifierConfigError::EmptySecretRef)
-        );
-        assert_eq!(
-            CallbackVerifierConfig::PathToken {
-                token_ref: String::new(),
-            }
-            .validate(),
-            Err(CallbackVerifierConfigError::EmptyTokenRef)
-        );
-    }
-
-    const CALLBACK_URL: &str = "https://messaging.example.org/v1/provider-callbacks/sms";
-
-    /// The URL an `hmac-sha1-url-form` provider signs is configuration: the
-    /// route cannot reconstruct it behind a proxy. It is required, absolute,
-    /// and carries no query or fragment, which the request supplies.
-    #[test]
-    fn a_url_form_verifier_names_the_external_url_it_verifies_over() {
-        let missing = serde_json::from_value::<CallbackVerifierConfig>(json!({
-            "kind": "hmac-sha1-url-form",
-            "header": "X-Callback-Signature",
-            "secretRef": "secret:env/TOKEN"
-        }));
-        assert!(missing.is_err());
-        let with_url = |url: &str| CallbackVerifierConfig::HmacSha1UrlForm {
-            url: url.to_owned(),
-            header: "X-Callback-Signature".to_owned(),
-            secret_ref: "secret:env/TOKEN".to_owned(),
-        };
-        assert_eq!(with_url(CALLBACK_URL).validate(), Ok(()));
-        assert_eq!(
-            with_url("http://127.0.0.1:8080/v1/provider-callbacks/sms").validate(),
-            Ok(())
-        );
-        for refused in [
-            "",
-            "/v1/provider-callbacks/sms",
-            "ftp://messaging.example.org/callbacks",
-            "https://messaging.example.org/callbacks?secret=1",
-            "https://messaging.example.org/callbacks#part",
-            "https://user:pass@messaging.example.org/callbacks",
-            "https:///callbacks",
-            "https://messaging.example.org/call backs",
-        ] {
-            assert_eq!(
-                with_url(refused).validate(),
-                Err(CallbackVerifierConfigError::InvalidUrl),
-                "{refused}"
-            );
-        }
-        let long = format!(
-            "https://messaging.example.org/{}",
-            "a".repeat(MAXIMUM_CALLBACK_URL_BYTES)
-        );
-        assert_eq!(
-            with_url(&long).validate(),
-            Err(CallbackVerifierConfigError::InvalidUrl)
         );
     }
 }

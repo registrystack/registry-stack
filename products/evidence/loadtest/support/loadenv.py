@@ -145,7 +145,8 @@ def render_openapi(template: Path, port: int, output: Path) -> None:
 
 def _mock_plan(count: int) -> str:
     lines = [
-        "version: 1",
+        "apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1",
+        "kind: EvidenceMockPlan",
         "openapi: ../source.openapi.yaml",
         "operations:",
         "  - method: GET",

@@ -1,7 +1,7 @@
 //! Bounded, strict loading of an operator runtime configuration document.
 //!
 //! Every Registry Stack runtime reads its `runtime.yaml` through
-//! [`RuntimeConfigLoader`], so the same file rules, the same YAML reader and the
+//! [`RuntimeConfigLoader`], so the same file rules, the same reader and the
 //! same environment substitution apply everywhere:
 //!
 //! 1. the path is absolute and lexically normal, and no component of it is a
@@ -9,33 +9,55 @@
 //! 2. the file is a regular file of at most the configured size, opened without
 //!    following a link and checked to be the same file before and after the
 //!    read;
-//! 3. the bytes are UTF-8 and parse as exactly one YAML document with string
-//!    keys and no tags;
-//! 4. removed keys are refused with a diagnostic naming their replacement;
-//! 5. `apiVersion` and `kind` must be literally the product's envelope;
-//! 6. `${VAR}`, `${VAR:-default}` and `${VAR:?message}` are substituted in
-//!    string values only, after parsing, and refused in every field whose name
-//!    ends in `Ref` or `Refs` and everywhere under `secretProviders`. There is
-//!    no escape syntax: a literal `${` reaches the configuration as the value of
-//!    a variable, because substitution is a single pass;
-//! 7. the result is deserialized into the product's typed configuration.
+//! 3. the shared configuration reader (`registry-platform-yaml`) checks the
+//!    bytes: UTF-8, at most 1 MiB, and one document in the shared YAML subset.
+//!    `${NAME}`, `${NAME:-fallback}` and `${NAME:?message}` are substituted in
+//!    string values while the reader builds the document, so a diagnostic
+//!    about a substituted value points at the text as written (CFG-SEC-2);
+//! 4. `apiVersion` and `kind` must be literally the product's envelope;
+//! 5. removed keys are refused with a diagnostic naming their replacement;
+//! 6. the document is decoded into the product's typed configuration; every
+//!    unknown and removed key is reported, and decoding stops at the first
+//!    other error.
 //!
-//! No refusal repeats a configured or substituted value.
+//! Substitution is refused in keys, in `apiVersion` and `kind`, in every
+//! member whose key ends in `Ref` or `Refs` and everything below it, and
+//! everywhere under `secretProviders`. A substituted value is text: it fills a
+//! string member and never an integer or boolean one (CFG-VAL-3). There is no
+//! escape syntax, and substitution is a single pass, so a literal `${` reaches
+//! the configuration as the value of a variable. `${` followed by a name
+//! character or `}` starts an expression, and one that is not well formed is
+//! refused; any other `${` is text.
+//!
+//! A refusal is a [`RuntimeConfigError`] carrying the reader's diagnostics
+//! (CFG-DIAG-1). No refusal repeats a configured or substituted value; a
+//! substitution refusal names the environment variable and nothing else.
 
 use std::fs;
 use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
 
+use registry_platform_yaml::{
+    escape_pointer_segment, ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Reader,
+    Refusal, RemovedKey as RemovedPointer, Report, RetiredApiVersion, ScalarHook, ScalarSite,
+    Severity, Source,
+};
 use serde::de::DeserializeOwned;
-use serde_json::{Map, Number, Value};
 
-use crate::{redact_refused_values, resolve_config_env_expression, sha256_uri};
+use crate::{resolve_config_env_expression, sha256_uri};
 
 /// The default size cap for a runtime configuration document.
 pub const DEFAULT_MAX_RUNTIME_CONFIG_BYTES: u64 = 1024 * 1024;
 
 /// The longest runtime configuration path the loader accepts, in bytes.
 pub const MAX_RUNTIME_CONFIG_PATH_BYTES: usize = 4096;
+
+/// The name diagnostics carry for a document checked from text rather than a
+/// file, such as an unsaved buffer.
+const BUFFER_NAME: &str = "runtime.yaml";
+
+/// The name diagnostics carry for an authored document checked from text.
+const AUTHORED_BUFFER_NAME: &str = "authored file";
 
 /// The `apiVersion` and `kind` a product's runtime configuration carries.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,8 +69,8 @@ pub struct RuntimeEnvelope {
 /// A key a runtime configuration no longer accepts, and what replaced it.
 ///
 /// `path` is dotted from the document root; a `*` segment matches any mapping
-/// key or sequence index. `replacement` is the sentence an operator reads after
-/// "`path` is no longer accepted; ".
+/// key or sequence index. `replacement` names what to write instead; it is the
+/// refusal's suggested action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RemovedKey {
     pub path: &'static str,
@@ -59,132 +81,164 @@ pub struct RemovedKey {
 /// `jwksSource`, for a runtime whose issuer block sits at `authentication.oidc`.
 pub const REMOVED_OIDC_JWKS_URI: RemovedKey = RemovedKey {
     path: "authentication.oidc.jwksUri",
-    replacement: "declare authentication.oidc.jwksSource with kind: uri and uri: <https URL>",
+    replacement:
+        "Declare `authentication.oidc.jwksSource` with `kind: uri` and `uri` set to the https URL.",
 };
 
-/// What kind of rule a runtime configuration broke.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RuntimeConfigErrorKind {
-    /// The configured path is not absolute and lexically normal.
-    Path,
-    /// A path component is a symbolic link, the file is not a regular file, or
-    /// it changed while it was read.
-    UnsafeFile,
-    /// The file could not be read.
-    Unavailable,
-    /// The file is empty or larger than the cap.
-    Bounds,
-    /// The file is not UTF-8.
-    Encoding,
-    /// The file is not exactly one YAML document with string keys and no tags.
-    Syntax,
-    /// A removed key is present.
-    RemovedKey,
-    /// `apiVersion` or `kind` is not the product's envelope.
-    Envelope,
-    /// An environment expression could not be substituted.
-    Substitution,
-    /// An environment expression appears in a secret-reference field.
-    SubstitutionInReference,
-    /// A value does not satisfy the product's typed configuration.
-    InvalidValue,
-    /// An authored project file holds an environment expression.
-    AuthoredExpression,
-    /// An authored project file is not YAML the environment-expression check
-    /// can read.
-    AuthoredSyntax,
-}
+/// Codes of the refusals the loader reports itself, before the reader runs
+/// (CFG-DIAG-3).
+const CODE_PATH: &str = "platform.runtime-config.path";
+const CODE_UNSAFE_FILE: &str = "platform.runtime-config.unsafe-file";
+/// The code of the refusal for a configuration file that cannot be read.
+pub const UNAVAILABLE_CODE: &str = "platform.runtime-config.unavailable";
+/// The reader's code for a document over the size bound (CFG-YAML-6).
+const CODE_TOO_LARGE: &str = "yaml.too-large";
 
-impl RuntimeConfigErrorKind {
-    /// The stable diagnostic code for this refusal.
-    #[must_use]
-    pub const fn code(self) -> &'static str {
-        match self {
-            Self::Path => "runtime_config.path",
-            Self::UnsafeFile => "runtime_config.unsafe_file",
-            Self::Unavailable => "runtime_config.unavailable",
-            Self::Bounds => "runtime_config.bounds",
-            Self::Encoding => "runtime_config.encoding",
-            Self::Syntax => "runtime_config.syntax",
-            Self::RemovedKey => "runtime_config.removed_key",
-            Self::Envelope => "runtime_config.envelope",
-            Self::Substitution => "runtime_config.substitution",
-            Self::SubstitutionInReference => "runtime_config.substitution_in_reference",
-            Self::InvalidValue => "runtime_config.invalid_value",
-            Self::AuthoredExpression => "authored_config.environment_expression",
-            Self::AuthoredSyntax => "authored_config.syntax",
-        }
-    }
-}
+/// The reader's code for a `${...}` expression written where substitution is
+/// refused.
+const CODE_NOT_ALLOWED: &str = "config.substitution-not-allowed";
+/// The reader's code for a `${...}` expression that cannot be substituted.
+const CODE_SUBSTITUTION: &str = "config.substitution";
 
-/// A refused runtime configuration: which rule broke, at which field, and a
-/// message that names the field and never a configured value.
+/// A refused runtime configuration: the diagnostics that say where and what to
+/// do (CFG-DIAG-1). A consumer classifies a refusal by a diagnostic's `code`.
+/// No part of it repeats a configured value.
+///
+/// `Display` renders every diagnostic in the human form (CFG-DIAG-2).
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("{}", self.render())]
 pub struct RuntimeConfigError {
-    kind: RuntimeConfigErrorKind,
+    /// Boxed, so the products' error types that carry a refusal stay small.
+    detail: Box<RefusalDetail>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RefusalDetail {
     file: Option<PathBuf>,
-    field: String,
-    message: String,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl RuntimeConfigError {
-    fn new(
-        kind: RuntimeConfigErrorKind,
-        field: impl Into<String>,
+    /// A refusal about the file as a whole, found before the reader ran.
+    fn file_level(
+        code: &str,
         message: impl Into<String>,
+        suggested_action: impl Into<String>,
     ) -> Self {
+        Self::from_report(Report::new(vec![Diagnostic::error(
+            code,
+            "",
+            message,
+            suggested_action,
+        )]))
+    }
+
+    fn from_report(report: Report) -> Self {
+        let diagnostics = report.into_diagnostics();
+        assert!(
+            !diagnostics.is_empty(),
+            "a refusal carries at least one diagnostic"
+        );
         Self {
-            kind,
-            file: None,
-            field: field.into(),
-            message: message.into(),
+            detail: Box::new(RefusalDetail {
+                file: None,
+                diagnostics,
+            }),
         }
     }
 
+    /// Name `file` as the refused file, and as the source of every
+    /// diagnostic that did not name one.
     fn in_file(mut self, file: &Path) -> Self {
-        self.file = Some(file.to_owned());
+        let name = file.display().to_string();
+        for diagnostic in &mut self.detail.diagnostics {
+            if diagnostic.source.is_none() {
+                diagnostic.source = Some(Source {
+                    file: name.clone(),
+                    line: None,
+                    column: None,
+                });
+            }
+        }
+        self.detail.file = Some(file.to_owned());
         self
-    }
-
-    #[must_use]
-    pub const fn kind(&self) -> RuntimeConfigErrorKind {
-        self.kind
-    }
-
-    #[must_use]
-    pub const fn code(&self) -> &'static str {
-        self.kind.code()
     }
 
     /// The runtime configuration file, when the refusal came from one.
     #[must_use]
     pub fn file(&self) -> Option<&Path> {
-        self.file.as_deref()
+        self.detail.file.as_deref()
     }
 
-    /// The dotted field the refusal concerns; `/` for the whole document.
+    /// Every diagnostic the refusal carries, in the order the reader
+    /// reported them: the first error of each structural kind, every unknown
+    /// and removed key, and the first other decoding error (CFG-DIAG-5).
     #[must_use]
-    pub fn field(&self) -> &str {
-        &self.field
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.detail.diagnostics
     }
 
-    /// The refusal without the file prefix.
+    /// The error a consumer words the refusal from: the first of the
+    /// earliest rank (a file or syntax problem, then the envelope, then a
+    /// substitution, then a removed key, then an unknown key, then any other
+    /// value problem). An unknown key decides ahead of the missing member it
+    /// is usually a typo of. A consumer classifies it by the diagnostic's code
+    /// and path.
     #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
+    pub fn deciding_diagnostic(&self) -> &Diagnostic {
+        let diagnostics = &self.detail.diagnostics;
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Error)
+            .min_by_key(|diagnostic| rank(diagnostic))
+            .unwrap_or(&diagnostics[0])
     }
 
     fn render(&self) -> String {
-        match &self.file {
-            Some(file) => format!("{}: {}", file.display(), self.message),
-            None => self.message.clone(),
-        }
+        let mut rendered: String = self
+            .detail
+            .diagnostics
+            .iter()
+            .map(Diagnostic::render_human)
+            .collect();
+        rendered.truncate(rendered.trim_end().len());
+        rendered
     }
 }
 
+/// How early a diagnostic decides the refusal; lower decides first.
+fn rank(diagnostic: &Diagnostic) -> u8 {
+    let envelope_member = diagnostic.path == "/apiVersion" || diagnostic.path == "/kind";
+    match diagnostic.code.as_str() {
+        "yaml.too-large" => 0,
+        "yaml.not-utf8" => 1,
+        code if code.starts_with("yaml.") => 2,
+        "config.invalid-type" if diagnostic.path.is_empty() => 2,
+        "config.missing-envelope" | "config.wrong-kind" => 3,
+        "config.unsupported-api-version"
+        | "config.retired-api-version"
+        | "config.deprecated-api-version" => 4,
+        "config.expected-string" | "config.null-value" | CODE_NOT_ALLOWED if envelope_member => 4,
+        CODE_NOT_ALLOWED => 5,
+        CODE_SUBSTITUTION => 6,
+        "config.removed-key" => 7,
+        "config.unknown-key" => 8,
+        _ => 9,
+    }
+}
+
+/// A dotted removed-key path as the reader's pointer.
+fn pointer_of(dotted: &str) -> String {
+    dotted
+        .split('.')
+        .map(|segment| format!("/{}", escape_pointer_segment(segment)))
+        .collect()
+}
+
 /// A loaded runtime configuration and the digest of what the runtime runs.
-#[derive(Clone, Debug)]
+///
+/// `Debug` prints no member: the configuration may hold substituted values.
+#[derive(Clone)]
 pub struct LoadedRuntimeConfig<T> {
     pub config: T,
     /// `sha256:` label over the RFC 8785 canonical JSON of the document after
@@ -194,12 +248,20 @@ pub struct LoadedRuntimeConfig<T> {
     pub effective_digest: String,
 }
 
+impl<T> std::fmt::Debug for LoadedRuntimeConfig<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LoadedRuntimeConfig")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Loads one product's runtime configuration under the shared rules.
 #[derive(Clone, Debug)]
 pub struct RuntimeConfigLoader {
     envelope: RuntimeEnvelope,
     removed_keys: &'static [RemovedKey],
-    max_bytes: u64,
+    retired_api_versions: &'static [RetiredApiVersion<'static>],
     trusted_ownership: bool,
 }
 
@@ -209,7 +271,7 @@ impl RuntimeConfigLoader {
         Self {
             envelope,
             removed_keys: &[],
-            max_bytes: DEFAULT_MAX_RUNTIME_CONFIG_BYTES,
+            retired_api_versions: &[],
             trusted_ownership: false,
         }
     }
@@ -221,10 +283,15 @@ impl RuntimeConfigLoader {
         self
     }
 
-    /// Lower or raise the size cap.
+    /// Refuse each of these `apiVersion` values with
+    /// `config.retired-api-version` and the sentence naming what to write
+    /// instead (CFG-CHANGE-2).
     #[must_use]
-    pub const fn max_bytes(mut self, max_bytes: u64) -> Self {
-        self.max_bytes = max_bytes;
+    pub const fn retired_api_versions(
+        mut self,
+        retired_api_versions: &'static [RetiredApiVersion<'static>],
+    ) -> Self {
+        self.retired_api_versions = retired_api_versions;
         self
     }
 
@@ -259,52 +326,95 @@ impl RuntimeConfigLoader {
         path: &Path,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
-        let bytes = self.read(path).map_err(|error| error.in_file(path))?;
-        let text = std::str::from_utf8(&bytes).map_err(|_| {
-            RuntimeConfigError::new(
-                RuntimeConfigErrorKind::Encoding,
-                "/",
-                "the runtime configuration is not UTF-8 text",
-            )
-            .in_file(path)
-        })?;
-        self.parse_str(text, lookup)
+        let bytes = self.read_file(path)?;
+        self.parse_file(path, &bytes, &lookup)
+    }
+
+    /// The bytes of the file at `path`, read under the file rules: the one
+    /// read every check of the file works from.
+    pub(crate) fn read_file(&self, path: &Path) -> Result<Vec<u8>, RuntimeConfigError> {
+        self.read(path).map_err(|error| error.in_file(path))
+    }
+
+    /// Apply every rule after the file read to the `bytes` read from `path`.
+    pub(crate) fn parse_file<T: DeserializeOwned>(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
+        self.parse(&path.display().to_string(), bytes, Fill::Variables(lookup))
+            .map_err(|error| error.in_file(path))
+    }
+
+    /// Apply every rule after the file read to the `bytes` read from `path`,
+    /// with no environment: a value that holds an expression is replaced as a
+    /// whole by what `stand_in` returns for the pointer of its member.
+    pub(crate) fn parse_file_with_stand_ins<T: DeserializeOwned>(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        stand_in: &dyn Fn(&str) -> String,
+    ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
+        self.parse(&path.display().to_string(), bytes, Fill::StandIns(stand_in))
             .map_err(|error| error.in_file(path))
     }
 
     /// Apply every rule after the file read to `text`. Used by authoring tools
-    /// that check an unsaved buffer, and by tests.
+    /// that check an unsaved buffer, and by tests. Diagnostics name the
+    /// buffer `runtime.yaml`.
     pub fn parse_str<T: DeserializeOwned>(
         &self,
         text: &str,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
-        let mut document = parse_document(text)?;
-        self.reject_removed_keys(&document)?;
-        self.check_envelope(&document)?;
-        substitute_environment(&mut document, &lookup)?;
+        self.parse(BUFFER_NAME, text.as_bytes(), Fill::Variables(&lookup))
+    }
+
+    fn parse<T: DeserializeOwned>(
+        &self,
+        file: &str,
+        bytes: &[u8],
+        fill: Fill<'_>,
+    ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
+        let removed: Vec<(String, String)> = self
+            .removed_keys
+            .iter()
+            .map(|removed| (pointer_of(removed.path), sentence(removed.replacement)))
+            .collect();
+        let removed: Vec<RemovedPointer<'_>> = removed
+            .iter()
+            .map(|(pointer, replacement)| RemovedPointer {
+                pointer,
+                replacement,
+            })
+            .collect();
+        let api_versions = [ApiVersion::current(self.envelope.api_version)];
+        let format = FormatSpec {
+            kind: self.envelope.kind,
+            envelope: EnvelopeRule::ApiVersionKind {
+                api_versions: &api_versions,
+                retired_api_versions: self.retired_api_versions,
+            },
+            removed_keys: &removed,
+        };
+        let mut substitution = Substitution { fill };
+        let decoded = Reader::new(file)
+            .with_hook(&mut substitution)
+            .decode::<T>(bytes, &Expect::one(&format))
+            .map_err(RuntimeConfigError::from_report)?;
         let canonical =
-            registry_platform_canonical_json::canonicalize_json(&document).map_err(|_| {
-                RuntimeConfigError::new(
-                    RuntimeConfigErrorKind::InvalidValue,
-                    "/",
-                    "the runtime configuration holds a value that has no canonical JSON form",
-                )
-            })?;
-        let effective_digest = sha256_uri(&canonical);
-        let config = serde_path_to_error::deserialize(document).map_err(|error| {
-            let field = error.path().to_string();
-            let field = if field == "." { "/".to_owned() } else { field };
-            let reason = redact_refused_values(&error.into_inner().to_string());
-            RuntimeConfigError::new(
-                RuntimeConfigErrorKind::InvalidValue,
-                field.clone(),
-                format!("{field} is invalid: {reason}"),
-            )
-        })?;
+            registry_platform_canonical_json::canonicalize_json(&decoded.document.to_json_value())
+                .map_err(|_| {
+                    RuntimeConfigError::file_level(
+                        "platform.runtime-config.canonical-form",
+                        "the runtime configuration holds a value that has no canonical JSON form",
+                        "Write every number as a plain decimal within the range JSON can carry.",
+                    )
+                })?;
         Ok(LoadedRuntimeConfig {
-            config,
-            effective_digest,
+            config: decoded.value,
+            effective_digest: sha256_uri(&canonical),
         })
     }
 
@@ -314,38 +424,23 @@ impl RuntimeConfigLoader {
         if self.trusted_ownership {
             require_trusted_ownership(path)?;
         }
-        read_bounded(path, self.max_bytes)
+        read_bounded(path, DEFAULT_MAX_RUNTIME_CONFIG_BYTES)
     }
+}
 
-    fn reject_removed_keys(&self, document: &Value) -> Result<(), RuntimeConfigError> {
-        for removed in self.removed_keys {
-            let segments = removed.path.split('.').collect::<Vec<_>>();
-            if let Some(found) = find_path(document, &segments, &mut Vec::new()) {
-                return Err(RuntimeConfigError::new(
-                    RuntimeConfigErrorKind::RemovedKey,
-                    found.clone(),
-                    format!("{found} is no longer accepted; {}", removed.replacement),
-                ));
-            }
-        }
-        Ok(())
+/// A removed key's replacement as a suggested action: the text as the
+/// product wrote it, opening with a capital letter and ending in a full stop.
+fn sentence(replacement: &str) -> String {
+    let replacement = replacement.trim_end();
+    let mut characters = replacement.chars();
+    let mut sentence: String = characters
+        .next()
+        .map(|first| first.to_uppercase().chain(characters).collect())
+        .unwrap_or_default();
+    if !sentence.ends_with('.') {
+        sentence.push('.');
     }
-
-    fn check_envelope(&self, document: &Value) -> Result<(), RuntimeConfigError> {
-        for (field, expected) in [
-            ("apiVersion", self.envelope.api_version),
-            ("kind", self.envelope.kind),
-        ] {
-            if document.get(field).and_then(Value::as_str) != Some(expected) {
-                return Err(RuntimeConfigError::new(
-                    RuntimeConfigErrorKind::Envelope,
-                    field,
-                    format!("{field} must be exactly {expected}"),
-                ));
-            }
-        }
-        Ok(())
-    }
+    sentence
 }
 
 /// Whether `text` holds an environment expression the runtime loader would
@@ -371,308 +466,227 @@ pub fn contains_environment_expression(text: &str) -> bool {
     false
 }
 
+/// Whether the text after a `${` makes it the start of an expression: a name
+/// character or `}`. Any other `${` is text.
+fn opens_expression(after: &str) -> bool {
+    after.starts_with(|character: char| {
+        character == '_' || character == '}' || character.is_ascii_alphanumeric()
+    })
+}
+
+/// Whether `text` holds a `${` that starts an expression.
+fn has_expression_start(text: &str) -> bool {
+    text.match_indices("${")
+        .any(|(start, _)| opens_expression(&text[start + 2..]))
+}
+
 /// Refuse an authored project file that holds an environment expression in a
 /// key or a string value.
 ///
 /// Environment substitution applies to `runtime.yaml` only. An authored file
 /// is reviewed and packaged as written, so an expression in it would either be
-/// taken literally or make the reviewed text differ from what runs. Text this
-/// check cannot read as YAML is refused, so a file never passes unchecked
-/// because a product's parser accepts what this reader does not.
+/// taken literally or make the reviewed text differ from what runs. The file
+/// is read by the shared reader without an envelope, and a file the reader
+/// refuses is refused here, so a file never passes unchecked because a
+/// product's parser accepts what this reader does not. Text that is not an
+/// expression, such as a lone `${`, is accepted.
 ///
 /// There is no escape for a literal `${NAME}` in an authored file.
 pub fn reject_environment_expressions_in_authored_yaml(
     text: &str,
 ) -> Result<(), RuntimeConfigError> {
-    let document = serde_norway::from_str::<serde_norway::Value>(text).map_err(|error| {
-        RuntimeConfigError::new(
-            RuntimeConfigErrorKind::AuthoredSyntax,
-            "/",
-            format!(
-                "the authored file is not valid YAML: {}",
-                redact_refused_values(&error.to_string())
-            ),
-        )
-    })?;
-    let mut path = Vec::new();
-    match find_authored_expression(&document, &mut path) {
-        Some(field) => Err(RuntimeConfigError::new(
-            RuntimeConfigErrorKind::AuthoredExpression,
-            field.clone(),
-            format!(
-                "{field} holds an environment expression; ${{...}} substitution applies to \
-                 runtime.yaml only, so write the value in the authored file directly"
-            ),
-        )),
-        None => Ok(()),
-    }
+    let mut hook = AuthoredExpressions;
+    Reader::new(AUTHORED_BUFFER_NAME)
+        .with_hook(&mut hook)
+        .scan(text.as_bytes())
+        .map(|_| ())
+        .map_err(RuntimeConfigError::from_report)
 }
 
-fn find_authored_expression(value: &serde_norway::Value, path: &mut Vec<String>) -> Option<String> {
-    match value {
-        serde_norway::Value::String(text) if contains_environment_expression(text) => {
-            Some(dotted(path))
-        }
-        serde_norway::Value::Sequence(items) => {
-            items.iter().enumerate().find_map(|(index, item)| {
-                path.push(index.to_string());
-                let found = find_authored_expression(item, path);
-                path.pop();
-                found
-            })
-        }
-        serde_norway::Value::Mapping(mapping) => mapping.iter().find_map(|(key, item)| {
-            let name = match key {
-                serde_norway::Value::String(name) => name.clone(),
-                _ => "?".to_owned(),
-            };
-            path.push(name.clone());
-            let found = if contains_environment_expression(&name) {
-                Some(dotted(path))
-            } else {
-                find_authored_expression(item, path)
-            };
-            path.pop();
-            found
-        }),
-        serde_norway::Value::Tagged(tagged) => find_authored_expression(&tagged.value, path),
-        _ => None,
-    }
-}
+/// Refuses every environment expression in a key or text value of an
+/// authored file (CFG-SEC-2), as a [`ScalarHook`] a product passes to the
+/// shared reader that decodes the file.
+pub struct AuthoredExpressions;
 
-fn dotted(path: &[String]) -> String {
-    if path.is_empty() {
-        "/".to_owned()
-    } else {
-        path.join(".")
-    }
-}
-
-fn parse_document(text: &str) -> Result<Value, RuntimeConfigError> {
-    let document = serde_norway::from_str::<serde_norway::Value>(text).map_err(|error| {
-        RuntimeConfigError::new(
-            RuntimeConfigErrorKind::Syntax,
-            "/",
-            format!(
-                "the runtime configuration is not valid YAML: {}",
-                redact_refused_values(&error.to_string())
-            ),
-        )
-    })?;
-    let document = to_json(document, &mut Vec::new())?;
-    if !document.is_object() {
-        return Err(RuntimeConfigError::new(
-            RuntimeConfigErrorKind::Syntax,
-            "/",
-            "the runtime configuration must be a YAML mapping",
-        ));
-    }
-    Ok(document)
-}
-
-fn to_json(
-    value: serde_norway::Value,
-    path: &mut Vec<String>,
-) -> Result<Value, RuntimeConfigError> {
-    Ok(match value {
-        serde_norway::Value::Null => Value::Null,
-        serde_norway::Value::Bool(value) => Value::Bool(value),
-        serde_norway::Value::Number(number) => {
-            if let Some(value) = number.as_u64() {
-                Value::Number(value.into())
-            } else if let Some(value) = number.as_i64() {
-                Value::Number(value.into())
-            } else {
-                let field = dotted(path);
-                number
-                    .as_f64()
-                    .and_then(Number::from_f64)
-                    .map(Value::Number)
-                    .ok_or_else(|| {
-                        RuntimeConfigError::new(
-                            RuntimeConfigErrorKind::Syntax,
-                            field.clone(),
-                            format!("{field} is not a finite number"),
-                        )
-                    })?
-            }
-        }
-        serde_norway::Value::String(value) => Value::String(value),
-        serde_norway::Value::Sequence(items) => {
-            let mut converted = Vec::with_capacity(items.len());
-            for (index, item) in items.into_iter().enumerate() {
-                path.push(index.to_string());
-                converted.push(to_json(item, path)?);
-                path.pop();
-            }
-            Value::Array(converted)
-        }
-        serde_norway::Value::Mapping(mapping) => {
-            let mut converted = Map::new();
-            for (key, item) in mapping {
-                let serde_norway::Value::String(key) = key else {
-                    let field = dotted(path);
-                    return Err(RuntimeConfigError::new(
-                        RuntimeConfigErrorKind::Syntax,
-                        field.clone(),
-                        format!("{field} has a key that is not a string"),
-                    ));
-                };
-                path.push(key.clone());
-                let item = to_json(item, path)?;
-                path.pop();
-                converted.insert(key, item);
-            }
-            Value::Object(converted)
-        }
-        serde_norway::Value::Tagged(_) => {
-            let field = dotted(path);
-            return Err(RuntimeConfigError::new(
-                RuntimeConfigErrorKind::Syntax,
-                field.clone(),
-                format!("{field} carries a YAML tag, which a runtime configuration does not use"),
+impl AuthoredExpressions {
+    fn check(text: &str) -> Result<(), Refusal> {
+        if contains_environment_expression(text) {
+            return Err(refusal(
+                CODE_NOT_ALLOWED,
+                "a `${...}` expression is written in an authored file; substitution applies to \
+                 runtime.yaml only",
+                "Write the value in the authored file directly.",
             ));
+        }
+        Ok(())
+    }
+}
+
+impl ScalarHook for AuthoredExpressions {
+    fn key(&mut self, site: &ScalarSite<'_>) -> Result<(), Refusal> {
+        Self::check(site.text)
+    }
+
+    fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
+        Self::check(site.text).map(|()| None)
+    }
+}
+
+fn refusal(code: &str, message: impl Into<String>, suggested_action: impl Into<String>) -> Refusal {
+    Refusal {
+        code: code.to_owned(),
+        message: message.into(),
+        suggested_action: suggested_action.into(),
+    }
+}
+
+/// Substitutes environment expressions in an operator file's string values
+/// while the reader builds the document (CFG-SEC-2).
+struct Substitution<'l> {
+    fill: Fill<'l>,
+}
+
+/// What fills a value that holds an environment expression.
+enum Fill<'l> {
+    /// Each expression, by the variable it names.
+    Variables(&'l dyn Fn(&str) -> Option<String>),
+    /// The whole value, by the stand-in of the member that holds it, named by
+    /// its pointer. The expressions are still checked by syntax.
+    StandIns(&'l dyn Fn(&str) -> String),
+}
+
+/// Why substitution is refused at a value.
+enum Literal<'k> {
+    /// `apiVersion` or `kind` at the root.
+    Envelope(&'k str),
+    /// A member whose key ends in `Ref` or `Refs`, or a value below one.
+    Reference(&'k str),
+    /// A value under `secretProviders`. A provider setting chooses which
+    /// secret a reference resolves to, so substitution is refused under it as
+    /// it is in a reference.
+    SecretProvider,
+}
+
+impl Literal<'_> {
+    fn refusal(&self) -> Refusal {
+        match self {
+            Literal::Envelope(member) => refusal(
+                CODE_NOT_ALLOWED,
+                format!("{member} is never filled by substitution"),
+                format!("Write {member} in the file as plain text."),
+            ),
+            Literal::Reference(key) => refusal(
+                CODE_NOT_ALLOWED,
+                format!("`{key}` holds secret references, which are never filled by substitution"),
+                "Write the reference itself, as secret:env/NAME or secret:file/name.",
+            ),
+            Literal::SecretProvider => refusal(
+                CODE_NOT_ALLOWED,
+                "a secret provider setting is never filled by substitution",
+                "Write the setting in runtime.yaml as plain text.",
+            ),
+        }
+    }
+}
+
+/// The first reason, from the root down, that substitution is refused at
+/// the value `site` describes.
+fn literal_at<'k>(site: &ScalarSite<'k>) -> Option<Literal<'k>> {
+    if let [member @ ("apiVersion" | "kind")] = site.keys {
+        if site.pointer == format!("/{member}") {
+            return Some(Literal::Envelope(member));
+        }
+    }
+    site.keys.iter().find_map(|key| {
+        if *key == "secretProviders" {
+            Some(Literal::SecretProvider)
+        } else if key.ends_with("Ref") || key.ends_with("Refs") {
+            Some(Literal::Reference(key))
+        } else {
+            None
         }
     })
 }
 
-fn find_path(value: &Value, segments: &[&str], found: &mut Vec<String>) -> Option<String> {
-    let Some((segment, rest)) = segments.split_first() else {
-        return Some(found.join("."));
-    };
-    let children: Vec<(String, &Value)> = match value {
-        Value::Object(map) if *segment == "*" => {
-            map.iter().map(|(key, item)| (key.clone(), item)).collect()
-        }
-        Value::Object(map) => map
-            .get(*segment)
-            .map(|item| vec![((*segment).to_owned(), item)])
-            .unwrap_or_default(),
-        Value::Array(items) if *segment == "*" => items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| (index.to_string(), item))
-            .collect(),
-        _ => Vec::new(),
-    };
-    for (key, child) in children {
-        found.push(key);
-        if let Some(path) = find_path(child, rest, found) {
-            return Some(path);
-        }
-        found.pop();
-    }
-    None
-}
-
-/// Whether a field of this name holds secret references, where substitution
-/// is refused.
-fn is_reference_field(name: &str) -> bool {
-    name.ends_with("Ref") || name.ends_with("Refs")
-}
-
-/// Whether a field of this name configures the secret providers. A provider
-/// setting chooses which secret a reference resolves to, so substitution is
-/// refused under it as it is in a reference.
-fn is_secret_provider_field(name: &str) -> bool {
-    name == "secretProviders"
-}
-
-/// Why substitution is refused at a field.
-#[derive(Clone, Copy)]
-enum Literal {
-    Reference,
-    SecretProvider,
-}
-
-fn substitute_environment(
-    document: &mut Value,
-    lookup: &impl Fn(&str) -> Option<String>,
-) -> Result<(), RuntimeConfigError> {
-    substitute_value(document, &mut Vec::new(), None, lookup)
-}
-
-fn substitute_value(
-    value: &mut Value,
-    path: &mut Vec<String>,
-    literal: Option<Literal>,
-    lookup: &impl Fn(&str) -> Option<String>,
-) -> Result<(), RuntimeConfigError> {
-    match value {
-        Value::String(text) if text.contains("${") => {
-            let field = dotted(path);
-            let message = match literal {
-                None => {
-                    *text = substitute_string(text, &field, lookup)?;
-                    return Ok(());
-                }
-                Some(Literal::Reference) => format!(
-                    "{field} is a secret reference and does not take ${{...}} substitution; \
-                     write secret:env/NAME or secret:file/name instead"
-                ),
-                Some(Literal::SecretProvider) => format!(
-                    "{field} configures a secret provider and does not take ${{...}} \
-                     substitution; write the setting in runtime.yaml directly"
-                ),
-            };
-            return Err(RuntimeConfigError::new(
-                RuntimeConfigErrorKind::SubstitutionInReference,
-                field,
-                message,
+impl ScalarHook for Substitution<'_> {
+    fn key(&mut self, site: &ScalarSite<'_>) -> Result<(), Refusal> {
+        if has_expression_start(site.text) {
+            return Err(refusal(
+                CODE_NOT_ALLOWED,
+                "a key is never filled by substitution",
+                "Write the key as plain text; substitution fills string values only.",
             ));
         }
-        Value::Array(items) => {
-            for (index, item) in items.iter_mut().enumerate() {
-                path.push(index.to_string());
-                substitute_value(item, path, literal, lookup)?;
-                path.pop();
-            }
-        }
-        Value::Object(map) => {
-            for (key, item) in map.iter_mut() {
-                path.push(key.clone());
-                let literal = literal
-                    .or_else(|| is_reference_field(key).then_some(Literal::Reference))
-                    .or_else(|| is_secret_provider_field(key).then_some(Literal::SecretProvider));
-                substitute_value(item, path, literal, lookup)?;
-                path.pop();
-            }
-        }
-        _ => {}
+        Ok(())
     }
-    Ok(())
+
+    fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
+        if !has_expression_start(site.text) {
+            return Ok(None);
+        }
+        if let Some(literal) = literal_at(site) {
+            return Err(literal.refusal());
+        }
+        match self.fill {
+            Fill::Variables(lookup) => substitute_string(site.text, lookup).map(Some),
+            Fill::StandIns(stand_in) => {
+                substitute_string(site.text, &|_| Some(String::from("set")))?;
+                Ok(Some(stand_in(site.pointer)))
+            }
+        }
+    }
 }
 
+fn malformed_expression() -> Refusal {
+    refusal(
+        CODE_SUBSTITUTION,
+        "the `${...}` expression is not well formed",
+        "Write ${NAME}, ${NAME:-fallback}, or ${NAME:?message}, where NAME is letters, digits, \
+         and underscores and does not start with a digit.",
+    )
+}
+
+/// Substitute every expression in `text` in one pass. A refusal names the
+/// variable and never its value or a `:?` message.
 fn substitute_string(
     text: &str,
-    field: &str,
-    lookup: &impl Fn(&str) -> Option<String>,
-) -> Result<String, RuntimeConfigError> {
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<String, Refusal> {
     let mut substituted = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find("${") {
         substituted.push_str(&rest[..start]);
         let after_start = &rest[start + 2..];
+        if !opens_expression(after_start) {
+            substituted.push_str("${");
+            rest = after_start;
+            continue;
+        }
         let Some(end) = after_start.find('}') else {
-            return Err(RuntimeConfigError::new(
-                RuntimeConfigErrorKind::Substitution,
-                field,
-                format!("{field} has an unterminated ${{...}} expression"),
-            ));
+            return Err(malformed_expression());
         };
-        let (name, value) =
-            resolve_config_env_expression(&after_start[..end], lookup).map_err(|error| {
-                RuntimeConfigError::new(
-                    RuntimeConfigErrorKind::Substitution,
-                    field,
-                    format!("{field} could not be substituted: {error}"),
-                )
-            })?;
+        let expression = &after_start[..end];
+        let (name, value) = match resolve_config_env_expression(expression, lookup) {
+            Ok(resolved) => resolved,
+            Err(_) => return Err(unresolved(expression)),
+        };
         if value.contains('\0') {
-            return Err(RuntimeConfigError::new(
-                RuntimeConfigErrorKind::Substitution,
-                field,
-                format!("{field} could not be substituted: environment variable {name} holds a NUL byte"),
+            return Err(refusal(
+                CODE_SUBSTITUTION,
+                format!("the environment variable {name} holds a NUL byte"),
+                format!("Remove the NUL byte from {name}."),
+            ));
+        }
+        // The reader's own rule for text written in the file: a control
+        // character other than tab, line feed, and carriage return.
+        if value
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+        {
+            return Err(refusal(
+                CODE_SUBSTITUTION,
+                format!("the environment variable {name} holds a control character"),
+                format!("Remove the control character from {name}."),
             ));
         }
         substituted.push_str(&value);
@@ -680,6 +694,79 @@ fn substitute_string(
     }
     substituted.push_str(rest);
     Ok(substituted)
+}
+
+/// The refusal for an expression that did not resolve: malformed, or a
+/// variable that is unset or empty without a fallback. The expression is
+/// split the way `resolve_config_env_expression` splits it.
+fn unresolved(expression: &str) -> Refusal {
+    let (name, message) = if let Some((name, _)) = expression.split_once(":-") {
+        (name, None)
+    } else if let Some((name, message)) = expression.split_once(":?") {
+        (name, Some(message))
+    } else {
+        (expression, None)
+    };
+    if !crate::valid_env_key(name) {
+        return malformed_expression();
+    }
+    match message {
+        Some(message) if !message.trim().is_empty() => refusal(
+            CODE_SUBSTITUTION,
+            format!(
+                "the environment variable {name} is unset or empty; the message written for it \
+                 is withheld"
+            ),
+            format!("Set {name} in the runtime's environment."),
+        ),
+        Some(_) => refusal(
+            CODE_SUBSTITUTION,
+            format!("the environment variable {name} is unset or empty"),
+            format!("Set {name} in the runtime's environment."),
+        ),
+        None => refusal(
+            CODE_SUBSTITUTION,
+            format!("the environment variable {name} is unset or empty"),
+            format!(
+                "Set {name} in the runtime's environment, or write a fallback as \
+                 ${{{name}:-fallback}}."
+            ),
+        ),
+    }
+}
+
+fn unsafe_file(message: &str, suggested_action: &str) -> RuntimeConfigError {
+    RuntimeConfigError::file_level(CODE_UNSAFE_FILE, message, suggested_action)
+}
+
+fn unavailable() -> RuntimeConfigError {
+    RuntimeConfigError::file_level(
+        UNAVAILABLE_CODE,
+        "the runtime configuration could not be read",
+        "Check that the file exists and that the runtime user can read it.",
+    )
+}
+
+fn out_of_bounds(maximum: u64) -> RuntimeConfigError {
+    RuntimeConfigError::file_level(
+        CODE_TOO_LARGE,
+        format!("the runtime configuration is larger than {maximum} bytes"),
+        format!("Keep the runtime configuration to at most {maximum} bytes."),
+    )
+}
+
+fn not_regular() -> RuntimeConfigError {
+    unsafe_file(
+        "the runtime configuration must be a regular file",
+        "Point the path at a regular file.",
+    )
+}
+
+fn changed() -> RuntimeConfigError {
+    unsafe_file(
+        "the runtime configuration changed while it was read",
+        "Load the runtime configuration again once nothing is writing to it.",
+    )
 }
 
 fn validate_absolute_lexical_path(path: &Path) -> Result<(), RuntimeConfigError> {
@@ -696,10 +783,11 @@ fn validate_absolute_lexical_path(path: &Path) -> Result<(), RuntimeConfigError>
     if normal {
         Ok(())
     } else {
-        Err(RuntimeConfigError::new(
-            RuntimeConfigErrorKind::Path,
-            "/",
+        Err(RuntimeConfigError::file_level(
+            CODE_PATH,
             "the runtime configuration path must be absolute, without . or .. components",
+            "Give the absolute path of the runtime configuration file, without . or .. \
+             components.",
         ))
     }
 }
@@ -711,26 +799,6 @@ fn has_current_directory_component(path: &Path) -> bool {
         .as_encoded_bytes()
         .split(|byte| std::path::is_separator(char::from(*byte)))
         .any(|component| component == b".")
-}
-
-fn unsafe_file(message: &str) -> RuntimeConfigError {
-    RuntimeConfigError::new(RuntimeConfigErrorKind::UnsafeFile, "/", message)
-}
-
-fn unavailable() -> RuntimeConfigError {
-    RuntimeConfigError::new(
-        RuntimeConfigErrorKind::Unavailable,
-        "/",
-        "the runtime configuration could not be read",
-    )
-}
-
-fn out_of_bounds(maximum: u64) -> RuntimeConfigError {
-    RuntimeConfigError::new(
-        RuntimeConfigErrorKind::Bounds,
-        "/",
-        format!("the runtime configuration must be between 1 and {maximum} bytes"),
-    )
 }
 
 /// Refuse a path any of whose components is a symbolic link.
@@ -745,6 +813,7 @@ fn reject_symlink_components(path: &Path) -> Result<(), RuntimeConfigError> {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(unsafe_file(
                     "the runtime configuration path must not pass through a symbolic link",
+                    "Give the path of the file itself, with no symbolic link in it.",
                 ))
             }
             Ok(_) => {}
@@ -774,6 +843,8 @@ fn require_trusted_ownership(path: &Path) -> Result<(), RuntimeConfigError> {
             return Err(unsafe_file(
                 "the runtime configuration and every directory above it must be owned by root \
                  or the runtime user and not writable by group or others",
+                "Give the file and every directory above it to root or the runtime user, and \
+                 remove group and other write permission.",
             ));
         }
     }
@@ -784,17 +855,16 @@ fn require_trusted_ownership(path: &Path) -> Result<(), RuntimeConfigError> {
 fn require_trusted_ownership(_path: &Path) -> Result<(), RuntimeConfigError> {
     Err(unsafe_file(
         "trusted ownership of the runtime configuration cannot be checked on this platform",
+        "Run the runtime on a platform with Unix file ownership.",
     ))
 }
 
 fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, RuntimeConfigError> {
-    let not_regular = || unsafe_file("the runtime configuration must be a regular file");
-    let changed = || unsafe_file("the runtime configuration changed while it was read");
     let scanned = fs::symlink_metadata(path).map_err(|_| unavailable())?;
     if scanned.file_type().is_symlink() || !scanned.is_file() {
         return Err(not_regular());
     }
-    if scanned.len() == 0 || scanned.len() > maximum {
+    if scanned.len() > maximum {
         return Err(out_of_bounds(maximum));
     }
     let file = open_no_follow(path)?;
@@ -814,7 +884,7 @@ fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, RuntimeConfigError
     let mut reader = file.take(maximum + 1);
     reader.read_to_end(&mut bytes).map_err(|_| unavailable())?;
     let after = reader.get_ref().metadata().map_err(|_| unavailable())?;
-    if bytes.is_empty() || bytes.len() as u64 > maximum {
+    if bytes.len() as u64 > maximum {
         return Err(out_of_bounds(maximum));
     }
     if !same_file(&opened, &after) || bytes.len() as u64 != after.len() {
@@ -839,7 +909,7 @@ fn open_no_follow(path: &Path) -> Result<fs::File, RuntimeConfigError> {
             |_| unavailable(),
             |metadata| {
                 if metadata.file_type().is_symlink() || !metadata.is_file() {
-                    unsafe_file("the runtime configuration must be a regular file")
+                    not_regular()
                 } else {
                     unavailable()
                 }

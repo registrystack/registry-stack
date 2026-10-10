@@ -79,17 +79,17 @@ pub const MAXIMUM_KEY_BINDING_AGE_SECONDS: u64 = 300;
 /// and never comes from a response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PolicyBoundsError {
-    #[error("maximumAssertionLifetimeSeconds must be {MINIMUM_ASSERTION_LIFETIME_SECONDS} to {MAXIMUM_ASSERTION_LIFETIME_SECONDS}, not {0}")]
+    #[error("maximumAssertionLifetimeSeconds must be {MINIMUM_ASSERTION_LIFETIME_SECONDS} to {MAXIMUM_ASSERTION_LIFETIME_SECONDS}")]
     AssertionLifetime(u64),
-    #[error("clockSkewSeconds must be at most {MAXIMUM_CLOCK_SKEW_SECONDS}, not {0}")]
+    #[error("clockSkewSeconds must be at most {MAXIMUM_CLOCK_SKEW_SECONDS}")]
     ClockSkew(u64),
-    #[error("minimumItems must be {MINIMUM_EXPECTED_LIST_ITEMS} to {MAXIMUM_EXPECTED_LIST_ITEMS}, not {0}")]
+    #[error("minimumItems must be {MINIMUM_EXPECTED_LIST_ITEMS} to {MAXIMUM_EXPECTED_LIST_ITEMS}")]
     MinimumItems(usize),
-    #[error("maximumItems must be {MINIMUM_EXPECTED_LIST_ITEMS} to {MAXIMUM_EXPECTED_LIST_ITEMS}, not {0}")]
+    #[error("maximumItems must be {MINIMUM_EXPECTED_LIST_ITEMS} to {MAXIMUM_EXPECTED_LIST_ITEMS}")]
     MaximumItems(usize),
     #[error("a Version 1 policy document pins an audience, which a holder-bound assertion does not carry")]
     HolderBound,
-    #[error("maximumKeyBindingAgeSeconds must be {MINIMUM_KEY_BINDING_AGE_SECONDS} to {MAXIMUM_KEY_BINDING_AGE_SECONDS}, not {0}")]
+    #[error("maximumKeyBindingAgeSeconds must be {MINIMUM_KEY_BINDING_AGE_SECONDS} to {MAXIMUM_KEY_BINDING_AGE_SECONDS}")]
     KeyBindingAge(u64),
 }
 
@@ -1873,6 +1873,10 @@ fn decode_bounded(
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use std::{collections::BTreeSet, sync::Arc};
 
     use p256::elliptic_curve::rand_core::OsRng;
@@ -3191,6 +3195,23 @@ mod tests {
     /// The document fields are public, so a caller can build one in code
     /// without going through a reader. The conversion to a policy is the second
     /// place the bounds hold.
+    #[test]
+    fn a_policy_bounds_refusal_never_repeats_the_stated_value() {
+        let refusals = [
+            PolicyBoundsError::AssertionLifetime(7_654_321),
+            PolicyBoundsError::ClockSkew(7_654_321),
+            PolicyBoundsError::MinimumItems(7_654_321),
+            PolicyBoundsError::MaximumItems(7_654_321),
+            PolicyBoundsError::KeyBindingAge(7_654_321),
+        ];
+        for refusal in refusals {
+            assert!(
+                !refusal.to_string().contains("7654321"),
+                "the refusal repeats the stated value: {refusal}"
+            );
+        }
+    }
+
     #[test]
     fn a_policy_document_built_in_code_cannot_widen_the_contract_bounds() {
         let now = "2026-08-02T12:00:00Z".parse().expect("time parses");

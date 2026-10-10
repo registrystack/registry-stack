@@ -6,6 +6,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -90,6 +91,25 @@ class BRegQuickstartTests(unittest.TestCase):
             self.assertIn("id: installation-map-reader", clients)
             self.assertIn("service_zones: central", clients)
             self.assertNotIn("clientAuthentication:", clients)
+
+    def test_spatial_project_gives_every_journey_profile_one_local_client(self) -> None:
+        helper = load_helper()
+        with tempfile.TemporaryDirectory() as spatial_dir:
+            project = Path(spatial_dir) / "project"
+            helper.prepare_spatial(SPATIAL_FIXTURE, project)
+            registry = (project / "registry.yaml").read_text(encoding="utf-8")
+            journeys = (project / "tests/journeys.yaml").read_text(encoding="utf-8")
+            clients = (project / "dev-clients.yaml").read_text(encoding="utf-8")
+        profiles = set(re.findall(r"^\s+accessProfile: (\S+)$", journeys, re.MULTILINE))
+        self.assertIn("map-reader", profiles)
+        self.assertIn("directory-reader", profiles)
+        bound = re.findall(r"accessProfiles: \[([^\]]+)\]", clients)
+        for profile in sorted(profiles):
+            self.assertEqual(bound.count(profile), 1, profile)
+        # The local issuer's scopes are written with colons, in all three files.
+        for text in (registry, journeys, clients):
+            self.assertNotRegex(text, r"service-sites:[a-z]+\.[a-z]+")
+        self.assertIn("scopes: [service-sites:public:read]", clients)
 
     def test_create_record_reads_record_identifier_from_registry_record_envelope(self) -> None:
         helper = load_helper()

@@ -63,16 +63,26 @@ python3 editors/configure.py evidence-oid4vci /path/to/issuer --document config/
 ```
 
 The product argument also accepts `casework`, `messaging`, `discovery`,
-`render` and `evidence`. Manifest and wallet-delivery setup records the
-selected document in `.registry-stack-editor/project.json`, so an arbitrary
-configuration filename can be recognized without claiming unrelated YAML.
+`render`, `evidence`, `evidence-deployment` (an Evidence deployment project
+directory holding `runtime.yaml`), `platform` (a directory holding a task
+connection file, `task-connection.yaml`), and `breg-mcp` and `breg-review` (a
+directory holding the citizen MCP gateway's or review page's `runtime.yaml`).
+Manifest and wallet-delivery setup records the selected document in
+`.registry-stack-editor/project.json`, so an arbitrary configuration filename
+can be recognized without claiming unrelated YAML.
 
 Setup copies maintained schemas from this checkout and adds a **Registry Stack:
 check** task where the product supplies a validation command. Use **Tasks: Run
 Task** in VS Code or **task: spawn** in Zed. No validator is run automatically
-when a file opens. Casework, Scheduling, and Messaging currently publish runtime
-schemas; their policy/package validation comes from their check task.
-Manifest, Render, and wallet delivery have no maintained authoring JSON schema.
+when a file opens. Casework publishes schemas for its project, runtime, fixture,
+simulation, holiday-set, and development clients files. Messaging publishes
+project, template, provider, and runtime schemas; its check task validates the
+whole project. Wallet delivery publishes a runtime schema. Scheduling publishes
+schemas for its project, records, fixture, and runtime files. Render maps its
+bundle `manifest.yaml`, its `labels/*.yaml` tables, and a `runtime.yaml` beside
+them. Manifest maps the selected document to the metadata manifest schema and
+every `profile.yaml` below the project to the profile descriptor schema.
+Platform maps `task-connection.yaml` and checks it with `evidencectl dev check`.
 
 For multiple product directories in one workspace, pass `--workspace` with the
 ancestor directory. Schema mappings name the specific project's paths so one
@@ -86,6 +96,17 @@ regenerate it when moving a workspace.
 Evidence retains its canonical `tooling editor` schema generator.
 The shared helper invokes the matching Evidence CLI. Schema setup and
 CLI tasks can be used without installing the semantic extension.
+
+`evidence-deployment` configures an Evidence deployment project: the
+`runtime.yaml` the `evidence` runtime reads, beside its bundle in `bundle/`.
+Setup maps the runtime and bundle contracts to `runtime.yaml` and
+`bundle/evidence.yaml`, the code list schema to `bundle/codelists/*.yaml`, the
+fixture schema to `bundle/fixtures/*.yaml`, and the target governance schema to
+`governance.yaml`. It maps the two verification policy contracts by file name:
+`verification*.policy.yaml` to the verification policy and
+`holder-bound*.policy.yaml` to the holder-bound verification policy. It adds an
+`evidence check --runtime-config runtime.yaml` task. The runtime, bundle, and
+policy contracts are JSON Schema documents written in YAML.
 
 ## Install
 

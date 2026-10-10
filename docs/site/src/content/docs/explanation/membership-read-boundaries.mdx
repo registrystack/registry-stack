@@ -38,7 +38,7 @@ boundary joins them inside the facility's read grant:
 ```yaml
 permissions:
   - entity: facility
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [get, list, lookup, snapshot, revisions]
     readableFields: [label]
     allowCount: true
@@ -58,9 +58,9 @@ missing membership, a null value, an inactive membership, or another principal d
 declared fields are authorization inputs, not an additional readable-field grant.
 
 Every listed membership boundary and every ordinary `rowBoundaries` predicate must hold. Declare
-`rowBoundaries` explicitly even when membership is the only row restriction; `rowBoundaries: []`
+`rowBoundaries` explicitly even when membership is the only row restriction; `rowBoundaries: unrestricted`
 adds no direct claim predicate and leaves the membership checks in force. A permission carries at most
-eight boundaries, reported as `access.membership.limit`. Configure the identity claim from a trusted
+eight boundaries, reported as `breg.access.membership-limit`. Configure the identity claim from a trusted
 issuer, and never accept a caller-submitted principal as authority.
 
 ## What the compiler refuses
@@ -69,11 +69,11 @@ The refusals keep a membership boundary from being read as broader authority tha
 
 | Combination | Diagnostic |
 | --- | --- |
-| An anonymous profile, or one without a verified `principalClaim` | `access.membership.authentication` |
-| Writes, actions, reviewed changes, or request lifecycle grants | `access.membership.read_only` |
-| A spatial bbox permission, which uses a separate database authority role | `access.membership.spatial_unsupported` |
-| A membership entity with a change-request lifecycle | `access.membership.request_unsupported` |
-| More than eight boundaries on one grant | `access.membership.limit` |
+| A profile without a verified `principalClaim` | `breg.access.membership-authentication` |
+| Writes, actions, reviewed changes, or request lifecycle grants | `breg.access.membership-read-only` |
+| A spatial bbox permission, which uses a separate database authority role | `breg.access.membership-spatial-unsupported` |
+| A membership entity with a change-request lifecycle | `breg.access.membership-request-unsupported` |
+| More than eight boundaries on one grant | `breg.access.membership-limit` |
 
 A membership-bounded grant supports get, lookup, list, snapshot, and revisions, plus counts when it
 sets `allowCount`. It can protect the root of a relationship read path, and a target permission that
@@ -108,7 +108,7 @@ block that rolls back the local context on error. It grants no access to private
 through direct endpoints or derived views, and it needs no additional database role and no
 row-level-security bypass.
 
-{/* Evidence: crates/registry-breg/src/membership.rs, access.membership.limit;
+{/* Evidence: crates/registry-breg/src/membership.rs, breg.access.membership-limit;
     crates/registry-breg/src/contract.rs, MembershipBoundarySource;
     products/breg/membership-access.md. */}
 
@@ -157,15 +157,14 @@ codes, so a recipient is retired by removing its clients, not its entry.
 
 | Combination | Diagnostic |
 | --- | --- |
-| Writes, actions, reviewed changes, or request lifecycle grants on a gated permission | `consent.require.read_only` |
-| An anonymous gated profile | `consent.require.anonymous` |
-| A gated profile without `requesterClients`, or with a client no recipient organization lists | `consent.require.clients` |
-| A spatial bbox permission, which uses a separate database authority role | `consent.require.spatial_unsupported` |
-| Bulk data export of a gated permission | `consent.require.export_unsupported` |
-| Exporting a gated profile as an Evidence source | `consent.require.evidence_source_unsupported` |
-| A read path that reaches a gated entity through a later step | `consent.require.read_path_target` |
-| A profile granting `create` or `batch` on a consent record, which only actions declaring `consentIssuer` write | `consent.record.direct_write` |
-| A consent record no permission requires yet | `consent.require.unused` |
+| Writes, actions, reviewed changes, or request lifecycle grants on a gated permission | `breg.consent.require-read-only` |
+| A gated profile without `requesterClients`, or with a client no recipient organization lists | `breg.consent.require-clients` |
+| A spatial bbox permission, which uses a separate database authority role | `breg.consent.require-spatial-unsupported` |
+| Bulk data export of a gated permission | `breg.consent.require-export-unsupported` |
+| Exporting a gated profile as an Evidence source | `breg.consent.require-evidence-source-unsupported` |
+| A read path that reaches a gated entity through a later step | `breg.consent.require-read-path-target` |
+| A profile granting `create` or `batch` on a consent record, which only actions declaring `consentIssuer` write | `breg.consent.record-direct-write` |
+| A consent record no permission requires yet | `breg.consent.require-unused` |
 
 Every read operation of a gated permission is checked: get, lookup, list, count, snapshot,
 revisions, continuation cursors, and read paths rooted at the gated entity. A row without consent
@@ -174,7 +173,7 @@ answers `404` exactly like an absent row.
 ### What it does not enforce
 
 A profile without `requireConsent` bypasses consent. `bregctl check` reports
-`access.consent.ungated_client` when an ungated profile reads a gated entity while it admits any
+`breg.access.consent-ungated-client` when an ungated profile reads a gated entity while it admits any
 client, or a client a gated profile admits; give each side its own clients. A recipient reads the
 decisions addressed to it through a feed profile, and that feed shows withdrawals and
 invalidations addressed to it, including one for a subject it never received a give for; refusals
@@ -193,7 +192,7 @@ whose catalog definition was altered.
 
 {/* Evidence: crates/registry-breg/src/consent.rs, validate_recipients(), is_reserved_claim() and feed_decisions();
     crates/registry-breg/src/model.rs, recipient_set();
-    crates/registry-breg/src/access.rs, access.consent.ungated_client;
+    crates/registry-breg/src/access.rs, breg.access.consent-ungated-client;
     crates/registry-breg/src/tooling.rs, GATED_SCOPE_WIDENED and UNGATED_SCOPE;
     crates/registry-breg/tests/postgres_consent_access.rs;
     products/breg/consent.md. */}

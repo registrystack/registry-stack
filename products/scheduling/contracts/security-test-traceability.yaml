@@ -35,7 +35,7 @@ entries:
       - {path: crates/registry-scheduling/src/auth.rs, name: a_complete_task_grant_is_extracted_and_bound_to_the_deployment}
       - {path: crates/registry-scheduling/src/auth.rs, name: a_read_without_the_reads_scope_is_a_profile_refusal_but_still_mutates}
       - {path: crates/registry-scheduling/src/auth.rs, name: the_explain_path_demands_its_own_scope}
-      - {path: crates/registry-scheduling/src/config.rs, name: explain_and_read_scopes_must_differ_and_retention_must_be_positive}
+      - {path: crates/registry-scheduling/src/config.rs, name: scopes_retention_and_destinations_are_refused_at_their_member}
       - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: any_partial_core_grant_set_is_rejected}
       - {path: crates/registry-casework/src/task_grants/native_exchange_tests.rs, name: approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid, features: [postgres-test]}
   - id: SCHEDULING-SEC-05
@@ -145,7 +145,7 @@ entries:
   - id: SCHEDULING-SEC-15
     tests:
       - {path: crates/registry-scheduling/src/config.rs, name: every_listener_mode_verifies_the_package_without_a_pin}
-      - {path: crates/registry-scheduling/src/config.rs, name: a_refused_authored_policy_names_the_member_and_the_cause}
+      - {path: crates/registry-scheduling/src/config.rs, name: a_refused_packaged_policy_names_the_member_and_its_position}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: the_policy_digest_is_stable_and_moves_with_content}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: adoption_binds_one_identity_and_refuses_a_second}
       - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_rejects_a_different_deployment_identity_without_writing, features: [postgres-test]}
@@ -180,7 +180,7 @@ entries:
       - {path: crates/registry-scheduling/src/config.rs, name: the_access_token_profile_admits_only_the_rfc_9068_pair}
   - id: SCHEDULING-SEC-21
     tests:
-      - {path: crates/registry-scheduling/src/config.rs, name: a_production_deployment_must_name_the_clients_it_admits}
+      - {path: crates/registry-scheduling/src/config.rs, name: every_deployment_must_name_the_clients_it_admits}
   - id: SCHEDULING-SEC-22
     tests:
       - {path: crates/registry-scheduling/src/auth.rs, name: an_exchanged_token_is_refused_until_its_authority_is_declared}
@@ -227,7 +227,7 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_divergent_startup_leaves_the_published_policy_untouched}
       - {path: crates/registry-scheduling/src/runtime.rs, name: the_removed_migrate_command_refuses_as_usage_naming_plan_then_apply}
       - {path: crates/registry-scheduling/src/config.rs, name: a_pinned_package_digest_must_match_the_verified_package}
-      - {path: crates/registry-scheduling/src/config.rs, name: identity_database_id_is_required_and_names_the_key_to_add}
+      - {path: crates/registry-scheduling/src/config.rs, name: a_missing_identity_block_is_refused_with_the_key_to_add}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: plan_on_an_empty_database_reports_the_initial_activation_and_writes_nothing, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_records_one_row_per_activation_and_a_previous_package_is_a_new_row, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_refuses_a_database_where_this_package_is_not_active, features: [postgres-test]}

@@ -1,0 +1,14 @@
+id: merge-key
+rules: [CFG-YAML-3]
+summary: A merge key is named as a merge key, not reported as an unknown `<<` member.
+mutation:
+  append: |
+    conformanceMerge:
+      <<: {}
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.merge-key
+      path: /conformanceMerge/<<
+      at: {line: 2, column: 3}
+      suggestedAction: Write the value in full where it is used.

@@ -77,12 +77,12 @@ fn operation(
         .cloned()
         .collect::<BTreeSet<_>>();
     // Request metadata disclosure is a separate grant. The projection repeats
-    // the rule the request read path applies: only a non-anonymous profile on a
+    // the rule the request read path applies: only a profile on a
     // change-request entity receives the fields its grant names.
-    let readable_request_fields = if profile.anonymous || surface.entity.change_request.is_none() {
+    let readable_request_fields = if surface.entity.change_request.is_none() {
         BTreeSet::new()
     } else {
-        profile.readable_request_fields.clone()
+        profile.readable_request_fields.clone().into()
     };
     let query = surface
         .route

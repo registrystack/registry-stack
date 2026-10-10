@@ -98,7 +98,7 @@ accessProfiles:
     - registration-number
     - status
     - label
-    rowBoundaries: []
+    rowBoundaries: unrestricted
 - id: evidence-source
   principalClaim: registry_principal
   requiredScopes:
@@ -118,7 +118,7 @@ accessProfiles:
       valueOrigin: request
     - selector: by-registration-number
       valueOrigin: request
-    rowBoundaries: []
+    rowBoundaries: unrestricted
 vocabularies:
 - id: record-status
   values:

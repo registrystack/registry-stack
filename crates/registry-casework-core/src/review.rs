@@ -1,8 +1,4 @@
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-};
+use std::{cmp::Ordering, collections::BTreeMap, fmt};
 
 use chrono::{DateTime, Utc};
 use jsonschema::{Draft, JSONSchema};
@@ -12,6 +8,7 @@ use serde_json::{json, Value};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::finding::{ConfigFinding, Findings, IDENTIFIER_ACTION, IDENTIFIER_MESSAGE};
 use crate::{ClockPolicy, IssuerPrincipal, SourceBinding};
 
 pub const MAXIMUM_REVIEW_KINDS: usize = 64;
@@ -27,9 +24,12 @@ pub const MAXIMUM_REVIEW_APPROVALS_PER_STAGE: u16 = 32;
 pub const MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES: usize = 256 * 1024;
 
 const MAXIMUM_REVIEW_OUTCOMES: usize = 16;
+const MAXIMUM_REVIEW_KIND_CLOCKS: usize = 32;
 const MAXIMUM_REVIEW_SCHEMA_BYTES: usize = 64 * 1024;
-const MAXIMUM_REVIEW_DISPLAY_BYTES: usize = 16 * 1024;
-const MAXIMUM_REVIEW_VALUE_DEPTH: usize = 16;
+/// The most bytes a review display holds, as canonical JSON.
+pub const MAXIMUM_REVIEW_DISPLAY_BYTES: usize = 16 * 1024;
+/// The deepest a review display or result nests.
+pub const MAXIMUM_REVIEW_VALUE_DEPTH: usize = 16;
 const MAXIMUM_REVIEW_REASON_BYTES: usize = 2_000;
 const MAXIMUM_REVIEW_RESULT_BYTES: usize = 16 * 1024;
 const MAXIMUM_REVIEW_RESULT_CONSTRAINTS_BYTES: usize = 16 * 1024;
@@ -42,21 +42,55 @@ const RESULT_CONSTRAINTS_PATH: &str = "$.resultConstraints";
 pub type ReviewPolicyDigest = ContentDigest;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewRetentionPolicy {
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_REVIEW_RETENTION_DAYS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_REVIEW_RETENTION_DAYS>")
+    )]
     pub terminal_days: u32,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_REVIEW_RETENTION_DAYS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_REVIEW_RETENTION_DAYS>")
+    )]
     pub accountability_days: u32,
 }
 
 impl ReviewRetentionPolicy {
-    fn check(&self) -> Result<(), ReviewPolicyError> {
-        if self.terminal_days == 0
-            || self.accountability_days < self.terminal_days
-            || self.accountability_days > MAXIMUM_REVIEW_RETENTION_DAYS
-        {
-            return Err(ReviewPolicyError::Retention);
+    /// The reader refuses a file whose days are out of range; these findings
+    /// hold the same bounds for a policy built in code.
+    fn findings(&self, findings: &mut Findings) {
+        let message =
+            format!("expected a whole number of days from 1 to {MAXIMUM_REVIEW_RETENTION_DAYS}");
+        if self.terminal_days == 0 || self.terminal_days > MAXIMUM_REVIEW_RETENTION_DAYS {
+            findings.push(
+                "casework.review-kind.retention-out-of-range",
+                "/retention/terminalDays",
+                message.as_str(),
+                "Write a number of days within the bound.",
+            );
         }
-        Ok(())
+        if self.accountability_days > MAXIMUM_REVIEW_RETENTION_DAYS {
+            findings.push(
+                "casework.review-kind.retention-out-of-range",
+                "/retention/accountabilityDays",
+                message.as_str(),
+                "Write a number of days within the bound.",
+            );
+        } else if self.accountability_days < self.terminal_days {
+            findings.add(
+                ConfigFinding::new(
+                    "casework.review-kind.accountability-before-terminal",
+                    "/retention/accountabilityDays",
+                    "accountabilityDays is shorter than terminalDays",
+                    "Make accountabilityDays at least as long as terminalDays.",
+                )
+                .with_related("/retention/terminalDays", "terminalDays is written here"),
+            );
+        }
     }
 }
 
@@ -102,6 +136,7 @@ impl ReviewClockCorrelation {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewKindPurpose {
     Approval,
@@ -109,6 +144,7 @@ pub enum ReviewKindPurpose {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewContextStrategy {
     Submitted,
@@ -116,6 +152,7 @@ pub enum ReviewContextStrategy {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewOutcomeSettlement {
     Rejected,
@@ -124,6 +161,7 @@ pub enum ReviewOutcomeSettlement {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewOutcomePolicy {
     pub id: String,
@@ -135,20 +173,29 @@ pub struct ReviewOutcomePolicy {
 }
 
 impl ReviewOutcomePolicy {
-    fn is_valid(&self) -> bool {
-        valid_identifier(&self.id)
-            && !self.label.trim().is_empty()
+    fn label_is_valid(&self) -> bool {
+        !self.label.trim().is_empty()
             && self.label.len() <= 120
             && self.label.chars().all(|character| !character.is_control())
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewStagePolicy {
     pub id: String,
     pub queue: String,
     pub deciding_profiles: Vec<String>,
+    #[serde(
+        deserialize_with = "crate::typed::bounded_u16::<_, 1, { MAXIMUM_REVIEW_APPROVALS_PER_STAGE as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::BoundedU32<1, { MAXIMUM_REVIEW_APPROVALS_PER_STAGE as u32 }>"
+        )
+    )]
     pub required_approvals: u16,
     #[serde(default)]
     pub exclude_initiator: bool,
@@ -157,29 +204,85 @@ pub struct ReviewStagePolicy {
 }
 
 impl ReviewStagePolicy {
-    fn check(&self) -> Result<(), ReviewPolicyError> {
-        if !valid_identifier(&self.id)
-            || !valid_identifier(&self.queue)
-            || self.deciding_profiles.is_empty()
-            || self.deciding_profiles.len() > MAXIMUM_REVIEW_PROFILES_PER_STAGE
-            || !all_unique(self.deciding_profiles.iter().map(String::as_str))
-            || self
-                .deciding_profiles
-                .iter()
-                .any(|profile| !valid_identifier(profile))
-        {
-            return Err(ReviewPolicyError::StageIdentity);
+    /// Identity findings and threshold findings, relative to `at`. The
+    /// reader refuses a file whose threshold is out of range; the threshold
+    /// findings hold the same bound for a policy built in code.
+    fn findings(&self, at: &str) -> (Findings, Findings) {
+        let mut identity = Findings::default();
+        if !valid_identifier(&self.id) {
+            identity.push(
+                "casework.review-kind.invalid-stage-id",
+                format!("{at}/id"),
+                IDENTIFIER_MESSAGE,
+                IDENTIFIER_ACTION,
+            );
         }
+        if !valid_identifier(&self.queue) {
+            identity.push(
+                "casework.review-kind.invalid-stage-queue",
+                format!("{at}/queue"),
+                IDENTIFIER_MESSAGE,
+                IDENTIFIER_ACTION,
+            );
+        }
+        if self.deciding_profiles.is_empty() {
+            identity.push(
+                "casework.review-kind.no-deciding-profiles",
+                format!("{at}/decidingProfiles"),
+                "a stage needs at least one deciding access profile",
+                "List the staff or supervisor access profiles that decide this stage.",
+            );
+        }
+        if self.deciding_profiles.len() > MAXIMUM_REVIEW_PROFILES_PER_STAGE {
+            identity.push(
+                "casework.review-kind.too-many-deciding-profiles",
+                format!("{at}/decidingProfiles"),
+                format!(
+                    "at most {MAXIMUM_REVIEW_PROFILES_PER_STAGE} deciding profiles may be listed on one stage"
+                ),
+                "Remove deciding profiles until no more than the bound remain.",
+            );
+        }
+        identity.repeated(
+            self.deciding_profiles
+                .iter()
+                .enumerate()
+                .map(|(index, profile)| {
+                    (format!("{at}/decidingProfiles/{index}"), profile.as_str())
+                }),
+            "casework.review-kind.duplicate-deciding-profile",
+            "this access profile is already listed",
+            "List each deciding profile once.",
+        );
+        for (index, profile) in self.deciding_profiles.iter().enumerate() {
+            if !valid_identifier(profile) {
+                identity.push(
+                    "casework.review-kind.invalid-deciding-profile",
+                    format!("{at}/decidingProfiles/{index}"),
+                    IDENTIFIER_MESSAGE,
+                    IDENTIFIER_ACTION,
+                );
+            }
+        }
+        let mut threshold = Findings::default();
         if self.required_approvals == 0
             || self.required_approvals > MAXIMUM_REVIEW_APPROVALS_PER_STAGE
         {
-            return Err(ReviewPolicyError::StageThreshold);
+            threshold.push(
+                "casework.review-kind.required-approvals-out-of-range",
+                format!("{at}/requiredApprovals"),
+                format!(
+                    "expected a whole number of approvals from 1 to {MAXIMUM_REVIEW_APPROVALS_PER_STAGE}"
+                ),
+                "Write a number of approvals within the bound.",
+            );
         }
-        Ok(())
+        (identity, threshold)
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewKindPolicy {
     pub id: String,
@@ -190,8 +293,16 @@ pub struct ReviewKindPolicy {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clocks: Vec<String>,
     pub retention: ReviewRetentionPolicy,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-foreign" = "json-schema-2020-12"))
+    )]
     pub display_schema: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-foreign" = "json-schema-2020-12"))
+    )]
     pub result_schema: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outcomes: Vec<ReviewOutcomePolicy>,
@@ -199,64 +310,254 @@ pub struct ReviewKindPolicy {
 
 impl ReviewKindPolicy {
     pub fn check(&self) -> Result<(), ReviewPolicyError> {
-        if !valid_identifier(&self.id) || !valid_version(&self.version) {
-            return Err(ReviewPolicyError::Identity);
+        match self.tagged_findings().into_iter().next() {
+            Some((error, _)) => Err(error),
+            None => Ok(()),
         }
-        if self.stages.is_empty() || self.stages.len() > MAXIMUM_REVIEW_STAGES {
-            return Err(ReviewPolicyError::Stages);
+    }
+
+    /// Every problem in this review kind, located by pointers relative to
+    /// the review kind (CFG-DIAG-5).
+    #[must_use]
+    pub fn findings(&self) -> Vec<ConfigFinding> {
+        self.tagged_findings()
+            .into_iter()
+            .map(|(_, finding)| finding)
+            .collect()
+    }
+
+    /// Every finding beside the policy error it was reported as before
+    /// findings were collected, in the order `check` reports them.
+    fn tagged_findings(&self) -> Vec<(ReviewPolicyError, ConfigFinding)> {
+        let mut out = Vec::new();
+        let mut tag = |error: ReviewPolicyError, findings: Findings| {
+            out.extend(
+                findings
+                    .into_vec()
+                    .into_iter()
+                    .map(|finding| (error, finding)),
+            );
+        };
+
+        let mut identity = Findings::default();
+        if !valid_identifier(&self.id) {
+            identity.push(
+                "casework.review-kind.invalid-id",
+                "/id",
+                IDENTIFIER_MESSAGE,
+                IDENTIFIER_ACTION,
+            );
         }
-        if !all_unique(self.stages.iter().map(|stage| stage.id.as_str())) {
-            return Err(ReviewPolicyError::StageIdentity);
+        if !valid_version(&self.version) {
+            identity.push(
+                "casework.review-kind.invalid-version",
+                "/version",
+                "expected 1 to 64 ASCII letters, digits, '.', '-', or '_'",
+                "Write a version, such as 1 or 2026-09.",
+            );
         }
-        if self.clocks.len() > 32
-            || !all_unique(self.clocks.iter().map(String::as_str))
-            || self.clocks.iter().any(|clock| !valid_identifier(clock))
-        {
-            return Err(ReviewPolicyError::ClockIdentity);
+        tag(ReviewPolicyError::Identity, identity);
+
+        let mut stages = Findings::default();
+        if self.stages.is_empty() {
+            stages.push(
+                "casework.review-kind.no-stages",
+                "/stages",
+                "a review kind needs at least one stage",
+                "Declare a stage under stages.",
+            );
         }
-        for stage in &self.stages {
-            stage.check()?;
+        if self.stages.len() > MAXIMUM_REVIEW_STAGES {
+            stages.push(
+                "casework.review-kind.too-many-stages",
+                "/stages",
+                format!("at most {MAXIMUM_REVIEW_STAGES} stages may be declared"),
+                "Remove stages until no more than the bound remain.",
+            );
+        }
+        tag(ReviewPolicyError::Stages, stages);
+
+        let mut stage_ids = Findings::default();
+        stage_ids.repeated(
+            self.stages
+                .iter()
+                .enumerate()
+                .map(|(index, stage)| (format!("/stages/{index}/id"), stage.id.as_str())),
+            "casework.review-kind.duplicate-stage-id",
+            "this stage id is already declared",
+            "Give every stage of the review kind a unique id.",
+        );
+        tag(ReviewPolicyError::StageIdentity, stage_ids);
+
+        let mut clocks = Findings::default();
+        if self.clocks.len() > MAXIMUM_REVIEW_KIND_CLOCKS {
+            clocks.push(
+                "casework.review-kind.too-many-clocks",
+                "/clocks",
+                format!("at most {MAXIMUM_REVIEW_KIND_CLOCKS} clocks may be named"),
+                "Remove clocks until no more than the bound remain.",
+            );
+        }
+        clocks.repeated(
+            self.clocks
+                .iter()
+                .enumerate()
+                .map(|(index, clock)| (format!("/clocks/{index}"), clock.as_str())),
+            "casework.review-kind.duplicate-clock",
+            "this clock is already named",
+            "Name each clock once.",
+        );
+        for (index, clock) in self.clocks.iter().enumerate() {
+            if !valid_identifier(clock) {
+                clocks.push(
+                    "casework.review-kind.invalid-clock",
+                    format!("/clocks/{index}"),
+                    IDENTIFIER_MESSAGE,
+                    IDENTIFIER_ACTION,
+                );
+            }
+        }
+        tag(ReviewPolicyError::ClockIdentity, clocks);
+
+        for (index, stage) in self.stages.iter().enumerate() {
+            let (identity, threshold) = stage.findings(&format!("/stages/{index}"));
+            tag(ReviewPolicyError::StageIdentity, identity);
+            tag(ReviewPolicyError::StageThreshold, threshold);
         }
 
         match self.purpose {
             ReviewKindPurpose::Approval => {
-                if self
-                    .outcomes
-                    .iter()
-                    .any(|outcome| outcome.settlement == ReviewOutcomeSettlement::Answered)
-                {
-                    return Err(ReviewPolicyError::ApprovalPayload);
+                let mut payload = Findings::default();
+                for (index, outcome) in self.outcomes.iter().enumerate() {
+                    if outcome.settlement == ReviewOutcomeSettlement::Answered {
+                        payload.push(
+                            "casework.review-kind.answered-outcome-in-approval",
+                            format!("/outcomes/{index}/settlement"),
+                            "an approval review kind cannot settle with answered",
+                            "Write settlement: rejected or changes_requested, or make the review kind's purpose answer.",
+                        );
+                    }
                 }
+                tag(ReviewPolicyError::ApprovalPayload, payload);
             }
             ReviewKindPurpose::Answer => {
-                if self.stages.len() != 1 || self.stages[0].required_approvals != 1 {
-                    return Err(ReviewPolicyError::AnswerStages);
-                }
-                if self.outcomes.is_empty()
-                    || self
-                        .outcomes
-                        .iter()
-                        .any(|outcome| outcome.settlement != ReviewOutcomeSettlement::Answered)
+                let mut answer_stages = Findings::default();
+                if self.stages.len() > 1 {
+                    answer_stages.push(
+                        "casework.review-kind.answer-stage-count",
+                        "/stages",
+                        "an answer review kind has exactly one stage",
+                        "Keep one stage.",
+                    );
+                } else if self
+                    .stages
+                    .first()
+                    .is_some_and(|stage| stage.required_approvals != 1)
                 {
-                    return Err(ReviewPolicyError::AnswerOutcomes);
+                    answer_stages.push(
+                        "casework.review-kind.answer-stage-approvals",
+                        "/stages/0/requiredApprovals",
+                        "the stage of an answer review kind takes exactly one decision",
+                        "Write requiredApprovals: 1.",
+                    );
                 }
+                tag(ReviewPolicyError::AnswerStages, answer_stages);
+                let mut answer_outcomes = Findings::default();
+                if self.outcomes.is_empty() {
+                    answer_outcomes.push(
+                        "casework.review-kind.answer-without-outcomes",
+                        "/outcomes",
+                        "an answer review kind declares at least one answered outcome",
+                        "Declare an outcome with settlement: answered.",
+                    );
+                }
+                for (index, outcome) in self.outcomes.iter().enumerate() {
+                    if outcome.settlement != ReviewOutcomeSettlement::Answered {
+                        answer_outcomes.push(
+                            "casework.review-kind.unanswered-outcome-in-answer",
+                            format!("/outcomes/{index}/settlement"),
+                            "an answer review kind settles only with answered",
+                            "Write settlement: answered.",
+                        );
+                    }
+                }
+                tag(ReviewPolicyError::AnswerOutcomes, answer_outcomes);
             }
         }
 
-        self.retention.check()?;
-        check_closed_object_schema(&self.display_schema)?;
-        if let Some(result_schema) = &self.result_schema {
-            check_closed_object_schema(result_schema)?;
+        let mut retention = Findings::default();
+        self.retention.findings(&mut retention);
+        tag(ReviewPolicyError::Retention, retention);
+
+        let mut schemas = Findings::default();
+        if check_closed_object_schema(&self.display_schema).is_err() {
+            schemas.push(
+                "casework.review-kind.invalid-display-schema",
+                "/displaySchema",
+                closed_schema_message(),
+                CLOSED_SCHEMA_ACTION,
+            );
         }
-        if self.outcomes.len() > MAXIMUM_REVIEW_OUTCOMES
-            || !all_unique(self.outcomes.iter().map(|outcome| outcome.id.as_str()))
-            || self.outcomes.iter().any(|outcome| !outcome.is_valid())
-            || (self.result_schema.is_none()
-                && self.outcomes.iter().any(|outcome| outcome.result_required))
+        if self
+            .result_schema
+            .as_ref()
+            .is_some_and(|schema| check_closed_object_schema(schema).is_err())
         {
-            return Err(ReviewPolicyError::Outcomes);
+            schemas.push(
+                "casework.review-kind.invalid-result-schema",
+                "/resultSchema",
+                closed_schema_message(),
+                CLOSED_SCHEMA_ACTION,
+            );
         }
-        Ok(())
+        tag(ReviewPolicyError::Schema, schemas);
+
+        let mut outcomes = Findings::default();
+        if self.outcomes.len() > MAXIMUM_REVIEW_OUTCOMES {
+            outcomes.push(
+                "casework.review-kind.too-many-outcomes",
+                "/outcomes",
+                format!("at most {MAXIMUM_REVIEW_OUTCOMES} outcomes may be declared"),
+                "Remove outcomes until no more than the bound remain.",
+            );
+        }
+        outcomes.repeated(
+            self.outcomes
+                .iter()
+                .enumerate()
+                .map(|(index, outcome)| (format!("/outcomes/{index}/id"), outcome.id.as_str())),
+            "casework.review-kind.duplicate-outcome-id",
+            "this outcome id is already declared",
+            "Give every outcome of the review kind a unique id.",
+        );
+        for (index, outcome) in self.outcomes.iter().enumerate() {
+            if !valid_identifier(&outcome.id) {
+                outcomes.push(
+                    "casework.review-kind.invalid-outcome-id",
+                    format!("/outcomes/{index}/id"),
+                    IDENTIFIER_MESSAGE,
+                    IDENTIFIER_ACTION,
+                );
+            }
+            if !outcome.label_is_valid() {
+                outcomes.push(
+                    "casework.review-kind.invalid-outcome-label",
+                    format!("/outcomes/{index}/label"),
+                    "expected a label of 1 to 120 bytes that is not only spaces and has no control characters",
+                    "Write a short label for the outcome.",
+                );
+            }
+            if self.result_schema.is_none() && outcome.result_required {
+                outcomes.push(
+                    "casework.review-kind.result-required-without-result-schema",
+                    format!("/outcomes/{index}/resultRequired"),
+                    "resultRequired needs a resultSchema on the review kind",
+                    "Declare resultSchema on the review kind, or remove resultRequired.",
+                );
+            }
+        }
+        tag(ReviewPolicyError::Outcomes, outcomes);
+        out
     }
 
     pub fn policy_digest(&self) -> Result<ReviewPolicyDigest, ReviewPolicyError> {
@@ -268,6 +569,12 @@ impl ReviewKindPolicy {
         let canonical = registry_platform_canonical_json::canonicalize_json(&value)
             .map_err(|_| ReviewPolicyError::Canonical)?;
         Ok(ContentDigest::for_bytes(&canonical))
+    }
+
+    /// Check `display` against this kind's `displaySchema` and the display
+    /// bounds, exactly as the runtime checks a display a producer submits.
+    pub fn validate_display(&self, display: &Value) -> Result<(), ReviewValidationError> {
+        validate_display(&self.display_schema, display)
     }
 
     pub fn snapshot(&self) -> Result<ReviewKindPolicySnapshot, ReviewPolicyError> {
@@ -1206,6 +1513,14 @@ pub enum ReviewDecisionError {
     ReasonInvalid,
 }
 
+const CLOSED_SCHEMA_ACTION: &str = "Write a JSON Schema with type: object and additionalProperties: false on every object, using only local $ref.";
+
+fn closed_schema_message() -> String {
+    format!(
+        "expected a closed JSON Schema 2020-12 object: type object, additionalProperties false on every object, only local $ref, at most {MAXIMUM_REVIEW_SCHEMA_BYTES} canonical bytes and {MAXIMUM_REVIEW_VALUE_DEPTH} levels deep"
+    )
+}
+
 fn check_closed_object_schema(schema: &Value) -> Result<(), ReviewPolicyError> {
     let root = schema.as_object().ok_or(ReviewPolicyError::Schema)?;
     if root.get("type") != Some(&Value::String("object".to_owned()))
@@ -1846,11 +2161,6 @@ fn bounded_text(value: &str, maximum_bytes: usize) -> bool {
 
 fn valid_path_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'$' | b'.' | b'/' | b'_' | b'-' | b'~')
-}
-
-fn all_unique<'a>(values: impl Iterator<Item = &'a str>) -> bool {
-    let mut seen = BTreeSet::new();
-    values.into_iter().all(|value| seen.insert(value))
 }
 
 fn is_false(value: &bool) -> bool {

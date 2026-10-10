@@ -412,7 +412,7 @@ fn compiled_registry(
             ]
         }],
         "accessProfiles":[{
-            "id":"reader","default":true,"principalClaim":"registry_principal",
+            "id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":[{
                 "entity":"entry","operations":["create","get","list","lookup"],
                 "readableFields":["code","active","population"],

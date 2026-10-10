@@ -334,7 +334,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.platform_hygiene == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -342,8 +342,21 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Check shared Rust hygiene files
         run: products/platform/scripts/check-hygiene-alignment.sh
+
+      - name: Test the YAML reader boundary checks
+        run: python3 -m unittest products/platform/scripts/test_check_yaml_reader_boundary.py
+
+      - name: Enforce the YAML reader boundary
+        run: products/platform/scripts/check-yaml-reader-boundary.sh
 
   platform-fuzz:
     name: Platform fuzz smoke (${{ matrix.group }})
@@ -363,6 +376,9 @@ jobs:
           - group: sd-jwt
             target_a: sdjwt_holder_proof
             target_b: sdjwt_issuance
+          - group: yaml
+            target_a: yaml_reader
+            target_b: yaml_decode
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -583,10 +599,26 @@ jobs:
       - name: Test affected packages
         run: python3 .github/scripts/run_cargo_packages.py test
 
+      - name: Check Casework schemas against their generators
+        if: matrix.name == 'casework'
+        run: products/casework/scripts/check-schemas.sh
+
       - name: Validate Manifest profiles
         if: matrix.name == 'manifest'
         working-directory: products/manifest
         run: cargo run --locked -p registry-manifest-cli -- validate-profiles profiles
+
+      - name: Reproduce the Manifest schemas
+        if: matrix.name == 'manifest'
+        run: cargo test --locked -p registry-manifest-cli --features schema --lib schema::tests
+
+      - name: Reproduce the Render schemas
+        if: matrix.name == 'render'
+        run: cargo test --locked -p registry-render --features schema --lib schema::tests
+
+      - name: Reproduce the task connection schema
+        if: matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-thunderid-tooling')
+        run: cargo test --locked -p registry-thunderid-tooling --features schema --lib schema::tests
 
       - name: Report disk usage
         if: always()
@@ -892,6 +924,9 @@ jobs:
       - name: Scheduling contract consistency
         run: products/scheduling/scripts/check-contracts.sh
 
+      - name: Check Scheduling schemas against their generators
+        run: products/scheduling/scripts/check-schemas.sh
+
   scheduling-postgres:
     name: Scheduling PostgreSQL transactions
     needs: [changes, rust-policy]
@@ -993,6 +1028,9 @@ jobs:
 
       - name: Messaging contract consistency
         run: products/messaging/scripts/check-contracts.sh
+
+      - name: Check Messaging schemas and OpenAPI against their generators
+        run: products/messaging/scripts/check-schemas.sh
 
       - name: Self-test the Messaging vendor-neutrality gate
         run: products/messaging/scripts/test-check-vendor-neutrality.sh
@@ -1269,8 +1307,8 @@ jobs:
     # suite (both execution backends), the admission, runtime, and parity
     # suites in one explicit place, the PostgreSQL handler journeys against
     # a disposable PostGIS database, and the no-default refusal suite that
-    # keeps `action.handler.wasm_build_unsupported` and
-    # `hook.handler.wasm_build_unsupported` proven.
+    # keeps `breg.action.handler-wasm-build-unsupported` and
+    # `breg.hook.handler-wasm-build-unsupported` proven.
     name: Base Registry Engine WASM executor
     needs: changes
     if: needs.changes.outputs.breg_integration == 'true'
@@ -1358,11 +1396,16 @@ jobs:
       - rust-policy
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.config_conformance == 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # The check commands and the BReg citizen service schema check compile
+    # their crates cold.
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          # The conventions lint compares the exceptions register with the
+          # event baseline (CFG-CHANGE-5), so the history has to be present.
+          fetch-depth: 0
           persist-credentials: false
           submodules: false
 
@@ -1378,6 +1421,70 @@ jobs:
 
       - name: Check runtime configuration conformance
         run: products/platform/scripts/check-config-conformance.py --check-generated
+
+      - name: Check BReg citizen service runtime schemas
+        run: cargo test --locked -p registry-breg-mcp -p registry-breg-review --features registry-breg-mcp/schema,registry-breg-review/schema --lib schema::tests
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
+      - name: Test configuration conventions lint
+        run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_check_config_conventions.py
+
+      - name: Check configuration conventions
+        env:
+          # The event baseline the changes job resolved; the archive check
+          # compares against the same commit.
+          CONVENTIONS_BASE_REF: ${{ needs.changes.outputs.archive_base_ref }}
+          CONVENTIONS_COMPARISON_REQUIRED: ${{ needs.changes.outputs.archive_comparison_required }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          lint=(uv run --no-project --with PyYAML==6.0.2 python products/platform/scripts/check-config-conventions.py)
+          if [[ "${CONVENTIONS_COMPARISON_REQUIRED}" == "true" ]]; then
+            if [[ -z "${CONVENTIONS_BASE_REF}" ]]; then
+              echo "Cannot check CFG-CHANGE-5: the event baseline is unavailable." >&2
+              exit 1
+            fi
+            register=products/platform/config-conventions-exceptions.yaml
+            if git cat-file -e "${CONVENTIONS_BASE_REF}:${register}" 2>/dev/null; then
+              "${lint[@]}" --base "${CONVENTIONS_BASE_REF}"
+            else
+              # A baseline that predates the register (the change that
+              # introduces it) has nothing to compare with, and the lint
+              # refuses an explicit --base without the register.
+              echo "::notice::CFG-CHANGE-5 not checked: the event baseline predates ${register}."
+              "${lint[@]}"
+            fi
+          elif [[ "${CONVENTIONS_COMPARISON_REQUIRED}" == "false" ]]; then
+            # A scheduled sweep has no change baseline; the lint compares the
+            # register with its merge base with origin/main.
+            "${lint[@]}"
+          else
+            echo "The event comparison policy is unavailable." >&2
+            exit 1
+          fi
+          # Every rule the convention declares has one Enforcement summary
+          # row, and the gates that row names exist.
+          "${lint[@]}" --rule-coverage
+
+      - name: Test configuration conformance corpus runner
+        run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_config_conformance.py
+
+      # The binaries the registered `check` commands name; a cell whose
+      # program is missing from the directory fails.
+      - name: Build configuration check commands
+        run: >-
+          cargo build --locked --bins
+          -p registry-bregctl -p registry-caseworkctl -p registry-schedulingctl
+          -p registry-messagingctl -p registry-discoveryctl -p registry-render
+          -p registry-evidence -p registry-evidencectl -p registry-manifest-cli
+          -p registry-breg-mcp -p registry-breg-review -p registry-evidence-oid4vci
+
+      - name: Run configuration conformance corpus
+        run: products/platform/scripts/run-config-conformance.sh --strict --bin-dir target/debug
 
   rust-result:
     name: Rust workspace
@@ -1497,6 +1604,14 @@ jobs:
 
       - name: Test release upgrade rehearsal
         run: python3 -m unittest release/scripts/test_rehearse_upgrade.py
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
+      - name: Test release upgrade steps
+        run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_upgrade_steps.py
 
       - name: Test rehearsal advisory evidence collector
         run: python3 -m unittest release/scripts/test_collect_rehearsal_advisory_evidence.py
@@ -1763,6 +1878,15 @@ jobs:
           cargo test --locked \
             -p registry-evidencectl --test dev_lifecycle -- \
             --ignored --test-threads=1
+          # The reference authoring check delegates its fixture runs to the
+          # evidence binary built above. An inexact name filter that selects
+          # nothing still exits 0, so the step names the test exactly and
+          # fails unless it reports one pass.
+          cargo test --locked -p registry-evidencectl --lib \
+            check::tests::the_reference_authoring_example_checks_with_no_diagnostic \
+            -- --ignored --exact \
+            | tee "${RUNNER_TEMP}/evidence-reference-authoring.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-reference-authoring.log" || { echo "::error::expected exactly one passing test for the_reference_authoring_example_checks_with_no_diagnostic"; exit 1; }
 
       - name: Execute the Evidence tutorials with the stock issuer
         shell: bash

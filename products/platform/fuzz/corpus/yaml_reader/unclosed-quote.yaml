@@ -1,0 +1,4 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+name: "open
+next: 1

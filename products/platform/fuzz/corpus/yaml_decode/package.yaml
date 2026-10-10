@@ -1,0 +1,6 @@
+apiVersion: id.registrystack.org/formats/fuzz/package/v1
+kind: FuzzPackage
+id: pkg
+version: "2"
+source: {type: none}
+audience: one

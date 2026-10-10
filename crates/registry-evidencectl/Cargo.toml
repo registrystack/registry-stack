@@ -38,6 +38,7 @@ registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-cli-reference.workspace = true
 registry-platform-crypto.workspace = true
+registry-platform-yaml.workspace = true
 registry-thunderid-tooling.workspace = true
 p256.workspace = true
 # `jwk from-pem` reads a PEM SubjectPublicKeyInfo or PKCS #1 public key.
@@ -56,6 +57,16 @@ ureq.workspace = true
 url.workspace = true
 zeroize.workspace = true
 tempfile.workspace = true
+
+schemars = { workspace = true, optional = true }
+
+[features]
+# The generator for the committed schemas of the documents this crate owns.
+schema = ["dep:schemars", "registry-evidence-authoring/schema"]
+
+[[example]]
+name = "authoring-schema"
+required-features = ["schema"]
 
 [dev-dependencies]
 registry-evidence-authoring = { workspace = true, features = ["testing"] }

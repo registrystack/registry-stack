@@ -11,7 +11,8 @@
 //! produced before engine-owned statistical release storage changed every
 //! package DDL. It pins the compatibility contract used for successor planning:
 //! historical bytes remain a readable predecessor without being rederived as a
-//! current candidate package.
+//! current candidate package. It carries the retired package apiVersion, so it
+//! also pins that a retired package is read only as a predecessor.
 //!
 //! The loading tests read a temporary copy, so a run never touches the frozen
 //! bytes.
@@ -31,11 +32,13 @@ use std::time::{Duration, Instant};
 use registry_breg::action_handler::{evaluate_action_detailed, ActionHandlerOutcome};
 use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_yaml, ModuleAssetSource};
+use registry_breg::migration::{successor_plan_is_empty, successor_plan_is_empty_for_predecessor};
 use registry_breg::package::{
     change_set_to_applicable_migration_plan, compiled_registry_change_set_from_baseline,
     inspect_package_integrity, load_package, load_predecessor_package,
     prepare_package_with_project_assets, PackageBuildRequest, PackageEnvelope, PackageError,
-    PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile,
+    PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile, VerifiedPredecessorPackage,
+    PACKAGE_API_VERSION, PACKAGE_KIND, RETIRED_PACKAGE_API_VERSION,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
@@ -118,6 +121,25 @@ fn local_project() -> registry_breg::contract::RegistryProject {
     project
 }
 
+/// The package's `source/registry.yaml`: the acceptance project as JSON, which
+/// the reader accepts as YAML. The serialized source writes an absent optional
+/// member as null, which an authored file never carries, so nulls are removed.
+fn local_project_bytes() -> Vec<u8> {
+    fn remove_nulls(value: &mut Value) {
+        match value {
+            Value::Object(members) => {
+                members.retain(|_, member| !member.is_null());
+                members.values_mut().for_each(remove_nulls);
+            }
+            Value::Array(items) => items.iter_mut().for_each(remove_nulls),
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(local_project()).unwrap();
+    remove_nulls(&mut value);
+    serde_json::to_vec(&value).unwrap()
+}
+
 fn handler_assets() -> Vec<PackageSourceFile> {
     HANDLER_SCRIPTS
         .into_iter()
@@ -166,7 +188,7 @@ fn prepare_frozen_package() -> registry_breg::package::PreparedPackage {
         schema_fingerprint: digest(compiled.ddl().script().as_bytes()),
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
-            bytes: serde_json::to_vec(&local_project()).unwrap(),
+            bytes: local_project_bytes(),
         },
         modules: vec![],
         fixture_journeys: fixture_journeys(),
@@ -414,7 +436,7 @@ fn frozen_package_remains_a_readable_predecessor() {
             schema_fingerprint: digest(candidate.registry().ddl().script().as_bytes()),
             project: PackageSourceFile {
                 path: "source/registry.yaml".to_owned(),
-                bytes: serde_json::to_vec(&local_project()).unwrap(),
+                bytes: local_project_bytes(),
             },
             modules: vec![],
             fixture_journeys: fixture_journeys(),
@@ -433,6 +455,287 @@ fn frozen_package_remains_a_readable_predecessor() {
     assert!(current_predecessor.statistical_release_store_present());
 }
 
+/// Rewrite a package copy's manifest into the envelope an earlier release
+/// wrote, the retired apiVersion and no kind, and reseal its sum file.
+fn retire_envelope(package: &Path) {
+    let manifest_path = package.join("package.json");
+    let mut envelope: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(envelope["apiVersion"], PACKAGE_API_VERSION);
+    assert_eq!(envelope["kind"], PACKAGE_KIND);
+    envelope["apiVersion"] = json!(RETIRED_PACKAGE_API_VERSION);
+    envelope.as_object_mut().unwrap().remove("kind");
+    fs::write(
+        &manifest_path,
+        canonicalize_json(&envelope).expect("retired envelope canonicalizes"),
+    )
+    .unwrap();
+    reseal(package);
+}
+
+fn reseal(package: &Path) {
+    fs::remove_file(package.join(SUM_FILE)).unwrap();
+    write_sum_file(
+        package,
+        None,
+        &PackageLimits {
+            max_files: 1_026,
+            max_file_bytes: 16 * 1024 * 1024,
+            max_total_bytes: 64 * 1024 * 1024,
+            max_depth: 16,
+            max_path_bytes: 512,
+        },
+        "test package",
+    )
+    .expect("rewritten package envelope is closed");
+}
+
+/// Replace one listed file of a package copy, rebind its manifest entry to
+/// the new bytes, and reseal the package.
+fn rewrite_packaged_file(package: &Path, path: &str, bytes: &[u8]) {
+    fs::write(package.join(path), bytes).unwrap();
+    let manifest_path = package.join("package.json");
+    let mut envelope: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    let entry = envelope["manifest"]["files"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["path"] == path)
+        .expect("the manifest lists the rewritten file");
+    entry["sha256"] = json!(digest(bytes));
+    entry["size"] = json!(bytes.len());
+    fs::write(
+        &manifest_path,
+        canonicalize_json(&envelope).expect("rebound envelope canonicalizes"),
+    )
+    .unwrap();
+    reseal(package);
+}
+
+/// Set the retired `anonymous` member of every access profile `profile_id`
+/// names in a packaged governed model or migration baseline.
+fn set_retired_anonymous(entities: &mut Value, profile_id: &str, anonymous: bool) {
+    let mut changed = 0;
+    for entity in entities.as_object_mut().unwrap().values_mut() {
+        if let Some(profile) = entity["accessProfiles"].get_mut(profile_id) {
+            profile["anonymous"] = json!(anonymous);
+            changed += 1;
+        }
+    }
+    assert!(changed > 0, "the model carries the profile");
+}
+
+#[test]
+fn a_predecessor_that_granted_unauthenticated_access_is_refused() {
+    // Packages an earlier release built carry `anonymous: false` on every
+    // profile, which a predecessor read accepts. A predecessor whose model
+    // granted unauthenticated access is refused: a successor planned over that
+    // baseline would keep row policies that admit a caller without a
+    // principal.
+    let package = legacy_frozen_copy();
+    let model_path = package.path().join("effective-model.json");
+    let mut model: Value = serde_json::from_slice(&fs::read(&model_path).unwrap()).unwrap();
+    for entity in model["entities"].as_object().unwrap().values() {
+        for profile in entity["accessProfiles"].as_object().unwrap().values() {
+            assert_eq!(profile["anonymous"], json!(false));
+        }
+    }
+    set_retired_anonymous(&mut model["entities"], "person-reader", true);
+    rewrite_packaged_file(
+        package.path(),
+        "effective-model.json",
+        &canonicalize_json(&model).unwrap(),
+    );
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    assert!(matches!(
+        load_predecessor_package(package.path(), &context),
+        Err(PackageError::Derivation)
+    ));
+}
+
+#[test]
+fn a_predecessor_migration_baseline_reads_the_retired_anonymous_member() {
+    // A successor an earlier release built embeds its own predecessor's
+    // baseline, with the retired member on every profile. Read as the
+    // predecessor of the next upgrade, `false` is accepted and `true` refused.
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    let legacy = legacy_frozen_copy();
+    let legacy_predecessor = load_predecessor_package(legacy.path(), &context)
+        .expect("the legacy package is a verified predecessor");
+    let (directory, _) = verified_successor(&legacy_predecessor);
+    let successor = directory.path().join("package");
+
+    // Each row sets the retired member on one kind of site; every other site
+    // carries `false`.
+    for (site, anonymous, readable) in [
+        ("profile", false, true),
+        ("profile", true, false),
+        ("action permission", false, true),
+        ("action permission", true, false),
+    ] {
+        let copy = fixture_copy(&successor);
+        let manifest_path = copy.path().join("package.json");
+        let mut envelope: Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let baseline = &mut envelope["manifest"]["migrationPlan"]["priorBaseline"];
+        let profile_anonymous = anonymous && site == "profile";
+        set_retired_anonymous(
+            &mut baseline["entities"],
+            "person-reader",
+            profile_anonymous,
+        );
+        let mut permissions_set = 0;
+        for action in baseline["actions"]["actions"].as_array_mut().unwrap() {
+            for permission in action["permissions"].as_array_mut().unwrap() {
+                permission["anonymous"] = json!(anonymous && site == "action permission");
+                permissions_set += 1;
+            }
+        }
+        assert!(
+            permissions_set > 0,
+            "the baseline carries an action permission"
+        );
+        fs::write(
+            &manifest_path,
+            canonicalize_json(&envelope).expect("rebound envelope canonicalizes"),
+        )
+        .unwrap();
+        reseal(copy.path());
+        assert_eq!(
+            load_predecessor_package(copy.path(), &context).is_ok(),
+            readable,
+            "{site}, anonymous: {anonymous}"
+        );
+    }
+}
+
+/// Build the frozen project as a successor of `predecessor` and load it the
+/// way `bregctl apply` loads its target.
+fn verified_successor(
+    predecessor: &VerifiedPredecessorPackage,
+) -> (tempfile::TempDir, registry_breg::package::VerifiedPackage) {
+    let candidate = prepare_frozen_package();
+    let successor = prepare_package_with_project_assets(
+        PackageBuildRequest {
+            from_package_digest: Some(predecessor.package_digest().to_owned()),
+            compiler_source_revision: SOURCE_REVISION.to_owned(),
+            schema_fingerprint: digest(candidate.registry().ddl().script().as_bytes()),
+            project: PackageSourceFile {
+                path: "source/registry.yaml".to_owned(),
+                bytes: local_project_bytes(),
+            },
+            modules: vec![],
+            fixture_journeys: fixture_journeys(),
+            migration_plan: PackageMigrationPlanInput::SuccessorFromBaseline {
+                prior_baseline: Box::new(predecessor.migration_baseline().clone()),
+            },
+        },
+        handler_assets(),
+    )
+    .expect("the current compiler builds a successor from the predecessor baseline");
+    let directory = tempfile::Builder::new()
+        .prefix("registry-successor-package-")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
+        .expect("temporary successor directory");
+    let root = directory.path().join("package");
+    successor
+        .publish_to_directory(&root)
+        .expect("the successor publishes");
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    let verified = load_package(&root, &context).expect("the successor verifies");
+    (directory, verified)
+}
+
+#[test]
+fn a_retired_package_is_read_only_as_a_predecessor() {
+    // CFG-CHANGE-2: the pre-statistics fixture is a package an earlier
+    // release built, carrying the retired apiVersion and no kind. Starting,
+    // inspecting, or checking it is refused as retired; reading it as the
+    // deployed predecessor of a rebuild is not, so an upgrade can replace it.
+    let package = legacy_frozen_copy();
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    assert!(matches!(
+        load_package(package.path(), &context),
+        Err(PackageError::RetiredApiVersion)
+    ));
+    assert!(matches!(
+        inspect_package_integrity(package.path()),
+        Err(PackageError::RetiredApiVersion)
+    ));
+    let predecessor = load_predecessor_package(package.path(), &context)
+        .expect("a retired package is still a verified predecessor");
+    assert!(predecessor.carries_retired_api_version());
+
+    let current = frozen_copy();
+    let current_predecessor = load_predecessor_package(current.path(), &context)
+        .expect("the current frozen package is a verified predecessor");
+    assert!(!current_predecessor.carries_retired_api_version());
+}
+
+#[test]
+fn a_package_names_its_kind_and_refuses_another() {
+    let package = frozen_copy();
+    let manifest_path = package.path().join("package.json");
+    let mut envelope: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    envelope["kind"] = json!("RegistryPackage");
+    fs::write(
+        &manifest_path,
+        canonicalize_json(&envelope).expect("mutated envelope canonicalizes"),
+    )
+    .unwrap();
+    reseal(package.path());
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    assert!(matches!(
+        load_package(package.path(), &context),
+        Err(PackageError::Integrity)
+    ));
+}
+
+#[test]
+fn rebuilding_a_retired_predecessor_has_apply_work_with_an_unchanged_model() {
+    // The same package under the retired envelope: same model, same engine
+    // capabilities. Its unchanged rebuild has an empty plan, yet it is the
+    // only way off a package the runtime no longer starts, so apply must not
+    // refuse it as empty. Over a current predecessor the same rebuild is
+    // still an ordinary empty successor.
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    let retired = frozen_copy();
+    retire_envelope(retired.path());
+    let retired_predecessor = load_predecessor_package(retired.path(), &context)
+        .expect("the retired package is a verified predecessor");
+    assert!(retired_predecessor.carries_retired_api_version());
+    let (_directory, successor) = verified_successor(&retired_predecessor);
+    assert!(successor_plan_is_empty(&successor));
+    assert!(!successor_plan_is_empty_for_predecessor(
+        &successor,
+        &retired_predecessor
+    ));
+
+    let current = frozen_copy();
+    let current_predecessor = load_predecessor_package(current.path(), &context)
+        .expect("the current frozen package is a verified predecessor");
+    let (_directory, successor) = verified_successor(&current_predecessor);
+    assert!(successor_plan_is_empty_for_predecessor(
+        &successor,
+        &current_predecessor
+    ));
+}
+
 #[test]
 #[ignore = "re-freezes the committed fixture; run only after an approved package-format change"]
 fn write_frozen_fixture() {
@@ -445,4 +748,39 @@ fn write_frozen_fixture() {
         .publish_to_directory(&destination)
         .expect("the frozen fixture is written");
     inspect_package_integrity(&destination).expect("the written fixture verifies");
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn a_predecessor_written_with_retired_row_reach_compiles_as_unrestricted_rows() {
+    // The fixture's registry.yaml writes `rowBoundaries: []` for "every row",
+    // the spelling an earlier release gave that meaning. A predecessor read
+    // gives it that meaning, so a rehearsal can compile the packaged sources.
+    let package = legacy_frozen_copy();
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    let (predecessor, registry) =
+        registry_breg::package::load_predecessor_rehearsal_baseline(package.path(), &context)
+            .expect("a retired row reach reads as a predecessor");
+    assert_eq!(registry.registry_id(), "person-registration-rhai");
+    assert_eq!(
+        predecessor.migration_baseline().registry_id,
+        registry.registry_id()
+    );
+}
+
+#[test]
+fn a_current_project_still_refuses_the_retired_row_reach() {
+    let source = fs::read(legacy_frozen_root().join("source/registry.yaml"))
+        .expect("the frozen predecessor carries its project source");
+    let refused = parse_project_yaml(&source).expect_err("an empty row reach is refused");
+    assert!(
+        refused
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code.starts_with("config.")),
+        "{:?}",
+        refused.diagnostics()
+    );
 }

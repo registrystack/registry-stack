@@ -56,7 +56,7 @@ fn person_action(script: &str) -> CompiledAction {
             {"id":"friend","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromField":"person"},"operation":"patch","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":[]}],"results":["person","friend","existing"]}]}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(
@@ -99,8 +99,8 @@ fn record_action(script: &str) -> CompiledAction {
         ],"handler":{"kind":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-label","label":"A label is required."}],
             "writes":[{"id":"record","target":{"entity":"record"},"operation":"create","fields":["label","count","amount"]}]
         }}],
-        "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","permissions":[
-            {"action":"register-record","operations":["invoke"],"targets":[{"entity":"record","rowBoundaries":[]}],"results":["record"]}
+        "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
+            {"action":"register-record","operations":["invoke"],"targets":[{"entity":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
         ]}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();

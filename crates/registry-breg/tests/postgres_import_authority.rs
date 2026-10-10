@@ -77,7 +77,7 @@ const FIXTURE: &str = r#"{
     ]
   }],
   "accessProfiles":[{
-    "id":"loader","default":true,"principalClaim":"registry_principal",
+    "id":"loader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "permissions":[{
       "entity":"widget","operations":["import"],
       "readableFields":["jurisdiction","label"],"writableFields":["jurisdiction","label"],
@@ -92,7 +92,7 @@ const FIXTURE: &str = r#"{
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     }]
   },{
-    "id":"second-loader","principalClaim":"registry_principal",
+    "id":"second-loader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "permissions":[{
       "entity":"widget","operations":["import"],
       "readableFields":["jurisdiction","label"],"writableFields":["jurisdiction","label"],

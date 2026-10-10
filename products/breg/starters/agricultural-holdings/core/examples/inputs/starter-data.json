@@ -29,37 +29,37 @@
   },
   "ana-role": {
     "holderFarm": {
-      "recordRef": "river"
+      "recordCapture": "river"
     },
     "holderPerson": {
-      "recordRef": "ana"
+      "recordCapture": "ana"
     },
     "startDate": "2026-01-01"
   },
   "bo-role": {
     "holderFarm": {
-      "recordRef": "river"
+      "recordCapture": "river"
     },
     "holderPerson": {
-      "recordRef": "bo"
+      "recordCapture": "bo"
     },
     "startDate": "2026-01-01"
   },
   "cooperative-role": {
     "holderFarm": {
-      "recordRef": "landless"
+      "recordCapture": "landless"
     },
     "holderOrganization": {
-      "recordRef": "cooperative"
+      "recordCapture": "cooperative"
     },
     "startDate": "2026-01-01"
   },
   "group-role": {
     "holderFarm": {
-      "recordRef": "collective"
+      "recordCapture": "collective"
     },
     "holderGroup": {
-      "recordRef": "group"
+      "recordCapture": "group"
     },
     "startDate": "2026-01-01"
   }

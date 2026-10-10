@@ -294,6 +294,8 @@ schemas/child-tracker-facts.schema.yaml
 Create `selectors/child-tracked-entity-v1.yaml`:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
 maximumAggregateBytes: 64
 fields:
   tracked_entity_id:
@@ -311,6 +313,8 @@ source record without reaching the assertion.
 Replace `sources/child-tracker.yaml` with:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
 transport: http-json
 baseUrl: https://play.im.dhis2.org
 posture: record-transformed
@@ -587,6 +591,8 @@ Evidence Gateway does not convert absence into a negative answer.
 Create `questions/immunization-summary.yaml`:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: immunization-summary
 question: Which immunizations are recorded for this child?
 purpose: care-continuity

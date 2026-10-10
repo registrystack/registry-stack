@@ -1,0 +1,13 @@
+id: dangling-reference
+rules: [CFG-ID-4]
+summary: A reference to an identifier nothing defines is refused by the check command at the reference.
+mutation:
+  member:
+    role: reference
+    value: conformance-missing
+expect:
+  exit: 1
+  diagnostics:
+    - code: any
+      path: "{pointer}"
+      at: {line: 1, column: 1}

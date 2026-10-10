@@ -1,21 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Operator-pinned Casework endpoints and BREG's own status credentials.
 use super::*;
-use registry_platform_config::SecretResolver;
+use registry_platform_config::{SecretReference, SecretResolver};
 use registry_platform_httputil::client::PrivateKeyJwtConfig;
+use registry_platform_yaml::Url;
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskGrantStatusConfig {
-    pub source_issuer: String,
-    pub base_url: String,
+    /// The Casework task authority's issuer, exactly as Casework states it.
+    /// `http` and `https` are both accepted, since the value is compared, not
+    /// fetched.
+    pub source_issuer: Url,
+    /// The Casework base URL the status check calls. It is `https`; `http`
+    /// is accepted only for a loopback host, for local development.
+    pub base_url: Url,
     pub token_endpoint: String,
     pub client_assertion_audience: String,
     pub client_id: String,
-    pub private_key_ref: String,
+    pub private_key_ref: SecretReference,
     pub casework_resource: String,
-    pub ca_bundle_ref: Option<String>,
+    /// PEM CA bundle for Casework and its token endpoint. Omitted, the
+    /// platform's trusted roots verify them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_bundle_ref: Option<SecretReference>,
 }
 
 pub struct TaskGrantStatusRegistry {
@@ -38,7 +47,7 @@ impl TaskGrantStatusRegistry {
         let mut clients = BTreeMap::new();
         for config in configs {
             let secret = secrets
-                .resolve(&config.private_key_ref)
+                .resolve_reference(&config.private_key_ref)
                 .map_err(|_| TaskGrantError::Configuration)?;
             let key = registry_platform_crypto::parse_json_strict(secret.expose_secret())
                 .map_err(|_| TaskGrantError::Configuration)?;
@@ -46,7 +55,7 @@ impl TaskGrantStatusRegistry {
             let ca = config
                 .ca_bundle_ref
                 .as_ref()
-                .map(|reference| secrets.resolve(reference))
+                .map(|reference| secrets.resolve_reference(reference))
                 .transpose()
                 .map_err(|_| TaskGrantError::Configuration)?;
             let mut token = PrivateKeyJwtConfig::new(
@@ -64,17 +73,18 @@ impl TaskGrantStatusRegistry {
                 token = token.with_trusted_root_certificates(ca.expose_secret().to_vec());
             }
             let client = TaskGrantStatusClient::new(
-                config.source_issuer.clone(),
+                config.source_issuer.as_str().to_owned(),
                 resource.to_owned(),
                 config
                     .base_url
+                    .as_str()
                     .parse()
                     .map_err(|_| TaskGrantError::Configuration)?,
                 Arc::new(PrivateKeyJwt::new(token).map_err(|_| TaskGrantError::Configuration)?),
                 ca.as_ref().map(|value| value.expose_secret()),
             )?;
             if clients
-                .insert(config.source_issuer.clone(), client)
+                .insert(config.source_issuer.as_str().to_owned(), client)
                 .is_some()
             {
                 return Err(TaskGrantError::Configuration);
@@ -132,12 +142,12 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
         let config = TaskGrantStatusConfig {
-            source_issuer: "https://casework.test".into(),
-            base_url: "https://casework.test".into(),
+            source_issuer: Url::new("https://casework.test").unwrap(),
+            base_url: Url::new("https://casework.test").unwrap(),
             token_endpoint: "https://identity.test/oauth2/token".into(),
             client_assertion_audience: "https://identity.test".into(),
             client_id: "breg-status".into(),
-            private_key_ref: "secret:file/status-key".into(),
+            private_key_ref: SecretReference::parse("secret:file/status-key").unwrap(),
             casework_resource: "urn:casework:test".into(),
             ca_bundle_ref: None,
         };
@@ -150,20 +160,17 @@ mod tests {
         assert!(status.contains(&config.source_issuer));
         assert!(!status.contains("https://other.test"));
         let mut duplicate = config.clone();
-        duplicate.base_url = "https://other-casework.test".into();
+        duplicate.base_url = Url::new("https://other-casework.test").unwrap();
         assert!(TaskGrantStatusRegistry::activate(
             &[config.clone(), duplicate],
             "urn:breg:test",
             &secrets
         )
         .is_err());
-        for url in [
-            "http://casework.test",
-            "https://user@casework.test",
-            "https://casework.test/#fragment",
-        ] {
+        assert!(Url::new("https://user@casework.test").is_err());
+        for url in ["http://casework.test", "https://casework.test/#fragment"] {
             let mut invalid = config.clone();
-            invalid.base_url = url.into();
+            invalid.base_url = Url::new(url).unwrap();
             assert!(
                 TaskGrantStatusRegistry::activate(&[invalid], "urn:breg:test", &secrets).is_err(),
                 "{url}"

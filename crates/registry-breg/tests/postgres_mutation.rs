@@ -341,37 +341,37 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         "the public mutation path persists a refusal before returning validation failure"
     );
 
-    let anonymous_claims = ClaimContext::for_compiled(
+    let reader_claims = ClaimContext::for_compiled(
         &compiled,
         "widget",
-        None,
-        "anonymous-reader",
+        Some(PRINCIPAL_CANARY.to_owned()),
+        "label-reader",
         None,
         Vec::new(),
     )
-    .expect("anonymous read authority is compiler-bound");
-    let before_anonymous = durable_counts(&database, table).await;
-    let anonymous_mutation = coordinator
+    .expect("read-only authority is compiler-bound");
+    let before_reader = durable_counts(&database, table).await;
+    let reader_mutation = coordinator
         .execute(
             &mut client,
             create_request(
                 &create_plan,
-                "anonymous-key",
-                &anonymous_claims,
+                "reader-key",
+                &reader_claims,
                 "00000000-0000-0000-0000-000000000105",
-                "anonymous-label",
+                "reader-label",
                 Some(1),
             ),
         )
         .await;
-    assert_eq!(anonymous_mutation, Err(MutationError::InvalidRequest));
+    assert_eq!(reader_mutation, Err(MutationError::InvalidRequest));
     assert_eq!(
         durable_counts(&database, table).await,
         DurableCounts {
-            audit: before_anonymous.audit + 1,
-            ..before_anonymous
+            audit: before_reader.audit + 1,
+            ..before_reader
         },
-        "anonymous read authority cannot cross the mutation boundary"
+        "read-only authority cannot cross the mutation boundary"
     );
 
     for (index, fault) in [
@@ -2218,12 +2218,12 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     assert_eq!(fetched.body["data"]["domainData"]["label"], "http-created");
     assert_eq!(fetched.etag, created.etag);
 
-    let anonymous_fetched = response_parts(
+    let label_fetched = response_parts(
         send(
             &app,
             Method::GET,
-            &format!("/v1/records/widgets/{record_id}?accessProfile=anonymous-reader"),
-            None,
+            &format!("/v1/records/widgets/{record_id}?accessProfile=label-reader"),
+            Some(api_claims("case-management", None)),
             &[],
             Vec::new(),
         )
@@ -2231,11 +2231,11 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     )
     .await;
     assert_eq!(
-        anonymous_fetched.body["data"]["domainData"],
+        label_fetched.body["data"]["domainData"],
         json!({"label": "http-created"})
     );
-    assert!(anonymous_fetched.etag.starts_with("\"breg-"));
-    assert_ne!(anonymous_fetched.etag, fetched.etag);
+    assert!(label_fetched.etag.starts_with("\"breg-"));
+    assert_ne!(label_fetched.etag, fetched.etag);
 
     let listed_response = send(
         &app,
@@ -2602,11 +2602,12 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     assert_eq!(query_authority.status(), StatusCode::NOT_FOUND);
     assert!(query_authority.headers().get("etag").is_none());
 
-    for (label, blocked_claims) in [
-        ("anonymous", None),
+    for (label, blocked_claims, status) in [
+        ("unauthenticated", None, StatusCode::UNAUTHORIZED),
         (
             "unauthorized",
             Some(api_claims("wrong-purpose", Some("zone-a"))),
+            StatusCode::NOT_FOUND,
         ),
     ] {
         let response = send(
@@ -2621,7 +2622,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
             Vec::new(),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{label}");
+        assert_eq!(response.status(), status, "{label}");
         assert!(response.headers().get("etag").is_none(), "{label}");
     }
 
@@ -3483,7 +3484,7 @@ fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
             ]
           }],
           "accessProfiles":[{
-            "id":"writer","default":true,"principalClaim":"registry_principal",
+            "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"widget","operations":["create","get","list","patch","batch"],
@@ -3517,7 +3518,7 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
             ]
           }],
           "accessProfiles":[{
-            "id":"writer","default":true,"principalClaim":"registry_principal",
+            "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"widget","operations":["create","get","list","patch","batch"],
@@ -3528,7 +3529,7 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           },{
-            "id":"keeper","principalClaim":"registry_principal",
+            "id":"keeper","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-review"],
             "permissions":[{
               "entity":"widget","operations":["get","list","patch"],
@@ -3539,7 +3540,7 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           },{
-            "id":"drafter","principalClaim":"registry_principal",
+            "id":"drafter","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-drafting"],
             "permissions":[{
               "entity":"widget","operations":["create","get"],
@@ -3946,7 +3947,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             ]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management","case-review"],
             "permissions":[{
               "entity":"widget","operations":["create","get","list","patch","tombstone"],
@@ -3955,7 +3956,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           },{
-            "id":"review-operator","principalClaim":"registry_principal",
+            "id":"review-operator","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"widget","operations":["create","get","list","patch","tombstone"],
@@ -3964,14 +3965,14 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           },{
-            "id":"anonymous-reader","anonymous":true,
+            "id":"label-reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":[{
               "entity":"widget","operations":["get","list"],
               "readableFields":["label"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           },{
-            "id":"label-editor","principalClaim":"registry_principal",
+            "id":"label-editor","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"widget","operations":["get","patch"],
@@ -3980,7 +3981,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           },{
-            "id":"case-operator","default":true,"principalClaim":"registry_principal",
+            "id":"case-operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"log","operations":["create","get","list"],

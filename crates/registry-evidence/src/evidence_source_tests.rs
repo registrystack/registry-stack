@@ -1,4 +1,8 @@
 //! Two independently authorized Evidence runtimes, joined by a signed source.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 use super::*;
 use axum::{extract::Request, middleware::Next, response::Response};
 use registry_evidence_client::EvidenceDefinitionsDocument;
@@ -833,9 +837,9 @@ async fn signed_evidence_source_refuses_selectors_the_upstream_resolves_from_its
         let mut candidate = baseline.clone();
         candidate["sources"]["source-b"]["evidence"]["contract"]["definitions"][0]["subjects"][0]
             ["selector"]["valueOrigin"] = json!(origin);
-        let Err(error) =
-            crate::config::EvidenceConfig::parse_yaml(&serde_json::to_vec(&candidate).unwrap())
-        else {
+        let Err(error) = crate::config::EvidenceConfig::parse_yaml_reporting_rule(
+            &serde_json::to_vec(&candidate).unwrap(),
+        ) else {
             panic!("runtime accepted {origin}");
         };
         assert_eq!(
@@ -863,9 +867,9 @@ async fn signed_evidence_source_refuses_forwarded_access_attribution() {
     )
     .unwrap();
     candidate["sources"]["source-b"]["forwardAccessAttribution"] = json!(true);
-    let Err(error) =
-        crate::config::EvidenceConfig::parse_yaml(&serde_json::to_vec(&candidate).unwrap())
-    else {
+    let Err(error) = crate::config::EvidenceConfig::parse_yaml_reporting_rule(
+        &serde_json::to_vec(&candidate).unwrap(),
+    ) else {
         panic!("runtime accepted forwarded access attribution");
     };
     assert_eq!(
@@ -885,9 +889,9 @@ async fn signed_evidence_source_refuses_unauthenticated_access() {
     )
     .unwrap();
     candidate["sources"]["source-b"]["authentication"] = json!({"kind": "none"});
-    let Err(error) =
-        crate::config::EvidenceConfig::parse_yaml(&serde_json::to_vec(&candidate).unwrap())
-    else {
+    let Err(error) = crate::config::EvidenceConfig::parse_yaml_reporting_rule(
+        &serde_json::to_vec(&candidate).unwrap(),
+    ) else {
         panic!("runtime accepted an unauthenticated signed Evidence source");
     };
     assert_eq!(
@@ -902,8 +906,10 @@ async fn signed_evidence_source_refuses_unauthenticated_access() {
         .as_object_mut()
         .unwrap()
         .remove("evidence");
-    crate::config::EvidenceConfig::parse_yaml(&serde_json::to_vec(&candidate).unwrap())
-        .expect("the local profile accepts an unauthenticated loopback HTTP source");
+    crate::config::EvidenceConfig::parse_yaml_reporting_rule(
+        &serde_json::to_vec(&candidate).unwrap(),
+    )
+    .expect("the local profile accepts an unauthenticated loopback HTTP source");
     assert!(fixture.requests.lock().await.is_empty());
 }
 

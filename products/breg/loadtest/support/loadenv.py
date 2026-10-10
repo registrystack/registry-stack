@@ -29,7 +29,8 @@ BUILD_PROFILES = ("debug", "release")
 PROJECT_REPLACEMENTS = {
     "  sourceRevision: business-establishments-acceptance-0.1.0": "  sourceRevision: business-establishments-loadtest-0.1.0",
 }
-DEV_CLIENTS = """version: 1
+DEV_CLIENTS = """apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
 clients:
   - id: loadtest-driver
     accessProfiles: [business-operator]

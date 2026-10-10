@@ -99,6 +99,65 @@ fn secret_provider_requirement(reference_pattern: &str, provider: &str, definiti
 mod tests {
     use super::*;
 
+    fn null_admissions(node: &Value, pointer: &str, found: &mut Vec<String>) {
+        match node {
+            Value::Object(members) => {
+                let kind = members.get("type");
+                if kind == Some(&Value::from("null"))
+                    || kind
+                        .and_then(Value::as_array)
+                        .is_some_and(|kinds| kinds.contains(&Value::from("null")))
+                {
+                    found.push(pointer.to_owned());
+                }
+                for (key, member) in members {
+                    null_admissions(member, &format!("{pointer}/{key}"), found);
+                }
+            }
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    null_admissions(item, &format!("{pointer}/{index}"), found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn cfg_empty_1_the_shared_blocks_admit_null_where_the_reader_does_nowhere() {
+        use registry_platform_yaml::{EnvelopeRule, Expect, FormatSpec, Reader};
+
+        const PROVIDERS: FormatSpec<'static> = FormatSpec {
+            kind: "SecretProviders",
+            envelope: EnvelopeRule::Exempt {
+                reason: "one shared block read alone",
+            },
+            removed_keys: &[],
+        };
+        for (member, yaml) in [("file", "file: null\n"), ("environment", "environment:\n")] {
+            let refused = Reader::new("providers.yaml")
+                .decode::<SecretProvidersConfig>(yaml.as_bytes(), &Expect::one(&PROVIDERS))
+                .unwrap_err();
+            let found: Vec<_> = refused
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+                .collect();
+            assert_eq!(
+                found,
+                [("config.null-value", format!("/{member}").as_str())]
+            );
+        }
+
+        let document: Value = serde_json::from_str(&shared_blocks_document().unwrap()).unwrap();
+        let mut found = Vec::new();
+        null_admissions(&document, "", &mut found);
+        assert!(
+            found.is_empty(),
+            "the shared blocks admit null at {found:#?}"
+        );
+    }
+
     #[test]
     fn a_static_jwks_document_requires_the_provider_its_reference_names() {
         let requirement = |pattern: &str, provider: &str, definition: &str| {

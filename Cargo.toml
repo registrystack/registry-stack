@@ -43,6 +43,7 @@ members = [
     "crates/registry-platform-sdjwt",
     "crates/registry-platform-sqlite",
     "crates/registry-platform-testing",
+    "crates/registry-platform-yaml",
     "crates/registry-thunderid-tooling",
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
@@ -159,6 +160,7 @@ registry-platform-script = { path = "crates/registry-platform-script", version =
 registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.40.0" }
 registry-platform-sqlite = { path = "crates/registry-platform-sqlite", version = "0.40.0" }
 registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.40.0" }
+registry-platform-yaml = { path = "crates/registry-platform-yaml", version = "0.40.0" }
 
 anstream = { version = "1" }
 anstyle = { version = "1" }
@@ -233,12 +235,12 @@ rusqlite = { version = "0.40", default-features = false, features = ["bundled", 
 rustix = { version = "1", features = ["fs", "process"] }
 rustls-native-certs = { version = "0.8.4" }
 ryu-js = { version = "=1.0.3" }
+saphyr-parser = { version = "=0.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 schemars = { version = "=1.2.2" }
 serde_norway = { version = "0.9" }
 serde_path_to_error = { version = "0.1" }
-serde_yaml_ng = { version = "0.10.0" }
 sha2 = { version = "0.11" }
 signal-hook = { version = "0.4" }
 subtle = { version = "2" }

@@ -93,8 +93,8 @@ fn characterization_action(script: &str) -> CompiledAction {
             "refusals":[{"code":"blank-label","label":"A label is required."}],
             "writes":[{"id":"record","target":{"entity":"record"},"operation":"create","fields":["label","count","amount"]}]
         }}],
-        "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","permissions":[
-            {"action":"register-record","operations":["invoke"],"targets":[{"entity":"record","rowBoundaries":[]}],"results":["record"]}
+        "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
+            {"action":"register-record","operations":["invoke"],"targets":[{"entity":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
         ]}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();

@@ -317,13 +317,13 @@ fn partial_text_registry() -> registry_breg::CompiledRegistry {
             ]
         }],
         "accessProfiles":[{
-            "id":"facility-operator","default":true,"principalClaim":"principal","permissions":[{
+            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                 "entity":"permit","operations":["list"],
                 "readableFields":["permit-type","valid-from","administrative-boundary"],
                 "filterableFields":["permit-type","valid-from","administrative-boundary"],
                 "allowCount":true,
                 "rowBoundaries":[{"field":"administrative-boundary","claim":"administrative_boundaries","operator":"in"}]
-            }]
+            },{"dataset":"monthly-air-permits","operations":["read-live"]}]
         }],
         "vocabularies":[
             {"id":"permit-type","values":["air-emissions","water-discharge"]},
@@ -331,10 +331,9 @@ fn partial_text_registry() -> registry_breg::CompiledRegistry {
         ],
         "statisticalDatasets":[{
             "id":"monthly-air-permits","unit":"permit","population":"startswith(permitType,'a')",
-            "period":{"kind":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
+            "period":{"type":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["administrative-boundary"],
-            "disclosure":{"minimumCount":2,"roundingBase":2},
-            "live":["facility-operator"]
+            "disclosure":{"minimumCount":2,"roundingBase":2}
         }]
     });
     let bytes = serde_json::to_vec(&source).expect("partial-text fixture serializes");

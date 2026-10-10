@@ -42,6 +42,7 @@ SHARDS = {
         "registry-platform-sdjwt",
         "registry-platform-sqlite",
         "registry-platform-testing",
+        "registry-platform-yaml",
     ),
     "manifest": (
         "registry-manifest-cli",
@@ -126,18 +127,61 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
         "registry-casework",
         "registry-discovery",
         "registry-evidence",
+        "registry-evidence-oid4vci",
         "registry-render",
         "registry-scheduling",
         "registry-messaging",
     }
 )
+# The configuration conformance corpus runs the registered `check` command of
+# each format it reaches from the built binaries of these packages, which the
+# job builds; a change to one, or to anything it links, runs the corpus.
+CONFIG_CHECK_PACKAGES = frozenset(
+    {
+        "registry-breg-mcp",
+        "registry-breg-review",
+        "registry-bregctl",
+        "registry-caseworkctl",
+        "registry-discoveryctl",
+        "registry-evidence",
+        "registry-evidence-oid4vci",
+        "registry-evidencectl",
+        "registry-manifest-cli",
+        "registry-messagingctl",
+        "registry-render",
+        "registry-schedulingctl",
+    }
+)
 CONFIG_CONFORMANCE_INPUTS = (
     "products/platform/generated/*",
     "products/platform/scripts/*config-conformance*",
+    "products/platform/scripts/*config_conformance*",
+    "products/platform/conformance/*",
     "products/breg/generated/runtime/*",
+    "products/breg/generated/mcp-runtime/*",
+    "products/breg/generated/review-runtime/*",
     "products/casework/generated/runtime/*",
     "products/scheduling/generated/runtime/*",
     "products/messaging/generated/runtime/*",
+    "products/evidence/generated/oid4vci-runtime/*",
+)
+
+# The configuration conventions lint runs in the same job. Beyond the files
+# below it reads every file and reader crate config-formats.yaml names (see
+# config_format_inputs), and it refuses a schema under these globs that
+# nobody registered, so a new one has to reach it.
+CONFIG_CONVENTIONS_INPUTS = (
+    "products/platform/config-formats.yaml",
+    "products/platform/config-conventions-exceptions.yaml",
+    "products/platform/CONFIG-CONVENTIONS.md",
+    "products/platform/scripts/*config-conventions*",
+    "editors/configure.py",
+    "products/*/generated/*.schema.json",
+    "products/*/contracts/*.schema.json",
+    "products/*/contracts/*.schema.yaml",
+    "products/*/schemas/*.schema.json",
+    "products/*/profile/schema/*.schema.json",
+    "crates/*/schemas/*.schema.json",
 )
 
 # These are Registry Record commitments implemented by Base Registry Engine.
@@ -471,6 +515,9 @@ LOCK_NATIVE_BUILD_HELPERS = frozenset(
         "vcpkg",
     }
 )
+# The YAML reader boundary probes these crates' entry points, so a locked
+# release of one runs it.
+LOCK_YAML_READERS = frozenset({"serde_norway", "serde_yaml_ng"})
 LOCK_NATIVE_PACKAGES = LOCK_NATIVE_BUILD_HELPERS | frozenset(
     {
         "aws-lc-rs",
@@ -511,7 +558,9 @@ DOCS_ARCHIVE_INPUTS = frozenset(
         "docs/site/scripts/configuration-reference.mjs",
         "docs/site/scripts/docsets.mjs",
         "docs/site/scripts/generate-breg-configuration.mjs",
+        "docs/site/scripts/generate-configuration-formats.mjs",
         "docs/site/scripts/generate-evidence-configuration.mjs",
+        "docs/site/scripts/generate-scheduling-configuration.mjs",
         "docs/site/scripts/retry.mjs",
         "docs/site/src/data/archive-lock.yaml",
         "docs/site/src/data/docsets.yaml",
@@ -737,12 +786,14 @@ class LockChange:
     ``members`` names the workspace members whose locked dependency closure
     changed, or is None when the change must select the complete matrix.
     ``native`` is true when the change can alter compiled or linked native
-    code, or when that cannot be ruled out.
+    code, or when that cannot be ruled out. ``packages`` names the locked
+    packages whose entries changed when ``members`` routes the change.
     """
 
     members: frozenset[str] | None
     native: bool
     reason: str
+    packages: frozenset[str] = frozenset()
 
 
 LockKey = tuple[str, str, str]
@@ -885,6 +936,7 @@ def lock_change(
         False,
         f"{len(changed)} locked package entries changed; "
         f"{len(affected)} workspace members affected",
+        frozenset(key[0] for key in changed),
     )
 
 
@@ -909,6 +961,34 @@ def repo_docs_sources(root: Path = REPO_ROOT) -> frozenset[str]:
     return frozenset(
         match.group(1).strip("'\"") for match in REPO_DOCS_SOURCE.finditer(text)
     )
+
+
+CONFIG_FORMATS = "products/platform/config-formats.yaml"
+CONFIG_FORMAT_PATH = re.compile(
+    r"^\s*(?:-\s+)?(?:path|file|example|driftCheck|differentialTest):\s*(\S+)\s*$",
+    re.MULTILINE,
+)
+CONFIG_FORMAT_CRATE = re.compile(r"^\s*(?:-\s+)?crate:\s*(\S+)\s*$", re.MULTILINE)
+
+
+def config_format_inputs(
+    root: Path = REPO_ROOT,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Return the repository files and reader crates config-formats.yaml names.
+
+    The classifier runs without PyYAML, so this reads the path-valued and
+    ``crate:`` keys by line; test_ci_changes.py holds the result equal to a
+    full YAML parse of the registry.
+    """
+
+    text = (root / CONFIG_FORMATS).read_text(encoding="utf-8")
+    paths = {
+        match.group(1).strip("'\"") for match in CONFIG_FORMAT_PATH.finditer(text)
+    }
+    crates = {
+        match.group(1).strip("'\"") for match in CONFIG_FORMAT_CRATE.finditer(text)
+    }
+    return frozenset(paths - {"none"}), frozenset(crates)
 
 
 def is_root_workflow(path: str) -> bool:
@@ -1054,6 +1134,9 @@ def classify(
     # the nightly sweep only, outside the merge verdict.
     platform_assurance = platform and (full_sweep or not pull_request)
     platform_coverage = platform and (full_sweep or main_push)
+    # The YAML reader boundary audits every Rust source, manifest, Cargo
+    # configuration, and clippy configuration, because a suppression or a
+    # crate-level clippy.toml anywhere can switch it off.
     platform_hygiene = complete or any(
         matches(
             path,
@@ -1062,9 +1145,19 @@ def classify(
             "products/platform/rustfmt.toml",
             "products/platform/scripts/*",
             "products/platform/templates/*",
+            "products/platform/config-formats.yaml",
+            "*.rs",
+            "*Cargo.toml",
+            "*clippy.toml",
+            "*.cargo/config",
+            "*.cargo/config.toml",
         )
         or path in {"clippy.toml", "deny.toml", "rustfmt.toml"}
         for path in paths
+    ) or (
+        lock_members is not None
+        and lock_change is not None
+        and bool(lock_change.packages & LOCK_YAML_READERS)
     )
     # Evidence fuzz smoke follows the platform fuzz policy: broad assurance
     # for the merge queue and the nightly sweep, deferred out of review.
@@ -1072,10 +1165,18 @@ def classify(
         bool(affected & EVIDENCE_PACKAGES)
         or "evidence_assurance" in security_workflow_gates
     ) and (full_sweep or not pull_request)
+    format_paths, format_crates = config_format_inputs()
     config_conformance = (
         complete
-        or any(matches(path, *CONFIG_CONFORMANCE_INPUTS) for path in paths)
-        or bool(affected & CONFIG_CONFORMANCE_PACKAGES)
+        or any(
+            path in format_paths
+            or matches(path, *CONFIG_CONFORMANCE_INPUTS, *CONFIG_CONVENTIONS_INPUTS)
+            for path in paths
+        )
+        or bool(
+            affected
+            & (CONFIG_CONFORMANCE_PACKAGES | CONFIG_CHECK_PACKAGES | format_crates)
+        )
     )
     release_tool = (
         complete
@@ -1168,8 +1269,14 @@ def classify(
             for prefix in (
                 "products/breg/generated/authoring/",
                 "products/breg/generated/runtime/",
+                "products/breg/generated/tools/",
+                "products/casework/generated/project/",
                 "products/casework/generated/runtime/",
                 "products/scheduling/generated/runtime/",
+                "products/scheduling/generated/project/",
+                "products/scheduling/generated/records/",
+                "products/scheduling/generated/fixture/",
+                "products/messaging/generated/authoring/",
                 "products/messaging/generated/runtime/",
                 "products/discovery/schemas/",
             )

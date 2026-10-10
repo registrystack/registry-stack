@@ -1,4 +1,8 @@
 //! Contract tests for exact, source-neutral HTTP/JSON execution.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -38,6 +42,7 @@ use registry_evidence::source::{
 };
 use registry_evidence::verifier::{verify_flattened_jws, EvidenceVerificationPolicy};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
+use registry_platform_yaml::{BoundedU32, BoundedU64, Url};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -137,7 +142,7 @@ fn http_request_mut(source: &mut SourceConfig) -> &mut FixedRequest {
     request
 }
 
-fn base_url_mut(source: &mut SourceConfig) -> &mut String {
+fn base_url_mut(source: &mut SourceConfig) -> &mut Url {
     let SourceConfig::HttpJson { base_url, .. } = source else {
         panic!("{NOT_HTTP_JSON}");
     };
@@ -322,23 +327,32 @@ fn request_limits(config: &PreparationLimits) -> RequestPartsLimits {
         channel(config.query),
         channel(config.json_body),
         RequestPartsBounds {
-            maximum_query_pairs: configured(config.maximum_query_pairs, MAXIMUM_QUERY_PAIRS),
+            maximum_query_pairs: configured(
+                config.maximum_query_pairs.map(|value| value.get()),
+                MAXIMUM_QUERY_PAIRS,
+            ),
             maximum_query_name_bytes: configured(
-                config.maximum_query_name_bytes,
+                config.maximum_query_name_bytes.map(|value| value.get()),
                 MAXIMUM_QUERY_NAME_BYTES,
             ),
             maximum_query_value_bytes: configured(
-                config.maximum_query_value_bytes,
+                config.maximum_query_value_bytes.map(|value| value.get()),
                 MAXIMUM_QUERY_VALUE_BYTES,
             ),
-            maximum_json_depth: configured(config.maximum_json_depth, MAXIMUM_JSON_BODY_DEPTH),
+            maximum_json_depth: configured(
+                config.maximum_json_depth.map(|value| value.get()),
+                MAXIMUM_JSON_BODY_DEPTH,
+            ),
             maximum_collection_items: configured(
-                config.maximum_collection_items,
+                config.maximum_collection_items.map(|value| value.get()),
                 MAXIMUM_ARRAY_ITEMS,
             ),
-            maximum_string_bytes: configured(config.maximum_string_bytes, MAXIMUM_STRING_BYTES),
+            maximum_string_bytes: configured(
+                config.maximum_string_bytes.map(|value| value.get()),
+                MAXIMUM_STRING_BYTES,
+            ),
             maximum_normalized_bytes: configured(
-                config.maximum_normalized_bytes,
+                config.maximum_normalized_bytes.map(|value| value.get()),
                 MAXIMUM_REQUEST_PARTS_BYTES,
             ),
         },
@@ -1062,7 +1076,7 @@ async fn sec_declared_unresolved_problem_is_exact_and_source_neutral() {
         let (_root, secrets) = resolver(&[]);
         let mut source = fixed_source(&server.uri(), json!({"kind": "none"}));
         *unresolved_problem_mut(&mut source) = Some(DeclaredUnresolvedProblem {
-            status: 404,
+            status: BoundedU32::new(404).expect("404 is the declared status"),
             type_uri: TYPE_URI.into(),
             code: "consultation.unresolved".into(),
         });
@@ -1105,11 +1119,12 @@ async fn undeclared_and_oversized_unresolved_problems_remain_dependency_failures
 
     let mut source = fixed_source(&server.uri(), json!({"kind": "none"}));
     *unresolved_problem_mut(&mut source) = Some(DeclaredUnresolvedProblem {
-        status: 404,
+        status: BoundedU32::new(404).expect("404 is the declared status"),
         type_uri: "https://id.example.invalid/problems/consultation/unresolved".into(),
         code: "consultation.unresolved".into(),
     });
-    http_request_mut(&mut source).maximum_response_bytes = 32;
+    http_request_mut(&mut source).maximum_response_bytes =
+        BoundedU64::new(32).expect("a valid response bound");
     let executor = SourceExecutor::new(&source, secrets).expect("bounded executor builds");
     assert_eq!(
         executor
@@ -1272,7 +1287,7 @@ async fn path_binding_contract_rejects_empty_missing_and_extra_material_before_c
 
     let server = MockServer::start().await;
     let mut source = base;
-    *base_url_mut(&mut source) = server.uri();
+    *base_url_mut(&mut source) = Url::new(server.uri()).expect("the mock origin is a URL");
     let executor = SourceExecutor::new(&source, empty_secrets).expect("valid path plan compiles");
     let mut missing_field = selector("unused");
     missing_field.values.clear();
@@ -2172,9 +2187,12 @@ async fn every_acquisition_posture_fixture_executes_with_one_bounded_request() {
             json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         );
         *posture_mut(&mut source) = posture;
-        http_request_mut(&mut source).projection = std::iter::once("/total".to_owned())
-            .chain(declared_facts.iter().map(|fact| format!("/result/{fact}")))
-            .collect();
+        http_request_mut(&mut source).projection = registry_platform_yaml::UniqueList::new(
+            std::iter::once("/total".to_owned())
+                .chain(declared_facts.iter().map(|fact| format!("/result/{fact}")))
+                .collect(),
+        )
+        .expect("the projection paths are distinct");
         let prepared = runtime
             .prepare(
                 &preparation,
@@ -2668,7 +2686,8 @@ async fn oauth_credential_redaction_fixture_fails_closed_without_data_requests()
             assumed_lifetime_seconds,
         );
         if case_id == "transport-timeout" {
-            http_request_mut(&mut source).timeout_milliseconds = 20;
+            http_request_mut(&mut source).timeout_milliseconds =
+                BoundedU64::new(20).expect("a valid timeout");
         }
         let executor = SourceExecutor::new(&source, secrets).expect("OAuth executor builds");
         let result = executor
@@ -2783,7 +2802,9 @@ async fn projection_missing_leaf_is_omitted_but_bad_intermediate_stops_before_ex
             &server.uri(),
             json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         );
-        http_request_mut(&mut source).projection = vec!["/results/*/optional".into()];
+        http_request_mut(&mut source).projection =
+            registry_platform_yaml::UniqueList::new(vec!["/results/*/optional".into()])
+                .expect("a single path is distinct");
         let executor = SourceExecutor::new(&source, secrets).expect("executor builds");
         assert_eq!(
             executor
@@ -2863,10 +2884,12 @@ async fn source_executor_failure_matrix_is_exact_single_request_and_value_free()
             json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         );
         if case_id == "timeout" {
-            http_request_mut(&mut source).timeout_milliseconds = 20;
+            http_request_mut(&mut source).timeout_milliseconds =
+                BoundedU64::new(20).expect("a valid timeout");
         }
         if case_id == "raw-oversized-before-projection" {
-            http_request_mut(&mut source).maximum_response_bytes = 64;
+            http_request_mut(&mut source).maximum_response_bytes =
+                BoundedU64::new(64).expect("a valid response bound");
         }
         let error = SourceExecutor::new(&source, secrets)
             .expect("failure-matrix source compiles")
@@ -3088,7 +3111,9 @@ async fn private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails() {
     let (mismatch_address, mismatch_ca, mismatch_server) =
         spawn_private_ca_tls_server("localhost").await;
     let mut mismatch_source = source;
-    *base_url_mut(&mut mismatch_source) = format!("https://127.0.0.1:{}", mismatch_address.port());
+    *base_url_mut(&mut mismatch_source) =
+        Url::new(format!("https://127.0.0.1:{}", mismatch_address.port()))
+            .expect("the loopback origin is a URL");
     let mismatch_captured = BTreeMap::from([("private-pki".into(), mismatch_ca)]);
     let mismatch = SourceExecutor::new_with_selector_sets_and_tls(
         &mismatch_source,

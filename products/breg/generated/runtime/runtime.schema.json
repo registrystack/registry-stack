@@ -1,5 +1,28 @@
 {
   "$defs": {
+    "AllowedClients": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Accept a token from every client.",
+          "type": "string"
+        },
+        {
+          "description": "Accept a token only from a listed client.",
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x20\\x7F]+$",
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ],
+      "description": "The OAuth clients whose tokens a runtime accepts: the keyword\n`unrestricted`, or a list of at least one client."
+    },
     "AuditDestinationKind": {
       "description": "The configured audit destination kind, as written in product configuration.",
       "oneOf": [
@@ -15,12 +38,21 @@
         }
       ]
     },
+    "ClaimName": {
+      "description": "The name of one top-level claim of an access token. The reader accepts any\ntext; the runtime then refuses a name that is not a valid claim name, one\nthat repeats another contextual name, and one that is a registered or\nauthentication claim.",
+      "type": "string"
+    },
     "Classification": {
       "enum": [
         "public",
         "internal",
         "restricted"
       ],
+      "type": "string"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
     "EnvironmentSecretProviderConfig": {
@@ -46,22 +78,16 @@
       "additionalProperties": false,
       "properties": {
         "assertionAudience": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "clientId": {
           "type": "string"
         },
         "privateKeyRef": {
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         },
         "resource": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "scopes": {
           "default": [],
@@ -85,21 +111,11 @@
       "additionalProperties": false,
       "oneOf": [
         {
-          "properties": {
-            "tokenRef": {
-              "type": "string"
-            }
-          },
           "required": [
             "tokenRef"
           ]
         },
         {
-          "properties": {
-            "privateKeyJwt": {
-              "type": "object"
-            }
-          },
           "required": [
             "privateKeyJwt"
           ]
@@ -107,23 +123,16 @@
       ],
       "properties": {
         "baseUrl": {
-          "type": "string"
+          "$ref": "#/$defs/Url",
+          "description": "The Evidence service's base URL. It is `https`; `http` is accepted\nonly for a loopback host, for local development."
         },
         "caBundleRef": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference",
+          "description": "PEM CA bundle for the Evidence service and its token endpoint.\nOmitted, the platform's trusted roots verify them."
         },
         "privateKeyJwt": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EvidencePrivateKeyJwtConfig"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/EvidencePrivateKeyJwtConfig",
+          "description": "The refreshing credential: a private-key JWT client exchange.\nExactly one of `tokenRef` and `privateKeyJwt` is written."
         },
         "revokedKeyIds": {
           "default": [],
@@ -133,17 +142,14 @@
           "type": "array"
         },
         "tokenRef": {
-          "description": "Compatibility path for a pre-issued token. Long-running providers\nshould configure `privateKeyJwt` so expiry triggers a fresh exchange.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference",
+          "description": "Compatibility path for a pre-issued token. Long-running providers\nshould configure `privateKeyJwt` so expiry triggers a fresh exchange.\nExactly one of `tokenRef` and `privateKeyJwt` is written."
         },
         "trustBindingId": {
           "type": "string"
         },
         "trustedJwksRef": {
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         }
       },
       "required": [
@@ -194,8 +200,7 @@
               "type": "string"
             },
             "uri": {
-              "pattern": "^https?://",
-              "type": "string"
+              "$ref": "#/$defs/Url"
             }
           },
           "required": [
@@ -209,8 +214,7 @@
           "description": "Read the key set from a secret, for deployments without network access\nto the issuer.",
           "properties": {
             "documentRef": {
-              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "kind": {
               "const": "static",
@@ -260,10 +264,7 @@
           "additionalProperties": false,
           "properties": {
             "accessKeyIdRef": {
-              "maxLength": 140,
-              "minLength": 1,
-              "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "bucket": {
               "maxLength": 63,
@@ -271,13 +272,7 @@
               "type": "string"
             },
             "caBundleRef": {
-              "maxLength": 140,
-              "minLength": 1,
-              "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": [
-                "string",
-                "null"
-              ]
+              "$ref": "#/$defs/SecretReference"
             },
             "endpoint": {
               "maxLength": 2048,
@@ -298,19 +293,10 @@
               "type": "string"
             },
             "secretAccessKeyRef": {
-              "maxLength": 140,
-              "minLength": 1,
-              "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "sessionTokenRef": {
-              "maxLength": 140,
-              "minLength": 1,
-              "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": [
-                "string",
-                "null"
-              ]
+              "$ref": "#/$defs/SecretReference"
             },
             "timeoutMilliseconds": {
               "default": 10000,
@@ -351,10 +337,7 @@
           "additionalProperties": false,
           "properties": {
             "authorizationRef": {
-              "maxLength": 140,
-              "minLength": 1,
-              "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "endpoint": {
               "maxLength": 2048,
@@ -425,34 +408,22 @@
           "description": "Secret reference to the audit hash key."
         },
         "path": {
-          "default": null,
-          "description": "Absolute path of the active audit file. Required for, and accepted\nonly with, the `file` destination.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "Absolute path of the active audit file. Required for, and accepted\nonly with, the `file` destination; omitted with `stdout`.",
+          "type": "string"
         },
         "retainDays": {
-          "default": null,
-          "description": "Days a rotated file is retained. Defaults to 90.",
+          "description": "Days a rotated file is retained, accepted only with the `file`\ndestination. Omitted, a rotated file is retained for 90 days.",
           "format": "uint32",
           "maximum": 36500,
           "minimum": 1,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         },
         "rotateBytes": {
-          "default": null,
-          "description": "Size in bytes at which the active file rotates. Defaults to 100 MiB.",
+          "description": "Size in bytes at which the active file rotates, accepted only with the\n`file` destination. Omitted, the file rotates at 100 MiB.",
           "format": "uint64",
           "maximum": 4294967295,
           "minimum": 1048576,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         }
       },
       "required": [
@@ -462,37 +433,16 @@
         "not": {
           "anyOf": [
             {
-              "properties": {
-                "path": {
-                  "not": {
-                    "type": "null"
-                  }
-                }
-              },
               "required": [
                 "path"
               ]
             },
             {
-              "properties": {
-                "rotateBytes": {
-                  "not": {
-                    "type": "null"
-                  }
-                }
-              },
               "required": [
                 "rotateBytes"
               ]
             },
             {
-              "properties": {
-                "retainDays": {
-                  "not": {
-                    "type": "null"
-                  }
-                }
-              },
               "required": [
                 "retainDays"
               ]
@@ -522,15 +472,19 @@
       "additionalProperties": false,
       "properties": {
         "contextual": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RawContextualClaimNames"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/RawContextualClaimNames",
+          "default": {
+            "actorKind": "registry_actor_kind",
+            "approver": "registry_approver",
+            "grantBounds": "registry_grant_bounds",
+            "grantClient": "registry_grant_client",
+            "grantExp": "registry_grant_exp",
+            "grantId": "registry_grant_id",
+            "grantResource": "registry_grant_resource",
+            "grantSourceIssuer": "registry_grant_source_issuer",
+            "purpose": "registry_purpose"
+          },
+          "description": "The claim names that carry delegated-authority context. Each name\ndefaults to its `registry_` claim; written, every name is given."
         },
         "principal": {
           "maxLength": 128,
@@ -569,10 +523,7 @@
             ]
           },
           "pattern": "^[\\x21-\\x7E]+$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "trustedActors": {
           "additionalProperties": {
@@ -591,31 +542,31 @@
       "additionalProperties": false,
       "properties": {
         "actorKind": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "approver": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "grantBounds": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "grantClient": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "grantExp": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "grantId": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "grantResource": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "grantSourceIssuer": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "purpose": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         }
       },
       "required": [
@@ -643,44 +594,11 @@
           "type": "integer"
         },
         "secretRef": {
-          "maxLength": 140,
-          "minLength": 1,
-          "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         }
       },
       "required": [
         "secretRef"
-      ],
-      "type": "object"
-    },
-    "RawDatabaseConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "migrationUrlRef": {
-          "maxLength": 140,
-          "minLength": 1,
-          "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-          "type": "string"
-        },
-        "pool": {
-          "$ref": "#/$defs/RawPoolBounds"
-        },
-        "roles": {
-          "$ref": "#/$defs/RawSqlRoles"
-        },
-        "runtimeUrlRef": {
-          "maxLength": 140,
-          "minLength": 1,
-          "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-          "type": "string"
-        }
-      },
-      "required": [
-        "runtimeUrlRef",
-        "migrationUrlRef",
-        "pool",
-        "roles"
       ],
       "type": "object"
     },
@@ -726,7 +644,7 @@
         "payloadRetentionDays": {
           "default": 7,
           "description": "Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.",
-          "format": "uint8",
+          "format": "uint32",
           "maximum": 30,
           "minimum": 1,
           "type": "integer"
@@ -759,11 +677,8 @@
           "description": "Address families to validate when resolving the destination."
         },
         "hmacSha256KeyRef": {
-          "description": "Runtime secret reference for the receiver's shared HMAC-SHA-256 key.",
-          "maxLength": 140,
-          "minLength": 1,
-          "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Runtime secret reference for the receiver's shared HMAC-SHA-256 key."
         },
         "networkProfile": {
           "$ref": "#/$defs/EventDestinationNetworkProfile",
@@ -783,14 +698,7 @@
           "type": "string"
         },
         "tls": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RawEventDestinationTlsConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/RawEventDestinationTlsConfig",
           "description": "Optional private CA and client identity secret references for HTTPS."
         }
       },
@@ -818,7 +726,7 @@
         },
         "maximumAttempts": {
           "description": "Maximum total attempts in one delivery generation, including the first attempt.",
-          "format": "uint8",
+          "format": "uint32",
           "maximum": 5,
           "minimum": 1,
           "type": "integer"
@@ -834,27 +742,11 @@
       "additionalProperties": false,
       "anyOf": [
         {
-          "properties": {
-            "caBundleRef": {
-              "maxLength": 140,
-              "minLength": 1,
-              "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": "string"
-            }
-          },
           "required": [
             "caBundleRef"
           ]
         },
         {
-          "properties": {
-            "clientIdentityRef": {
-              "maxLength": 140,
-              "minLength": 1,
-              "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": "string"
-            }
-          },
           "required": [
             "clientIdentityRef"
           ]
@@ -862,24 +754,12 @@
       ],
       "properties": {
         "caBundleRef": {
-          "description": "PEM CA bundle secret reference, when the receiver uses a private certificate authority.",
-          "maxLength": 140,
-          "minLength": 1,
-          "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference",
+          "description": "PEM CA bundle secret reference, when the receiver uses a private\ncertificate authority. Omitted, the platform's trusted roots verify\nthe receiver. At least one of `caBundleRef` and `clientIdentityRef`\nis written."
         },
         "clientIdentityRef": {
-          "description": "PEM client identity secret reference for mutual TLS.",
-          "maxLength": 140,
-          "minLength": 1,
-          "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference",
+          "description": "PEM client identity secret reference for mutual TLS. Omitted, the\nregistry presents no client certificate."
         }
       },
       "type": "object"
@@ -889,14 +769,7 @@
       "description": "Raw `fieldEncryption` deployment block, absent by default.",
       "properties": {
         "provider": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RawFieldEncryptionProvider"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/RawFieldEncryptionProvider"
         }
       },
       "type": "object"
@@ -946,9 +819,8 @@
           "additionalProperties": false,
           "properties": {
             "dekRef": {
-              "maxLength": 140,
-              "minLength": 1,
-              "type": "string"
+              "$ref": "#/$defs/SecretReference",
+              "description": "The data encryption key, named by a `secret:file/NAME` reference;\nan environment reference is refused."
             },
             "kind": {
               "const": "localFile",
@@ -969,7 +841,7 @@
         "receiptRetentionDays": {
           "default": 7,
           "description": "Days a held response is kept after its commit. A retry after it is\nrefused as expired and never executed; the key stays spent.",
-          "format": "uint16",
+          "format": "uint32",
           "maximum": 365,
           "minimum": 1,
           "type": "integer"
@@ -1031,28 +903,6 @@
       },
       "type": "object"
     },
-    "RawListenerConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "bind": {
-          "$ref": "#/$defs/ListenerBind"
-        },
-        "publicOrigin": {
-          "description": "Canonical HTTPS origin (loopback HTTP for local development) for QGIS\ndiscovery and pagination. Required when the registry exposes GIS collections.",
-          "maxLength": 2048,
-          "minLength": 1,
-          "pattern": "^https?://[^/@?#\\s]+/?$",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "bind"
-      ],
-      "type": "object"
-    },
     "RawMetricsListenerConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1081,15 +931,8 @@
           "$ref": "#/$defs/OidcAlgorithm"
         },
         "allowedClients": {
-          "items": {
-            "maxLength": 512,
-            "minLength": 1,
-            "pattern": "^[^\\x00-\\x20\\x7F]+$",
-            "type": "string"
-          },
-          "maxItems": 128,
-          "type": "array",
-          "uniqueItems": true
+          "$ref": "#/$defs/AllowedClients",
+          "description": "The OAuth clients whose tokens this registry accepts: `unrestricted`\nto accept a token from every client, or a list of at least one\nclient."
         },
         "assertionIssuers": {
           "additionalProperties": {
@@ -1103,7 +946,9 @@
             "type": "array",
             "uniqueItems": true
           },
+          "description": "The assertion authorities each client may exchange a subject token\nfrom, keyed by client identifier. Omitted, no assertion-issuer rule\napplies; written, it lists at least one client, and a client not\nlisted, or listed with `[]`, may exchange from no authority.",
           "maxProperties": 128,
+          "minProperties": 1,
           "propertyNames": {
             "maxLength": 512,
             "minLength": 1,
@@ -1131,11 +976,10 @@
           "uniqueItems": true
         },
         "issuer": {
+          "$ref": "#/$defs/Url",
           "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL.",
           "maxLength": 2048,
-          "minLength": 1,
-          "pattern": "^https?://",
-          "type": "string"
+          "minLength": 1
         },
         "jwksCache": {
           "$ref": "#/$defs/RawJwksCacheConfig",
@@ -1185,6 +1029,7 @@
         "accessTokenType",
         "scopeClaim",
         "scopeSeparator",
+        "allowedClients",
         "maxTokenLifetimeSeconds",
         "leewayMilliseconds"
       ],
@@ -1241,12 +1086,8 @@
       "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package digest the runtime must\nfind there. The package digest is the digest of the package's\n`SHA256SUMS` file; see [`crate::package`].",
       "properties": {
         "expectedDigest": {
-          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage.",
-          "pattern": "^sha256:[0-9a-f]{64}$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/Digest",
+          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage."
         },
         "root": {
           "description": "Absolute path of the package directory.",
@@ -1273,7 +1114,7 @@
           "type": "integer"
         },
         "maxSize": {
-          "format": "uint",
+          "format": "uint32",
           "maximum": 128,
           "minimum": 1,
           "type": "integer"
@@ -1300,36 +1141,76 @@
       ],
       "type": "object"
     },
+    "RawRegistryDatabase": {
+      "additionalProperties": false,
+      "description": "The registry's database: the shared database block and the connection\npool and SQL roles the registry adds.",
+      "properties": {
+        "migrationUrlRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the migration connection URL."
+        },
+        "pool": {
+          "$ref": "#/$defs/RawPoolBounds"
+        },
+        "roles": {
+          "$ref": "#/$defs/RawSqlRoles"
+        },
+        "runtimeUrlRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the least-privileged runtime connection URL."
+        },
+        "testOnlyPlaintext": {
+          "default": false,
+          "description": "Allow a plaintext connection. Refused outside test builds.",
+          "type": "boolean"
+        },
+        "trustedRootCertificateRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to a PEM root certificate the connection trusts.\nAbsent, the connection trusts the platform's root certificates."
+        }
+      },
+      "required": [
+        "runtimeUrlRef",
+        "migrationUrlRef",
+        "pool",
+        "roles"
+      ],
+      "type": "object"
+    },
+    "RawRegistryListener": {
+      "additionalProperties": false,
+      "description": "The registry's listener: the shared listener block and an optional public\norigin.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "publicOrigin": {
+          "$ref": "#/$defs/Url",
+          "description": "Canonical public origin for QGIS discovery and pagination links, with\nan optional deployment path prefix such as\n`https://registry.example.org/breg`. It is `https`; `http` is accepted\nonly for a loopback host, for local development. Required when the\nregistry exposes GIS collections; omitted, the registry builds no\nabsolute discovery or paging links."
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
     "RawReviewAuthorityConfig": {
       "additionalProperties": false,
       "properties": {
         "completionRecipient": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "The logical recipient the review authority names in each completion\nnotification. Written together with `completionTokenRef`; omitted, no\ncompletion notification is accepted and the registry polls for\nresults.",
+          "type": "string"
         },
         "completionTokenRef": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference",
+          "description": "The bearer token the review authority presents when it notifies this\nregistry that a review completed. Written together with\n`completionRecipient`; omitted, no completion notification is\naccepted and the registry polls for results."
         },
         "endpoint": {
           "type": "string"
         },
         "privateKeyJwt": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RawReviewPrivateKeyJwtConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/RawReviewPrivateKeyJwtConfig",
+          "description": "A refreshing client-assertion credential for the review service.\nExactly one of `tokenRef` and `privateKeyJwt` is written."
         },
         "producerId": {
           "type": "string"
@@ -1344,11 +1225,8 @@
           "type": "integer"
         },
         "tokenRef": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference",
+          "description": "A static bearer token for the review service. Exactly one of\n`tokenRef` and `privateKeyJwt` is written."
         }
       },
       "required": [
@@ -1369,25 +1247,15 @@
           "type": "string"
         },
         "privateKeyJwt": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RawReviewPrivateKeyJwtConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/RawReviewPrivateKeyJwtConfig",
+          "description": "A refreshing client-assertion credential for the executing registry.\nExactly one of `tokenRef` and `privateKeyJwt` is written."
         },
         "registryId": {
           "type": "string"
         },
         "tokenRef": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference",
+          "description": "A static bearer token for the executing registry. Exactly one of\n`tokenRef` and `privateKeyJwt` is written."
         }
       },
       "required": [
@@ -1404,17 +1272,14 @@
           "type": "string"
         },
         "caBundleRef": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference",
+          "description": "A PEM bundle of the roots that sign the token endpoint's certificate.\nOmitted, the platform's trusted roots verify it."
         },
         "clientAssertionKeyRef": {
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         },
         "clientIdRef": {
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         },
         "resource": {
           "type": "string"
@@ -1515,25 +1380,11 @@
       "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
       "properties": {
         "environment": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
           "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
         },
         "file": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FileSecretProviderConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/FileSecretProviderConfig",
           "description": "Enables `secret:file/name` references, read from files under `root`."
         }
       },
@@ -1548,13 +1399,12 @@
       "additionalProperties": false,
       "properties": {
         "baseUrl": {
-          "type": "string"
+          "$ref": "#/$defs/Url",
+          "description": "The Casework base URL the status check calls. It is `https`; `http`\nis accepted only for a loopback host, for local development."
         },
         "caBundleRef": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference",
+          "description": "PEM CA bundle for Casework and its token endpoint. Omitted, the\nplatform's trusted roots verify them."
         },
         "caseworkResource": {
           "type": "string"
@@ -1566,10 +1416,11 @@
           "type": "string"
         },
         "privateKeyRef": {
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         },
         "sourceIssuer": {
-          "type": "string"
+          "$ref": "#/$defs/Url",
+          "description": "The Casework task authority's issuer, exactly as Casework states it.\n`http` and `https` are both accepted, since the value is compared, not\nfetched."
         },
         "tokenEndpoint": {
           "type": "string"
@@ -1585,6 +1436,13 @@
         "caseworkResource"
       ],
       "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
     }
   },
   "$id": "https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json",
@@ -1619,7 +1477,7 @@
       "$ref": "#/$defs/RawCursorConfig"
     },
     "database": {
-      "$ref": "#/$defs/RawDatabaseConfig"
+      "$ref": "#/$defs/RawRegistryDatabase"
     },
     "eventDelivery": {
       "$ref": "#/$defs/RawEventDeliveryConfig",
@@ -1666,18 +1524,10 @@
       "type": "string"
     },
     "listener": {
-      "$ref": "#/$defs/RawListenerConfig"
+      "$ref": "#/$defs/RawRegistryListener"
     },
     "metricsListener": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/RawMetricsListenerConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
+      "$ref": "#/$defs/RawMetricsListenerConfig",
       "description": "Optional operator-private metrics listener. Absent by default, which\nserves no metrics surface at all."
     },
     "operationalTimeouts": {

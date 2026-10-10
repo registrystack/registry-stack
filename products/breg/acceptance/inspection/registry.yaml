@@ -211,11 +211,12 @@ entities:
 accessProfiles:
   - id: inspection-inspector
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes:
       - facility-inspection
     permissions:
       - entity: inspection
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get
@@ -237,7 +238,7 @@ accessProfiles:
           - inspection-code
           - facility-code
       - entity: inspection-observation
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get
@@ -260,7 +261,7 @@ accessProfiles:
           - inspection
           - inspection-domain
       - entity: permit
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get
@@ -292,7 +293,7 @@ accessProfiles:
           - permit-status
           - valid-from
       - entity: public-authority
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get

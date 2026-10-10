@@ -190,8 +190,13 @@ const FORBIDDEN: &[(&str, &str)] = &[
 ///
 /// `url` is on the list because parsing and printing a URL is string work: the
 /// authoring form names where a document came from, and never goes there.
+///
+/// `registry-platform-yaml` is the shared configuration reader: it reads from
+/// the bytes its caller hands it, so the caller stays the one that opened the
+/// file.
 const PERMITTED_DEPENDENCIES: &[&str] = &[
     "anyhow",
+    "registry-platform-yaml",
     "rhai",
     "schemars",
     "serde",

@@ -5,6 +5,10 @@
 //! produced by the other pipeline stages, so a failure names an emit-stage
 //! rule and never a bug in the OpenAPI loader, the sampler, or the narrowing
 //! heuristics (all still placeholders as this file is written).
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 
 use registry_evidence_authoring::openapi::types;
 

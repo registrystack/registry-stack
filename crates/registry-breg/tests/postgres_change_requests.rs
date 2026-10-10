@@ -4539,26 +4539,27 @@ async fn attachment_download_journey(
             .await
             .is_empty()
     );
+    let unauthenticated = send(&app, Method::GET, &download_uri, None, &[], vec![]).await;
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
     for (uri, actor) in [
         (
             download_uri.clone(),
-            Some(claims("submitter", OTHER_SUBMITTER, None)),
+            claims("submitter", OTHER_SUBMITTER, None),
         ),
-        (download_uri.clone(), None),
         (
             download_uri.replace("accessProfile=submitter", "accessProfile=hidden-owner"),
-            Some(submitter.clone()),
+            submitter.clone(),
         ),
         (
             download_uri.replace("proposalVersion=1", "proposalVersion=2"),
-            Some(submitter.clone()),
+            submitter.clone(),
         ),
         (
             download_uri.replace("/evidence?", "/undeclared?"),
-            Some(submitter.clone()),
+            submitter.clone(),
         ),
     ] {
-        let denied = send(&app, Method::GET, &uri, actor, &[], vec![]).await;
+        let denied = send(&app, Method::GET, &uri, Some(actor), &[], vec![]).await;
         assert_eq!(denied.status(), StatusCode::NOT_FOUND);
     }
     let submitted = run_action(
@@ -8583,7 +8584,7 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
           ],
           "accessProfiles":[
             {
-              "id":"steward","default":true,"principalClaim":"registry_principal",
+              "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
@@ -8600,7 +8601,7 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
               }]
             },
             {
-              "id":"submitter","default":true,"principalClaim":"registry_principal",
+              "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
@@ -8611,7 +8612,7 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
               }]
             },
             {
-              "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
+              "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
@@ -8620,7 +8621,7 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
               }]
             },
             {
-              "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
+              "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","apply_request"],
@@ -8679,12 +8680,12 @@ fn long_logical_id_registry() -> registry_breg::CompiledRegistry {
             }
           ],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"registry_principal","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","list","submit_request","apply_request"],
               "readableFields":["tenant","placement","proposed-site","reason"],
-              "applyTargets":[{"entity":"asset-placement", "rowBoundaries": []}],
-              "rowBoundaries": []
+              "applyTargets":[{"entity":"asset-placement", "rowBoundaries": "unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
@@ -8751,7 +8752,7 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
           ],
           "accessProfiles":[
             {
-              "id":"steward","default":true,"principalClaim":"registry_principal",
+              "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"household",
                 "operations":["create"],
@@ -8762,7 +8763,7 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
               }]
             },
             {
-              "id":"operator","default":true,"principalClaim":"registry_principal",
+              "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[
                 {
                   "entity":"registration-request",
@@ -8889,7 +8890,7 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
           ],
           "accessProfiles":[
             {
-              "id":"steward","default":true,"principalClaim":"registry_principal",
+              "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
@@ -8906,7 +8907,7 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
               }]
             },
             {
-              "id":"submitter","principalClaim":"registry_principal",
+              "id":"submitter","principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
@@ -8917,7 +8918,7 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
               }]
             },
             {
-              "id":"reviewer","default":true,"principalClaim":"registry_principal","requiredPurposes":["review"],
+              "id":"reviewer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
@@ -8926,7 +8927,7 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
               }]
             },
             {
-              "id":"final-reviewer","principalClaim":"registry_principal","requiredPurposes":["final"],
+              "id":"final-reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["final"],
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
@@ -8935,7 +8936,7 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
               }]
             },
             {
-              "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
+              "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","apply_request"],
@@ -9002,7 +9003,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           ],
           "accessProfiles":[
             {
-              "id":"steward","default":true,"principalClaim":"registry_principal",
+              "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
@@ -9020,7 +9021,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               }]
             },
             {
-              "id":"submitter","default":true,"principalClaim":"registry_principal",
+              "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
@@ -9031,7 +9032,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               }]
             },
             {
-              "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
+              "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
@@ -9040,7 +9041,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               }]
             },
             {
-              "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
+              "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","apply_request"],

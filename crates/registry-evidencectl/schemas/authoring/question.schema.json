@@ -11,12 +11,24 @@
       ],
       "type": "string"
     },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
     "FactCombination": {
       "description": "How many values a fact's path is expected to reach.",
       "enum": [
         "exactly-one",
         "collect"
       ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
     "QuestionAnswer": {
@@ -26,15 +38,10 @@
         "concept": {
           "type": "string"
         },
-        "id": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "maximum": {
           "format": "int64",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
           "type": [
             "integer",
             "null"
@@ -42,7 +49,8 @@
         },
         "maximumBytes": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 1024,
+          "minimum": 1,
           "type": [
             "integer",
             "null"
@@ -50,7 +58,8 @@
         },
         "maximumSerializedBytes": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 65536,
+          "minimum": 1,
           "type": [
             "integer",
             "null"
@@ -58,6 +67,8 @@
         },
         "minimum": {
           "format": "int64",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
           "type": [
             "integer",
             "null"
@@ -65,7 +76,8 @@
         },
         "minimumBytes": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 1024,
+          "minimum": 1,
           "type": [
             "integer",
             "null"
@@ -95,6 +107,16 @@
         },
         "type": {
           "$ref": "#/$defs/AnswerType"
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExternalId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "values": {
           "default": [],
@@ -180,7 +202,8 @@
         },
         "validitySeconds": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 31536000,
+          "minimum": 1,
           "type": "integer"
         }
       },
@@ -235,10 +258,14 @@
         "collectionBounds": {
           "additionalProperties": {
             "format": "uint64",
-            "minimum": 0,
+            "maximum": 256,
+            "minimum": 1,
             "type": "integer"
           },
           "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
           "type": "object"
         },
         "facts": {
@@ -248,7 +275,6 @@
           "type": "array"
         },
         "operation": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -272,7 +298,6 @@
           "type": "boolean"
         },
         "profile": {
-          "default": null,
           "type": [
             "string",
             "null"
@@ -294,7 +319,6 @@
           "type": "string"
         },
         "source": {
-          "default": null,
           "description": "Whether this role supplies an inline operation path selector.\n\nOmission keeps the unambiguous single-role shorthand. An explicit\nvalue is useful when multiple roles use the same selector field name.",
           "type": [
             "boolean",
@@ -317,7 +341,7 @@
       "type": "string"
     }
   },
-  "$id": "https://registrystack.example/schemas/evidence-authoring/question.v1.json",
+  "$id": "https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "One authored question: what is asked, of which subjects, from which source,\nand which governed concepts the answer carries. The schema derived from this\ntype describes shape alone: which keys exist, which are required, and which\nvalues are one of a closed set. Rules that hold between fields, such as a\nsubject naming `selector` or `profiles` and never both, stay with the\nauthoring checks the compiler and the language server both run, so a\ndocument this schema accepts may still be one those checks turn away.",
@@ -327,6 +351,10 @@
         "$ref": "#/$defs/QuestionAnswer"
       },
       "type": "array"
+    },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/question/v1alpha1",
+      "type": "string"
     },
     "derivation": {
       "type": "string"
@@ -345,6 +373,10 @@
       ]
     },
     "id": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "kind": {
+      "const": "EvidenceQuestion",
       "type": "string"
     },
     "purpose": {
@@ -357,7 +389,8 @@
       "items": {
         "$ref": "#/$defs/QuestionResponseFormat"
       },
-      "type": "array"
+      "type": "array",
+      "uniqueItems": true
     },
     "source": {
       "$ref": "#/$defs/QuestionSource"
@@ -380,6 +413,8 @@
     }
   },
   "required": [
+    "apiVersion",
+    "kind",
     "id",
     "question",
     "purpose",

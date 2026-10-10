@@ -192,7 +192,7 @@ pub(crate) mod tests {
                 allow_direct_content: false,
                 requests_per_minute: 60,
                 burst: 10,
-                daily_limit: None,
+                maximum_messages_per_day: None,
             },
             AccessProfile {
                 id: "operations".to_owned(),
@@ -206,7 +206,7 @@ pub(crate) mod tests {
                 allow_direct_content: false,
                 requests_per_minute: 60,
                 burst: 10,
-                daily_limit: None,
+                maximum_messages_per_day: None,
             },
         ])
         .unwrap()

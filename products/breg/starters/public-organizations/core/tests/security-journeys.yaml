@@ -1,4 +1,5 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: starter-model-policy
     steps:
@@ -11,7 +12,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-DEPARTMENT
             name: Department of Community Services
@@ -28,7 +29,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-RIVER
             name: River District Office
@@ -45,7 +46,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-HILL
             name: Hill District Office
@@ -62,12 +63,12 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             institutionFrom:
-              recordRef: river
+              recordCapture: river
             institutionTo:
-              recordRef: department
+              recordCapture: department
             relationshipType: reports-to
             startDate: '2026-01-01'
         expect:
@@ -83,12 +84,12 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             institutionFrom:
-              recordRef: hill
+              recordCapture: hill
             institutionTo:
-              recordRef: department
+              recordCapture: department
             relationshipType: reports-to
             startDate: '2026-01-01'
         expect:
@@ -104,7 +105,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: JOURNEY-FIRST-001
             name: Frist Record
@@ -120,7 +121,7 @@ journeys:
           scopes: []
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: DENIED-001
             name: Denied
@@ -136,8 +137,8 @@ journeys:
           scopes: []
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: first-record
+          type: get
+          recordCapture: first-record
         expect:
           outcome: refusal
           status: 404
@@ -151,10 +152,10 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             record:
-              recordRef: first-record
+              recordCapture: first-record
             name: First Record
             reason: Synthetic spelling correction
             supportingReference: SYNTHETIC-SUPPORT-001
@@ -170,8 +171,8 @@ journeys:
           scopes: []
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: draft
+          type: get
+          recordCapture: draft
         expect:
           outcome: refusal
           status: 404
@@ -185,8 +186,8 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: draft
+          type: get
+          recordCapture: draft
         expect:
           outcome: success
           status: 200
@@ -200,9 +201,9 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: submit_request
-          etagRef: before-submit
-          recordRef: before-submit
+          type: submit-request
+          etagCapture: before-submit
+          recordCapture: before-submit
         expect:
           outcome: success
           status: 200
@@ -215,8 +216,8 @@ journeys:
             - starter:reviewer
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: draft
+          type: get
+          recordCapture: draft
         expect:
           outcome: success
           status: 200
@@ -230,8 +231,8 @@ journeys:
             - starter:reader
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: first-record
+          type: get
+          recordCapture: first-record
         expect:
           outcome: success
           status: 200
@@ -250,7 +251,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: LINK-JOURNEY-SOURCE
             name: Synthetic Source Office
@@ -267,7 +268,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: LINK-JOURNEY-BEFORE
             name: Synthetic Before Office
@@ -284,7 +285,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: LINK-JOURNEY-AFTER
             name: Synthetic After Office
@@ -301,12 +302,12 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             institutionFrom:
-              recordRef: source
+              recordCapture: source
             institutionTo:
-              recordRef: before
+              recordCapture: before
             relationshipType: reports-to
             startDate: '2026-01-01'
         expect:
@@ -322,14 +323,14 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             record:
-              recordRef: link
+              recordCapture: link
             institutionFrom:
-              recordRef: source
+              recordCapture: source
             institutionTo:
-              recordRef: after
+              recordCapture: after
             relationshipType: reports-to
             startDate: '2026-02-01'
             reason: Synthetic documented reporting-link correction
@@ -347,8 +348,8 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: request
+          type: get
+          recordCapture: request
         expect:
           outcome: success
           status: 200
@@ -362,9 +363,9 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: submit_request
-          recordRef: before-submit
-          etagRef: before-submit
+          type: submit-request
+          recordCapture: before-submit
+          etagCapture: before-submit
         expect:
           outcome: success
           status: 200
@@ -377,8 +378,8 @@ journeys:
             - starter:reviewer
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: request
+          type: get
+          recordCapture: request
         expect:
           outcome: success
           status: 200
@@ -392,8 +393,8 @@ journeys:
             - starter:reader
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: link
+          type: get
+          recordCapture: link
         expect:
           outcome: success
           status: 200

@@ -97,6 +97,7 @@ mod ingestion_store;
 #[cfg(feature = "runtime")]
 pub mod instance_claim;
 pub mod lifecycle;
+pub mod literal_text;
 pub mod logical_names;
 pub mod manifest_adapter;
 pub(crate) mod membership;
@@ -157,6 +158,7 @@ pub(crate) mod stored_bytes;
 pub mod task_grant;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod tooling;
+pub mod unique_set;
 pub mod wasm_handler;
 #[cfg(feature = "wasm")]
 pub mod wasm_runtime;

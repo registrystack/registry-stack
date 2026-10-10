@@ -6,6 +6,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use registry_breg_mcp::{
+    check,
     cli::{Cli, Command},
     config::RuntimeConfig,
     runtime,
@@ -38,11 +39,35 @@ fn operational_log_level(value: Result<String, std::env::VarError>) -> Result<Le
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    // The offline check writes its own report and reads no log setting.
+    if let Command::Check(arguments) = &cli.command {
+        let request = check::CheckRequest {
+            runtime: &cli.runtime_config,
+            environment: arguments.environment,
+            format: arguments.format,
+            deny_warnings: arguments.deny_warnings,
+        };
+        return ExitCode::from(check::run(
+            &request,
+            &mut std::io::stdout().lock(),
+            &mut std::io::stderr().lock(),
+        ));
+    }
+
     let level = match operational_log_level(std::env::var(LOG_VARIABLE)) {
         Ok(level) => level,
         Err(error) => {
             eprintln!("breg-mcp: {error}");
             return ExitCode::from(2);
+        }
+    };
+    // A refused runtime file is reported in the shared human shape on
+    // standard error (CFG-DIAG-2), naming members and never their values.
+    let config = match RuntimeConfig::load(&cli.runtime_config) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("breg-mcp: {error}");
+            return ExitCode::FAILURE;
         }
     };
     // JSON lines on standard output, from this crate only.
@@ -57,7 +82,7 @@ fn main() -> ExitCode {
         .with(Targets::new().with_target("registry_breg_mcp", level))
         .init();
 
-    match run(cli) {
+    match serve(&config) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             // Startup failures name the failing field and stage, never the
@@ -68,26 +93,14 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> Result<(), String> {
-    let config = RuntimeConfig::load(&cli.runtime_config)
-        .map_err(|error| format!("the runtime configuration could not be loaded: {error}"))?;
-    match cli.command {
-        Command::Check => {
-            runtime::check(&config)
-                .map_err(|error| format!("the configuration cannot be served: {error}"))?;
-            tracing::info!(target: "registry_breg_mcp", "configuration is valid");
-            Ok(())
-        }
-        Command::Serve => {
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| format!("the async runtime could not start: {error}"))?;
-            runtime
-                .block_on(runtime::serve(&config, shutdown_signal()))
-                .map_err(|error| format!("the gateway could not serve: {error}"))
-        }
-    }
+fn serve(config: &RuntimeConfig) -> Result<(), String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("the async runtime could not start: {error}"))?;
+    runtime
+        .block_on(runtime::serve(config, shutdown_signal()))
+        .map_err(|error| format!("the gateway could not serve: {error}"))
 }
 
 async fn shutdown_signal() {

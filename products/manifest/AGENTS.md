@@ -32,7 +32,13 @@ Run focused checks from the monorepo root:
 cargo test --locked -p registry-manifest-core
 cargo test --locked -p registry-manifest-cli
 cargo run --locked -p registry-manifest-cli -- validate-profiles products/manifest/profiles
+cargo test --locked -p registry-manifest-cli --features schema --lib schema::tests
 ```
+
+The CLI reads manifests and profile descriptors only through
+`registry-platform-yaml`. A change to the reader types regenerates
+`products/manifest/schemas/` with the generator the schema tests name, never by
+hand.
 
 Renderer changes need representative golden-output coverage. Shared model
 changes also need affected BReg publication checks. The broader

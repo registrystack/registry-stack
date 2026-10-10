@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod support;
+
 use registry_manifest_core::{
     canonicalize_json, compile_manifest, render_base_dcat, render_catalog, source_manifest_digest,
     validate_manifest, MetadataError, MetadataManifest,
@@ -11,7 +13,7 @@ const MULTI_DATASET_FIXTURE: &str = include_str!(
 );
 
 fn fixture() -> MetadataManifest {
-    serde_yaml_ng::from_str(MULTI_DATASET_FIXTURE).expect("multi-dataset fixture parses")
+    support::from_yaml(MULTI_DATASET_FIXTURE).expect("multi-dataset fixture parses")
 }
 
 fn validation_paths(manifest: &MetadataManifest) -> Vec<String> {
@@ -201,16 +203,14 @@ fn rejects_distribution_without_access_and_malformed_optional_fields() {
 #[test]
 fn strict_parser_rejects_missing_dataset_and_unknown_distribution_keys() {
     let missing_dataset = MULTI_DATASET_FIXTURE.replace("    dataset: legal-entities\n", "");
-    let error = serde_yaml_ng::from_str::<MetadataManifest>(&missing_dataset)
-        .expect_err("distribution dataset is required");
+    let error = support::from_yaml(&missing_dataset).expect_err("distribution dataset is required");
     assert!(error.to_string().contains("dataset"), "{error}");
 
     let unknown = MULTI_DATASET_FIXTURE.replace(
         "    dataset: legal-entities\n",
         "    dataset: legal-entities\n    access_scope: public\n",
     );
-    let error = serde_yaml_ng::from_str::<MetadataManifest>(&unknown)
-        .expect_err("unknown distribution key must fail");
+    let error = support::from_yaml(&unknown).expect_err("unknown distribution key must fail");
     assert!(error.to_string().contains("access_scope"), "{error}");
 }
 
@@ -232,7 +232,7 @@ fn rejects_distribution_collection_above_the_top_level_bound() {
 
 #[test]
 fn existing_manifest_canonical_bytes_and_digest_are_unchanged() {
-    let absent: MetadataManifest = serde_yaml_ng::from_str(
+    let absent: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -248,7 +248,7 @@ datasets:
 "#,
     )
     .expect("baseline parses");
-    let explicit_empty: MetadataManifest = serde_yaml_ng::from_str(
+    let explicit_empty: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -316,7 +316,7 @@ fn non_empty_new_fields_change_digest_deterministically() {
     );
 
     let reparsed: MetadataManifest =
-        serde_yaml_ng::from_str(MULTI_DATASET_FIXTURE).expect("fixture reparses");
+        support::from_yaml(MULTI_DATASET_FIXTURE).expect("fixture reparses");
     assert_eq!(
         baseline_digest,
         source_manifest_digest(&reparsed).expect("reparsed digest")
@@ -331,7 +331,7 @@ fn filtering_preserves_dataset_version_and_prunes_hidden_distributions() {
         1,
     );
     let mut manifest: MetadataManifest =
-        serde_yaml_ng::from_str(&with_entity).expect("entity fixture parses");
+        support::from_yaml(&with_entity).expect("entity fixture parses");
     let mut hidden_distribution = manifest.distributions[0].clone();
     hidden_distribution.id = "beneficial-ownership-snapshot".to_string();
     hidden_distribution.iri = None;
@@ -354,7 +354,7 @@ fn filtering_preserves_dataset_version_and_prunes_hidden_distributions() {
 
 #[test]
 fn filtered_catalog_and_dcat_do_not_reveal_hidden_dataset_or_service_relationships() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:

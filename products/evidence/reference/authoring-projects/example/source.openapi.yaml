@@ -1,0 +1,25 @@
+openapi: 3.1.0
+info: {title: Synthetic reference API, version: 1.0.0}
+x-evidencectl-mock:
+  datasets:
+    place-codes:
+      path: ./data/place-codes.json
+paths:
+  /places:
+    get:
+      responses:
+        "200":
+          description: Synthetic place
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [code]
+                properties:
+                  code:
+                    type: string
+                    minLength: 3
+                    maxLength: 3
+                    x-evidencectl-mock:
+                      reference: {dataset: place-codes, field: code}

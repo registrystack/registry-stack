@@ -16,6 +16,7 @@ registry-platform-canonical-json = { workspace = true }
 registry-platform-config = { workspace = true }
 registry-platform-crypto = { workspace = true }
 registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-yaml = { workspace = true }
 typst = { workspace = true }
 typst-pdf = { workspace = true }
 typst-assets = { workspace = true }
@@ -29,9 +30,9 @@ hex = { workspace = true }
 jsonschema = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_norway = { workspace = true }
 sha2 = { workspace = true }
 rustix = { workspace = true }
+schemars = { workspace = true, optional = true }
 subtle = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["process", "io-util"] }
@@ -49,3 +50,11 @@ path = "src/main.rs"
 
 [lints]
 workspace = true
+
+[features]
+schema = [
+  "dep:schemars",
+  "registry-platform-audit/schema",
+  "registry-platform-config/schema",
+  "registry-platform-yaml/schema",
+]

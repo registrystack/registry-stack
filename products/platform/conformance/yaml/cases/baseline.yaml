@@ -1,0 +1,6 @@
+id: baseline
+rules: [CFG-CHECK-1, CFG-CHECK-3, CFG-DIAG-1, CFG-DIAG-4]
+summary: The format's registered minimal valid example, unchanged, passes its offline check with no diagnostic.
+expect:
+  exit: 0
+  diagnostics: []

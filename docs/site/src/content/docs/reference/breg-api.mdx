@@ -36,8 +36,9 @@ the exact ones its package compiled.
 
 ## Authentication and profile selection
 
-Every request carries `Authorization: Bearer <token>` unless the selected profile sets
-`anonymous: true`. The token is a JWT signed by the configured issuer with the configured
+Every request except the health and readiness probes carries `Authorization: Bearer <token>`;
+a request without a verified token is refused with `401 authentication.refused` before any
+profile is selected. The token is a JWT signed by the configured issuer with the configured
 algorithm. It must carry
 `iss`, `aud`, and `exp`, and its scopes come from the claim named by `scopeClaim`, split on
 `scopeSeparator`; both are required settings. The principal and purpose claims are the ones named
@@ -49,9 +50,9 @@ query option. A profile grants access when the token satisfies its `requiredScop
 entity. Row boundaries on the grant compare a record field with a token claim and hide every
 record outside them, on reads and on writes.
 
-A refusal is concealed as `404 resource.not_found` whenever the token is missing, does not
-satisfy the profile, or names a record outside the caller's boundary. The only exception is a
-token that was presented and rejected, which returns `401 authentication.refused`. A caller
+A refusal is concealed as `404 resource.not_found` whenever the verified token does not satisfy
+the profile or names a record outside the caller's boundary. The only exception is a token that
+is missing, or presented and rejected, which returns `401 authentication.refused`. A caller
 therefore cannot distinguish a record that does not exist from one it may not see.
 
 {/* Evidence: crates/registry-breg/src/auth.rs;
@@ -666,7 +667,7 @@ presence flag.
 
 `readableRequestFields` accepts `review_state`, which discloses the closed `review` projection,
 and `actor_reference`, which discloses `submitterReference` and
-`applierReference`. Both require a non-anonymous profile. Every change-request action response
+`applierReference`. Every change-request action response
 separately includes `actorReference`, the caller-supplied actor identity recorded with that
 action, independent of `readableRequestFields`.
 
@@ -674,8 +675,8 @@ action, independent of `readableRequestFields`.
 
 `GET /v1/registry` lists the same grant as `readableRequestFields` on each operation, beside
 `readableFields`, so a caller can learn before a read which request fields its selected profile
-receives. The list follows the rule request reads apply: an anonymous profile, or an entity
-without a change request, lists no request fields.
+receives. The list follows the rule request reads apply: an entity without a change request
+lists no request fields.
 
 {/* Evidence: crates/registry-breg/src/api/metadata.rs, readable_request_fields;
     crates/registry-breg/tests/http_read_only.rs, workspace_metadata_projects_request_field_disclosure_per_caller_profile. */}

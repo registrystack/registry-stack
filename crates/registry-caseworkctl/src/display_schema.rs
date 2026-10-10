@@ -46,46 +46,70 @@ const MAXIMUM_SCHEMA_DEPTH: usize = 16;
 /// rather than materialized here.
 const MAXIMUM_WITNESS_ITEMS: u64 = 64;
 
-/// Refuse a described request whose bound source-context review kind cannot
+/// A described request whose bound source-context review kind cannot
+/// display what the request discloses.
+pub(crate) struct DisplayRefusal {
+    /// The review kind's index under `reviewKinds`.
+    pub(crate) kind: usize,
+    /// The declared request's index under the source's `requests`.
+    pub(crate) request: usize,
+    /// Every mismatch the source schemas prove, in field order.
+    pub(crate) mismatches: Vec<String>,
+}
+
+/// Whether a described request's bound source-context review kind cannot
 /// display what the request's projected fields disclose. A request that
 /// requires no review, names no declared kind, or binds a kind that is not
 /// source-context is left to the checks that refuse those bindings.
+pub(crate) fn display_refusal(
+    policy: &CaseworkProject,
+    source: &SourcePolicy,
+    request: &Value,
+) -> Option<DisplayRefusal> {
+    let policy_id = request
+        .pointer("/review/policyId")
+        .and_then(Value::as_str)?;
+    let kind = policy
+        .review_kinds
+        .iter()
+        .position(|kind| kind.id == policy_id)
+        .filter(|kind| {
+            policy.review_kinds[*kind].context_strategy == ReviewContextStrategy::Source
+        })?;
+    let entity = request["requestEntity"].as_str().unwrap_or_default();
+    let declared = source
+        .requests
+        .iter()
+        .position(|declared| declared.entity == entity)?;
+    let mismatches = display_mismatches(
+        &policy.review_kinds[kind].display_schema,
+        request,
+        &source.requests[declared].context_projection,
+    );
+    (!mismatches.is_empty()).then_some(DisplayRefusal {
+        kind,
+        request: declared,
+        mismatches,
+    })
+}
+
+/// Refuse a described request [`display_refusal`] finds a mismatch in.
 pub(crate) fn check_described_request(
     policy: &CaseworkProject,
     source: &SourcePolicy,
     description: &Path,
     request: &Value,
 ) -> Result<()> {
-    let Some(policy_id) = request.pointer("/review/policyId").and_then(Value::as_str) else {
+    let Some(refusal) = display_refusal(policy, source, request) else {
         return Ok(());
     };
-    let Some(kind) = policy
-        .review_kinds
-        .iter()
-        .find(|kind| kind.id == policy_id)
-        .filter(|kind| kind.context_strategy == ReviewContextStrategy::Source)
-    else {
-        return Ok(());
-    };
-    let entity = request["requestEntity"].as_str().unwrap_or_default();
-    let Some(declared) = source
-        .requests
-        .iter()
-        .find(|declared| declared.entity == entity)
-    else {
-        return Ok(());
-    };
-    let mismatches =
-        display_mismatches(&kind.display_schema, request, &declared.context_projection);
-    if mismatches.is_empty() {
-        return Ok(());
-    }
     bail!(
         "review kind {kind_id} displaySchema rejects what source {source_id} request entity {entity} in {description} can disclose to a reviewer, so Casework would hide those review tasks from every reviewer: {mismatches}; make the displaySchema of reviewKinds entry {kind_id} admit each projected field's source schema under its API name, as `bregctl explain change-requests` reports it",
-        kind_id = kind.id,
+        kind_id = policy.review_kinds[refusal.kind].id,
         source_id = source.id,
+        entity = source.requests[refusal.request].entity,
         description = description.display(),
-        mismatches = mismatches.join("; "),
+        mismatches = refusal.mismatches.join("; "),
     )
 }
 
@@ -137,7 +161,7 @@ fn schema_mismatches(
     let closed = schema.get("additionalProperties") == Some(&Value::Bool(false));
     let prefix = label_prefix.map_or_else(String::new, |prefix| format!("{prefix}: "));
     let mut mismatches = Vec::new();
-    for logical in projection {
+    for (position, logical) in projection.iter().enumerate() {
         let Some(field) = fields.iter().find(|field| field["field"] == *logical) else {
             continue;
         };
@@ -148,20 +172,19 @@ fn schema_mismatches(
         let patterns = pattern_matches(schema, api_name);
         if declared.is_none() && closed && !patterns.admits {
             mismatches.push(format!(
-                "{prefix}property {api_name} (source field {logical}) is not declared, and additionalProperties: false rejects every disclosure that carries it; the source describes it as {source}"
+                "{prefix}the projected field at contextProjection position {position} is not declared, and additionalProperties: false rejects every disclosure that carries it"
             ));
             continue;
         }
         if let Some(property) = declared {
-            let label = format!("{prefix}property {api_name}");
-            if let Some(mismatch) = property_mismatch(&label, logical, property, source) {
+            let label = format!("{prefix}the displaySchema property");
+            if let Some(mismatch) = property_mismatch(&label, position, property, source) {
                 mismatches.push(mismatch);
             }
         }
-        for (pattern, pattern_schema) in patterns.definite {
-            let label =
-                format!("{prefix}patternProperties pattern {pattern} matching property {api_name}");
-            if let Some(mismatch) = property_mismatch(&label, logical, pattern_schema, source) {
+        for (_, pattern_schema) in patterns.definite {
+            let label = format!("{prefix}a patternProperties entry matching the property");
+            if let Some(mismatch) = property_mismatch(&label, position, pattern_schema, source) {
                 mismatches.push(mismatch);
             }
         }
@@ -196,15 +219,15 @@ fn allof_branch_mismatches(
     {
         let label = format!("allOf branch {}", index + 1);
         if branch == &Value::Bool(false) {
-            for logical in projection {
+            for (position, logical) in projection.iter().enumerate() {
                 let Some(field) = fields.iter().find(|field| field["field"] == *logical) else {
                     continue;
                 };
-                let Some(api_name) = field["apiName"].as_str() else {
+                if field["apiName"].as_str().is_none() {
                     continue;
-                };
+                }
                 mismatches.push(format!(
-                    "{label}: property {api_name} (source field {logical}) admits no value"
+                    "{label}: the projected field at contextProjection position {position} admits no value"
                 ));
             }
             continue;
@@ -263,9 +286,13 @@ fn pattern_matches<'a>(display: &'a Value, api_name: &str) -> PatternMatches<'a>
     PatternMatches { admits, definite }
 }
 
+/// One mismatch between a displayed property and the projected field at
+/// `position` in the request's `contextProjection`. The text names the
+/// position and a fixed reason, never a name, schema, or value read from an
+/// authored file.
 fn property_mismatch(
     label: &str,
-    logical: &str,
+    position: usize,
     property: &Value,
     source: &Value,
 ) -> Option<String> {
@@ -275,7 +302,9 @@ fn property_mismatch(
     let displayed = compile(property)?;
     let admitted = compile(source)?;
     if property == &Value::Bool(false) {
-        return Some(format!("{label} (source field {logical}) admits no value"));
+        return Some(format!(
+            "{label} for the projected field at contextProjection position {position} admits no value"
+        ));
     }
     if let (Some(displayed_types), Some(source_types)) =
         (json_types(property), source_json_types(source, 0))
@@ -286,14 +315,14 @@ fn property_mismatch(
                 .any(|shown| types_overlap(source, shown))
         }) {
             return Some(format!(
-                "{label} accepts type {}, but source field {logical} is {}",
+                "{label} for the projected field at contextProjection position {position} accepts type {}, but the source field is {}",
                 render_types(&displayed_types),
                 render_types(&source_types),
             ));
         }
     }
     let maximum_bytes = source.get("x-registry-maxBytes").and_then(Value::as_u64);
-    let mut rejected = Vec::new();
+    let mut rejected: Vec<Value> = Vec::new();
     for (value, witness_label) in witnesses(source, 0) {
         if admitted.is_valid(&value)
             && maximum_bytes.is_none_or(|maximum| encoded_len(&value) <= maximum)
@@ -307,12 +336,8 @@ fn property_mismatch(
         return None;
     }
     Some(format!(
-        "{label} rejects {} that source field {logical} admits",
-        rejected
-            .iter()
-            .map(Value::to_string)
-            .collect::<Vec<_>>()
-            .join(", ")
+        "{label} for the projected field at contextProjection position {position} rejects {} value(s) that the source field admits",
+        rejected.len()
     ))
 }
 
@@ -340,7 +365,7 @@ fn contains_reference(schema: &Value, depth: usize) -> bool {
 }
 
 /// The JSON types a schema's own `type` keyword admits.
-fn json_types(schema: &Value) -> Option<BTreeSet<String>> {
+pub(crate) fn json_types(schema: &Value) -> Option<BTreeSet<String>> {
     match schema.get("type")? {
         Value::String(name) => Some(BTreeSet::from([name.clone()])),
         Value::Array(names) => names
@@ -376,7 +401,7 @@ fn types_overlap(source: &str, shown: &str) -> bool {
         || (source == "number" && shown == "integer")
 }
 
-fn render_types(types: &BTreeSet<String>) -> String {
+pub(crate) fn render_types(types: &BTreeSet<String>) -> String {
     match types.iter().collect::<Vec<_>>().as_slice() {
         [single] => (*single).clone(),
         several => format!(

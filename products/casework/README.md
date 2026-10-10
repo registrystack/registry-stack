@@ -781,13 +781,25 @@ python3 products/casework/scripts/generate_openapi.py --check
 ```
 
 The local product wrapper runs that OpenAPI drift check, the dependency guard,
-every product script test, both maintained offline authoring journeys, and a
-two-entity `source add --apply` pairing that `bregctl check` must accept.
-Build `caseworkctl` and `bregctl` first, or set `CASEWORKCTL_BIN` and
-`BREGCTL_BIN`:
+every product script test, the schema drift check below, both maintained
+offline authoring journeys, and a two-entity `source add --apply` pairing that
+`bregctl check` must accept. Build `caseworkctl` and `bregctl` first, or set
+`CASEWORKCTL_BIN` and `BREGCTL_BIN`:
 
 ```sh
 products/casework/scripts/check-checkpoint.sh
+```
+
+The committed project and runtime schemas under `generated/` are reproduced
+by their generators, never edited by hand. The schema drift check needs no
+database and runs on every pull request that touches Casework:
+
+```sh
+cargo run --locked -p registry-casework-core --features schema \
+  --example project-schema -- --output products/casework/generated/project
+cargo run --locked -p registry-casework --features schema \
+  --example runtime-schema -- --output products/casework/generated/runtime
+products/casework/scripts/check-schemas.sh
 ```
 
 The dependency-direction guard reads Cargo metadata, including transitive
@@ -850,8 +862,8 @@ cargo test -p registry-casework --features postgres-test --test activation_postg
 ```
 
 The maintained BReg, payment, and standalone review examples have one aggregate
-non-browser proof. It also runs the owning Casework and BReg configuration,
-runtime-schema, and retention-compatibility checks. The database must be
+non-browser proof. It also runs the owning Casework and BReg configuration
+checks, the BReg runtime-schema check, and the retention-compatibility checks. The database must be
 explicitly disposable; every included suite creates its own schema:
 
 ```sh

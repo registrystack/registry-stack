@@ -129,11 +129,11 @@ accessProfiles:
     permissions:
       - action: register-person
         operations: [invoke]
-        targets: [{entity: person, rowBoundaries: []}]
+        targets: [{entity: person, rowBoundaries: unrestricted}]
         results: [person]
       - action: register-person-with-registration
         operations: [invoke]
-        targets: [{entity: person, rowBoundaries: []}, {entity: registration, rowBoundaries: []}, {entity: register, rowBoundaries: []}]
+        targets: [{entity: person, rowBoundaries: unrestricted}, {entity: registration, rowBoundaries: unrestricted}, {entity: register, rowBoundaries: unrestricted}]
         results: [person, registration, register]
   - id: person-reader
     default: true
@@ -141,13 +141,13 @@ accessProfiles:
     requiredScopes: [registry:person:read]
     requiredPurposes: [person-registration-audit]
     permissions:
-      - {entity: person, operations: [get], readableFields: [identifier, display-name], rowBoundaries: []}
-      - {entity: registration, operations: [get], readableFields: [registration-code, person, register], rowBoundaries: []}
-      - {entity: register, operations: [get], readableFields: [register-code, active, last-person], rowBoundaries: []}
+      - {entity: person, operations: [get], readableFields: [identifier, display-name], rowBoundaries: unrestricted}
+      - {entity: registration, operations: [get], readableFields: [registration-code, person, register], rowBoundaries: unrestricted}
+      - {entity: register, operations: [get], readableFields: [register-code, active, last-person], rowBoundaries: unrestricted}
   - id: person-administrator
     principalClaim: registry_principal
     requiredScopes: [registry:person:manage]
     requiredPurposes: [person-maintenance]
     permissions:
-      - {entity: person, operations: [create, get, patch], readableFields: [identifier, display-name], writableFields: [identifier, display-name], rowBoundaries: []}
-      - {entity: register, operations: [create, get, patch], readableFields: [register-code, active, last-person], writableFields: [register-code, active, last-person], rowBoundaries: []}
+      - {entity: person, operations: [create, get, patch], readableFields: [identifier, display-name], writableFields: [identifier, display-name], rowBoundaries: unrestricted}
+      - {entity: register, operations: [create, get, patch], readableFields: [register-code, active, last-person], writableFields: [register-code, active, last-person], rowBoundaries: unrestricted}

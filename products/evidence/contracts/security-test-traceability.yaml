@@ -160,7 +160,7 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: an_undeclared_source_404_stays_source_unavailable_and_logs_a_value_free_cause}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_set_member_aborts_without_partial_release}
-      - {file: crates/registry-evidence/src/bundle.rs, name: declared_unresolved_fixture_neutrally_covers_hidden_lookup_categories}
+      - {file: crates/registry-evidence/src/fixture.rs, name: declared_unresolved_fixture_neutrally_covers_hidden_lookup_categories}
       - {file: crates/registry-evidence/src/main.rs, name: reference_declared_unresolved_form_is_data_free_and_source_bound}
       - {file: crates/registry-evidence/src/main.rs, name: reference_fixture_evaluates_declared_unresolved_without_problem_data}
   - id: sec-subject-binding-scope

@@ -12,7 +12,13 @@ use url::Url;
 
 pub use registry_discovery_profile::ServiceKind;
 
-pub const INDEX_SCHEMA: &str = "registry-discovery/index/v1alpha1";
+/// The `apiVersion` every index carries.
+pub const INDEX_API_VERSION: &str = "id.registrystack.org/formats/discovery/index/v1alpha1";
+/// The `kind` every index carries.
+pub const INDEX_KIND: &str = "DiscoveryIndex";
+/// The member an index built before it carried `apiVersion` and `kind`
+/// opened with. It is read only to name the rebuild.
+pub const RETIRED_INDEX_HEADER: &str = "schemaVersion";
 pub const MAXIMUM_INDEX_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAXIMUM_ORIGINS: usize = 1_024;
 pub const MAXIMUM_SERVICES: usize = 100_000;
@@ -51,7 +57,8 @@ pub const MAXIMUM_HTTP_BODY_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DiscoveryIndex {
-    pub schema_version: String,
+    pub api_version: String,
+    pub kind: String,
     pub catalog_revision: String,
     pub mapping_revision: String,
     pub built_at: String,
@@ -176,6 +183,57 @@ pub enum IndexError {
         "the Discovery index contains a retired service kind; remove Relay origins and rebuild it with `discoveryctl package`"
     )]
     RetiredServiceKind,
+    #[error(
+        "the Discovery index carries the retired `schemaVersion` header; rebuild it with `discoveryctl package`"
+    )]
+    RetiredHeader,
+}
+
+impl IndexError {
+    /// The diagnostic code that names this refusal (CFG-DIAG-3).
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Invalid => "discovery.index.invalid",
+            Self::BoundExceeded => "discovery.index.bound-exceeded",
+            Self::NotCanonical => "discovery.index.not-canonical",
+            Self::RetiredServiceKind => "discovery.index.retired-service-kind",
+            Self::RetiredHeader => "discovery.index.retired-header",
+        }
+    }
+
+    /// What was refused, without repeating any of the index's contents.
+    #[must_use]
+    pub fn finding(self) -> &'static str {
+        match self {
+            Self::Invalid => "the file is not a valid Discovery index",
+            Self::BoundExceeded => "the index is empty or exceeds a compiled bound",
+            Self::NotCanonical => "the index is not in the canonical form `discoveryctl package` writes",
+            Self::RetiredServiceKind => "the index contains a retired Relay service",
+            Self::RetiredHeader => {
+                "the index carries the retired `schemaVersion` header instead of `apiVersion` and `kind`"
+            }
+        }
+    }
+
+    /// The step that fixes it.
+    #[must_use]
+    pub fn suggested_action(self) -> &'static str {
+        match self {
+            Self::Invalid | Self::NotCanonical => {
+                "Rebuild the index with `discoveryctl package`; never edit or reformat it by hand."
+            }
+            Self::BoundExceeded => {
+                "Approve fewer origins or write fewer mappings so the index fits its bounds, then rebuild it with `discoveryctl package`."
+            }
+            Self::RetiredServiceKind => {
+                "Remove the Relay origins from origins.yaml and rebuild the index with `discoveryctl package`."
+            }
+            Self::RetiredHeader => {
+                "Rebuild the package with `discoveryctl package`, then update package.expectedDigest in runtime.yaml if you pin it."
+            }
+        }
+    }
 }
 
 pub fn parse_index(bytes: &[u8]) -> Result<DiscoveryIndex, IndexError> {
@@ -186,6 +244,9 @@ pub fn parse_index(bytes: &[u8]) -> Result<DiscoveryIndex, IndexError> {
     let value = parse_json_strict(bytes).map_err(|_| IndexError::Invalid)?;
     if contains_retired_service_kind(&value) {
         return Err(IndexError::RetiredServiceKind);
+    }
+    if value.get(RETIRED_INDEX_HEADER).is_some() && value.get("apiVersion").is_none() {
+        return Err(IndexError::RetiredHeader);
     }
     let index: DiscoveryIndex = serde_json::from_value(value).map_err(|_| IndexError::Invalid)?;
     validate_index(&index)?;
@@ -297,7 +358,8 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 pub fn validate_index(index: &DiscoveryIndex) -> Result<(), IndexError> {
-    if index.schema_version != INDEX_SCHEMA
+    if index.api_version != INDEX_API_VERSION
+        || index.kind != INDEX_KIND
         || !valid_digest(&index.catalog_revision)
         || !valid_digest(&index.mapping_revision)
         || !valid_timestamp(&index.built_at)
@@ -562,7 +624,8 @@ pub(crate) mod tests {
             }],
         }];
         DiscoveryIndex {
-            schema_version: INDEX_SCHEMA.into(),
+            api_version: INDEX_API_VERSION.into(),
+            kind: INDEX_KIND.into(),
             catalog_revision: catalog_revision(&services).unwrap(),
             mapping_revision: mapping_revision(&mappings).unwrap(),
             built_at: "2026-08-14T00:00:01Z".into(),
@@ -582,11 +645,56 @@ pub(crate) mod tests {
     #[test]
     fn duplicate_members_and_noncanonical_indexes_are_refused() {
         assert_eq!(
-            parse_index(br#"{"schemaVersion":"a","schemaVersion":"b"}"#),
+            parse_index(br#"{"apiVersion":"a","apiVersion":"b"}"#),
             Err(IndexError::Invalid)
         );
         let pretty = serde_json::to_vec_pretty(&example_index()).unwrap();
         assert_eq!(parse_index(&pretty), Err(IndexError::NotCanonical));
+    }
+
+    #[test]
+    fn an_index_with_the_retired_header_is_refused_with_rebuild_guidance() {
+        let mut value = serde_json::to_value(example_index()).unwrap();
+        let members = value.as_object_mut().unwrap();
+        members.remove("apiVersion");
+        members.remove("kind");
+        members.insert(
+            RETIRED_INDEX_HEADER.into(),
+            "registry-discovery/index/v1alpha1".into(),
+        );
+        let bytes = canonicalize_json(&value).unwrap();
+        let refusal = parse_index(&bytes).unwrap_err();
+        assert_eq!(refusal, IndexError::RetiredHeader);
+        assert_eq!(refusal.code(), "discovery.index.retired-header");
+        assert!(refusal.suggested_action().contains("discoveryctl package"));
+        assert!(refusal
+            .suggested_action()
+            .contains("package.expectedDigest"));
+    }
+
+    #[test]
+    fn an_index_of_another_kind_or_version_is_invalid() {
+        let mut index = example_index();
+        index.kind = "DiscoveryOrigins".into();
+        assert_eq!(validate_index(&index), Err(IndexError::Invalid));
+        let mut index = example_index();
+        index.api_version = "id.registrystack.org/formats/discovery/index/v1".into();
+        assert_eq!(validate_index(&index), Err(IndexError::Invalid));
+    }
+
+    #[test]
+    fn every_refusal_has_a_code_and_a_fix() {
+        for refusal in [
+            IndexError::Invalid,
+            IndexError::BoundExceeded,
+            IndexError::NotCanonical,
+            IndexError::RetiredServiceKind,
+            IndexError::RetiredHeader,
+        ] {
+            assert!(refusal.code().starts_with("discovery.index."));
+            assert!(!refusal.finding().is_empty());
+            assert!(refusal.suggested_action().ends_with('.'));
+        }
     }
 
     #[test]

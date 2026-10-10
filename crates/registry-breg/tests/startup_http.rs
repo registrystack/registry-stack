@@ -17,6 +17,7 @@ use jsonwebtoken::Algorithm;
 use registry_breg::api::{
     authenticated_router, router, HeldReadResponse, HttpService, ReadRuntimeIdentity,
     ReadServiceError, ReadinessProbe, RecordReadRequest, RecordReadService, ServiceFuture,
+    VerifiedRequestClaims,
 };
 use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
@@ -32,21 +33,12 @@ use registry_breg::startup::{
     OperationalLogLevel, StartupError, WebhookStateTransitionCode,
 };
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
+use registry_platform_crypto::PrivateJwk;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
+use registry_platform_testing::{fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt};
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
-
-/// The document refusal with its message set aside, so a table can name it
-/// beside the refusals that carry none.
-const DOCUMENT: RuntimeConfigError = RuntimeConfigError::Document(String::new());
-
-fn refusal(error: RuntimeConfigError) -> RuntimeConfigError {
-    match error {
-        RuntimeConfigError::Document(_) => DOCUMENT,
-        other => other,
-    }
-}
 
 const RAW_PRINCIPAL_CANARY: &str = "breg-v1-25-raw-principal-canary";
 const RECORD_ID_CANARY: &str = "aaaaaaaa-aaaa-4aaa-8aaa-rsv125canary";
@@ -68,7 +60,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: startup-http
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 entities:
@@ -83,10 +75,11 @@ entities:
 accessProfiles:
   - id: public
     default: true
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: public-record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [list]
         readableFields: [label]
 "#;
@@ -328,6 +321,7 @@ async fn trace_transport_health_aliases_and_request_ids_are_correlated() {
         request
             .headers_mut()
             .insert("traceparent", HeaderValue::from_static(INBOUND));
+        request.extensions_mut().insert(reader_claims());
         let response = app
             .clone()
             .oneshot(request)
@@ -498,12 +492,12 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 27] {
+fn startup_errors() -> [StartupError; 28] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
         // exercises the same static text, so one representative is enough here.
-        StartupError::RuntimeConfig(DOCUMENT),
+        StartupError::RuntimeConfig(RuntimeConfigError::InvalidBinding),
         StartupError::PackageRefused(PackageError::Integrity),
         StartupError::DatabaseConnection,
         StartupError::DatabaseUnready,
@@ -522,6 +516,7 @@ fn startup_errors() -> [StartupError; 27] {
         StartupError::Cursor,
         StartupError::Oidc,
         StartupError::Authentication,
+        StartupError::AuthenticationClientsUnlisted,
         StartupError::EventDestinations,
         StartupError::RetainedWebhookBindings {
             retained_deliveries: 2,
@@ -658,6 +653,13 @@ fn expected_operational_event(
             None,
             Some("startup.role_mode.split"),
         ),
+        OperationalEvent::ClientsUnrestricted => (
+            OperationalLogLevel::Info,
+            "registry_breg::startup",
+            "authentication.oidc.allowedClients is unrestricted: a token from any client is accepted",
+            None,
+            Some("startup.authentication.clients_unrestricted"),
+        ),
         OperationalEvent::PostgresBaselineAdvisory(advisory) => (
             match advisory.severity() {
                 AdvisorySeverity::Warning => OperationalLogLevel::Warn,
@@ -742,6 +744,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::Cursor => "the Registry cursor profile was refused",
         StartupError::Oidc => "the Registry OIDC key source was refused",
         StartupError::Authentication => "the Registry authentication profile was refused",
+        StartupError::AuthenticationClientsUnlisted => {
+            "the project names clients that authentication.oidc.allowedClients does not list; list each client named in requesterClients, trusted actors, or consent recipients there"
+        }
         StartupError::EventDestinations => "the Registry event destination bindings were refused",
         StartupError::RetainedWebhookBindings { .. } => {
             "retained webhook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"
@@ -833,6 +838,7 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     );
     events.push(OperationalEvent::RoleMode(RoleMode::Single));
     events.push(OperationalEvent::RoleMode(RoleMode::Split));
+    events.push(OperationalEvent::ClientsUnrestricted);
     events.push(OperationalEvent::WebhookWorkerIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationRetryPending);
@@ -976,23 +982,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
                 .expect("test cursor key is valid"),
         ),
     ));
-    let authenticator = Arc::new(
-        RegistryAuthenticator::new(
-            &registry,
-            TokenVerifierConfig::access_token_profile(
-                "https://issuer.example",
-                vec!["urn:breg:test".to_owned()],
-                vec![Algorithm::EdDSA],
-                vec!["at+jwt".to_owned()],
-            ),
-            Arc::new(JwksFetcher::new_static(
-                JwkSet { keys: Vec::new() },
-                JwksFetcherConfig::defaults(),
-            )),
-            AuthorityClaimConfig::new("registry_principal", None),
-        )
-        .expect("anonymous Registry has a valid production authenticator"),
-    );
+    let authenticator = pinned_authenticator(&registry);
     let app = with_request_timeout_for_test(
         authenticated_router(service, authenticator),
         Duration::from_secs(10),
@@ -1003,6 +993,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
         .oneshot(
             Request::builder()
                 .uri("/v1/registry")
+                .header("authorization", reader_bearer())
                 .body(Body::empty())
                 .expect("provenance request builds"),
         )
@@ -1085,6 +1076,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
             .oneshot(
                 Request::builder()
                     .uri(uri)
+                    .header("authorization", reader_bearer())
                     .body(Body::empty())
                     .expect("metrics request builds"),
             )
@@ -1101,24 +1093,31 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
     let valid_runtime = runtime_without_telemetry(directory.path());
     parse_runtime_config_with_env(&valid_runtime, |_| None)
         .expect("runtime without telemetry parses");
-    for (member, expected) in [
+    for (member, expected_path) in [
         (
             format!("metrics:\n  labels:\n    principal: {RAW_PRINCIPAL_CANARY}\n"),
-            DOCUMENT,
+            "/metrics",
         ),
         (
             format!("telemetry:\n  tracestate: {TRACESTATE_CANARY}\n"),
-            RuntimeConfigError::GovernedMember,
+            "/telemetry",
         ),
     ] {
         let error =
             parse_runtime_config_with_env(&(valid_runtime.clone() + member.as_str()), |_| None)
                 .expect_err("runtime telemetry authority is absent");
-        assert_eq!(refusal(error.clone()), expected);
-        assert_forbidden_values_absent(&format!("{error:?} {error}"));
+        let diagnostics = error.diagnostics(None);
+        assert_eq!(diagnostics[0].code, "config.unknown-key");
+        assert_eq!(diagnostics[0].path, expected_path);
+        assert_forbidden_values_absent(&format!("{error:?} {error} {}", error.render_human(None)));
     }
 
-    let config_path = directory.path().join(FILESYSTEM_PATH_CANARY);
+    // The loader refuses a path through a symbolic link, and the temporary
+    // directory may sit under one (`/var` on macOS), so the refusal this test
+    // reads is reached through the resolved directory.
+    let config_path = fs::canonicalize(directory.path())
+        .expect("temporary directory resolves")
+        .join(FILESYSTEM_PATH_CANARY);
     fs::write(&config_path, canary_runtime_document()).expect("canary runtime config writes");
     let output = Command::new(env!("CARGO_BIN_EXE_breg"))
         .args([
@@ -1131,11 +1130,28 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
     assert_eq!(output.status.code(), Some(1));
     let stdout = std::str::from_utf8(&output.stdout).expect("operational stdout is UTF-8");
     let stderr = std::str::from_utf8(&output.stderr).expect("operational stderr is UTF-8");
-    let logs = format!("{stdout}{stderr}");
-    assert_forbidden_values_absent(&logs);
+    // The operational log on stdout names no path and no value.
+    assert_forbidden_values_absent(stdout);
+    // The operator reads the reader's diagnostics on stderr: the refused key
+    // with its position and fix, under the file the operator named, and no
+    // configured value.
+    let config_file = config_path.to_str().expect("config path is UTF-8");
+    let human = stderr.replace(config_file, "<runtime.yaml>");
+    assert_forbidden_values_absent(&human);
+    assert!(
+        human.starts_with("breg did not start: its runtime configuration was refused.\n"),
+        "{human}"
+    );
+    assert!(
+        human.contains("error[config.unknown-key] <runtime.yaml>:3:1 /telemetry\n"),
+        "{human}"
+    );
+    assert!(human.contains("  next: "), "{human}");
+    assert!(human.ends_with(" in 1 file\n"), "{human}");
+    let logs = format!("{stdout}{human}");
     assert!(!logs.contains("startup-http"));
     assert!(!logs.contains(&registry_revision));
-    let records = logs
+    let records = stdout
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("operational log is JSON"))
         .collect::<Vec<_>>();
@@ -1243,23 +1259,7 @@ async fn configured_metrics_record_served_requests_with_closed_value_free_labels
                 .expect("test cursor key is valid"),
         ),
     ));
-    let authenticator = Arc::new(
-        RegistryAuthenticator::new(
-            &registry,
-            TokenVerifierConfig::access_token_profile(
-                "https://issuer.example",
-                vec!["urn:breg:test".to_owned()],
-                vec![Algorithm::EdDSA],
-                vec!["at+jwt".to_owned()],
-            ),
-            Arc::new(JwksFetcher::new_static(
-                JwkSet { keys: Vec::new() },
-                JwksFetcherConfig::defaults(),
-            )),
-            AuthorityClaimConfig::new("registry_principal", None),
-        )
-        .expect("anonymous Registry has a valid production authenticator"),
-    );
+    let authenticator = pinned_authenticator(&registry);
     let metrics = Arc::new(Metrics::without_pool_for_test());
     let app = with_request_timeout_and_metrics_for_test(
         authenticated_router(service, authenticator),
@@ -1322,43 +1322,29 @@ async fn configured_metrics_record_served_requests_with_closed_value_free_labels
     assert_forbidden_values_absent(body);
 }
 
-/// A request that presents no credential and is refused before admission is
-/// counted on the metrics listener under a closed reason, so the operational
-/// signal survives the refusal no longer reaching the audit journal.
+/// A request that presents no credential is refused before admission, before
+/// any access profile or query is read, with one value-free problem. The
+/// refusal is counted as a client error under the registered route template,
+/// and no metric family is reserved for unauthenticated callers.
 #[tokio::test]
-async fn anonymous_pre_admission_refusals_are_counted_under_closed_reasons() {
+async fn unauthenticated_requests_are_refused_before_any_profile_or_query_is_read() {
     let _request_logs = captured_request_logs();
     let registry = compiled_registry();
+    let records = Arc::new(NoopRecords::default());
     let service = Arc::new(HttpService::new(
         Arc::clone(&registry),
         ReadRuntimeIdentity {
             package_revision: "package-startup-http".to_owned(),
             schema_fingerprint: "schema-startup-http".to_owned(),
         },
-        Arc::new(NoopRecords::default()),
+        records.clone(),
         Arc::new(SlowReadiness),
         Arc::new(
             CursorCodec::new(Zeroizing::new(vec![0x46; 32]), Duration::from_secs(300))
                 .expect("test cursor key is valid"),
         ),
     ));
-    let authenticator = Arc::new(
-        RegistryAuthenticator::new(
-            &registry,
-            TokenVerifierConfig::access_token_profile(
-                "https://issuer.example",
-                vec!["urn:breg:test".to_owned()],
-                vec![Algorithm::EdDSA],
-                vec!["at+jwt".to_owned()],
-            ),
-            Arc::new(JwksFetcher::new_static(
-                JwkSet { keys: Vec::new() },
-                JwksFetcherConfig::defaults(),
-            )),
-            AuthorityClaimConfig::new("registry_principal", None),
-        )
-        .expect("anonymous Registry has a valid production authenticator"),
-    );
+    let authenticator = pinned_authenticator(&registry);
     let metrics = Arc::new(Metrics::without_pool_for_test());
     let app = with_request_timeout_and_metrics_for_test(
         authenticated_router(service, authenticator),
@@ -1366,18 +1352,15 @@ async fn anonymous_pre_admission_refusals_are_counted_under_closed_reasons() {
         Some(Arc::clone(&metrics)),
     );
 
-    // A profile no anonymous caller can hold, then an unparsable query on a
-    // route the anonymous caller can otherwise reach. Both carry no
-    // credential, so neither names a principal.
-    for (uri, expected) in [
-        (
-            format!("/v1/records/public-records?accessProfile={QUERY_VALUE_CANARY}"),
-            StatusCode::NOT_FOUND,
-        ),
-        (
-            format!("/v1/records/public-records?pageSize={QUERY_VALUE_CANARY}"),
-            StatusCode::BAD_REQUEST,
-        ),
+    // The record route, a profile no caller holds, an unparsable query, and
+    // both discovery documents: without a credential each is refused alike.
+    let mut refusals = Vec::new();
+    for uri in [
+        "/v1/records/public-records".to_owned(),
+        format!("/v1/records/public-records?accessProfile={QUERY_VALUE_CANARY}"),
+        format!("/v1/records/public-records?pageSize={QUERY_VALUE_CANARY}"),
+        "/v1/registry".to_owned(),
+        "/openapi.json".to_owned(),
     ] {
         let response = app
             .clone()
@@ -1385,12 +1368,32 @@ async fn anonymous_pre_admission_refusals_are_counted_under_closed_reasons() {
                 Request::builder()
                     .uri(&uri)
                     .body(Body::empty())
-                    .expect("anonymous refusal request builds"),
+                    .expect("unauthenticated request builds"),
             )
             .await
-            .expect("anonymous refusal request responds");
-        assert_eq!(response.status(), expected, "{uri} is refused");
+            .expect("unauthenticated request responds");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("refusal body reads");
+        let mut problem: Value = serde_json::from_slice(&body).expect("refusal is JSON");
+        assert_eq!(problem["code"], "authentication.refused", "{uri}");
+        assert_forbidden_values_absent(std::str::from_utf8(&body).expect("refusal is UTF-8"));
+        problem
+            .as_object_mut()
+            .expect("problem object")
+            .remove("traceId");
+        refusals.push(problem);
     }
+    assert!(
+        refusals.windows(2).all(|pair| pair[0] == pair[1]),
+        "every unauthenticated refusal has one shape"
+    );
+    assert!(records
+        .correlations
+        .lock()
+        .expect("correlation capture")
+        .is_empty());
 
     let scrape = metrics::metrics_app(Arc::clone(&metrics))
         .oneshot(
@@ -1408,17 +1411,74 @@ async fn anonymous_pre_admission_refusals_are_counted_under_closed_reasons() {
     let body = std::str::from_utf8(&body).expect("scrape body is UTF-8");
     assert!(
         body.contains(
-            "breg_anonymous_refusals_total{route=\"/v1/records/public-records\",method=\"GET\",reason=\"read_concealed\"} 1\n"
+            "breg_http_requests_total{route=\"/v1/records/public-records\",method=\"GET\",status=\"client_error\"} 3\n"
         ),
-        "the concealed anonymous read is counted under its registered route template: {body}"
+        "the refusals are counted under their registered route template: {body}"
     );
     assert!(
-        body.contains(
-            "breg_anonymous_refusals_total{route=\"/v1/records/public-records\",method=\"GET\",reason=\"read_request_invalid\"} 1\n"
-        ),
-        "the unparsable anonymous query is counted under its own reason: {body}"
+        !body.contains("anonymous"),
+        "no metric family is reserved for unauthenticated callers: {body}"
     );
     assert_forbidden_values_absent(body);
+}
+
+/// The static key set the authenticated tests verify against: the shared
+/// testing key, pinned without a network fetch.
+fn pinned_authenticator(registry: &CompiledRegistry) -> Arc<RegistryAuthenticator> {
+    let document = jwks_from_private_jwk(
+        &PrivateJwk::parse(fixtures::ED25519_PRIVATE_JWK).expect("fixture JWK parses"),
+    );
+    let keys = serde_json::from_value::<JwkSet>(document).expect("static JWKS document parses");
+    Arc::new(
+        RegistryAuthenticator::new(
+            registry,
+            TokenVerifierConfig::access_token_profile(
+                "https://issuer.example",
+                vec!["urn:breg:test".to_owned()],
+                vec![Algorithm::EdDSA],
+                vec!["at+jwt".to_owned()],
+            ),
+            Arc::new(JwksFetcher::new_static(keys, JwksFetcherConfig::defaults())),
+            AuthorityClaimConfig::new("registry_principal", None),
+        )
+        .expect("Registry has a valid production authenticator"),
+    )
+}
+
+/// A bearer the pinned authenticator accepts for the `public` profile.
+fn reader_bearer() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_secs();
+    let token = sign_ed25519_compact_jwt(
+        fixtures::ED25519_PRIVATE_JWK,
+        "at+jwt",
+        "registry-platform-testing-ed25519-1",
+        json!({
+            "iss": "https://issuer.example",
+            "aud": "urn:breg:test",
+            "iat": now,
+            "nbf": now,
+            "exp": now + 300,
+            "registry_actor_kind": "service",
+            "registry_principal": "startup-reader",
+        }),
+    );
+    format!("Bearer {token}")
+}
+
+/// The verified claims of a `public` profile caller, for the router without
+/// the authentication layer.
+fn reader_claims() -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        "startup-reader",
+        BTreeSet::new(),
+        None,
+        std::collections::BTreeMap::new(),
+    )
+    .expect("reader claims are valid")
 }
 
 struct TestDirectory {

@@ -2,15 +2,15 @@
 
 This is a neutral synthetic Base Registry Engine source fixture for the first BReg GIS increment. It models one `service-site` entity with a CRS84 GeoJSON Point field named `location`, public map attributes, an optional null geometry case and a reviewed derived logical `map-label` attribute.
 
-The public collection id is `service-site.map-reader`: entity `service-site`, profile `map-reader`, direct current-record list authority and an explicit bounded bbox grant. The quickstart calls the protected `service-site.installation-map-reader` collection with a stock-issuer client to exercise the installation's `service_zones: central` row restriction. That client registration supplies `registry_principal: synthetic-qgis-installation`, `registry_purpose: service-site-map`, scope `service-sites:map.read` and claim `service_zones: central`. No fabricated runtime claim is required.
+The public map collection id is `service-site.map-reader`: entity `service-site`, profile `map-reader`, direct current-record list authority and an explicit bounded bbox grant. The quickstart calls the protected `service-site.installation-map-reader` collection with a stock-issuer client to exercise the installation's `service_zones: central` row restriction. That client registration supplies `registry_principal: synthetic-qgis-installation`, `registry_purpose: service-site-map`, scope `service-sites:map.read` and claim `service_zones: central`. No fabricated runtime claim is required.
 
-All authenticated profiles use the verified `registry_principal` claim, matching the quickstart's one runtime principal mapping. The token's `sub` remains its client identity; it is not substituted for the declared fixture principal.
+Every profile uses the verified `registry_principal` claim, matching the quickstart's one runtime principal mapping. The token's `sub` remains its client identity; it is not substituted for the declared fixture principal.
 
 Profiles:
 
-- `map-reader`: anonymous public `get` and `list`, public `location`, count, scalar filters and bbox with maximum spans of 0.25 longitude degrees and 0.20 latitude degrees.
+- `map-reader`: public map reader with `service-sites:public.read`, purpose `service-site-public-map`, `get` and `list` over every site, public `location`, count, scalar filters and bbox with maximum spans of 0.25 longitude degrees and 0.20 latitude degrees.
 - `installation-map-reader`: authenticated QGIS installation map reader with `service-sites:map.read`, purpose `service-site-map`, `zone` row boundary from the `service_zones` claim and the same bbox spans.
-- `directory-reader`: anonymous nonspatial public list/get without the geometry field.
+- `directory-reader`: public directory reader with `service-sites:public.read`, purpose `service-site-public-directory`, nonspatial list/get over every site without the geometry field.
 - `hidden-geometry-reader`: authenticated directory read where geometry is not readable and no spatial query is declared.
 - `get-only-map-reader`: authenticated get-only geometry read with no bbox authority.
 - `service-site-admin`: writable seed/admin profile with `service-sites:seed`, create/patch/batch and no data export. There is no QGIS editing profile.
@@ -27,7 +27,5 @@ cargo run --locked -p registry-bregctl -- check products/breg/acceptance/spatial
 mkdir -p out
 cargo run --locked -p registry-bregctl -- generate openapi products/breg/acceptance/spatial-service-sites --production --output out/spatial-service-sites-openapi
 ```
-
-`check` reports `access.profile.anonymous_collection` for `directory-reader` and `map-reader`. Both profiles grant `list` to unauthenticated callers on purpose, so every service site is public; `--deny-findings` would turn those two findings into failures.
 
 The offline commands validate authored source and generated contracts. They do not exercise token acquisition or database execution; use the quickstart and the product's PostgreSQL tests for those paths.

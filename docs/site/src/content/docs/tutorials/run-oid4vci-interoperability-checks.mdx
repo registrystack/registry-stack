@@ -46,8 +46,8 @@ revisions.
 
 ## Copy the complete configuration
 
-Create an owner-only working directory. The runner will create the delivery client key there,
-restrict it to the owner, and remove it before returning:
+Create an owner-only working directory. The runner generates the delivery client key and hands it
+to the processes it starts through their environment, so the key is never written to disk:
 
 ```sh
 umask 077
@@ -59,27 +59,29 @@ mkdir -p .tutorial/oid4vci-adopter
 Copy this complete loopback configuration exactly:
 
 ```yaml title=".tutorial/oid4vci-adopter/oid4vci.yaml" test-file
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
+kind: EvidenceOid4vciRuntimeConfig
 validationMode: supervised-local-development
 credentialIssuer: http://127.0.0.1:18440
 listener:
-  address: 127.0.0.1
-  port: 18440
+  bind: 127.0.0.1:18440
 metricsListener:
-  address: 127.0.0.1
-  port: 18441
+  bind: 127.0.0.1:18441
+secretProviders:
+  environment: {}
 evidence:
   baseUrl: http://127.0.0.1:18442
 tokenClient:
   tokenEndpoint: http://127.0.0.1:18442/token
   clientId: evidence-oid4vci-tutorial
-  privateKeyFile: delivery-client.jwk.json
+  privateKeyRef: secret:env/EVIDENCE_OID4VCI_CLIENT_JWK
 offers:
   issuer: http://127.0.0.1:18442
   jwksUri: http://127.0.0.1:18442/.well-known/jwks.json
   audiences: ["http://127.0.0.1:18440"]
   algorithms: [ES256]
   authorizedClients: [tutorial-operator]
+  requiredScopes: unrestricted
 store:
   maximumOffers: 256
   offerLifetimeSeconds: 300
@@ -116,7 +118,8 @@ Evidence presentation contract.
 The maintained harness creates every value that is not in the copied configuration: the delivery
 client, offer signer, holder key, codes, tokens, nonces, synthetic Evidence response, and relying
 policy. It fixes the independently trusted relying policy before any credential is issued. Those
-runtime-only values stay in the owner-only working directory and are removed when the run ends.
+runtime-only values live in the test process and in the environment of the binaries it starts, and
+are discarded when the run ends.
 
 Before those compatibility cases, the runner invokes the actual `evidence-oid4vci` binary. It runs
 `check` against the copied file, runs `inspect` and checks the derived batch ceiling, starts

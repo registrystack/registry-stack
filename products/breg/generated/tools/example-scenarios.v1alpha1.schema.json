@@ -1,0 +1,118 @@
+{
+  "$defs": {
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "Operation": {
+      "enum": [
+        "create",
+        "invoke",
+        "get",
+        "submit",
+        "apply",
+        "history"
+      ],
+      "type": "string"
+    },
+    "Scenario": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "input": {
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "input",
+        "steps"
+      ],
+      "type": "object"
+    },
+    "Step": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfile": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "action": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "capture": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "client": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "entity": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "input": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        },
+        "record": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "result": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "id",
+        "operation",
+        "entity",
+        "client",
+        "accessProfile"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/breg/example-scenarios/example-scenarios.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/breg/example-scenarios/v1alpha1",
+      "description": "The format and version this file is written in.",
+      "type": "string"
+    },
+    "kind": {
+      "const": "BRegExampleScenarios",
+      "description": "The kind of document this file is.",
+      "type": "string"
+    },
+    "scenarios": {
+      "items": {
+        "$ref": "#/$defs/Scenario"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "scenarios"
+  ],
+  "title": "Base Registry Engine example scenarios",
+  "type": "object"
+}

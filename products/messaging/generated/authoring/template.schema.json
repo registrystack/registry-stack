@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "Channel": {
+      "description": "A delivery channel.",
+      "enum": [
+        "email",
+        "sms"
+      ],
+      "type": "string"
+    },
+    "PartKind": {
+      "description": "A part of a message.",
+      "enum": [
+        "subject",
+        "text",
+        "html"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/messaging/template/template.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`template.yaml`, as authored.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/messaging/template/v1alpha1",
+      "type": "string"
+    },
+    "channel": {
+      "$ref": "#/$defs/Channel"
+    },
+    "kind": {
+      "const": "MessagingTemplate",
+      "type": "string"
+    },
+    "locales": {
+      "description": "The locales the version ships, at least one and at most 32, each with\nits own directory.",
+      "items": {
+        "pattern": "^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$",
+        "type": "string"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "parts": {
+      "description": "The parts every locale renders: subject and text, and optionally\nhtml, for email; text alone for SMS.",
+      "items": {
+        "$ref": "#/$defs/PartKind"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "channel",
+    "locales",
+    "parts"
+  ],
+  "title": "Registry Messaging template version",
+  "type": "object"
+}

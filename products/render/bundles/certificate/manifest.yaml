@@ -1,11 +1,11 @@
-apiVersion: render.registrystack.org/v1alpha1
+apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
 kind: RenderBundle
 bundleVersion: 1
 documents:
 - id: certificate
   version: 1
-  entry: templates/certificate.typ
-  schema: schemas/certificate.schema.json
+  entryFile: templates/certificate.typ
+  schemaFile: schemas/certificate.schema.json
   labels:
   - en
   pdfStandard: a-4

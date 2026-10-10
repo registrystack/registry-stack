@@ -747,7 +747,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           ],
           "accessProfiles":[
             {
-              "id":"steward","default":true,"principalClaim":"registry_principal",
+              "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
@@ -765,7 +765,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               }]
             },
             {
-              "id":"submitter","default":true,"principalClaim":"registry_principal",
+              "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["create","get","list","patch","submit_request","revise_request","cancel_request"],
@@ -775,10 +775,13 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "requestVisibility":"owner",
                 "allowCount":true
+              },{
+                "dataset":"monthly-owned-correction-requests",
+                "operations":["read-live"]
               }]
             },
             {
-              "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
+              "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
@@ -788,7 +791,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               }]
             },
             {
-              "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
+              "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","apply_request"],
@@ -805,10 +808,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "id":"monthly-owned-correction-requests",
             "unit":"correction-request",
             "population":"included eq true",
-            "period":{"kind":"flow","field":"requested-on","granularity":"month","firstPeriod":"2025-01"},
+            "period":{"type":"flow","field":"requested-on","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["included"],
-            "disclosure":{"minimumCount":2,"roundingBase":2},
-            "live":["submitter"]
+            "disclosure":{"minimumCount":2,"roundingBase":2}
           }]
         }"#,
     )

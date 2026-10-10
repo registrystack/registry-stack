@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
@@ -41,7 +45,7 @@ fn create_only_guard_source() -> Value {
     reviewer["permissions"][1]["applyTargets"]
         .as_array_mut()
         .expect("reviewer apply targets")
-        .push(json!({"entity":"enrolment", "rowBoundaries":[]}));
+        .push(json!({"entity":"enrolment", "rowBoundaries":"unrestricted"}));
     candidate
 }
 
@@ -109,10 +113,9 @@ fn native_reference_admission_requires_complete_manual_same_profile_authority() 
             .err()
             .unwrap_or_else(|| panic!("{case} was accepted"));
         assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == "change_request.submitter_targets.invalid"),
+            failure.diagnostics().iter().any(
+                |diagnostic| diagnostic.code == "breg.change-request.submitter-targets-invalid"
+            ),
             "{case}: {failure:?}"
         );
     }
@@ -185,5 +188,5 @@ fn create_only_requests_admit_exact_existing_application_guard_targets() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.submitter_targets.invalid"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.submitter-targets-invalid"));
 }

@@ -346,8 +346,7 @@ impl PostgresRecordReadService {
                 && plan
                     .entity
                     .access_profiles
-                    .get(claims.access_profile())
-                    .is_some_and(|profile| !profile.anonymous)
+                    .contains_key(claims.access_profile())
                 && proposal_version > 0
                 && request.request_history_after_proposal_version.is_none()
                 && request.adapter == CursorAdapter::Native
@@ -3538,7 +3537,7 @@ mod tests {
                     "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable",
                     "fields":[{"id":"details","type":"structured","maxBytes":256,"classification":"restricted","encrypted":true,"schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]}}]
                   }],
-                  "accessProfiles":[{"id":"reader","default":true,"principalClaim":"principal","permissions":[{"entity":"asset","operations":["get"],"readableFields":["details"],"rowBoundaries":[]}]}]
+                  "accessProfiles":[{"id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"asset","operations":["get"],"readableFields":["details"],"rowBoundaries":"unrestricted"}]}]
                 }"#,
             )
             .expect("fixture parses"),
@@ -3628,8 +3627,8 @@ mod tests {
                     "geojson":{"geometryField":"location"}
                   }],
                   "accessProfiles":[{
-                    "id":"public","default":true,"anonymous":true,
-                    "permissions":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": []}]
+                    "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+                    "permissions":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": "unrestricted"}]
                   }]
                 }"#,
             )
@@ -3678,13 +3677,13 @@ mod tests {
                     "geojson":{"geometryField":"location"}
                   }],
                   "accessProfiles":[{
-                    "id":"public","default":true,"anonymous":true,
+                    "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":[{
                       "entity":"site",
                       "operations":["list"],
                       "readableFields":["code","location"],
                       "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.3,"maximumLatitudeSpanDegrees":0.2}},
-                      "rowBoundaries": []
+                      "rowBoundaries": "unrestricted"
                     }]
                   }]
                 }"#,
@@ -3761,11 +3760,11 @@ mod tests {
                     ]
                   }],
                   "accessProfiles":[{
-                    "id":"public","default":true,"anonymous":true,
+                    "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":[{
                       "entity":"case","operations":["list"],
                       "readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"],
-                      "rowBoundaries": []
+                      "rowBoundaries": "unrestricted"
                     }]
                   }]
                 }"#,
@@ -4027,13 +4026,13 @@ mod tests {
                     "geojson":{"geometryField":"location"}
                   }],
                   "accessProfiles":[{
-                    "id":"public","default":true,"anonymous":true,
+                    "id":"public","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                     "permissions":[{
                       "entity":"site",
                       "operations":["list"],
                       "readableFields":["code","location"],
                       "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}},
-                      "rowBoundaries": []
+                      "rowBoundaries": "unrestricted"
                     }]
                   }]
                 }"#,

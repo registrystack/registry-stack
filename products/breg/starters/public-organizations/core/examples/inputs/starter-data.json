@@ -13,20 +13,20 @@
   },
   "river-link": {
     "institutionFrom": {
-      "recordRef": "river"
+      "recordCapture": "river"
     },
     "institutionTo": {
-      "recordRef": "department"
+      "recordCapture": "department"
     },
     "relationshipType": "reports-to",
     "startDate": "2026-01-01"
   },
   "hill-link": {
     "institutionFrom": {
-      "recordRef": "hill"
+      "recordCapture": "hill"
     },
     "institutionTo": {
-      "recordRef": "department"
+      "recordCapture": "department"
     },
     "relationshipType": "reports-to",
     "startDate": "2026-01-01"

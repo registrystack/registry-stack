@@ -88,7 +88,7 @@ impl MintResourceServer {
             JwksFetcherConfig::defaults(),
             fetch_url_policy(config, mode),
         ));
-        let required_scopes = config.required_scopes.clone().unwrap_or_default();
+        let required_scopes = config.required_scopes.items().to_vec();
         Self {
             verifier: Arc::new(TokenVerifier::new(verifier_profile(config), fetcher)),
             required_scopes,
@@ -150,7 +150,7 @@ pub fn verifier_profile(config: &OfferAuthorizationConfig) -> TokenVerifierConfi
             .map(|typ| (*typ).to_owned())
             .collect(),
     )
-    .with_allowed_clients(config.authorized_clients.clone())
+    .with_allowed_clients(config.authorized_clients.items().to_vec())
     .with_denied_kids(HashSet::new())
     .with_max_token_lifetime(Some(Duration::from_secs(
         config.maximum_token_lifetime_seconds,

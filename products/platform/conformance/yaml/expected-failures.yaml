@@ -1,0 +1,346 @@
+# Configuration conformance cells that fail today, and why.
+#
+# Written by `products/platform/scripts/run-config-conformance.sh
+# --write-expected-failures` against binaries built from this tree. A failing
+# cell is a format whose reader has not yet converged on the conventions in
+# products/platform/CONFIG-CONVENTIONS.md, not a reason to weaken a case:
+# remove the entry when the product conforms. Each entry's digest covers the
+# cell's sorted problems, so a listed cell whose problems change fails the run;
+# a leak, a crash, a timeout, or a failure of the harness is never listed. A
+# format whose baseline fails has only its baseline entry: its other cells do
+# not run. The runner fails on a failing cell missing here, and with --strict
+# on an entry that no longer holds.
+
+expectedFailures:
+- format: breg/module
+  case: comments-only-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: breg/module
+  case: empty-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: breg/module
+  case: init-modeline
+  reason: 'the first line of modules/record-notes/module.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: ff75efc6ce00
+- format: breg/module
+  case: missing-api-version
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: breg/module
+  case: missing-envelope
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: breg/module
+  case: missing-kind
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: breg/module
+  case: wrong-api-version
+  reason: exit status 0, expected 1; missing config.unsupported-api-version at /apiVersion 1:13
+  digest: 342ce26f695f
+- format: breg/module
+  case: wrong-kind
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 1:7
+  digest: 9e96b581560b
+- format: breg/module
+  case: wrong-kind-and-api-version
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 2:7
+  digest: 137899d927f4
+- format: breg/project
+  case: duplicate-id
+  reason: missing config.duplicate-id at /entities/1/id 54:9; unexpected breg.entity.id-duplicate at /entities 35:3
+  digest: 825fb996185d
+- format: breg/project
+  case: init-modeline
+  reason: 'the first line of registry.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: 6991c3866557
+- format: breg/runtime
+  case: init-modeline
+  reason: 'the first line of runtime.example.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: d5db192b6b23
+- format: casework/project
+  case: duplicate-id
+  reason: missing config.duplicate-id at /queues/1/id 26:9; unexpected casework.queue.duplicate-id at /queues/1/id 26:9
+  digest: 0009c0f39f05
+- format: casework/project
+  case: duplicate-set-item
+  reason: exit status 0, expected 1; missing config.duplicate-item at /accessProfiles/0/requiredScopes/1 9:41
+  digest: 22d9886fe7e3
+- format: discovery/evidence-mapping
+  case: comments-only-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: discovery/evidence-mapping
+  case: empty-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: discovery/evidence-mapping
+  case: missing-api-version
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: discovery/evidence-mapping
+  case: missing-envelope
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: discovery/evidence-mapping
+  case: missing-kind
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: discovery/evidence-mapping
+  case: wrong-api-version
+  reason: exit status 0, expected 1; missing config.unsupported-api-version at /apiVersion 1:13
+  digest: 342ce26f695f
+- format: discovery/evidence-mapping
+  case: wrong-kind
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 1:7
+  digest: 9e96b581560b
+- format: discovery/evidence-mapping
+  case: wrong-kind-and-api-version
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 2:7
+  digest: 137899d927f4
+- format: discovery/origins
+  case: comments-only-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: discovery/origins
+  case: empty-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: discovery/origins
+  case: missing-api-version
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: discovery/origins
+  case: missing-envelope
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: discovery/origins
+  case: missing-kind
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: discovery/origins
+  case: wrong-api-version
+  reason: exit status 0, expected 1; missing config.unsupported-api-version at /apiVersion 1:13
+  digest: 342ce26f695f
+- format: discovery/origins
+  case: wrong-kind
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 1:7
+  digest: 9e96b581560b
+- format: discovery/origins
+  case: wrong-kind-and-api-version
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 2:7
+  digest: 137899d927f4
+- format: evidence/bundle
+  case: comments-only-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: evidence/bundle
+  case: duplicate-id
+  reason: missing config.duplicate-id at /requirements/3/id 336:9; unexpected evidence.bundle.invalid-requirement at /requirements/3/id 336:9
+  digest: b0e46eed6211
+- format: evidence/bundle
+  case: empty-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: evidence/bundle
+  case: integer-boundary-sweep
+  reason: missing config.out-of-range at /requirements/0/derivation/parameters/minimum_age_years 245:39; unexpected evidence.bundle.invalid-requirement at /requirements/0 223:5 (and 3 more problems)
+  digest: cf493e383091
+- format: evidence/bundle
+  case: missing-api-version
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: evidence/bundle
+  case: missing-envelope
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: evidence/bundle
+  case: missing-kind
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: evidence/bundle
+  case: oversize
+  reason: missing yaml.too-large at the root (file); unexpected evidence.package.too-large at the root (file)
+  digest: 1dd16ce1ee8c
+- format: evidence/bundle
+  case: path-link-outside-project
+  reason: missing a diagnostic of any code at /sources/registered-birth-date/extractScript 118:20; unexpected evidence.package.unsafe-entry at the root (file)
+  digest: c2515e7c797a
+- format: evidence/bundle
+  case: wrong-api-version
+  reason: exit status 0, expected 1; missing config.unsupported-api-version at /apiVersion 1:13
+  digest: 342ce26f695f
+- format: evidence/bundle
+  case: wrong-kind
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 1:7
+  digest: 9e96b581560b
+- format: evidence/bundle
+  case: wrong-kind-and-api-version
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 2:7
+  digest: 137899d927f4
+- format: evidence/codelist
+  case: comments-only-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: evidence/codelist
+  case: empty-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: evidence/codelist
+  case: missing-api-version
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: evidence/codelist
+  case: missing-envelope
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: evidence/codelist
+  case: missing-kind
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
+- format: evidence/codelist
+  case: oversize
+  reason: missing yaml.too-large at the root (file); unexpected evidence.package.too-large at the root (file)
+  digest: 1dd16ce1ee8c
+- format: evidence/codelist
+  case: wrong-api-version
+  reason: exit status 0, expected 1; missing config.unsupported-api-version at /apiVersion 1:13
+  digest: 342ce26f695f
+- format: evidence/codelist
+  case: wrong-kind
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 1:7
+  digest: 9e96b581560b
+- format: evidence/codelist
+  case: wrong-kind-and-api-version
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 2:7
+  digest: 137899d927f4
+- format: evidence/fixture
+  case: duplicate-id
+  reason: missing config.duplicate-id at /cases/13/id 183:9; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
+  digest: d5846cd11199
+- format: evidence/fixture
+  case: extension-field
+  reason: missing config.unknown-key at /x-conformance 197:1; unexpected evidencectl.fixtures.failed at $.fixtures (file) (and 2 more problems)
+  digest: ea010f8469b6
+- format: evidence/fixture
+  case: too-many-problems
+  reason: missing config.unknown-key at /conformanceUnknown001 197:1; missing config.unknown-key at /conformanceUnknown002 198:1 (and 102 more problems)
+  digest: df8e54568e12
+- format: evidence/fixture
+  case: unknown-keys
+  reason: missing config.unknown-key at /conformanceFirst 197:1; missing config.unknown-key at /conformanceSecond 198:1 (and 3 more problems)
+  digest: 52183416d8f4
+- format: evidence/holder-bound-verification-policy
+  case: comments-only-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: evidence/holder-bound-verification-policy
+  case: empty-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: evidence/holder-bound-verification-policy
+  case: missing-api-version
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
+- format: evidence/holder-bound-verification-policy
+  case: missing-envelope
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
+- format: evidence/holder-bound-verification-policy
+  case: missing-kind
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
+- format: evidence/holder-bound-verification-policy
+  case: wrong-api-version
+  reason: exit status 0, expected 1; missing config.unsupported-api-version at /apiVersion 6:13
+  digest: 10e5145b5cf7
+- format: evidence/holder-bound-verification-policy
+  case: wrong-kind
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 6:7
+  digest: afe7978bea33
+- format: evidence/holder-bound-verification-policy
+  case: wrong-kind-and-api-version
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 7:7
+  digest: b2b108056a5d
+- format: evidence/verification-policy
+  case: comments-only-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: evidence/verification-policy
+  case: empty-file
+  reason: missing config.missing-envelope at the root 1:1; unexpected config.invalid-type at the root 1:1
+  digest: f6718810f259
+- format: evidence/verification-policy
+  case: missing-api-version
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
+- format: evidence/verification-policy
+  case: missing-envelope
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
+- format: evidence/verification-policy
+  case: missing-kind
+  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
+- format: evidence/verification-policy
+  case: wrong-api-version
+  reason: exit status 0, expected 1; missing config.unsupported-api-version at /apiVersion 6:13
+  digest: 10e5145b5cf7
+- format: evidence/verification-policy
+  case: wrong-kind
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 6:7
+  digest: afe7978bea33
+- format: evidence/verification-policy
+  case: wrong-kind-and-api-version
+  reason: exit status 0, expected 1; missing config.wrong-kind at /kind 7:7
+  digest: b2b108056a5d
+unreachedFormats:
+- format: breg/backup-binding
+  reason: syntax json; the corpus mutates YAML text
+- format: breg/data-export-checkpoint
+  reason: syntax json; the corpus mutates YAML text
+- format: breg/data-import-checkpoint
+  reason: syntax json; the corpus mutates YAML text
+- format: breg/data-import-state
+  reason: syntax json; the corpus mutates YAML text
+- format: breg/dev-prepared-source
+  reason: syntax json; the corpus mutates YAML text
+- format: breg/dev-source-transition
+  reason: syntax json; the corpus mutates YAML text
+- format: breg/dev-state
+  reason: syntax json; the corpus mutates YAML text
+- format: breg/evidence-source-export
+  reason: syntax json; the corpus mutates YAML text
+- format: breg/example-scenarios
+  reason: syntax json; the corpus mutates YAML text
+- format: breg/migration-descriptor
+  reason: syntax json; the corpus mutates YAML text
+- format: breg/migration-rehearsal-receipt
+  reason: syntax json; the corpus mutates YAML text
+- format: breg/package
+  reason: syntax json; the corpus mutates YAML text
+- format: breg/schema-test-receipt
+  reason: syntax json; the corpus mutates YAML text
+- format: casework/breg-source-description
+  reason: syntax json; the corpus mutates YAML text
+- format: casework/dev-state
+  reason: syntax json; the corpus mutates YAML text
+- format: discovery/index
+  reason: syntax json; the corpus mutates YAML text
+- format: evidence/client-contracts
+  reason: syntax json; the corpus mutates YAML text
+- format: evidence/client-profile
+  reason: syntax json; the corpus mutates YAML text
+- format: evidence/dev-state
+  reason: syntax json; the corpus mutates YAML text
+- format: evidence/source-import-journal
+  reason: syntax json; the corpus mutates YAML text
+- format: evidence/source-import-state
+  reason: syntax json; the corpus mutates YAML text
+- format: evidence/source-resolution
+  reason: syntax json; the corpus mutates YAML text
+- format: platform/thunderid-session
+  reason: syntax json; the corpus mutates YAML text
+inapplicableCases: []

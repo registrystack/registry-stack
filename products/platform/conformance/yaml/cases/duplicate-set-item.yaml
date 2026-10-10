@@ -1,0 +1,17 @@
+id: duplicate-set-item
+rules: [CFG-ID-6]
+summary: A set with its first item copied after the last is refused at the copy, naming the first item, instead of collapsing the two.
+mutation:
+  duplicateItem:
+    role: set
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.duplicate-item
+      path: "{pointer}/{index}"
+      from: item
+      at: {line: 1, column: 1}
+      related:
+        - path: "{pointer}/0"
+          from: first
+          at: {line: 1, column: 1}

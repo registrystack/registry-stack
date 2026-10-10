@@ -24,6 +24,7 @@ python3 products/casework/scripts/generate_cli_schemas.py --check
 python3 products/casework/scripts/check_dependency_direction.py
 python3 products/casework/scripts/check_database_test_isolation.py
 python3 -m unittest discover -s products/casework/scripts -p 'test_*.py'
+products/casework/scripts/check-schemas.sh
 
 if [ ! -x "$caseworkctl_bin" ]; then
   echo "build caseworkctl first or set CASEWORKCTL_BIN" >&2
@@ -92,7 +93,7 @@ PY
 # entity its own lifecycle hook (`casework-lifecycle-v1-<entity>`), since BReg
 # hook identifiers are unique across a registry. If both entities shared one
 # bare hook id, the pairing regresses and applying it leaves a registry
-# `bregctl check` refuses with `event.id.registry_duplicate`.
+# `bregctl check` refuses with `breg.event.id-registry-duplicate`.
 source_add_registry="$work/source-add-registry"
 mkdir -p "$source_add_registry"
 cp "$repo_root/products/breg/starters/public-organizations/core/registry.yaml" \

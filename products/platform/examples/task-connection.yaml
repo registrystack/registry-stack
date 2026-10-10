@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/platform/task-connection/task-connection.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/platform/task-connection/v1alpha1
+kind: PlatformTaskConnection
+caseworkUrl: http://127.0.0.1:8090
+tokenEndpoint: http://127.0.0.1:8091/oauth2/token
+clientAssertionAudience: http://127.0.0.1:8091/oauth2/token
+bootstrapResource: urn:registry:casework
+secretProviders:
+  file:
+    root: /home/operator/.task-keys
+clients:
+  task-agent:
+    assertionKeyRef: secret:file/task-agent.jwk
+    resource: urn:registry:breg
+    scopes:
+      - records:get

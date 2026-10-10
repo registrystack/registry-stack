@@ -100,6 +100,11 @@ impl Spec {
     /// YAML is a superset of JSON for this purpose, so both spellings are
     /// parsed the same way, and the document must declare a top-level
     /// `openapi: 3.0.x` or `3.1.x` version string.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "evidence/source-openapi is registered as an external format: an OpenAPI description is a grammar Registry Stack does not own; \
+                  it may use anchors, aliases, and tags the shared configuration reader refuses"
+    )]
     pub fn parse(text: &str, origin: &str) -> Result<Spec> {
         let document: Value = serde_norway::from_str(text)
             .with_context(|| format!("parsing {origin} as YAML or JSON"))?;

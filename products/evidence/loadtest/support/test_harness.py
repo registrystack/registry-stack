@@ -260,7 +260,11 @@ class EvidenceHarnessTests(unittest.TestCase):
             root = Path(directory)
             project = root / "project"
             project.mkdir()
-            (project / "evidence-project.yaml").write_text("version: 1\n", encoding="utf-8")
+            (project / "evidence-project.yaml").write_text(
+                "apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1\n"
+                "kind: EvidenceAuthoringProject\n",
+                encoding="utf-8",
+            )
             pool = root / "pool"
             loadenv.local_project(LOADTEST / "project", project, pool)
             plan = (project / "mocks/source.yaml").read_text(encoding="utf-8")

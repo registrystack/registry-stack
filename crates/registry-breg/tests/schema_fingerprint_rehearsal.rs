@@ -24,7 +24,8 @@ const ENVIRONMENT: &str = "production";
 const INSTANCE: &str = "rehearsal-instance";
 const DATABASE: &str = "rehearsal-database";
 const SOURCE_REVISION: &str = "rehearsal-source-revision";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys: []
 "#;
 
@@ -401,8 +402,9 @@ fn project_bytes(source_revision: &str) -> Vec<u8> {
   "accessProfiles": [{{
     "id": "reader",
     "principalClaim": "principal",
+    "requiredScopes": "unrestricted",
     "permissions": [{{
-      "rowBoundaries": [], "entity": "case",
+      "rowBoundaries": "unrestricted", "entity": "case",
       "operations": ["get", "list"],
       "readableFields": ["code"]
     }}]

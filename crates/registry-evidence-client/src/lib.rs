@@ -157,11 +157,14 @@ pub mod nonce;
 pub mod prepare;
 pub mod private_key_jwt;
 pub mod profile;
+mod profile_file;
 pub mod progressive;
 pub mod request;
 pub mod request_batch;
 pub mod response_format;
 pub mod retained;
+#[cfg(feature = "schema")]
+pub mod schema;
 pub mod token;
 
 /// One rule set for every outbound exchange. Which rules apply to a credential
@@ -212,6 +215,11 @@ pub use profile::{
     PrivateKeyReference, ReviewedContracts, TrustProfile, VerificationProfile,
     DEFAULT_METADATA_CACHE_SECONDS, EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1,
     EVIDENCE_CLIENT_PROFILE_SCHEMA_V1, MAXIMUM_METADATA_CACHE_SECONDS,
+};
+pub use profile_file::{
+    read_client_profile, read_reviewed_contracts, EVIDENCE_CLIENT_CONTRACTS_KIND,
+    EVIDENCE_CLIENT_CONTRACTS_SCHEMA_ID, EVIDENCE_CLIENT_PROFILE_KIND,
+    EVIDENCE_CLIENT_PROFILE_SCHEMA_ID,
 };
 pub use progressive::{
     AudienceScopedRequest, AudienceScopedResult, EvidenceClientContracts,

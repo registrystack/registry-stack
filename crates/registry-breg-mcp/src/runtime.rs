@@ -16,12 +16,11 @@ use registry_platform_oidc::{
     fetch_discovery_with_policy, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
     OidcDiscoveryConfig,
 };
-use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{
     audit::ToolAuditLog,
-    config::{describe_secret_failure, RuntimeConfig, RuntimeConfigError},
+    config::{describe_secret_failure, RuntimeConfig},
     contract::ContractSpec,
     gateway::{Gateway, ServiceDescription},
     inbound::{jwks_fetch_policy, uri_fetcher, verifier, ResourceServer, ResourceServerError},
@@ -32,14 +31,10 @@ use crate::{
 /// Why the gateway could not start. No variant carries a secret value.
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
-    #[error("the runtime configuration is not valid: {0}")]
-    Configuration(#[source] RuntimeConfigError),
     #[error("{0}")]
     Secret(String),
     #[error("the secret configured at {0} is not a usable key")]
     Key(&'static str),
-    #[error("{0} is not a usable URL")]
-    Url(&'static str),
     #[error("the inbound resource server could not be configured: {0}")]
     ResourceServer(String),
     #[error("the outbound registry exchange could not be configured: {0}")]
@@ -122,7 +117,7 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
             let policy = jwks_fetch_policy(development);
             let discovery = fetch_discovery_with_policy(
                 &OidcDiscoveryConfig {
-                    issuer: server.issuer.clone(),
+                    issuer: server.issuer.to_string(),
                     jwks_uri_override: None,
                     discovery_timeout: Duration::from_secs(5),
                     max_doc_bytes: 1024 * 1024,
@@ -150,7 +145,7 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
     };
     let resource_server = ResourceServer::new(
         server,
-        &config.service.name,
+        config.service.name.as_str(),
         verifier(server, Arc::new(fetcher)),
         profile.key_hasher(),
         config.rate_limits.clone(),
@@ -158,11 +153,16 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
     let private_key = resolve(
         &secrets,
         "exchange.privateKeyRef",
-        &config.exchange.private_key_ref,
+        config.exchange.private_key_ref.as_str(),
     )?;
     let key = PrivateJwk::parse(&text(&private_key, "exchange.privateKeyRef")?)
         .map_err(|_| StartupError::Key("exchange.privateKeyRef"))?;
-    let outbound = Outbound::new(&config.registry, &config.exchange, &server.resource, key)?;
+    let outbound = Outbound::new(
+        &config.registry,
+        &config.exchange,
+        server.resource.as_str(),
+        key,
+    )?;
     Ok(Parts {
         resource_server,
         outbound,
@@ -170,73 +170,30 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
     })
 }
 
-/// Validate the configuration and resolve every secret without opening a
-/// socket or writing the audit log.
-pub fn check(config: &RuntimeConfig) -> Result<(), StartupError> {
-    config.check().map_err(StartupError::Configuration)?;
-    let secrets = resolver(config)?;
-    let hash_key = resolve(
-        &secrets,
-        "audit.hashKeyRef",
-        config.audit.key.hash_key_ref.as_str(),
-    )?;
-    AuditProfile::production_from_secret_bytes(Zeroizing::new(hash_key.expose_secret().to_vec()))
-        .map_err(|_| StartupError::Key("audit.hashKeyRef"))?;
-    if let JwksSource::Static { document_ref } = &config.resource_server.jwks_source {
-        let document = resolve(
-            &secrets,
-            "resourceServer.jwksSource.documentRef",
-            document_ref,
-        )?;
-        parse_static_jwks(document.expose_secret())
-            .map_err(|_| StartupError::Key("resourceServer.jwksSource.documentRef"))?;
-    }
-    let private_key = resolve(
-        &secrets,
-        "exchange.privateKeyRef",
-        &config.exchange.private_key_ref,
-    )?;
-    let key = PrivateJwk::parse(&text(&private_key, "exchange.privateKeyRef")?)
-        .map_err(|_| StartupError::Key("exchange.privateKeyRef"))?;
-    Outbound::new(
-        &config.registry,
-        &config.exchange,
-        &config.resource_server.resource,
-        key,
-    )?;
-    config
-        .audit
-        .destination()
-        .map_err(StartupError::Configuration)?
-        .check_writable()?;
-    Ok(())
-}
-
 /// Build the gateway's HTTP application.
 pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
     let parts = assemble(config).await?;
+    // The loader already refused a destination the audit writer cannot use.
     let destination = config
         .audit
         .destination()
-        .map_err(StartupError::Configuration)?;
+        .map_err(|error| StartupError::Audit(error.to_string()))?;
     let audit = ToolAuditLog::new(AuditWriter::open(destination).await?);
-    let review_base_url = Url::parse(&config.service.review_base_url)
-        .map_err(|_| StartupError::Url("service.reviewBaseUrl"))?;
-    let resource = Url::parse(&config.resource_server.resource)
-        .map_err(|_| StartupError::Url("resourceServer.resource"))?;
+    let review_base_url = config.service.review_base_url.to_url();
+    let resource = config.resource_server.resource.to_url();
     let gateway = Gateway::new(
         parts.outbound,
         ContractSpec {
-            access_profile: config.registry.access_profile.clone(),
-            details_entity: config.service.details.entity.clone(),
-            application_entity: config.service.application.entity.clone(),
-            target_field: config.service.application.target_field.clone(),
-            owner_field: config.service.application.owner_field.clone(),
+            access_profile: config.registry.access_profile.to_string(),
+            details_entity: config.service.details.entity.to_string(),
+            application_entity: config.service.application.entity.to_string(),
+            target_field: config.service.application.target_field.to_string(),
+            owner_field: config.service.application.owner_field.to_string(),
         },
         ServiceDescription {
-            name: config.service.name.clone(),
-            description: config.service.description.clone(),
-            disclosure: config.service.disclosure.clone(),
+            name: config.service.name.as_str().to_owned(),
+            description: config.service.description.as_str().to_owned(),
+            disclosure: config.service.disclosure.as_str().to_owned(),
         },
         review_base_url,
         audit,
@@ -247,7 +204,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
         Arc::new(parts.resource_server),
         &server::ServerOptions {
             resource: &resource,
-            max_request_body_bytes: config.limits.max_request_body_bytes,
+            max_request_body_bytes: config.limits.request_bytes(),
             hsts: !config.development_loopback(),
         },
     ))
@@ -267,30 +224,4 @@ where
         .with_graceful_shutdown(shutdown)
         .await
         .map_err(StartupError::Serve)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::tests::document;
-
-    /// A document that no longer passes its own checks is reported as a
-    /// configuration failure, not as a failure of one of the halves.
-    #[test]
-    fn an_invalid_document_is_a_configuration_failure() {
-        let mut config = RuntimeConfig::from_slice(document().as_bytes()).expect("document loads");
-        config.registry.scopes.clear();
-        let error = check(&config).expect_err("an empty scope list is refused");
-        assert!(
-            matches!(
-                error,
-                StartupError::Configuration(RuntimeConfigError::Empty("registry.scopes"))
-            ),
-            "{error:?}"
-        );
-        assert_eq!(
-            error.to_string(),
-            "the runtime configuration is not valid: registry.scopes must not be empty"
-        );
-    }
 }

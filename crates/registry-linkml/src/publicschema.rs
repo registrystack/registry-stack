@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 
+use registry_platform_yaml::{EnvelopeRule, Expect, FormatSpec, Reader, Report};
 use serde::Deserialize;
 
 use crate::model::{ClassDef, EnumDef, Model, PermissibleValue, SlotDef};
@@ -178,9 +179,63 @@ pub struct Pin {
     pub files: Vec<String>,
 }
 
+/// The pin record carries no envelope: `sync-snapshot.sh` writes it beside the
+/// embedded files and this crate alone reads it.
+const PIN_FORMAT: FormatSpec = FormatSpec {
+    kind: "PublicSchemaPin",
+    envelope: EnvelopeRule::Exempt {
+        reason: "the snapshot pin record sync-snapshot.sh writes beside the embedded files",
+    },
+    removed_keys: &[],
+};
+
 /// Reads the pin record written beside the snapshot.
-pub fn pin() -> Result<Pin, serde_norway::Error> {
-    serde_norway::from_str(PIN_YAML)
+pub fn pin() -> Result<Pin, Report> {
+    read_pin(PIN_YAML)
+}
+
+fn read_pin(text: &str) -> Result<Pin, Report> {
+    Reader::new("publicschema/PIN.yaml")
+        .decode::<Pin>(text.as_bytes(), &Expect::one(&PIN_FORMAT))
+        .map(|decoded| decoded.value)
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+
+    fn codes(report: &Report) -> Vec<&str> {
+        report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect()
+    }
+
+    const RECORD: &str = "repository: https://github.com/PublicSchema/publicschema.org\n\
+        commit: e5cfbbc0161e4d2c802d1acd752ec193253f7820\n\
+        commitDate: 2026-09-24\n\
+        version: \"0.3.0\"\n\
+        license: CC-BY-4.0\n\
+        licenseUrl: https://creativecommons.org/licenses/by/4.0/\n\
+        files: [schema/publicschema.yaml]\n";
+
+    #[test]
+    fn the_pin_record_reads_through_the_shared_reader() {
+        let pin = read_pin(RECORD).unwrap_or_else(|report| panic!("{report}"));
+        assert_eq!(pin.commit, "e5cfbbc0161e4d2c802d1acd752ec193253f7820");
+        assert_eq!(pin.commit_date, "2026-09-24");
+        assert_eq!(pin.version, "0.3.0");
+        assert_eq!(pin.files, ["schema/publicschema.yaml"]);
+    }
+
+    #[test]
+    fn a_pin_record_with_an_unknown_or_repeated_key_is_refused() {
+        let unknown = read_pin(&format!("{RECORD}branch: main\n")).expect_err("an unknown key");
+        assert_eq!(codes(&unknown), ["config.unknown-key"], "{unknown}");
+        let repeated = read_pin(&format!("{RECORD}commit: abc1234\n")).expect_err("a repeated key");
+        assert_eq!(codes(&repeated), ["yaml.duplicate-key"], "{repeated}");
+    }
 }
 
 /// A ready-made selection shipped beside the snapshot, for `bregctl init
@@ -429,11 +484,15 @@ mod tests {
         sorted.dedup();
         assert_eq!(names, sorted, "starters are unique and in name order");
         for starter in starters {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "test reading this crate's own embedded starter for two keys; bregctl reads the ModelSelection format through its own reader"
+            )]
             let document: serde_norway::Value =
                 serde_norway::from_str(starter.contents).expect("a starter is YAML");
             assert_eq!(
                 document["kind"].as_str(),
-                Some("ModelSelection"),
+                Some("BRegModelSelection"),
                 "{} declares the selection kind",
                 starter.name
             );

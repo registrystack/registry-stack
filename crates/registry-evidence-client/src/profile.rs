@@ -11,6 +11,7 @@ use std::{
 
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::{is_cloud_metadata_ip, valid_resource_uri};
+use registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -22,10 +23,16 @@ pub const EVIDENCE_CLIENT_PROFILE_SCHEMA_V1: &str = "registry.evidence-client-pr
 pub const EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1: &str = "registry.evidence-client-contracts/v1";
 pub const DEFAULT_METADATA_CACHE_SECONDS: u64 = 600;
 pub const MAXIMUM_METADATA_CACHE_SECONDS: u64 = 600;
-const MAXIMUM_PROFILE_BYTES: u64 = 256 * 1024;
+// A profile and a contracts file are read whole by the shared reader, which
+// accepts no larger document.
+const MAXIMUM_PROFILE_BYTES: u64 = MAXIMUM_DOCUMENT_BYTES as u64;
 const MAXIMUM_PRIVATE_KEY_BYTES: u64 = 64 * 1024;
 const MAXIMUM_PINNED_JWKS_BYTES: u64 = 1024 * 1024;
-const MAXIMUM_REVIEWED_CONTRACTS_BYTES: u64 = 4 * 1024 * 1024;
+const MAXIMUM_REVIEWED_CONTRACTS_BYTES: u64 = MAXIMUM_DOCUMENT_BYTES as u64;
+// The names an opaque read gives the shared reader; its findings are not
+// reported from these paths.
+const PROFILE_SOURCE_NAME: &str = "client-profile";
+const CONTRACTS_SOURCE_NAME: &str = "client-contracts";
 const MAXIMUM_PROFILE_REFERENCE_BYTES: usize = 4096;
 const MAXIMUM_ENVIRONMENT_VARIABLE_BYTES: usize = 128;
 
@@ -54,7 +61,7 @@ pub struct EvidenceClientProfile {
     #[serde(default = "default_metadata_cache_seconds")]
     pub maximum_metadata_cache_seconds: u64,
     #[serde(skip)]
-    origin_directory: Option<PathBuf>,
+    pub(crate) origin_directory: Option<PathBuf>,
 }
 
 const fn default_metadata_cache_seconds() -> u64 {
@@ -62,19 +69,23 @@ const fn default_metadata_cache_seconds() -> u64 {
 }
 
 impl EvidenceClientProfile {
+    /// Read a profile through the shared configuration reader. The error is
+    /// deliberately opaque; [`crate::read_client_profile`] reports the
+    /// positioned findings.
     pub fn from_slice(bytes: &[u8]) -> Result<Self, EvidenceClientError> {
-        if bytes.len() as u64 > MAXIMUM_PROFILE_BYTES {
-            return Err(profile_error());
-        }
-        let profile: Self = serde_json::from_slice(bytes).map_err(|_| profile_error())?;
+        let profile =
+            crate::read_client_profile(PROFILE_SOURCE_NAME, bytes).map_err(|_| profile_error())?;
         profile.validate()?;
         Ok(profile)
     }
 
+    /// Read a profile file. Relative file references in it resolve against
+    /// the profile's own directory.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, EvidenceClientError> {
         let path = path.as_ref();
         let bytes = read_bounded_file(path, MAXIMUM_PROFILE_BYTES)?;
-        let mut profile: Self = serde_json::from_slice(&bytes).map_err(|_| profile_error())?;
+        let mut profile =
+            crate::read_client_profile(PROFILE_SOURCE_NAME, &bytes).map_err(|_| profile_error())?;
         profile.origin_directory = path.parent().map(Path::to_path_buf);
         profile.validate()?;
         Ok(profile)
@@ -197,16 +208,13 @@ impl EvidenceClientProfile {
         file: &Path,
     ) -> Result<crate::EvidenceDefinitionsDocument, EvidenceClientError> {
         let bytes = read_bounded_file(&self.resolve(file), MAXIMUM_REVIEWED_CONTRACTS_BYTES)?;
-        let catalog: ReviewedContracts =
-            serde_json::from_slice(&bytes).map_err(|_| profile_error())?;
-        if catalog.schema != EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1 {
-            return Err(profile_error());
-        }
+        let catalog = crate::read_reviewed_contracts(CONTRACTS_SOURCE_NAME, &bytes)
+            .map_err(|_| profile_error())?;
         Ok(catalog.into_definitions())
     }
 }
 
-fn strict_fetch_refuses_literal_origin(url: &url::Url) -> bool {
+pub(crate) fn strict_fetch_refuses_literal_origin(url: &url::Url) -> bool {
     let ip = match url.host() {
         Some(url::Host::Ipv4(ip)) => IpAddr::V4(ip),
         Some(url::Host::Ipv6(ip)) => IpAddr::V6(ip),

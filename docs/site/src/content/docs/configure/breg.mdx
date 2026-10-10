@@ -78,11 +78,11 @@ Initialized a registry project. 6 artifacts written.
   runtime.example.yaml
   tests/journeys.yaml
 
-  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+  finding  breg.access.profile-unrestricted-collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
            this profile can list all rows, subject only to query bounds; caller filters
            are not authorization. Add a claim-bound row restriction or review this
            registry-wide access
-  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+  finding  breg.access.profile-unrestricted-rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
            this profile has no claim-bound row restriction for its granted operations;
            requestVisibility owner limits request reads only, and other lifecycle rules
            still apply. Review this registry-wide access
@@ -99,7 +99,7 @@ Next:
      resolves
 ```
 
-A finding is an advisory the compiler attaches to a document path; it does not fail `check`, and [Test with journeys](../breg-journeys/) lists every finding the compiler can report and explains `--deny-findings` and `--production`.
+A finding is an advisory the compiler attaches to a document path; it does not fail `check`, and [Test with journeys](../breg-journeys/) lists every finding the compiler can report and explains `--deny-warnings` and `--production`.
 The first says the `operator` profile can list every row, which is right for a registry-wide operations role and wrong once the registry holds more than one caller's data.
 The second says the `evidence-source` profile can look up any record by its code, which is right for a source that vouches for the whole registry.
 The project's `record-reader` profile shows the row boundary that closes either one.
@@ -119,7 +119,7 @@ This page describes the Base Registry Engine (BReg)
 | `apiVersion`, `kind` | `registry.registrystack.org/v1alpha1` and `RegistryProject`. |
 | `registry` | `id`, `version`, `defaultLanguage`, and `canonicalBaseIri`, the base of every record IRI. |
 | `package` | Production identity: `sourceRevision`. Required for a production package. The retired `environment`, `instanceId`, and `sequence` keys are refused; the environment and instance belong in the runtime file's `identity`. |
-| `manifestProjection` | The Registry Manifest catalog a deployment publishes: the `accessProfile` it describes, a `classificationCeiling`, `catalog` metadata, and the `datasets[]` and `dataServices[]` it lists. Omitting it raises the finding `manifest_projection.missing`, which is reported only in authoring mode: it does not fail `bregctl check --production`, and `package` builds a package without one. A project that still carries the retired singular `dataset` or `dataService` is refused; declare `datasets[]` and `dataServices[]` instead. |
+| `manifestProjection` | The Registry Manifest catalog a deployment publishes: the `accessProfile` it describes, a `classificationCeiling`, `catalog` metadata, and the `datasets[]` and `dataServices[]` it lists. Omitting it raises the finding `breg.manifest-projection.missing`, which is reported only in authoring mode: it does not fail `bregctl check --production`, and `package` builds a package without one. A project that still carries the retired singular `dataset` or `dataService` is refused; declare `datasets[]` and `dataServices[]` instead. |
 | `modules` | Included modules by `id`, `version`, and `digest`. A production compilation requires a digest on every lock, and a lock and a loaded source for every module. |
 | `entities` | Entities declared in this file. |
 | `accessProfiles` | Every profile a token can select. |
@@ -133,9 +133,9 @@ further restricts that profile to the matching token kind and must be paired wit
 actor kinds. A token that acts for someone else, carrying a trusted `act` claim, is the exception:
 only a profile that declares `actorKind: agent` admits it. Such a profile without a `taskGrant` is a
 standing agent: it may read and author change-request drafts, and `check` refuses it any lifecycle
-operation with `access_profile.standing_agent.operation_forbidden`, any direct write with
-`access_profile.standing_agent.direct_mutation_forbidden`, and any immediate action with
-`access_profile.standing_agent.action_forbidden`. The person submits each draft through a profile
+operation with `breg.access-profile.standing-agent-operation-forbidden`, any direct write with
+`breg.access-profile.standing-agent-direct-mutation-forbidden`, and any immediate action with
+`breg.access-profile.standing-agent-action-forbidden`. The person submits each draft through a profile
 they use directly.<DocsetProduct product="registry-breg-services"> The
 [citizen chat assistant](../../configure/breg-mcp/) is built on such a profile.</DocsetProduct>
 
@@ -144,7 +144,7 @@ they use directly.<DocsetProduct product="registry-breg-services"> The
     crates/registry-breg/src/compiler.rs. */}
 
 Identifiers follow a closed grammar: a lowercase ASCII letter first, then lowercase letters, digits, hyphens, or underscores, at most 64 bytes.
-`check` refuses anything else with `identifier.invalid`, so an event id such as `record.status.changed` fails where `record-status-changed-v1` passes.
+`check` refuses anything else with `breg.identifier.invalid`, so an event id such as `record.status.changed` fails where `record-status-changed-v1` passes.
 The project convention is kebab-case for entity ids, field ids, profile ids, and vocabulary ids.
 The API exposes field ids in camelCase, so `asset-code` becomes `assetCode`, unless a field sets `apiName`.
 
@@ -224,9 +224,9 @@ another entity and changes when the constraint changes.
 `indexes[]` declares btree indexes, each with an `id` and ordered `fields`, such as
 `{id: asset-class, fields: [asset-class]}`. The compiler indexes every `reference` field
 unless a declared index or a unique constraint without `when` already leads with it.
-`bregctl check` reports `entity.list.unindexed_filter` or `entity.list.unindexed_sort` for a
+`bregctl check` reports `breg.entity.list-unindexed-filter` or `breg.entity.list-unindexed-sort` for a
 filterable or sortable list field that no index leads with. The finding fails a check only under
-`--deny-findings`; declare an index for an entity that will hold more than a few thousand rows.
+`--deny-warnings`; declare an index for an entity that will hold more than a few thousand rows.
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, derived_constraint_id(), compile_entities(), and unindexed_list_findings(); crates/registry-breg/src/generated_ddl.rs; products/breg/generated/authoring/registry-module.schema.json. */}
 
@@ -258,7 +258,7 @@ fields:
       unique: true
 ```
 
-Phase 1 refuses `pattern` on an encrypted field with `field.encrypted.pattern_refused`, because
+Phase 1 refuses `pattern` on an encrypted field with `breg.field.encrypted-pattern-refused`, because
 native patterns are PostgreSQL checks and encrypted plaintext must not reach PostgreSQL. Remove
 `pattern`, or keep the field in plaintext storage when the native pattern is required.
 
@@ -278,9 +278,9 @@ exact value.
 {/* Evidence: products/breg/generated/authoring/registry-project.schema.json;
     crates/registry-breg/src/contract.rs, FieldSource, FieldLookupSource, and
     NormalizationStep; crates/registry-breg/src/compiler.rs,
-    field.encrypted.classification_invalid, field.encrypted.type_unsupported, and
-    field.encrypted.pattern_refused;
-    crates/registry-breg/src/change_request.rs, change_request.effect.field_encrypted;
+    breg.field.encrypted-classification-invalid, breg.field.encrypted-type-unsupported, and
+    breg.field.encrypted-pattern-refused;
+    crates/registry-breg/src/change_request.rs, breg.change-request.effect-field-encrypted;
     crates/registry-breg/src/derived_sql.rs, refuse_encrypted_columns(). */}
 
 ## Related records
@@ -499,7 +499,7 @@ Binding `record-receiver` to a receiver belongs to [Bind webhook receivers](../.
 
 ## Declare count datasets
 
-Add root `statisticalDatasets` when your registry needs exact operational counts and separate disclosure-controlled releases. The compiler checks the population's typed filter, dimension domains, ordinary count grants, and caller-independent publisher visibility across every derived source dependency. Modules cannot contribute dataset declarations.
+Add root `statisticalDatasets` when your registry needs exact operational counts and separate disclosure-controlled releases, and grant each dataset in the access profiles that use it with a `{dataset, operations}` permission. The compiler checks the population's typed filter, dimension domains, ordinary count grants, and caller-independent publisher visibility across every derived source dependency. Modules cannot contribute dataset declarations.
 
 Follow [publish a statistical series](../breg-statistics/) to declare a dataset and read its released CSV, or review [live counts and statistical releases](../../explanation/breg-statistical-datasets/) before choosing disclosure parameters.
 
@@ -512,7 +512,7 @@ Follow [publish a statistical series](../breg-statistics/) to declare a dataset 
 |---|---|
 | `init` fails with `output.destination.invalid`. | The destination exists or contains a parent-directory component. Give a new path, or remove the directory if it holds nothing you want. |
 | An error or finding names a path such as `entities[id=record].fields[id=label]`. | The path is a document path into `registry.yaml` or the module file the message names. Fix the member it points at. |
-| `check` reports `identifier.invalid`. | An id breaks the closed grammar: start with a lowercase letter and use only lowercase letters, digits, hyphens, and underscores, at most 64 bytes. |
+| `check` reports `breg.identifier.invalid`. | An id breaks the closed grammar: start with a lowercase letter and use only lowercase letters, digits, hyphens, and underscores, at most 64 bytes. |
 | A module digest does not match. | Run `project lock` after editing a module, then review the digest change together with the module diff. |
 | `check` refuses a filter, sort, comparison, change request, or projection that uses an encrypted field. | An encrypted field answers equality lookups only. Declare a `lookup` block for exact-value lookups, or move the comparison to a field that is not sealed; [Encrypt restricted fields](#encrypt-restricted-fields) lists what is refused. |
 | `check` refuses the manifest projection's singular `dataset` or `dataService`. | The projection takes only the plural keys. Declare `datasets[]` and `dataServices[]`, each with an `id`, and point every entity's `primaryDataset` at one of them. |

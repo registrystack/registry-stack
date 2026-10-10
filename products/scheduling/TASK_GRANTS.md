@@ -183,9 +183,12 @@ grant UUID into the existing Casework development exchange path. Its connection
 entry selects the Scheduling destination, not policy fields:
 
 ```yaml
+secretProviders:
+  file:
+    root: /absolute/casework/.casework/dev/credentials/scheduling-agent
 clients:
   scheduling-agent:
-    assertionKeyFile: /absolute/casework/.casework/dev/credentials/scheduling-agent/assertion-key.jwk
+    assertionKeyRef: secret:file/assertion-key.jwk
     resource: urn:example:scheduling
     scopes: [scheduling-read, scheduling:commit]
 ```

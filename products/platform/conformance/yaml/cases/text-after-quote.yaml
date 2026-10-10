@@ -1,0 +1,13 @@
+id: text-after-quote
+rules: [CFG-YAML-8]
+summary: Text after a closing quote is refused at that text, and the fix says how to write the quote inside the value.
+mutation:
+  append: |
+    conformanceQuote: 'it's'
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.text-after-quote
+      path: /conformanceQuote
+      at: {line: 1, column: 23}
+      suggestedAction: "Put the whole value inside the quotes, and write a quote inside single quotes as two (`''`)."

@@ -12,12 +12,14 @@
 //!
 //! The runtime crate `registry-messaging` builds its PostgreSQL store, HTTP
 //! surface, and token verification on top of this model. The dependency runs
-//! one way: this crate depends on no other Registry Stack crate, and never on
-//! another product's runtime or protocol types.
+//! one way: this crate depends on no other Messaging crate, only on shared
+//! `registry-platform-*` primitives, and never on another product's runtime
+//! or protocol types.
 
 mod access;
 mod callback;
 mod content;
+mod finding;
 mod naming;
 mod package;
 mod problem;
@@ -25,12 +27,14 @@ mod receipt;
 mod render;
 mod sms;
 mod template;
+pub mod typed;
 mod visibility;
 mod wire;
 
 pub use access::*;
 pub use callback::*;
 pub use content::*;
+pub use finding::*;
 pub use naming::*;
 pub use package::*;
 pub use problem::*;

@@ -1,4 +1,5 @@
-apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/scheduling/fixture/fixture.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/scheduling/fixture/v1alpha1
 kind: SchedulingFixture
 name: household-morning
 now: 2026-10-09T20:00:00Z
@@ -15,7 +16,7 @@ facts:
       end: 2026-10-10T03:00:00Z
       units: 3
       unitsPolicy:
-        kind: perRecipient
+        type: per-recipient
         perRecipient: 1
         because: Each recipient consumes one serving slot.
       subquotas:
@@ -28,7 +29,6 @@ facts:
           units: 1
           because: Assisted bookings hold a protected unit.
       because: The Saturday morning household block, sized for two officers.
-initial: []
 cases:
   - name: first-household-takes-the-public-quota
     request:
@@ -38,12 +38,10 @@ cases:
         recipients: 2
         attendees: 3
       channel: public
-      policyRevision: 3
+      policyRevision: 1
       windowRevision: 2
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: admitted
+      type: admitted
       units: 2
   - name: next-public-household-finds-the-quota-spent
     request:
@@ -53,12 +51,10 @@ cases:
         recipients: 1
         attendees: 1
       channel: public
-      policyRevision: 3
+      policyRevision: 1
       windowRevision: 2
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: refused
+      type: refused
       code: capacity.exhausted
   - name: assisted-household-fits-the-protected-unit
     request:
@@ -68,10 +64,8 @@ cases:
         recipients: 1
         attendees: 1
       channel: assisted
-      policyRevision: 3
+      policyRevision: 1
       windowRevision: 2
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: admitted
+      type: admitted
       units: 1

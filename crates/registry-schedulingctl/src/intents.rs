@@ -15,15 +15,13 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use registry_scheduling::config::RuntimeConfig;
 use registry_scheduling::store::PostgresStore;
 use serde_json::{json, Value};
 
 pub fn undelivered(config_path: &Path, limit: i64) -> Result<Value> {
     let config_path =
         fs::canonicalize(config_path).context("resolving the Scheduling runtime configuration")?;
-    let config = RuntimeConfig::load(&config_path)
-        .with_context(|| format!("loading {}", config_path.display()))?;
+    let config = crate::project::load_runtime_config(&config_path)?;
     let resolver = crate::records::secret_resolver(&config)?;
     let store = PostgresStore::connect_runtime(&config.database, &resolver)
         .context("the Scheduling runtime database configuration is invalid")?;

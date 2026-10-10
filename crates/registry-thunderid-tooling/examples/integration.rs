@@ -556,6 +556,10 @@ fn rewrite_agent_jwks(state_root: &Path, public_jwks: &str) {
         .join("agents")
         .join(format!("{AGENT_ID}.yaml"));
     let text = std::fs::read_to_string(&path).expect("the agent document is readable");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "reads back a ThunderID resource this crate rendered, an external format (platform/thunderid-resources) ThunderID owns, not configuration an operator writes"
+    )]
     let mut document: serde_json::Value =
         serde_norway::from_str(&text).expect("the agent document parses");
     document["inboundAuthConfig"][0]["config"]["certificate"]["value"] =
@@ -574,6 +578,10 @@ fn remove_role_assignment(state_root: &Path) {
         .join("roles")
         .join(format!("{ROLE_ID}.yaml"));
     let text = std::fs::read_to_string(&path).expect("the role document is readable");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "reads back a ThunderID resource this crate rendered, an external format (platform/thunderid-resources) ThunderID owns, not configuration an operator writes"
+    )]
     let mut document: serde_json::Value =
         serde_norway::from_str(&text).expect("the role document parses");
     document["assignments"] = serde_json::json!([]);

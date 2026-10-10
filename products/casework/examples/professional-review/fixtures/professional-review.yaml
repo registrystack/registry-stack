@@ -1,10 +1,9 @@
-apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
+apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
 kind: CaseworkFixture
-name: professional-review-offline
-source:
-  id: professional-licences
-  requestEntity: scope-correction
-  reviewStage: review
+id: professional-review-offline
+request:
+  source: professional-licences
+  entity: scope-correction
 expect:
   queue: corrections
-  targetElapsed: PT48H
+  target: {elapsedMinutes: 2880}

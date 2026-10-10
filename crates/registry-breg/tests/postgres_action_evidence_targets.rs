@@ -7,6 +7,8 @@ mod action_evidence_provider;
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
+#[path = "support/source_bytes.rs"]
+mod source_bytes;
 
 use action_evidence_provider::EvidenceProvider;
 use axum::{
@@ -67,7 +69,8 @@ async fn setup_with_age(
         .join("../../products/breg/acceptance/farmer-landholding-evidence");
     let mut project =
         parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
-    let mut document = serde_json::to_value(&project).unwrap();
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&source_bytes::source_bytes(&project)).unwrap();
     document["entities"].as_array_mut().unwrap().push(json!({
         "id":"local-register", "route":"local-registers", "primaryDataset":"farmer-landholding-evidence", "mutationMode":"mutable",
         "fields":[

@@ -606,7 +606,15 @@ async fn invalid_mapping_is_refused_before_origin_io_and_preserves_previous_outp
 
     let result = build_project_at(project.path(), &output, true, OffsetDateTime::UNIX_EPOCH).await;
 
-    assert!(matches!(result, Err(BuildError::Project(_))));
+    let Err(BuildError::Project(refusal)) = result else {
+        panic!("the invalid mapping is refused before any origin is fetched");
+    };
+    let rendered = refusal.to_string();
+    assert!(rendered.contains("error[config.unknown-key]"), "{rendered}");
+    assert!(
+        rendered.contains("adult-status.yaml:2:1 /unexpected"),
+        "{rendered}"
+    );
     assert_eq!(counter.load(Ordering::SeqCst), 0);
     assert_eq!(
         fs::read(&output).expect("previous output"),

@@ -3,7 +3,6 @@
 
 use std::path::Path;
 
-use registry_breg::runtime_config::RuntimeConfigError;
 use registry_breg::startup::{check, CheckedStartup, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
 
@@ -23,33 +22,59 @@ pub(crate) const CHECKED_DEPENDENCIES: [&str; 10] = [
     "fieldEncryption",
 ];
 
+/// A doctor run that refused: its diagnostics, and whether the runtime
+/// configuration file itself was refused rather than a dependency it names.
+pub(crate) struct DoctorRefusal {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) runtime_configuration: bool,
+}
+
 /// Run the startup dependency check without binding a listener, keeping only
 /// the PostgreSQL baseline advisories and the role mode it decided. It verifies the dependencies
 /// preparation opens and intentionally owns no parallel readiness logic; the
 /// audit destination is checked as writable rather than opened, so doctor runs
 /// beside a serving process that holds it.
-pub(crate) fn run(runtime_config: &Path) -> Result<CheckedStartup, Diagnostic> {
+pub(crate) fn run(runtime_config: &Path) -> Result<CheckedStartup, DoctorRefusal> {
     if !runtime_config.is_absolute() {
-        return Err(diagnostic(
-            "startup.runtime_config.path_invalid",
-            "runtimeConfig",
-            "the runtime configuration path must be absolute",
-        ));
+        return Err(DoctorRefusal {
+            diagnostics: vec![diagnostic(
+                "startup.runtime_config.path_invalid",
+                "runtimeConfig",
+                "the runtime configuration path must be absolute",
+            )],
+            runtime_configuration: true,
+        });
     }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|_| {
-            diagnostic(
+        .map_err(|_| DoctorRefusal {
+            diagnostics: vec![diagnostic(
                 "startup.runtime.unavailable",
                 "runtime",
                 "the startup preparation runtime is unavailable",
-            )
+            )],
+            runtime_configuration: false,
         })?;
     runtime
         .block_on(check(runtime_config))
-        .map_err(startup_diagnostic)
+        .map_err(startup_refusal)
+}
+
+/// A refused runtime file reports every reader diagnostic, or the one rule
+/// the runtime decides itself, unchanged; any other refusal names its one
+/// startup cause.
+fn startup_refusal(error: StartupError) -> DoctorRefusal {
+    let runtime_configuration = matches!(error, StartupError::RuntimeConfig(_));
+    let diagnostics = match error {
+        StartupError::RuntimeConfig(cause) => crate::runtime_config_diagnostics(&cause),
+        other => vec![startup_diagnostic(other)],
+    };
+    DoctorRefusal {
+        diagnostics,
+        runtime_configuration,
+    }
 }
 
 fn startup_diagnostic(error: StartupError) -> Diagnostic {
@@ -59,7 +84,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     } = error
     {
         return diagnostic(
-            "field.pattern.syntax_invalid",
+            "breg.field.pattern-syntax-invalid",
             &format!("entities[{entity_id}].fields[{field_id}].pattern"),
             "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test before packaging; a failed activation requires restoration of the pre-activation backup before changing the pinned target",
         );
@@ -127,12 +152,6 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             ),
         );
     }
-    // The runtime configuration carries its own closed-vocabulary cause; name
-    // it the way `bregctl verify` already names it instead of collapsing every
-    // configuration mistake into one generic refusal.
-    if let StartupError::RuntimeConfig(cause) = error {
-        return runtime_config_diagnostic(cause);
-    }
     // The package refusal carries its own closed-vocabulary cause. Name it
     // inside the one package check instead of collapsing every package fault
     // into the same sentence; both vocabularies are value free.
@@ -156,8 +175,10 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         );
     }
     let (code, path, message) = match error {
-        StartupError::RuntimeConfig(_)
-        | StartupError::PackageRefused(_)
+        StartupError::RuntimeConfig(_) => {
+            unreachable!("startup_refusal reports every runtime configuration diagnostic")
+        }
+        StartupError::PackageRefused(_)
         | StartupError::PackageEnvelopeRefused(_)
         | StartupError::AuditDestination(_) => {
             unreachable!("handled above")
@@ -239,6 +260,11 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "authentication",
             "the authentication profile was refused: check the claim mapping, the accepted algorithms, and the audience against the package this runtime serves",
         ),
+        StartupError::AuthenticationClientsUnlisted => (
+            "startup.authentication.clients_unlisted",
+            "authentication",
+            "the project names clients in requesterClients, trusted actors, or consent recipients that authentication.oidc.allowedClients does not list; list each of them in allowedClients, because the keyword unrestricted lists none",
+        ),
         StartupError::EventDestinations => (
             "startup.event_destinations.refused",
             "eventDestinations",
@@ -291,18 +317,6 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     diagnostic(code, path, message)
 }
 
-/// Names a runtime configuration cause the same way `bregctl verify` already
-/// names it: the closed-vocabulary code and path `RuntimeConfigError` carries,
-/// prefixed for this command instead of `verify`'s.
-fn runtime_config_diagnostic(error: RuntimeConfigError) -> Diagnostic {
-    let metadata = error.metadata();
-    diagnostic(
-        &format!("startup.{}", metadata.code()),
-        metadata.path(),
-        &error.to_string(),
-    )
-}
-
 fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
     Diagnostic {
         severity: DiagnosticSeverity::Error,
@@ -316,6 +330,7 @@ fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
 mod tests {
     use super::*;
     use registry_breg::package::PackageError;
+    use registry_breg::runtime_config::RuntimeConfigError;
     use std::collections::HashSet;
 
     #[test]
@@ -401,7 +416,7 @@ mod tests {
             entity_id: "entry".to_owned(),
             field_id: "identifier".to_owned(),
         });
-        assert_eq!(diagnostic.code, "field.pattern.syntax_invalid");
+        assert_eq!(diagnostic.code, "breg.field.pattern-syntax-invalid");
         assert_eq!(
             diagnostic.path,
             "entities[entry].fields[identifier].pattern"
@@ -654,157 +669,140 @@ mod tests {
     }
 
     #[test]
-    fn runtime_config_causes_are_named_the_way_verify_already_names_them() {
+    fn runtime_config_causes_are_named_by_their_breg_runtime_codes() {
         // Every closed-vocabulary configuration cause `RuntimeConfigError`
-        // carries is named by its own code and path, matching `bregctl verify`,
-        // instead of collapsing into one generic runtime-configuration refusal.
+        // carries is named by its own `breg.runtime.*` code and pointer,
+        // matching `bregctl verify`, instead of collapsing into one generic
+        // runtime-configuration refusal.
         let cases = [
             (
-                RuntimeConfigError::Unavailable,
-                "startup.runtime_config.unavailable",
-                "/",
-            ),
-            (
-                RuntimeConfigError::UnsafeFile,
-                "startup.runtime_config.unsafe_file",
-                "/",
-            ),
-            (
-                RuntimeConfigError::Bounds,
-                "startup.runtime_config.bounds",
-                "/",
-            ),
-            (
-                RuntimeConfigError::EnvExpansion,
-                "startup.runtime_config.env_expansion",
-                "/",
-            ),
-            (
-                RuntimeConfigError::SubstitutionInReference,
-                "startup.runtime_config.substitution_in_reference",
-                "/",
-            ),
-            (
-                RuntimeConfigError::Document(
-                    "cursor is invalid: missing field `secretRef`".to_owned(),
-                ),
-                "startup.runtime_config.document",
-                "/",
-            ),
-            (
-                RuntimeConfigError::InvalidApiVersion,
-                "startup.runtime_config.invalid_api_version",
-                "/apiVersion",
-            ),
-            (
-                RuntimeConfigError::InvalidKind,
-                "startup.runtime_config.invalid_kind",
-                "/kind",
-            ),
-            (
-                RuntimeConfigError::GovernedMember,
-                "startup.runtime_config.governed_member",
-                "/",
-            ),
-            (
                 RuntimeConfigError::InvalidBinding,
-                "startup.runtime_config.invalid_binding",
-                "/",
+                "breg.runtime.invalid-binding",
+                "",
             ),
             (
                 RuntimeConfigError::InvalidListener,
-                "startup.runtime_config.invalid_listener",
+                "breg.runtime.invalid-listener",
                 "/listener",
             ),
             (
                 RuntimeConfigError::InvalidMetricsListener,
-                "startup.runtime_config.invalid_metrics_listener",
+                "breg.runtime.invalid-metrics-listener",
                 "/metricsListener",
             ),
             (
                 RuntimeConfigError::InvalidSecretProvider,
-                "startup.runtime_config.invalid_secret_provider",
+                "breg.runtime.invalid-secret-provider",
                 "/secretProviders",
             ),
             (
                 RuntimeConfigError::SecretProviderRootUnavailable,
-                "startup.runtime_config.secret_provider_root_unavailable",
+                "breg.runtime.secret-provider-root-unavailable",
                 "/secretProviders/file/root",
             ),
             (
                 RuntimeConfigError::UnsafeSecretProviderRoot,
-                "startup.runtime_config.unsafe_secret_provider_root",
+                "breg.runtime.unsafe-secret-provider-root",
                 "/secretProviders/file/root",
             ),
             (
                 RuntimeConfigError::InvalidDatabase,
-                "startup.runtime_config.invalid_database",
+                "breg.runtime.invalid-database",
                 "/database",
             ),
             (
                 RuntimeConfigError::InvalidPackage,
-                "startup.runtime_config.invalid_package",
+                "breg.runtime.invalid-package",
                 "/package",
             ),
             (
                 RuntimeConfigError::PackageRootUnavailable,
-                "startup.runtime_config.package_root_unavailable",
+                "breg.runtime.package-root-unavailable",
                 "/package/root",
             ),
             (
                 RuntimeConfigError::UnsafePackageRoot,
-                "startup.runtime_config.unsafe_package_root",
+                "breg.runtime.unsafe-package-root",
                 "/package/root",
             ),
             (
                 RuntimeConfigError::InvalidOidc,
-                "startup.runtime_config.invalid_oidc",
+                "breg.runtime.invalid-oidc",
                 "/authentication/oidc",
             ),
             (
                 RuntimeConfigError::InvalidOidcLeeway,
-                "startup.runtime_config.invalid_oidc_leeway",
+                "breg.runtime.invalid-oidc-leeway",
                 "/authentication/oidc/leewayMilliseconds",
             ),
             (
                 RuntimeConfigError::InvalidAudit,
-                "startup.runtime_config.invalid_audit",
+                "breg.runtime.invalid-audit",
                 "/audit",
             ),
             (
                 RuntimeConfigError::InvalidCursor,
-                "startup.runtime_config.invalid_cursor",
+                "breg.runtime.invalid-cursor",
                 "/cursor",
             ),
             (
                 RuntimeConfigError::InvalidEventDestination,
-                "startup.runtime_config.invalid_event_destination",
+                "breg.runtime.invalid-event-destination",
                 "/eventDestinations",
             ),
             (
                 RuntimeConfigError::InvalidFieldEncryption,
-                "startup.runtime_config.invalid_field_encryption",
+                "breg.runtime.invalid-field-encryption",
                 "/fieldEncryption",
             ),
             (
                 RuntimeConfigError::InvalidBounds,
-                "startup.runtime_config.invalid_bounds",
+                "breg.runtime.invalid-bounds",
                 "/operationalTimeouts",
             ),
-            (
-                RuntimeConfigError::Secret,
-                "startup.runtime_config.secret",
-                "/",
-            ),
+            (RuntimeConfigError::Secret, "breg.runtime.secret", ""),
         ];
 
         for (cause, expected_code, expected_path) in cases {
             let message = cause.to_string();
-            let diagnostic = startup_diagnostic(StartupError::RuntimeConfig(cause));
+            let refusal = startup_refusal(StartupError::RuntimeConfig(cause));
+            assert!(refusal.runtime_configuration);
+            let [diagnostic] = refusal.diagnostics.as_slice() else {
+                panic!("one runtime rule reports one diagnostic");
+            };
             assert_eq!(diagnostic.code, expected_code);
             assert_eq!(diagnostic.path, expected_path);
-            assert_eq!(diagnostic.message, message);
+            assert!(diagnostic
+                .message
+                .starts_with(&format!("{message}; next: ")));
         }
+    }
+
+    #[test]
+    fn a_refused_runtime_file_reports_every_reader_diagnostic_unchanged() {
+        use registry_breg::runtime_config::{
+            parse_runtime_config_with_env, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND,
+        };
+        let refused = parse_runtime_config_with_env(
+            &format!(
+                "apiVersion: {RUNTIME_CONFIG_API_VERSION}\nkind: {RUNTIME_CONFIG_KIND}\nlistenr: {{}}\naudt: {{}}\n"
+            ),
+            |_| None,
+        )
+        .expect_err("unknown keys are refused");
+        let refusal = startup_refusal(StartupError::RuntimeConfig(refused));
+        assert!(refusal.runtime_configuration);
+        let unknown = refusal
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "config.unknown-key")
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(unknown, ["/listenr", "/audt"]);
+        assert!(refusal
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.message.contains("; next: ")));
     }
 
     #[test]
@@ -831,7 +829,23 @@ mod tests {
             );
         }
 
-        for diagnostic in [key_source, profile] {
+        let unlisted = startup_diagnostic(StartupError::AuthenticationClientsUnlisted);
+        assert_eq!(unlisted.code, "startup.authentication.clients_unlisted");
+        assert_eq!(unlisted.path, "authentication");
+        for fix in [
+            "requesterClients",
+            "trusted actors",
+            "allowedClients",
+            "unrestricted",
+        ] {
+            assert!(
+                unlisted.message.contains(fix),
+                "{fix}: {}",
+                unlisted.message
+            );
+        }
+
+        for diagnostic in [key_source, profile, unlisted] {
             assert!(!diagnostic.message.contains("http"));
             assert!(!diagnostic.message.contains("://"));
         }

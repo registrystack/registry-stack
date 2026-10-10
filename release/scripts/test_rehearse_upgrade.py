@@ -491,59 +491,134 @@ class CaseworkPackageTest(unittest.TestCase):
 
 
 class MessagingUpgradeTest(unittest.TestCase):
-    DIGEST = "sha256:" + "b" * 64
+    ACTIVATED = "sha256:" + "a" * 64
+    PACKAGE = "sha256:" + "b" * 64
+    OTHER = "sha256:" + "c" * 64
 
     def messaging(self, root: Path) -> object:
         messaging = MODULE.Messaging.__new__(MODULE.Messaging)
         messaging.runtime = root / "runtime.yaml"
         return messaging
 
-    def plan(self, change: str, pending: list[int], active: str | None = DIGEST
-             ) -> dict[str, Any]:
-        return {"packageDigest": self.DIGEST, "activeDigest": active, "change": change,
+    def plan(self, change: str, pending: list[int], active: str | None = ACTIVATED,
+             package: str | None = PACKAGE) -> dict[str, Any]:
+        return {"packageDigest": package, "activeDigest": active, "change": change,
                 "pendingSchemaVersions": pending}
 
-    def test_schema_versions_pending_for_the_active_package_are_applied(self) -> None:
+    def status(self, package: str | None = PACKAGE, predecessor: str | None = ACTIVATED
+               ) -> dict[str, Any]:
+        return {"active": {"packageDigest": package, "predecessorPackageDigest": predecessor}}
+
+    def test_the_package_built_again_is_applied_over_the_previous_activation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             messaging = self.messaging(Path(directory))
             side = unittest.mock.Mock()
-            settled = self.plan("none", [])
-            side.run_json.side_effect = [self.plan("activate", [3]), settled]
-            self.assertEqual(messaging.upgrade(side),
-                             (settled, {"public.messaging_idempotency"}))
+            side.run_json.side_effect = [self.plan("activate", [3]),
+                                         self.plan("none", [], self.PACKAGE), self.status()]
+            self.assertEqual(messaging.upgrade(side, self.ACTIVATED),
+                             ([], {"public.messaging_idempotency"}))
             runtime = ["--runtime-config", str(messaging.runtime)]
             plan = unittest.mock.call("messagingctl", "--format", "json", "plan", *runtime)
-            self.assertEqual(side.run_json.call_args_list, [plan, plan])
+            status = unittest.mock.call("messagingctl", "--format", "json", "status", *runtime)
+            self.assertEqual(side.run_json.call_args_list, [plan, plan, status])
             side.run.assert_called_once_with("messagingctl", "apply", *runtime)
 
-    def test_a_plan_with_nothing_pending_is_answered_without_apply(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            messaging = self.messaging(Path(directory))
-            side = unittest.mock.Mock()
-            settled = self.plan("none", [])
-            side.run_json.return_value = settled
-            self.assertEqual(messaging.upgrade(side), (settled, set()))
-            side.run_json.assert_called_once()
-            side.run.assert_not_called()
-
     def test_a_lost_activation_is_never_applied_over(self) -> None:
-        for planned in (self.plan("activate", [3], None),
-                        self.plan("activate", [3], "sha256:" + "c" * 64)):
-            with self.subTest(planned=planned), tempfile.TemporaryDirectory() as directory:
+        cases = (
+            (self.ACTIVATED, self.plan("activate", [3], None)),
+            (self.ACTIVATED, self.plan("activate", [3], self.OTHER)),
+            (self.ACTIVATED, self.plan("none", [3], package=self.ACTIVATED)),
+            (self.ACTIVATED, self.plan("activate", [3], package=None)),
+            (None, self.plan("activate", [3], None)),
+        )
+        for activated, planned in cases:
+            with self.subTest(activated=activated, planned=planned), \
+                    tempfile.TemporaryDirectory() as directory:
                 messaging = self.messaging(Path(directory))
                 side = unittest.mock.Mock()
                 side.run_json.return_value = planned
-                self.assertEqual(messaging.upgrade(side), (planned, set()))
+                with self.assertRaisesRegex(MODULE.RehearsalError, "messagingctl plan"):
+                    messaging.upgrade(side, activated)
+                side.run_json.assert_called_once()
                 side.run.assert_not_called()
 
     def test_an_applied_version_that_empties_nothing_names_no_table(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             messaging = self.messaging(Path(directory))
             side = unittest.mock.Mock()
-            settled = self.plan("none", [])
-            side.run_json.side_effect = [self.plan("activate", [4]), settled]
-            self.assertEqual(messaging.upgrade(side), (settled, set()))
+            side.run_json.side_effect = [self.plan("activate", [4]),
+                                         self.plan("none", [], self.PACKAGE), self.status()]
+            self.assertEqual(messaging.upgrade(side, self.ACTIVATED), ([], set()))
             side.run.assert_called_once()
+
+    def test_the_ledger_after_the_apply_is_compared_with_the_plan_before_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            messaging = self.messaging(Path(directory))
+            side = unittest.mock.Mock()
+            side.run_json.side_effect = [self.plan("activate", []),
+                                         self.plan("none", [], self.PACKAGE),
+                                         self.status(predecessor=self.OTHER)]
+            differences, emptied = messaging.upgrade(side, self.ACTIVATED)
+            self.assertEqual(len(differences), 1)
+            self.assertIn("predecessor", differences[0])
+            self.assertEqual(emptied, set())
+
+
+# JSON is YAML, so the runtime document round-trips without PyYAML, which the
+# release-tool CI step does not install.
+@unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
+@unittest.mock.patch.object(MODULE, "load_yaml", load_json)
+class MessagingRepackageTest(unittest.TestCase):
+    def test_the_operator_path_runs_in_the_documented_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            messaging = MODULE.Messaging.__new__(MODULE.Messaging)
+            messaging.work = root
+            messaging.project = root / "project"
+            messaging.package = root / "package"
+            messaging.upgraded_package = root / "package-upgraded"
+            messaging.runtime = root / "runtime.yaml"
+            dump_json(messaging.runtime, {"kind": "MessagingRuntimeConfig",
+                                          "package": {"root": str(messaging.package)}})
+            events: list[Any] = []
+
+            def steps(ids, roots, catalog=None):
+                events.append(("steps", tuple(ids), roots))
+                return []
+
+            def command(binary, *arguments, **_):
+                self.assertEqual(binary, "messagingctl")
+                root_now = load_json(messaging.runtime)["package"]["root"]
+                events.append((*arguments, root_now) if "--runtime-config" in arguments
+                              else arguments)
+
+            side = unittest.mock.Mock()
+            side.run.side_effect = command
+            with unittest.mock.patch.object(MODULE.upgrade_steps, "apply_steps",
+                                            side_effect=steps), \
+                    unittest.mock.patch.object(
+                        MODULE, "write_messaging_project_envelope",
+                        side_effect=lambda project: events.append(("envelope", project))):
+                messaging.repackage(side)
+            project, upgraded = str(messaging.project), str(messaging.upgraded_package)
+            self.assertEqual(events, [
+                ("steps", MODULE.MESSAGING_RUNTIME_UPGRADE_STEPS, {"runtime": root}),
+                ("steps", MODULE.MESSAGING_UPGRADE_STEPS, {"project": messaging.project}),
+                ("envelope", messaging.project),
+                ("check", "--project", project),
+                ("package", project, "--output", upgraded),
+                ("check", "--package", upgraded),
+                ("check", "--runtime-config", str(messaging.runtime), upgraded),
+            ])
+            self.assertEqual(load_json(messaging.runtime),
+                             {"kind": "MessagingRuntimeConfig", "package": {"root": upgraded}})
+
+    def test_the_package_built_again_never_overwrites_the_previous_release_s(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            messaging = MODULE.Messaging(Path(directory) / "messaging", unittest.mock.Mock(),
+                                         unittest.mock.Mock())
+            self.assertNotEqual(messaging.upgraded_package, messaging.package)
+            self.assertEqual(messaging.upgraded_package.parent, messaging.package.parent)
 
 
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
@@ -557,17 +632,21 @@ class BregLedgerTest(unittest.TestCase):
         breg.secrets = root / "secrets"
         breg.project = root / "project"
         breg.clients = [MODULE.BREG_CLIENT]
+        breg.upgraded = False
         return breg
 
     EMPTY_PLAN = {"ok": False, "command": "plan", "diagnostics": [
         {"severity": "error", "code": "apply.package.empty_plan", "path": "package"}]}
 
     def rehearse_ledger_upgrade(self, root: Path, upgraded_plan: dict[str, Any] | None,
-                                *, upgrade_loses_rows: bool = False):
+                                *, upgrade_loses_rows: bool = False,
+                                real_steps: bool = False):
         """Run rehearse_breg against mocked binaries. `upgraded_plan` is what
         bregctl plan prints, exiting 1, for the rebuilt predecessor; None plans
         it as a pending successor. `upgrade_loses_rows` empties the table the
-        previous release seeded until the upgraded runtime writes again."""
+        previous release seeded until the upgraded runtime writes again.
+        `real_steps` applies the catalog steps to the files under
+        `root/project` instead of recording the call."""
         old = unittest.mock.Mock()
         new = unittest.mock.Mock()
         postgres = unittest.mock.Mock()
@@ -659,6 +738,12 @@ class BregLedgerTest(unittest.TestCase):
                 current["active"] = state["active"]
             return {"epoch": 1}
 
+        def steps(ids, roots, catalog=None):
+            self.assertEqual(tuple(ids), MODULE.BREG_UPGRADE_STEPS)
+            self.assertEqual(roots, {"project": breg.project})
+            events.append(("journeys",))
+            return []
+
         breg.package.side_effect = package
         breg.write_runtime.side_effect = runtime
         breg.seed.side_effect = seed
@@ -667,11 +752,16 @@ class BregLedgerTest(unittest.TestCase):
         new.run.side_effect = process
         report = {}
         registry = {"package": {}, "entities": [{"id": "record-group", "fields": []}]}
+        steps_patch = (unittest.mock.patch.object(
+            MODULE.upgrade_steps, "apply_steps", wraps=MODULE.upgrade_steps.apply_steps)
+            if real_steps else unittest.mock.patch.object(
+                MODULE.upgrade_steps, "apply_steps", side_effect=steps))
         with (unittest.mock.patch.object(MODULE, "Breg", return_value=breg),
               unittest.mock.patch.object(MODULE, "Service"),
               unittest.mock.patch.object(MODULE, "instance_claim", side_effect=claim),
               unittest.mock.patch.object(MODULE, "load_yaml", return_value=registry),
-              unittest.mock.patch.object(MODULE, "dump_yaml")):
+              unittest.mock.patch.object(MODULE, "dump_yaml"),
+              steps_patch):
             MODULE.rehearse_breg(root, unittest.mock.Mock(), postgres, old, new, report)
         packages = {"old": old_package, "upgraded": upgraded_package,
                     "successor": successor_package}
@@ -691,6 +781,48 @@ class BregLedgerTest(unittest.TestCase):
         self.assertEqual(current["active"], "sha256:" + "b" * 64,
                          "a changed package must be applied before current reads")
         self.assertIn(("package", "build-successor", packages["upgraded"]), events)
+
+    def test_the_rebuild_tests_journeys_this_source_wrote(self) -> None:
+        # Journeys are an authored test file, not state, so this source need
+        # not read the format the previous release wrote them in.
+        with tempfile.TemporaryDirectory() as directory:
+            events, _ledger, _report, _current, packages = self.rehearse_ledger_upgrade(
+                Path(directory), None)
+        self.assertEqual(events.count(("journeys",)), 1)
+        self.assertLess(events.index(("journeys",)),
+                        events.index(("package", "build-upgraded", packages["old"])))
+
+    def test_the_leg_changes_the_project_only_through_cataloged_steps(self) -> None:
+        # The project the leg leaves on disk equals the project after applying
+        # exactly the listed steps to the starter the previous release wrote.
+        starter = {
+            "registry.yaml": {
+                "accessProfiles": [{"id": "operator", "requiredScopes": [],
+                                    "permissions": [{"entity": "record",
+                                                     "rowBoundaries": []}]}]},
+            "tests/journeys.yaml": {"journeys": [{"id": "j", "steps": [
+                {"id": "s", "request": {"operation": "read_path"}}]}]},
+        }
+
+        def write_starter(project: Path) -> None:
+            for name, document in starter.items():
+                (project / name).parent.mkdir(parents=True, exist_ok=True)
+                (project / name).write_text(json.dumps(document))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "project").mkdir()
+            write_starter(root / "project")
+            (root / "expected").mkdir()
+            write_starter(root / "expected")
+            MODULE.upgrade_steps.apply_steps(list(MODULE.BREG_UPGRADE_STEPS),
+                                             {"project": root / "expected"})
+            self.rehearse_ledger_upgrade(root, None, real_steps=True)
+            for name in starter:
+                with self.subTest(file=name):
+                    leg = (root / "project" / name).read_text()
+                    self.assertEqual(leg, (root / "expected" / name).read_text())
+                    self.assertNotEqual(leg, json.dumps(starter[name]))
 
     def test_a_rebuild_with_nothing_to_apply_keeps_the_predecessor_package(self) -> None:
         # Rebuilding against the predecessor always records fromPackageDigest,
@@ -735,6 +867,19 @@ class BregLedgerTest(unittest.TestCase):
             self.assertEqual(load_json(root / "runtime.yaml")["package"],
                              {"root": str(root / "pkg")})
 
+    def test_an_upgraded_runtime_carries_the_documented_runtime_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            breg = self.breg(root)
+            breg.clients = []
+            breg.write_runtime(root / "before.yaml", "registry", root / "pkg", 8000)
+            breg.upgraded = True
+            breg.write_runtime(root / "after.yaml", "registry", root / "pkg", 8000)
+            self.assertEqual(load_json(root / "before.yaml")["authentication"]["oidc"][
+                "allowedClients"], [])
+            self.assertEqual(MODULE.upgrade_steps.load_document(root / "after.yaml")[
+                "authentication"]["oidc"]["allowedClients"], "unrestricted")
+
     def test_a_ledger_package_is_tested_and_built_against_its_baseline_unsigned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -747,6 +892,8 @@ class BregLedgerTest(unittest.TestCase):
             package, digest = breg.package(side, root / "build-2", baseline=baseline)
             self.assertEqual((package, digest), (root / "build-2" / "out" / "package", self.DIGEST))
             breg.create_database.assert_called_once_with("schematest")
+            breg.credentials.assert_called_once_with(root / "build-2" / "credentials.json",
+                                                     side)
             tested, packaged = (call.args for call in side.run_json.call_args_list)
             self.assertEqual(tested[3], "test")
             self.assertEqual(packaged[3], "package")
@@ -767,6 +914,41 @@ class BregLedgerTest(unittest.TestCase):
             side.run_json.side_effect = [{"ok": True}, {"ok": True}]
             with self.assertRaisesRegex(Error, "packageDigest"):
                 breg.package(side, Path(directory) / "build")
+
+    def test_schema_test_credentials_carry_the_envelope_each_side_reads(self) -> None:
+        envelopes = {
+            "from": {"apiVersion": "registry.registrystack.org/breg-schema-test-credentials/v1",
+                     "kind": "SchemaTestCredentials"},
+            "to": {"apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1",
+                   "kind": "BRegSchemaTestCredentials"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            breg = self.breg(root)
+            breg.keys = unittest.mock.Mock()
+            breg.keys.mint.return_value = "minted"
+            (breg.project / "tests").mkdir(parents=True)
+            dump_json(breg.project / "tests" / "journeys.yaml", {"journeys": [
+                {"id": "j", "steps": [{"id": "open", "claims": {"principal": "q"}},
+                                      {"id": "held", "claims": {"principal": "p"}}]}]})
+            for label, envelope in envelopes.items():
+                with self.subTest(side=label):
+                    side = unittest.mock.Mock()
+                    side.label = label
+                    breg.credentials(root / f"{label}.json", side)
+                    written = load_json(root / f"{label}.json")
+                    self.assertEqual(written, {**envelope, "bindings": [
+                        {"journeyId": "j", "stepId": "open",
+                         "credential": {"type": "bearer",
+                                        "tokenRef": "secret:file/journey-token-j-open"}},
+                        {"journeyId": "j", "stepId": "held",
+                         "credential": {"type": "bearer",
+                                        "tokenRef": "secret:file/journey-token-j-held"}}]})
+
+    def test_the_journeys_step_replaces_the_starter_shortcut(self) -> None:
+        self.assertEqual(MODULE.BREG_UPGRADE_STEPS,
+                         ("breg-journeys", "breg-access-unrestricted"))
+        self.assertFalse(hasattr(MODULE.Breg, "adopt_journeys"))
 
     def author(self, root: Path, package: dict[str, Any]) -> dict[str, Any]:
         breg = self.breg(root)
@@ -832,6 +1014,80 @@ class BregLedgerTest(unittest.TestCase):
         unchained["ledger"][0]["predecessorPackageDigest"] = "sha256:" + "c" * 64
         with self.assertRaisesRegex(Error, "chain"):
             MODULE.expect_ledger(unchained, "sha256:" + "b" * 64)
+
+
+# JSON is YAML, so the journeys document reads without PyYAML.
+@unittest.mock.patch.object(MODULE, "load_yaml", load_json)
+class UpgradeStepsWiringTest(unittest.TestCase):
+    def test_evidence_applies_its_steps_to_project_and_target_before_packaging(self) -> None:
+        events = []
+        evidence = MODULE.Evidence.__new__(MODULE.Evidence)
+        evidence.work = Path("work")
+        evidence.project = Path("project")
+        evidence.target = Path("target")
+        evidence.package = lambda side, output: events.append("package")
+
+        def steps(ids, roots, catalog=None):
+            self.assertEqual(tuple(ids), MODULE.EVIDENCE_UPGRADE_STEPS)
+            self.assertEqual(roots, {"project": Path("project"), "target": Path("target")})
+            events.append("steps")
+            return []
+
+        with unittest.mock.patch.object(MODULE.upgrade_steps, "apply_steps",
+                                        side_effect=steps):
+            evidence.upgrade(unittest.mock.Mock())
+        self.assertEqual(events, ["steps", "package"])
+
+    def test_a_step_failure_is_a_rehearsal_failure_naming_the_product(self) -> None:
+        with unittest.mock.patch.object(
+                MODULE.upgrade_steps, "apply_steps",
+                side_effect=MODULE.upgrade_steps.StepError("no file matches")):
+            with self.assertRaisesRegex(MODULE.RehearsalError, "Casework.*no file matches"):
+                MODULE.apply_upgrade_steps("Casework", ("x",), project=Path("."))
+
+    def test_manual_instructions_are_printed_not_applied(self) -> None:
+        with (unittest.mock.patch.object(MODULE.upgrade_steps, "apply_steps",
+                                         return_value=["edit the thing by hand"]),
+              unittest.mock.patch("builtins.print") as printed):
+            MODULE.apply_upgrade_steps("Evidence", ("x",), project=Path("."))
+        self.assertIn("edit the thing by hand", str(printed.call_args_list))
+
+
+class BregCredentialsTest(unittest.TestCase):
+    def side(self) -> object:
+        side = unittest.mock.Mock()
+        side.label = "to"
+        return side
+
+    def breg(self, root: Path, steps: list[dict[str, Any]]) -> object:
+        breg = MODULE.Breg.__new__(MODULE.Breg)
+        breg.secrets = root / "secrets"
+        breg.project = root / "project"
+        breg.keys = unittest.mock.Mock()
+        breg.keys.mint.return_value = "minted"
+        (breg.project / "tests").mkdir(parents=True)
+        dump_json(breg.project / "tests" / "journeys.yaml",
+                  {"journeys": [{"id": "journey", "steps": steps}]})
+        return breg
+
+    def test_every_journey_step_is_bound_to_a_bearer_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            breg = self.breg(root, [{"id": "read", "claims": {"principal": "operator"}}])
+            breg.credentials(root / "credentials.json", self.side())
+            bindings = load_json(root / "credentials.json")["bindings"]
+            self.assertEqual(bindings, [{
+                "journeyId": "journey", "stepId": "read",
+                "credential": {"type": "bearer",
+                               "tokenRef": "secret:file/journey-token-journey-read"}}])
+
+    def test_a_step_without_claims_is_refused_rather_than_sent_unauthenticated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            breg = self.breg(root, [{"id": "read"}])
+            with self.assertRaisesRegex(MODULE.RehearsalError, "names no claims"):
+                breg.credentials(root / "credentials.json", self.side())
+            self.assertFalse((root / "credentials.json").exists())
 
 
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
@@ -1068,6 +1324,177 @@ class AuditUpgradeTest(unittest.TestCase):
                 "eventId": "event-1", "time": "2026-09-25T00:00:00Z",
                 "correlation": "operation-1", "record": {}}) + "\n")
             self.assertEqual(MODULE.audit_record_count(root, "evidence.jsonl", schema=schema), 1)
+
+
+class MessagingAssertionsTest(unittest.TestCase):
+    ACTIVE = "sha256:" + "a" * 64
+    PACKAGE = "sha256:" + "b" * 64
+
+    def plan(self, **members: str) -> dict[str, str]:
+        return {"activeDigest": self.ACTIVE, "packageDigest": self.PACKAGE, **members}
+
+    def test_the_plan_must_name_the_previous_activation_and_another_package(self) -> None:
+        self.assertEqual(MODULE.ledger_plan_differences(self.ACTIVE, self.plan()), [])
+        for planned, named in (
+                (self.plan(activeDigest="sha256:" + "c" * 64), "activeDigest"),
+                (self.plan(activeDigest=None), "activeDigest"),
+                (self.plan(packageDigest=self.ACTIVE), "packageDigest"),
+                (self.plan(packageDigest=None), "packageDigest"),
+                ({}, "activeDigest")):
+            with self.subTest(planned=planned):
+                differences = MODULE.ledger_plan_differences(self.ACTIVE, planned)
+                self.assertTrue(differences)
+                self.assertIn(named, differences[0])
+
+    def test_a_ledger_that_named_no_package_before_the_upgrade_is_a_difference(self) -> None:
+        for activated in (None, ""):
+            with self.subTest(activated=activated):
+                (difference,) = MODULE.ledger_plan_differences(activated, self.plan())
+                self.assertIn("previous release", difference)
+
+    def activation(self, **members: str | None) -> dict[str, str | None]:
+        return {"packageDigest": self.PACKAGE, "predecessorPackageDigest": self.ACTIVE,
+                **members}
+
+    def settled(self, **members: str | None) -> dict[str, str | None]:
+        return {"activeDigest": self.PACKAGE, "packageDigest": self.PACKAGE, "change": "none",
+                **members}
+
+    def test_the_applied_ledger_names_the_planned_package_and_its_predecessor(self) -> None:
+        differences = MODULE.ledger_activation_differences
+        self.assertEqual(differences(self.ACTIVE, self.plan(), self.settled(),
+                                     self.activation()), [])
+        other = "sha256:" + "c" * 64
+        for settled, active, named in (
+                (self.settled(change="activate"), self.activation(), "applied package"),
+                (self.settled(activeDigest=self.ACTIVE), self.activation(), "applied package"),
+                (self.settled(activeDigest=other, packageDigest=other), self.activation(),
+                 "packageDigest changed"),
+                (self.settled(), self.activation(packageDigest=other), "active activation"),
+                (self.settled(), self.activation(predecessorPackageDigest=other), "predecessor"),
+                (self.settled(), self.activation(predecessorPackageDigest=None), "predecessor"),
+                (self.settled(), {}, "active activation")):
+            with self.subTest(settled=settled, active=active):
+                found = differences(self.ACTIVE, self.plan(), settled, active)
+                self.assertTrue(found)
+                self.assertIn(named, found[0])
+
+    def test_counts_one_event_across_every_segment_of_the_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            audit = Path(temporary)
+            erased = json.dumps({"record": {"event": "messaging.retention.erased"}})
+            other = json.dumps({"record": {"event": "messaging.retention.requested"}})
+            (audit / "messaging.ndjson").write_text(erased + "\n" + other + "\n")
+            (audit / "messaging.ndjson.1").write_text(erased + "\n")
+            (audit / "elsewhere.ndjson").write_text(erased + "\n")
+            self.assertEqual(MODULE.audit_event_count(
+                audit, "messaging.ndjson", "messaging.retention.erased"), 2)
+            self.assertEqual(MODULE.audit_event_count(
+                audit, "messaging.ndjson", "messaging.retention.requested"), 1)
+            self.assertEqual(MODULE.audit_event_count(audit, "messaging.ndjson", "absent"), 0)
+
+    def test_an_entry_without_a_record_event_is_not_counted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            audit = Path(temporary)
+            (audit / "messaging.ndjson").write_text(
+                '{"record": {}}\n{"event": "messaging.retention.erased"}\n')
+            self.assertEqual(MODULE.audit_event_count(
+                audit, "messaging.ndjson", "messaging.retention.erased"), 0)
+
+    def test_the_erase_must_add_its_requested_and_erased_records(self) -> None:
+        self.assertEqual(MODULE.retention_audit_losses(0, 0, 1, 1), [])
+        self.assertEqual(MODULE.retention_audit_losses(2, 2, 3, 3), [])
+        self.assertEqual(len(MODULE.retention_audit_losses(0, 0, 1, 0)), 1)
+        self.assertEqual(len(MODULE.retention_audit_losses(0, 0, 0, 1)), 1)
+        self.assertEqual(len(MODULE.retention_audit_losses(2, 2, 2, 2)), 2)
+
+    def rehearse(self, *, erase_events: int = 1, activation_records: int = 2,
+                 ledger_differences: tuple[str, ...] = ()) -> tuple[dict, Any, Any]:
+        """Run rehearse_messaging with every process and database faked. The
+        upgrade writes `activation_records` records to the operator stream and
+        the erase command `erase_events` requested and erased records."""
+        old, new = unittest.mock.Mock(), unittest.mock.Mock()
+        old.run_json.return_value = {"active": {"packageDigest": self.ACTIVE}}
+        messaging = unittest.mock.Mock()
+        messaging.submit.return_value = {"id": "m"}
+        messaging.views.return_value = {}
+        runtime_stream, operator_stream = MODULE.MESSAGING_AUDIT, MODULE.MESSAGING_OPERATOR_AUDIT
+        written = {"events": 0, runtime_stream: 9, operator_stream: 2}
+
+        def upgrade(*_arguments):
+            written[operator_stream] += activation_records
+            written[runtime_stream] += MODULE.MESSAGING_UPGRADED_AUDIT_RECORDS[runtime_stream]
+            return list(ledger_differences), set()
+
+        messaging.upgrade.side_effect = upgrade
+
+        def erase(*arguments, **_):
+            if "erase-expired" in arguments:
+                written["events"] += erase_events
+                written[operator_stream] += 2 * erase_events
+
+        new.run.side_effect = erase
+        postgres = unittest.mock.Mock()
+        postgres.row_counts.return_value = {"public.messages": 3}
+        report: dict[str, Any] = {}
+        with tempfile.TemporaryDirectory() as directory, \
+                unittest.mock.patch.object(MODULE, "Messaging", return_value=messaging), \
+                unittest.mock.patch.object(MODULE, "Service"), \
+                unittest.mock.patch.object(
+                    MODULE, "audit_record_count",
+                    side_effect=lambda _directory, name, **_k: written[name]), \
+                unittest.mock.patch.object(
+                    MODULE, "audit_event_count",
+                    side_effect=lambda *_a, **_k: written["events"]) as events:
+            try:
+                MODULE.rehearse_messaging(Path(directory), unittest.mock.Mock(), postgres,
+                                          old, new, report)
+            finally:
+                self.report = report
+                self.event_streams = {call.args[1] for call in events.call_args_list}
+        return report, new, messaging
+
+    def test_the_leg_erases_expired_data_with_the_new_release_and_expects_its_records(
+            self) -> None:
+        report, new, _messaging = self.rehearse()
+        self.assertEqual(report["messaging"]["viewDifferences"], [])
+        self.assertEqual(report["messaging"]["rowLosses"], [])
+        erase = [call.args for call in new.run.call_args_list
+                 if "erase-expired" in call.args]
+        self.assertEqual(len(erase), 1)
+        self.assertIn("--apply", erase[0])
+        self.assertEqual(erase[0][:3], ("messagingctl", "retention", "erase-expired"))
+        # `messagingctl` writes the erase records, so the operator stream holds them.
+        self.assertEqual(self.event_streams, {MODULE.MESSAGING_OPERATOR_AUDIT})
+
+    def test_the_leg_fails_when_the_erase_leaves_no_audit_record(self) -> None:
+        with self.assertRaisesRegex(MODULE.RehearsalError, "retention.erased"):
+            self.rehearse(erase_events=0)
+
+    def test_the_leg_repackages_then_upgrades_from_the_digest_the_old_release_activated(
+            self) -> None:
+        _report, new, messaging = self.rehearse()
+        self.assertEqual(
+            [call for call in messaging.mock_calls if call[0] in ("repackage", "upgrade")],
+            [unittest.mock.call.repackage(new), unittest.mock.call.upgrade(new, self.ACTIVE)])
+
+    def test_the_leg_fails_on_a_ledger_difference_the_upgrade_names(self) -> None:
+        with self.assertRaisesRegex(MODULE.RehearsalError, "names another predecessor"):
+            self.rehearse(ledger_differences=("the ledger names another predecessor",))
+
+    def test_the_leg_fails_when_the_activation_leaves_no_operator_audit_record(self) -> None:
+        with self.assertRaisesRegex(MODULE.RehearsalError,
+                                    "Messaging operator audit stream held 2 records"):
+            self.rehearse(activation_records=0)
+
+    def test_each_stream_is_held_to_the_records_the_upgrade_writes_to_it(self) -> None:
+        self.assertEqual(MODULE.MESSAGING_UPGRADED_AUDIT_RECORDS,
+                         {"messaging.ndjson": 7, "messaging.messagingctl.ndjson": 4})
+        report, _new, _messaging = self.rehearse()
+        self.assertEqual(report["messaging"]["auditRecordsBefore"],
+                         {"messaging.ndjson": 9, "messaging.messagingctl.ndjson": 2})
+        self.assertEqual(report["messaging"]["auditRecordsAfter"],
+                         {"messaging.ndjson": 16, "messaging.messagingctl.ndjson": 6})
 
 
 class GateWiringTest(unittest.TestCase):

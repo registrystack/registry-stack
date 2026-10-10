@@ -1,0 +1,16 @@
+{
+  "apiVersion": "id.registrystack.org/formats/evidence/source-resolution/v1alpha1",
+  "kind": "EvidenceSourceResolution",
+  "artifacts": {
+    "adapters/lookup-extract.rhai": {
+      "type": "keep"
+    },
+    "sources/lookup.yaml": {
+      "type": "adopt"
+    },
+    "adapters/lookup-request.rhai": {
+      "type": "file",
+      "path": "reviewed/lookup-request.rhai"
+    }
+  }
+}

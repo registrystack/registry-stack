@@ -39,7 +39,8 @@ SUBJECT_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 # declares, which is what caseworkctl dev requires, so the load harness drives
 # every Staff request through one principal and every producer request through
 # another. Nothing here is a credential.
-DEV_CLIENTS = """version: 1
+DEV_CLIENTS = """apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
+kind: CaseworkDevClients
 clients:
   - id: loadtest-admin
     accessProfile: administrator

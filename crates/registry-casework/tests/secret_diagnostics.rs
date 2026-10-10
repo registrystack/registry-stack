@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! A startup secret failure names the reference and the rule it broke.
+//! A startup secret failure names the member and the rule it broke.
 //!
 //! `migrate` and the audit journal resolve operator secrets before anything
 //! else runs, so their failures are the first thing an operator reads. The
@@ -22,7 +22,7 @@ fn database(reference: &str) -> DatabaseConfig {
 }
 
 #[test]
-fn a_missing_database_reference_names_the_reference_and_says_it_is_missing() {
+fn a_missing_database_reference_names_the_member_and_says_it_is_missing() {
     let root = tempfile::tempdir().expect("temporary secret root");
     let secrets = SecretResolver::new([SecretProvider::File], root.path()).expect("resolver");
 
@@ -32,8 +32,9 @@ fn a_missing_database_reference_names_the_reference_and_says_it_is_missing() {
 
     let message = error.to_string();
     assert!(
-        message.contains("secret:file/casework-database-url"),
-        "the failure does not name the reference: {message}"
+        message.contains("database.migrationUrlRef")
+            && !message.contains("secret:file/casework-database-url"),
+        "the failure does not name the member alone: {message}"
     );
     assert!(
         message.contains("no readable"),
@@ -77,7 +78,7 @@ mod unix {
     }
 
     #[test]
-    fn a_group_readable_database_reference_names_the_reference_and_the_mode_rule() {
+    fn a_group_readable_database_reference_names_the_mode_rule_without_the_reference() {
         let root = tempfile::tempdir().expect("temporary secret root");
         write_secret(root.path(), "casework-database-url", DATABASE_URL, 0o644);
         let secrets = SecretResolver::new([SecretProvider::File], root.path()).expect("resolver");
@@ -90,8 +91,8 @@ mod unix {
 
         let message = error.to_string();
         assert!(
-            message.contains("secret:file/casework-database-url"),
-            "the failure does not name the reference: {message}"
+            !message.contains("secret:file/casework-database-url"),
+            "the failure repeats the reference: {message}"
         );
         assert!(
             message.contains("0400 or 0600"),
@@ -104,7 +105,7 @@ mod unix {
     }
 
     #[test]
-    fn a_group_readable_trusted_root_reference_names_that_reference() {
+    fn a_group_readable_trusted_root_reference_is_refused_without_the_reference() {
         let root = tempfile::tempdir().expect("temporary secret root");
         write_secret(root.path(), "casework-database-url", DATABASE_URL, 0o600);
         write_secret(
@@ -122,8 +123,8 @@ mod unix {
 
         let message = error.to_string();
         assert!(
-            message.contains("secret:file/database-root.pem"),
-            "the failure does not name the certificate reference: {message}"
+            !message.contains("secret:file/database-root.pem"),
+            "the failure repeats the certificate reference: {message}"
         );
         assert!(
             message.contains("0400 or 0600"),

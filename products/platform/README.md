@@ -33,6 +33,7 @@ integration-test fixtures.
 | [`registry-platform-sdjwt`](crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |
 | [`registry-platform-sqlite`](crates/registry-platform-sqlite/README.md) | Bounded read-only SQLite execution for Evidence source adapters. |
 | [`registry-platform-testing`](crates/registry-platform-testing/README.md) | Mock IdP, mock HTTP upstreams, key fixtures, and cross-crate assertions for consumers. |
+| [`registry-platform-yaml`](../../crates/registry-platform-yaml/README.md) | The shared configuration reader: one YAML subset, typed decoding, and value-free diagnostics with a code, a position, and the fix. |
 
 ## Design Principles
 

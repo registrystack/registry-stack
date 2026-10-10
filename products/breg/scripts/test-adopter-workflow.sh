@@ -582,8 +582,8 @@ write_jwt "$temporary_root/oidc-signer.pem" "adopter-oidc-key" "synthetic-site-p
 write_jwt "$temporary_root/oidc-signer.pem" "adopter-oidc-key" "synthetic-site-planner" "" "$temporary_root/secrets/planner-no-purpose-token"
 
 cat >"$temporary_root/schema-test-credentials.yaml" <<'EOF'
-apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - {journeyId: asset-and-site-caller-surfaces, stepId: create-asset, credential: {type: bearer, tokenRef: secret:file/operator-token}}
   - {journeyId: asset-and-site-caller-surfaces, stepId: planner-gets-asset, credential: {type: bearer, tokenRef: secret:file/planner-token}}
@@ -1075,18 +1075,22 @@ if {cover["code"] for cover in covers} != {"access_profile_changed", "query_inve
     raise SystemExit("reviewed successor did not have the expected permission changes")
 base = "modules/asset-site-placement-core/migrations/read-maintenance-note"
 descriptor = {
+    "apiVersion": "id.registrystack.org/formats/breg/migration-descriptor/v1alpha1",
+    "kind": "BRegMigrationDescriptor",
     "id": "read-maintenance-note", "changeClass": "access_or_disclosure_change",
-    "covers": covers, "recovery": "exact_target_resume", "lockTimeoutMs": 1000,
-    "statementTimeoutMs": 60000, "steps": [], "preAssertions": [], "postAssertions": [],
+    "covers": covers, "recovery": "exact_target_resume", "lockTimeoutMilliseconds": 1000,
+    "statementTimeoutMilliseconds": 60000, "steps": [], "preAssertions": [], "postAssertions": [],
     "rehearsalReceiptPath": f"{base}/rehearsal.json",
 }
 def canonical(document):
     return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("ascii")
 descriptor_bytes = canonical(descriptor)
 receipt = {
+    "apiVersion": "id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1",
+    "kind": "BRegMigrationRehearsalReceipt",
     "priorPackageDigest": sys.argv[2], "priorSchemaFingerprint": sys.argv[3],
-    "planSha256": "sha256:" + hashlib.sha256(descriptor_bytes).hexdigest(),
-    "sqlSha256": [], "assertionSha256": [], "fixtureInventory": [], "postgresMajor": int(sys.argv[5]),
+    "planDigest": "sha256:" + hashlib.sha256(descriptor_bytes).hexdigest(),
+    "sqlDigests": [], "assertionDigests": [], "fixtureInventory": [], "postgresMajor": int(sys.argv[5]),
     "rowAssertions": [], "finalSchemaFingerprint": sys.argv[4],
 }
 directory = root / "review-v3" / base

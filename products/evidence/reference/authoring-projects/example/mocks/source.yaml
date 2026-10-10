@@ -1,0 +1,21 @@
+apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1
+kind: EvidenceMockPlan
+openapi: ../source.openapi.yaml
+openapiDigest: sha256:2829a7d49ceb6e03012608edd7758b0d3b67d1fdabdf1fa6858d694d17c8e926
+generation:
+  contract: evidencectl-source-mock-v1
+  seed: 0
+  asOf: 2025-01-01
+  datasets:
+    place-codes: sha256:f26cbf56a31c776b56d2a34843279b80008f5f6170005d83f944bad84b707f15
+operations:
+  - method: GET
+    path: /places
+    response:
+      status: 200
+      mediaType: application/json
+    cases:
+      - name: default
+        request:
+          pathParameters: {}
+        body: cases/get-places-61c06ed8/default-37a8eec1.json

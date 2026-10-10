@@ -1,0 +1,57 @@
+{
+  "$defs": {
+    "CalendarDate": {
+      "description": "A calendar date written YYYY-MM-DD.",
+      "format": "date",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/casework/holiday-set/holiday-set.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One revision of a holiday set, as a simulation pins it\n(`simulations/holiday-sets/<holidaySet>-<revision>.yaml`).",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/casework/holiday-set/v1alpha1",
+      "type": "string"
+    },
+    "dates": {
+      "description": "The dates that are not working days, at most 3660.",
+      "items": {
+        "$ref": "#/$defs/CalendarDate"
+      },
+      "maxItems": 3660,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "holidaySet": {
+      "$ref": "#/$defs/LocalId",
+      "description": "The holiday set a calendar names in `holidaySet`."
+    },
+    "kind": {
+      "const": "CaseworkHolidaySet",
+      "type": "string"
+    },
+    "revision": {
+      "format": "uint64",
+      "maximum": 9223372036854775807,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "holidaySet",
+    "revision",
+    "dates"
+  ],
+  "title": "Registry Casework holiday set",
+  "type": "object"
+}

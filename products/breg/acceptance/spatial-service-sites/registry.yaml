@@ -88,7 +88,7 @@ accessProfiles:
     requiredPurposes: [service-site-administration]
     permissions:
       - entity: service-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list, patch, batch]
         readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
         writableFields: [native-id, site-code, label, zone, service-kind, installation-client-id, location]
@@ -96,10 +96,12 @@ accessProfiles:
         sortableFields: [site-code, label]
         allowCount: true
   - id: map-reader
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: [service-sites:public.read]
+    requiredPurposes: [service-site-public-map]
     permissions:
       - entity: service-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [native-id, site-code, label, zone, service-kind, location]
         filterableFields: [site-code, zone, service-kind]
@@ -127,10 +129,12 @@ accessProfiles:
             maximumLongitudeSpanDegrees: 0.25
             maximumLatitudeSpanDegrees: 0.20
   - id: directory-reader
-    anonymous: true
+    principalClaim: registry_principal
+    requiredScopes: [service-sites:public.read]
+    requiredPurposes: [service-site-public-directory]
     permissions:
       - entity: service-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [native-id, site-code, label, zone, service-kind]
         filterableFields: [site-code, zone, service-kind]
@@ -142,7 +146,7 @@ accessProfiles:
     requiredPurposes: [service-site-directory]
     permissions:
       - entity: service-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [native-id, site-code, label, zone, service-kind, map-label]
         filterableFields: [site-code, zone, service-kind]
@@ -153,7 +157,7 @@ accessProfiles:
     requiredPurposes: [service-site-map]
     permissions:
       - entity: service-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
 vocabularies:

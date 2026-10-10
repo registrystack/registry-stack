@@ -24,16 +24,15 @@ use crate::access::{
     authorize_preview, authorize_submission, AccessProfiles, Caller, SubmissionRefusal,
     SubmissionScope,
 };
+use crate::finding::{FindingReason, MessagingFinding};
 use crate::package::{
-    valid_package_digest, Channel, CheckedManifest, MessagingPackage, PackageError,
+    valid_package_digest, Channel, CheckedManifest, MessagingProject, PackageError,
     ProviderDeclaration, SenderProfile, TemplateReference,
 };
 use crate::problem::ProblemCode;
 use crate::render::{finish_part, PartKind, RenderFailure};
 use crate::sms::{count_segments, SegmentCount};
-use crate::template::{
-    CompiledTemplate, DataDiagnostic, RenderRefusal, RenderedParts, TemplateSource,
-};
+use crate::template::{CompiledTemplate, DataDiagnostic, RenderRefusal, RenderedParts};
 
 /// A package whose manifest and templates passed every check.
 #[derive(Clone, Debug)]
@@ -44,51 +43,39 @@ pub struct Package {
 }
 
 impl Package {
-    /// Check `manifest`, compile every template in `sources`, and bind them
-    /// to `digest`. The shipped template versions must be exactly the
-    /// declared ones.
+    /// Check `project`, and bind it with every compiled template version to
+    /// `digest`. The template versions must be exactly the declared ones.
     pub fn assemble(
-        manifest: &MessagingPackage,
-        sources: Vec<TemplateSource>,
+        project: &MessagingProject,
+        templates: Vec<CompiledTemplate>,
         digest: String,
     ) -> Result<Self, PackageError> {
         if !valid_package_digest(&digest) {
             return Err(PackageError::InvalidDigest);
         }
-        let checked = manifest.check()?;
-        let mut templates = BTreeMap::new();
-        for source in sources {
+        let checked = project.check()?;
+        let mut compiled = BTreeMap::new();
+        for template in templates {
             let reference = TemplateReference {
-                id: source.id.clone(),
-                version: source.version.clone(),
+                id: template.id().to_owned(),
+                version: template.version().to_owned(),
             };
             if !checked.templates.contains(&reference) {
-                return Err(PackageError::UndeclaredTemplate {
-                    id: reference.id,
-                    version: reference.version,
-                });
+                return Err(PackageError::Findings(vec![MessagingFinding::new(
+                    FindingReason::UndeclaredTemplate,
+                    "",
+                )]));
             }
-            let compiled =
-                CompiledTemplate::compile(source).map_err(|reason| PackageError::Template {
-                    id: reference.id.clone(),
-                    version: reference.version.clone(),
-                    reason,
-                })?;
-            templates.insert(reference, compiled);
+            compiled.insert(reference, template);
         }
-        if let Some(missing) = checked
-            .templates
-            .iter()
-            .find(|reference| !templates.contains_key(*reference))
-        {
-            return Err(PackageError::MissingTemplate {
-                id: missing.id.clone(),
-                version: missing.version.clone(),
-            });
+        let shipped = compiled.keys().cloned().collect();
+        let missing = project.missing_templates(&shipped);
+        if !missing.is_empty() {
+            return Err(PackageError::Findings(missing));
         }
         Ok(Self {
             manifest: checked,
-            templates,
+            templates: compiled,
             digest,
         })
     }
@@ -485,10 +472,11 @@ impl std::fmt::Display for ContentRefusal {
 pub(crate) mod tests {
     use super::*;
     use crate::access::{AccessProfile, ActorKind};
-    use crate::package::tests::valid;
+    use crate::package::tests::{project, valid};
     use crate::render::MAXIMUM_TEXT_BYTES;
     use crate::sms::SmsEncoding;
     use crate::template::tests::{email_source, sms_source};
+    use crate::template::TemplateSource;
     use crate::visibility::CallerIdentity;
     use serde_json::json;
 
@@ -497,7 +485,7 @@ pub(crate) mod tests {
 
     /// A manifest shipping `appointment-reminder` 1 and 2 (email) and
     /// `appointment-sms` 1, with one sender allowed both and direct content.
-    pub(crate) fn manifest() -> MessagingPackage {
+    pub(crate) fn manifest() -> MessagingProject {
         let mut value = valid();
         value["templates"] = json!([
             {"id": "appointment-reminder", "version": "1"},
@@ -511,22 +499,30 @@ pub(crate) mod tests {
         value["accessProfiles"].as_array_mut().unwrap().push(json!({
             "id": "operators",
             "principalClaim": "sub",
+            "requiredScopes": "unrestricted",
             "requesterClients": ["operator-console"],
             "role": "operator",
             "requestsPerMinute": 60,
             "burst": 10
         }));
-        serde_json::from_value(value).unwrap()
+        project(value)
+    }
+
+    pub(crate) fn compiled(sources: Vec<TemplateSource>) -> Vec<CompiledTemplate> {
+        sources
+            .into_iter()
+            .map(|source| CompiledTemplate::compile(source).unwrap())
+            .collect()
     }
 
     pub(crate) fn package_with(sms_text: &str) -> Package {
         Package::assemble(
             &manifest(),
-            vec![
+            compiled(vec![
                 email_source("1"),
                 email_source("2"),
                 sms_source("1", sms_text),
-            ],
+            ]),
             DIGEST_V1.to_owned(),
         )
         .unwrap()
@@ -831,29 +827,46 @@ pub(crate) mod tests {
 
     #[test]
     fn the_package_ships_exactly_the_declared_templates() {
+        let findings = |result: Result<Package, PackageError>| match result {
+            Err(PackageError::Findings(findings)) => findings
+                .iter()
+                .map(|finding| (finding.code(), finding.path.clone()))
+                .collect::<Vec<_>>(),
+            other => panic!("expected findings, got {other:?}"),
+        };
         let undeclared = Package::assemble(
             &manifest(),
-            vec![
+            compiled(vec![
                 email_source("1"),
                 email_source("2"),
                 email_source("3"),
                 sms_source("1", "x"),
-            ],
+            ]),
             DIGEST_V1.to_owned(),
         );
-        assert!(matches!(
-            undeclared,
-            Err(PackageError::UndeclaredTemplate { .. })
-        ));
+        assert_eq!(
+            findings(undeclared),
+            [("messaging.template.undeclared".to_owned(), String::new())]
+        );
         let missing = Package::assemble(
             &manifest(),
-            vec![email_source("1"), sms_source("1", "x")],
+            compiled(vec![email_source("1"), sms_source("1", "x")]),
             DIGEST_V1.to_owned(),
         );
-        assert!(matches!(missing, Err(PackageError::MissingTemplate { .. })));
+        assert_eq!(
+            findings(missing),
+            [(
+                "messaging.project.missing-template".to_owned(),
+                "/templates/1".to_owned()
+            )]
+        );
         let digest = Package::assemble(
             &manifest(),
-            vec![email_source("1"), email_source("2"), sms_source("1", "x")],
+            compiled(vec![
+                email_source("1"),
+                email_source("2"),
+                sms_source("1", "x"),
+            ]),
             "sha256:short".to_owned(),
         );
         assert_eq!(digest.unwrap_err(), PackageError::InvalidDigest);

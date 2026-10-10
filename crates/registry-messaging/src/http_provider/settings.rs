@@ -21,18 +21,26 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use ipnet::IpNet;
-use registry_messaging_core::{valid_header_name, CallbackVerifierConfig};
+use registry_messaging_core::{
+    typed, valid_header_name, FindingReason, MessagingFinding, MESSAGING_PROVIDER_API_VERSION,
+    MESSAGING_PROVIDER_KIND,
+};
 use registry_platform_config::{ProtectedSecret, SecretReference, SecretResolver};
 use registry_platform_httputil::destination::{
     is_script_visible_response_header_name, is_script_writable_request_header_name,
     MAX_DESTINATION_OPERATION_TIMEOUT, MAX_DESTINATION_PRIVATE_CIDRS,
 };
-use serde::{Deserialize, Serialize};
+use registry_platform_yaml::{
+    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, RemovedKey, Report,
+    UniqueList,
+};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::config::describe_secret_failure;
+use super::CallbackVerifierConfig;
+use crate::config::{describe_secret_failure, optional_secret_reference, secret_reference};
 
 /// The longest script artifact path a package may name.
 pub const MAXIMUM_SCRIPT_PATH_BYTES: usize = 256;
@@ -42,7 +50,14 @@ pub const MAXIMUM_SCRIPT_PATH_BYTES: usize = 256;
 pub const MAXIMUM_SCRIPT_HEADERS: usize = 16;
 
 /// The most sends one provider may have in flight.
-pub const MAXIMUM_CONCURRENCY_LIMIT: u16 = 64;
+pub const MAXIMUM_CONCURRENT_REQUESTS: u16 = 64;
+
+/// The longest one HTTP send may take, in milliseconds: the destination
+/// substrate's whole-operation bound.
+pub const MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 10_000;
+const _: () = assert!(
+    MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS == MAX_DESTINATION_OPERATION_TIMEOUT.as_millis() as u64
+);
 
 /// The highest declared send rate.
 pub const MAXIMUM_RATE_PER_SECOND: u32 = 1_000;
@@ -61,40 +76,74 @@ pub const MINIMUM_TOKEN_CACHE_SECONDS: u64 = 10;
 /// parameter.
 pub(crate) const MAXIMUM_CREDENTIAL_VALUE_BYTES: usize = 4_096;
 
+/// `providers/<id>/provider.yaml`: the package half of one HTTP provider.
+pub const MESSAGING_PROVIDER_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: MESSAGING_PROVIDER_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(MESSAGING_PROVIDER_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[RemovedKey {
+        pointer: "/capabilities/concurrencyLimit",
+        replacement: "Write maximumConcurrentRequests.",
+    }],
+};
+
 /// Package material for one HTTP provider.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpProviderPackage {
+    pub api_version: String,
+    pub kind: String,
     /// Package path of the script whose `prepare(message, profile)` returns
     /// the request.
+    #[serde(deserialize_with = "script_path")]
+    #[cfg_attr(feature = "schema", schemars(with = "ScriptPath"))]
     pub prepare_script: String,
     /// Package path of the script whose `interpret(response)` classifies the
     /// response. Without one, the status code decides.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "optional_script_path")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<ScriptPath>"))]
     pub interpret_script: Option<String>,
     /// Package path of the script whose `receipt(request)` reads a verified
     /// delivery callback. Required exactly when `capabilities.receipts` is
     /// `callback`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "optional_script_path")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<ScriptPath>"))]
     pub receipt_script: Option<String>,
     pub request: HttpProviderRequest,
-    /// Response headers the interpret script may read, lowercase.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Response headers the interpret script may read, lowercase, at most
+    /// 16. Omitted, a script reads none.
+    #[serde(default, deserialize_with = "response_headers")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "UniqueList<ResponseHeaderName>",
+            length(max = MAXIMUM_SCRIPT_HEADERS)
+        )
+    )]
     pub response_headers: Vec<String>,
     pub capabilities: HttpProviderCapabilities,
 }
 
 /// The request shape a prepare script fills.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpProviderRequest {
     pub method: HttpSendMethod,
-    /// Request headers the prepare script may set, lowercase. The
-    /// authorization, host, content, cookie, and forwarding headers are never
-    /// script-writable.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Request headers the prepare script may set, lowercase, at most 16.
+    /// The authorization, host, content, cookie, and forwarding headers are
+    /// never script-writable. Omitted, a script sets none.
+    #[serde(default, deserialize_with = "request_headers")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "UniqueList<RequestHeaderName>",
+            length(max = MAXIMUM_SCRIPT_HEADERS)
+        )
+    )]
     pub headers: Vec<String>,
 }
 
@@ -115,16 +164,179 @@ pub enum HttpSendMethod {
 /// deduplicates submissions is declared once, as `idempotentSubmit` on the
 /// provider in `messaging.yaml`, where the sender profile checks read it.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpProviderCapabilities {
     pub receipts: ReceiptCapability,
-    /// The most sends the provider accepts at once, 1 to 64.
-    pub concurrency_limit: u16,
-    /// The provider's documented send rate. The worker enforces it at claim
-    /// time; this module only checks it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The most sends the provider accepts at once, 1 to 64. A deployment's
+    /// `maximumConcurrentRequests` for the provider is at most this.
+    #[serde(
+        deserialize_with = "typed::bounded_u16::<_, 1, { MAXIMUM_CONCURRENT_REQUESTS as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_CONCURRENT_REQUESTS))
+    )]
+    pub maximum_concurrent_requests: u16,
+    /// The provider's documented send rate, 1 to 1000. The worker enforces
+    /// it at claim time; this module only checks it.
+    #[serde(
+        default,
+        deserialize_with = "typed::optional_bounded_u32::<_, 1, MAXIMUM_RATE_PER_SECOND>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_RATE_PER_SECOND))
+    )]
     pub rate_per_second: Option<u32>,
+}
+
+/// A script's path relative to the provider directory: lowercase segments
+/// that do not start with a dot, ending in `.rhai`, at most 256 bytes.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ScriptPath(String);
+
+const SCRIPT_PATH_EXPECTED: &str =
+    "a relative path of lowercase segments ending in .rhai, at most 256 bytes";
+const SCRIPT_PATH_ACTION: &str = "Write a path such as scripts/prepare.rhai.";
+
+impl<'de> Deserialize<'de> for ScriptPath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let path = String::deserialize(deserializer)?;
+        if valid_script_path(&path) {
+            Ok(Self(path))
+        } else {
+            Err(Invalid::expected(SCRIPT_PATH_EXPECTED, SCRIPT_PATH_ACTION).into_error())
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ScriptPath {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ScriptPath".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "maxLength": MAXIMUM_SCRIPT_PATH_BYTES,
+            "pattern": "^([a-z0-9_-][a-z0-9._-]*/)*[a-z0-9_-][a-z0-9._-]*\\.rhai$",
+        })
+    }
+}
+
+fn script_path<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    ScriptPath::deserialize(deserializer).map(|path| path.0)
+}
+
+fn optional_script_path<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    script_path(deserializer).map(Some)
+}
+
+/// A request header a prepare script may set.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct RequestHeaderName(String);
+
+impl<'de> Deserialize<'de> for RequestHeaderName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = lowercase_header_name(deserializer)?;
+        if script_may_set(&name) {
+            Ok(Self(name))
+        } else {
+            Err(Invalid::expected(
+                "a header a script may set, not one the runtime sets: authorization, host, \
+                 content, cookie, and forwarding headers are the runtime's",
+                "Remove the header from request.headers; the runtime sets it.",
+            )
+            .into_error())
+        }
+    }
+}
+
+/// A response header an interpret script may read.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ResponseHeaderName(String);
+
+impl<'de> Deserialize<'de> for ResponseHeaderName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = lowercase_header_name(deserializer)?;
+        if is_script_visible_response_header_name(&name) {
+            Ok(Self(name))
+        } else {
+            Err(Invalid::expected(
+                "a response header scripts may read, not one the runtime withholds",
+                "Remove the header from responseHeaders; scripts cannot read it.",
+            )
+            .into_error())
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+fn header_name_schema() -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "minLength": 1,
+        "maxLength": registry_messaging_core::MAXIMUM_CALLBACK_HEADER_BYTES,
+        "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$",
+    })
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for RequestHeaderName {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "RequestHeaderName".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        header_name_schema()
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ResponseHeaderName {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ResponseHeaderName".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        header_name_schema()
+    }
+}
+
+fn lowercase_header_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let name = String::deserialize(deserializer)?;
+    if valid_lowercase_header_name(&name) {
+        Ok(name)
+    } else {
+        Err(Invalid::expected(
+            "a lowercase HTTP header name",
+            "Write the header name in lowercase, such as x-request-id.",
+        )
+        .into_error())
+    }
+}
+
+const HEADERS_EXPECTED: &str = "a list of at most 16 header names";
+const HEADERS_ACTION: &str = "Remove the headers no script sets or reads.";
+
+fn request_headers<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    let names = UniqueList::<RequestHeaderName>::deserialize(deserializer)?.into_vec();
+    if names.len() > MAXIMUM_SCRIPT_HEADERS {
+        return Err(Invalid::expected(HEADERS_EXPECTED, HEADERS_ACTION).into_error());
+    }
+    Ok(names.into_iter().map(|name| name.0).collect())
+}
+
+fn response_headers<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    let names = UniqueList::<ResponseHeaderName>::deserialize(deserializer)?.into_vec();
+    if names.len() > MAXIMUM_SCRIPT_HEADERS {
+        return Err(Invalid::expected(HEADERS_EXPECTED, HEADERS_ACTION).into_error());
+    }
+    Ok(names.into_iter().map(|name| name.0).collect())
 }
 
 /// How a provider reports delivery after accepting a message.
@@ -139,46 +351,71 @@ pub enum ReceiptCapability {
 
 /// Runtime settings for one HTTP provider.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpProviderSettings {
     /// The provider's origin and path prefix, ending in `/`. Every request
     /// target a script returns is relative to it and stays under it.
     /// `https` in production; `http` only to a loopback host.
+    #[serde(deserialize_with = "typed::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub base_url: String,
     /// The operator-declared trust bundle the provider's certificate may
-    /// chain to. Its roots are trusted in addition to the system roots, not
-    /// instead of them. The runtime resolves the name to PEM and passes it to
+    /// chain to, by its name under `tlsTrustProfiles`. Its roots are trusted
+    /// in addition to the system roots, not instead of them. The runtime
+    /// resolves the name to PEM and passes it to
     /// [`HttpProviderSettings::activate`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
     pub tls_trust_profile: Option<String>,
-    /// One send's whole budget: resolution, connection, request, and
-    /// response, at most 10000.
-    pub timeout_milliseconds: u64,
+    /// One send's whole budget in milliseconds: resolution, connection,
+    /// request, and response.
+    #[serde(deserialize_with = "typed::bounded_u64::<_, 1, MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS))
+    )]
+    pub attempt_timeout_milliseconds: u64,
     /// The largest response body read, at most 1 MiB.
+    #[serde(deserialize_with = "typed::bounded_u64::<_, 1, MAXIMUM_RESPONSE_BYTES>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_RESPONSE_BYTES))
+    )]
     pub maximum_response_bytes: u64,
     /// The most sends this deployment has in flight to the provider, at most
-    /// the package's declared `capabilities.concurrencyLimit`.
-    pub concurrency_limit: u16,
+    /// the package's declared `capabilities.maximumConcurrentRequests`.
+    #[serde(
+        deserialize_with = "typed::bounded_u16::<_, 1, { MAXIMUM_CONCURRENT_REQUESTS as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_CONCURRENT_REQUESTS))
+    )]
+    pub maximum_concurrent_requests: u16,
     pub redirects: RedirectPolicy,
     /// Exact RFC 1918, CGNAT, or unique-local networks an `https` provider may
     /// resolve into, for an in-country gateway on a private network. Every
-    /// other non-public address is refused.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// other non-public address is refused. Omitted, the provider may resolve
+    /// only to public addresses.
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_DESTINATION_PRIVATE_CIDRS))
+    )]
     pub allowed_private_cidrs: Vec<String>,
     /// Required, and only allowed, when the package sends with `get`: the
     /// message content travels in the query string, where provider access
     /// logs keep it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub acknowledge_query_string_content: bool,
     pub authentication: HttpProviderAuthentication,
     /// How the provider's delivery callbacks are authenticated. Required
     /// exactly when the package declares `receipts: callback`.
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")
-    )]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub callback_verifier: Option<CallbackVerifierConfig>,
 }
 
@@ -188,9 +425,15 @@ impl fmt::Debug for HttpProviderSettings {
             .debug_struct("HttpProviderSettings")
             .field("base_url", &self.base_url)
             .field("tls_trust_profile", &self.tls_trust_profile)
-            .field("timeout_milliseconds", &self.timeout_milliseconds)
+            .field(
+                "attempt_timeout_milliseconds",
+                &self.attempt_timeout_milliseconds,
+            )
             .field("maximum_response_bytes", &self.maximum_response_bytes)
-            .field("concurrency_limit", &self.concurrency_limit)
+            .field(
+                "maximum_concurrent_requests",
+                &self.maximum_concurrent_requests,
+            )
             .field("allowed_private_cidrs", &self.allowed_private_cidrs)
             .field(
                 "acknowledge_query_string_content",
@@ -210,12 +453,14 @@ pub enum RedirectPolicy {
     Deny,
 }
 
-/// How a send authenticates to the provider. The credential is added by
-/// Rust after the prepare script returns; no script ever sees it.
+/// How a send authenticates to the provider, chosen by `type`. The
+/// credential is added by Rust after the prepare script returns; no script
+/// ever sees it.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+#[derive(Clone, Deserialize, Eq, PartialEq)]
 #[serde(
-    tag = "kind",
+    remote = "Self",
     rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
@@ -225,25 +470,50 @@ pub enum HttpProviderAuthentication {
     None {},
     /// `Authorization: Basic` over the two resolved values.
     Basic {
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         username_ref: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         password_ref: String,
     },
     /// `Authorization: <scheme> <token>`. Absent, the scheme is `Bearer`,
     /// the only one the destination substrate presents today.
     StaticAuthorization {
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         token_ref: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         scheme: Option<String>,
     },
     /// The resolved value in the named request header.
     StaticApiKey {
         header_name: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         value_ref: String,
     },
     /// The resolved value in the named query parameter, appended after the
     /// script's own target.
     StaticApiKeyQuery {
         parameter_name: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         value_ref: String,
     },
     /// AWS Signature Version 4 for a JSON API. Rust signs the final request;
@@ -251,38 +521,82 @@ pub enum HttpProviderAuthentication {
     AwsSigv4 {
         region: String,
         service: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         access_key_id_ref: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         secret_access_key_ref: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// The session token for temporary credentials. Omitted, the request
+        /// is signed without one.
+        #[serde(default, deserialize_with = "optional_secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "Option<registry_platform_config::SecretReference>")
+        )]
         session_token_ref: Option<String>,
     },
     /// An OAuth 2.0 client-credentials bearer token, fetched from
     /// `tokenEndpoint` and cached.
     Oauth2ClientCredentials {
+        #[serde(deserialize_with = "typed::url")]
+        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
         token_endpoint: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         client_id_ref: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         client_secret_ref: String,
         /// Where the client secret travels. The token request carries it in
         /// the form body; `basic-header` is refused until the substrate can
         /// place it there.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         credential_placement: Option<CredentialPlacement>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         scope: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         audience: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         resource: Option<String>,
+        /// The longest a fetched token is reused, in seconds.
+        #[serde(
+            deserialize_with = "typed::bounded_u64::<_, MINIMUM_TOKEN_CACHE_SECONDS, MAXIMUM_TOKEN_CACHE_SECONDS>"
+        )]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(range(min = MINIMUM_TOKEN_CACHE_SECONDS, max = MAXIMUM_TOKEN_CACHE_SECONDS))
+        )]
         maximum_cache_seconds: u64,
-        /// The lifetime assumed when the token response carries no
-        /// `expires_in`. Absent, `expires_in` is required.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// The lifetime assumed, in seconds, when the token response carries
+        /// no `expires_in`. Omitted, `expires_in` is required.
+        #[serde(
+            default,
+            deserialize_with = "typed::optional_bounded_u64::<_, MINIMUM_TOKEN_CACHE_SECONDS, MAXIMUM_TOKEN_CACHE_SECONDS>"
+        )]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(range(min = MINIMUM_TOKEN_CACHE_SECONDS, max = MAXIMUM_TOKEN_CACHE_SECONDS))
+        )]
         assumed_lifetime_seconds: Option<u64>,
     },
 }
+registry_platform_yaml::tagged_union!(HttpProviderAuthentication);
 
 impl HttpProviderAuthentication {
-    /// The authentication kind, as written in configuration.
+    /// The authentication type, as written in configuration.
     #[must_use]
     pub const fn kind(&self) -> &'static str {
         match self {
@@ -301,7 +615,7 @@ impl fmt::Debug for HttpProviderAuthentication {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("HttpProviderAuthentication")
-            .field("kind", &self.kind())
+            .field("type", &self.kind())
             .finish_non_exhaustive()
     }
 }
@@ -338,7 +652,34 @@ pub(crate) fn invalid(field: &'static str, reason: impl Into<String>) -> HttpPro
 }
 
 impl HttpProviderPackage {
-    /// Check the package half on its own.
+    /// Read one `provider.yaml` through `reader`, without the checks that
+    /// read two members together. A refusal is the report a check prints
+    /// unchanged.
+    pub fn decode(reader: Reader<'_>, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
+        reader.decode(bytes, &Expect::one(&MESSAGING_PROVIDER_FORMAT))
+    }
+
+    /// Every finding about the file that reads two members together. What
+    /// one member decides by itself the reader already refused.
+    #[must_use]
+    pub fn findings(&self) -> Vec<MessagingFinding> {
+        match (self.capabilities.receipts, self.receipt_script.is_some()) {
+            (ReceiptCapability::Callback, false) => vec![MessagingFinding::new(
+                FindingReason::ReceiptScriptRequired,
+                "/capabilities/receipts",
+            )],
+            (ReceiptCapability::None | ReceiptCapability::Reconcile, true) => {
+                vec![MessagingFinding::new(
+                    FindingReason::ReceiptScriptNotAllowed,
+                    "/receiptScript",
+                )]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Check the package half on its own, as activation does with a package
+    /// that was not read from a file.
     ///
     /// # Errors
     ///
@@ -354,20 +695,20 @@ impl HttpProviderPackage {
         check_header_names(
             "request.headers",
             &self.request.headers,
-            |name| is_script_writable_request_header_name(name) && name != "content-type",
-            "is set by the runtime and cannot be named",
+            script_may_set,
+            "names a header the runtime sets; scripts cannot set it",
         )?;
         check_header_names(
             "responseHeaders",
             &self.response_headers,
             is_script_visible_response_header_name,
-            "is withheld by the runtime; scripts cannot read it",
+            "names a header the runtime withholds; scripts cannot read it",
         )?;
         let capabilities = &self.capabilities;
-        if !(1..=MAXIMUM_CONCURRENCY_LIMIT).contains(&capabilities.concurrency_limit) {
+        if !(1..=MAXIMUM_CONCURRENT_REQUESTS).contains(&capabilities.maximum_concurrent_requests) {
             return Err(invalid(
-                "capabilities.concurrencyLimit",
-                format!("must be 1 to {MAXIMUM_CONCURRENCY_LIMIT}"),
+                "capabilities.maximumConcurrentRequests",
+                format!("must be 1 to {MAXIMUM_CONCURRENT_REQUESTS}"),
             ));
         }
         if capabilities
@@ -393,21 +734,30 @@ impl HttpProviderPackage {
     }
 }
 
-fn check_script_path(field: &'static str, path: &str) -> Result<(), HttpProviderError> {
-    let valid = !path.is_empty()
-        && path.len() <= MAXIMUM_SCRIPT_PATH_BYTES
+/// Whether a prepare script may set the request header `name`.
+fn script_may_set(name: &str) -> bool {
+    is_script_writable_request_header_name(name) && name != "content-type"
+}
+
+fn valid_script_path(path: &str) -> bool {
+    path.len() <= MAXIMUM_SCRIPT_PATH_BYTES
         && path.ends_with(".rhai")
         && path.split('/').all(|segment| {
-            !segment.is_empty()
-                && segment != "."
-                && segment != ".."
+            segment.bytes().next().is_some_and(|byte| byte != b'.')
                 && segment.bytes().all(|byte| {
                     byte.is_ascii_lowercase()
                         || byte.is_ascii_digit()
                         || matches!(byte, b'.' | b'_' | b'-')
                 })
-        });
-    if valid {
+        })
+}
+
+fn valid_lowercase_header_name(name: &str) -> bool {
+    valid_header_name(name) && !name.bytes().any(|byte| byte.is_ascii_uppercase())
+}
+
+fn check_script_path(field: &'static str, path: &str) -> Result<(), HttpProviderError> {
+    if valid_script_path(path) {
         Ok(())
     } else {
         Err(invalid(
@@ -421,7 +771,7 @@ fn check_header_names(
     field: &'static str,
     names: &[String],
     allowed: impl Fn(&str) -> bool,
-    refused: &str,
+    refused: &'static str,
 ) -> Result<(), HttpProviderError> {
     if names.len() > MAXIMUM_SCRIPT_HEADERS {
         return Err(invalid(
@@ -430,14 +780,14 @@ fn check_header_names(
         ));
     }
     for (index, name) in names.iter().enumerate() {
-        if !valid_header_name(name) || name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        if !valid_lowercase_header_name(name) {
             return Err(invalid(field, "every name must be a lowercase header name"));
         }
         if !allowed(name) {
-            return Err(invalid(field, format!("`{name}` {refused}")));
+            return Err(invalid(field, refused));
         }
         if names[..index].contains(name) {
-            return Err(invalid(field, format!("`{name}` is named twice")));
+            return Err(invalid(field, "names a header twice"));
         }
     }
     Ok(())
@@ -536,15 +886,8 @@ impl HttpProviderSettings {
                 ("authentication.clientSecretRef", client_secret_ref.as_str()),
             ],
         };
-        match &self.callback_verifier {
-            None => {}
-            Some(
-                CallbackVerifierConfig::HmacSha1UrlForm { secret_ref, .. }
-                | CallbackVerifierConfig::HmacSha256Body { secret_ref, .. },
-            ) => references.push(("callbackVerifier.secretRef", secret_ref.as_str())),
-            Some(CallbackVerifierConfig::PathToken { token_ref }) => {
-                references.push(("callbackVerifier.tokenRef", token_ref.as_str()));
-            }
+        if let Some(verifier) = &self.callback_verifier {
+            references.push(verifier.secret_reference());
         }
         references
     }
@@ -571,12 +914,11 @@ impl HttpProviderSettings {
                 ))
             }
         }
-        let maximum_timeout =
-            u64::try_from(MAX_DESTINATION_OPERATION_TIMEOUT.as_millis()).unwrap_or(u64::MAX);
-        if !(1..=maximum_timeout).contains(&self.timeout_milliseconds) {
+        if !(1..=MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS).contains(&self.attempt_timeout_milliseconds)
+        {
             return Err(invalid(
-                "timeoutMilliseconds",
-                format!("must be 1 to {maximum_timeout}"),
+                "attemptTimeoutMilliseconds",
+                format!("must be 1 to {MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS}"),
             ));
         }
         if !(1..=MAXIMUM_RESPONSE_BYTES).contains(&self.maximum_response_bytes) {
@@ -585,12 +927,12 @@ impl HttpProviderSettings {
                 format!("must be 1 to {MAXIMUM_RESPONSE_BYTES}"),
             ));
         }
-        if self.concurrency_limit == 0
-            || self.concurrency_limit > package.capabilities.concurrency_limit
+        if self.maximum_concurrent_requests == 0
+            || self.maximum_concurrent_requests > package.capabilities.maximum_concurrent_requests
         {
             return Err(invalid(
-                "concurrencyLimit",
-                "must be 1 to the package's capabilities.concurrencyLimit",
+                "maximumConcurrentRequests",
+                "must be 1 to the package's capabilities.maximumConcurrentRequests",
             ));
         }
         if self.allowed_private_cidrs.len() > MAX_DESTINATION_PRIVATE_CIDRS {
@@ -647,31 +989,14 @@ impl HttpProviderSettings {
                     "is allowed only when the package declares receipts: callback",
                 ))
             }
-            (_, Some(verifier)) => {
-                verifier
-                    .validate()
-                    .map_err(|error| invalid("callbackVerifier", error.to_string()))?;
-                let (field, reference) = match verifier {
-                    CallbackVerifierConfig::HmacSha1UrlForm { secret_ref, .. }
-                    | CallbackVerifierConfig::HmacSha256Body { secret_ref, .. } => {
-                        ("callbackVerifier.secretRef", secret_ref)
-                    }
-                    CallbackVerifierConfig::PathToken { token_ref } => {
-                        ("callbackVerifier.tokenRef", token_ref)
-                    }
-                };
-                SecretReference::parse(reference.as_str()).map_err(|error| {
-                    HttpProviderError::Secret(describe_secret_failure(field, reference, &error))
-                })?;
-            }
-            (_, None) => {}
+            _ => {}
         }
         Ok(CheckedConnection {
             origin,
             base_path,
             development,
             allowed_private_cidrs,
-            timeout: Duration::from_millis(self.timeout_milliseconds),
+            timeout: Duration::from_millis(self.attempt_timeout_milliseconds),
             maximum_response_bytes: usize::try_from(self.maximum_response_bytes)
                 .unwrap_or(usize::MAX),
         })
@@ -690,7 +1015,7 @@ impl HttpProviderSettings {
                 } else {
                     Err(invalid(
                         "authentication",
-                        "kind none is allowed only for a loopback http baseUrl",
+                        "type none is allowed only for a loopback http baseUrl",
                     ))
                 }
             }

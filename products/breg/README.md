@@ -109,7 +109,7 @@ rollback paths.
 For an offline permissions exercise, use [Review access configuration](examples/access-review/README.md).
 It includes a complete project, allowed and refused synthetic caller scenarios,
 and an omitted-row-restriction exercise. `explain access` shows effective field
-permissions; `check --deny-findings` makes review findings blocking for automation.
+permissions; `check --deny-warnings` makes its access warnings blocking for automation.
 Entity `accessRequirements` are mandatory compiler checks, not additional grants.
 
 For configured atomic writes across records, see [Immediate actions](immediate-actions.md).
@@ -262,7 +262,7 @@ PostgreSQL is the sole Version 1 database. The administrator installs
 
 The compiler gives every reference column a btree index unless an authored
 index or unique constraint already leads with it, and an authoring compile
-reports `entity.list.unindexed_filter` or `entity.list.unindexed_sort` for a
+reports `breg.entity.list-unindexed-filter` or `breg.entity.list-unindexed-sort` for a
 granted list filter or sort that no index leads with. A database activated by
 an engine that predates reference indexes gains them through an ordinary
 successor package: `bregctl package` classifies each one as a compatible

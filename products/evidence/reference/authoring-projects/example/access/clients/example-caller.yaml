@@ -1,0 +1,15 @@
+apiVersion: id.registrystack.org/formats/evidence/access-client/v1alpha1
+kind: EvidenceAccessClient
+clientId: example-caller
+status: active
+policies:
+  - record-status-readers
+principal: urn:registrystack:evidence:local:client:example-caller
+evidenceAudience: urn:registrystack:evidence:local:client:example-caller
+keys:
+  - alg: ES256
+    crv: P-256
+    kid: 3Zh_V567IQVm_rIjeSdI2za4IeGlrrBjRkWB2eIF_ko
+    kty: EC
+    x: inSuyJoIxOXoaDzs5LaLchYH-31nKeB-laz2krTIfB8
+    y: RqtRpUwFMJHS1lUKmJMSyF55GnPZtnJAnm8eNOwNMGo

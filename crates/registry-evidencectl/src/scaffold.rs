@@ -616,3 +616,24 @@ fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> 
         "atomic no-replace project publication is unsupported on this platform",
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_starter_fixture_opens_with_the_modeline_naming_the_fixture_schema() {
+        let (_, contents) = SQLITE_STARTER_FILES
+            .iter()
+            .find(|(relative, _)| *relative == "fixtures/record-status.yaml")
+            .expect("the starter holds a fixture");
+        let first = std::str::from_utf8(contents)
+            .expect("the starter fixture is UTF-8")
+            .lines()
+            .next();
+        assert_eq!(
+            first,
+            Some("# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/fixture/fixture.v1alpha1.schema.json")
+        );
+    }
+}

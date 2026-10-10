@@ -53,7 +53,8 @@ use tower::ServiceExt as _;
 const INSTANCE: &str = "startup-instance";
 const DATABASE: &str = "startup-database";
 const SOURCE_REVISION: &str = "startup-source-revision";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: neutral-record-list
     steps:
@@ -61,7 +62,7 @@ journeys:
         entity: neutral-record
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -2819,6 +2820,7 @@ authentication:
     accessTokenType: JWT
     scopeClaim: scope
     scopeSeparator: " "
+    allowedClients: unrestricted
     maxTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
@@ -2962,12 +2964,12 @@ fn project_bytes(module_digest: &str) -> Vec<u8> {
 
 fn module_bytes(successor: bool) -> Vec<u8> {
     let second = if successor {
-        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "rowBoundaries": []}]}"#
+        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}"#
     } else {
         ""
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}{second}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}{second}]}}"#
     )
     .into_bytes()
 }
@@ -2975,7 +2977,7 @@ fn module_bytes(successor: bool) -> Vec<u8> {
 /// One module whose `holder` entity carries an encrypted restricted field, so
 /// a production package built from it requires field-encryption key state.
 fn module_bytes_with_encrypted_field() -> Vec<u8> {
-    r#"{"id":"core","version":"1","entities":[{"id":"holder","primaryDataset":"neutral-registry","route":"holders","mutationMode":"mutable","fields":[{"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},{"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},{"id":"secret","type":"string","maxLength":256,"required":true,"classification":"restricted","encrypted":true,"lookup":{"normalization":["trim","uppercase"],"unique":true}}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["jurisdiction","label","secret"],"rowBoundaries":[]}]}]}"#
+    r#"{"id":"core","version":"1","entities":[{"id":"holder","primaryDataset":"neutral-registry","route":"holders","mutationMode":"mutable","fields":[{"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},{"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},{"id":"secret","type":"string","maxLength":256,"required":true,"classification":"restricted","encrypted":true,"lookup":{"normalization":["trim","uppercase"],"unique":true}}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["jurisdiction","label","secret"],"requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
         .to_owned()
         .into_bytes()
 }

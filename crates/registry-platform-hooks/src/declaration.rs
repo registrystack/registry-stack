@@ -83,13 +83,14 @@ pub struct HookDeclaration {
 /// `rhai` and `wasm` and forbidden on `url`; its value is closed and checked at
 /// compile time in [`crate::validate_hooks`].
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 #[serde(
+    remote = "Self",
     deny_unknown_fields,
-    tag = "kind",
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
 pub enum HookHandlerSource {
     /// A reviewed Rhai script in the project.
     Rhai {
@@ -114,6 +115,26 @@ pub enum HookHandlerSource {
         /// Key in the runtime destination binding.
         destination_id: String,
     },
+}
+
+registry_platform_yaml::tagged_union!(HookHandlerSource, tag = "kind");
+
+impl Serialize for HookHandlerSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let (kind, key, value, abi) = match self {
+            Self::Rhai { script, abi } => ("rhai", "script", script, abi.as_ref()),
+            Self::Wasm { module, abi } => ("wasm", "module", module, abi.as_ref()),
+            Self::Url { destination_id } => ("url", "destinationId", destination_id, None),
+        };
+        let mut map = serializer.serialize_map(Some(2 + usize::from(abi.is_some())))?;
+        map.serialize_entry("kind", kind)?;
+        map.serialize_entry(key, value)?;
+        if let Some(abi) = abi {
+            map.serialize_entry("abi", abi)?;
+        }
+        map.end()
+    }
 }
 
 impl HookHandlerSource {

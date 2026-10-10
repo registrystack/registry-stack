@@ -921,7 +921,7 @@ pub fn resolve_offline_fixture_authorization(
         )
     };
     let context = AuthenticatedContext::offline_fixture_context(
-        authority.requester_tags.clone(),
+        authority.requester_tags.clone().into_vec(),
         audience,
         actor_kind,
         client,
@@ -1253,7 +1253,7 @@ fn validate_values(
             value: resolved,
         });
     }
-    if aggregate_bytes > profile.maximum_aggregate_bytes {
+    if aggregate_bytes > profile.maximum_aggregate_bytes.get() {
         return Err(AuthorizationError::Selector);
     }
     Ok(output)
@@ -1271,10 +1271,10 @@ fn validate_value(
                 maximum_bytes,
             },
             SelectorValue::String(value),
-        ) if bounded(value.len(), *minimum_bytes, *maximum_bytes) => {
+        ) if bounded(value.len(), minimum_bytes.get(), maximum_bytes.get()) => {
             Ok(ResolvedSelectorValue::String(value.clone()))
         }
-        (ConfiguredField::Date, SelectorValue::String(value))
+        (ConfiguredField::Date {}, SelectorValue::String(value))
             if canonical_date(value).is_some() =>
         {
             Ok(ResolvedSelectorValue::Date(value.clone()))
@@ -1286,7 +1286,7 @@ fn validate_value(
         {
             Ok(ResolvedSelectorValue::Integer(*value))
         }
-        (ConfiguredField::Boolean, SelectorValue::Boolean(value)) => {
+        (ConfiguredField::Boolean {}, SelectorValue::Boolean(value)) => {
             Ok(ResolvedSelectorValue::Boolean(*value))
         }
         (
@@ -1296,7 +1296,7 @@ fn validate_value(
                 maximum_bytes,
             },
             SelectorValue::String(value),
-        ) if bounded(value.len(), 1, *maximum_bytes) => {
+        ) if bounded(value.len(), 1, maximum_bytes.get()) => {
             let list = bundle
                 .codelist(codelist)
                 .ok_or(AuthorizationError::Selector)?;

@@ -58,7 +58,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_spatial_storage \
     --test postgres_spatial_read \
     --test postgres_revision_http \
-    --test postgres_anonymous_refusals \
+    --test postgres_unauthenticated_refusals \
     --test postgres_history_commit \
     --test postgres_historical \
     --test postgres_history_erasure \

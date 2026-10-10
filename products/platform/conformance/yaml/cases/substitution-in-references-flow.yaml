@@ -1,0 +1,14 @@
+id: substitution-in-references-flow
+rules: [CFG-SEC-2]
+summary: A substitution expression in a flow list under a member ending in `Refs` is refused at the item.
+appliesTo:
+  audiences: [operator]
+mutation:
+  append: |
+    conformanceRefs: ["${REGISTRY_CONFORMANCE_VALUE}"]
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.substitution-not-allowed
+      path: /conformanceRefs/0
+      at: {line: 1, column: 19}

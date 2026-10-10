@@ -1,0 +1,57 @@
+apiVersion: registry.registrystack.org/casework/v1alpha1
+kind: CaseworkProject
+casework:
+  id: dev-session
+  version: "1"
+accessProfiles:
+  - id: staff
+    principalClaim: sub
+    requiredScopes: [casework:staff]
+    role: staff
+  - id: supervisor
+    principalClaim: sub
+    requiredScopes: [casework:supervisor]
+    role: supervisor
+  - id: administrator
+    principalClaim: sub
+    requiredScopes: [casework:admin]
+    role: administrator
+  - id: requester
+    principalClaim: sub
+    requiredScopes: [casework:request]
+    role: requester
+queues:
+  - id: decisions
+    label: Decisions awaiting review
+reviewKinds:
+  - id: decision
+    version: "1"
+    purpose: answer
+    contextStrategy: submitted
+    stages:
+      - id: answer
+        queue: decisions
+        decidingProfiles: [staff]
+        requiredApprovals: 1
+    retention:
+      terminalDays: 90
+      accountabilityDays: 365
+    displaySchema:
+      type: object
+      additionalProperties: false
+      required: [summary]
+      properties:
+        summary: {type: string, maxLength: 160}
+    outcomes:
+      - id: confirmed
+        label: Confirm
+        settlement: answered
+        reasonRequired: false
+reviewProducers:
+  - id: requester
+    profile: requester
+    issuer: http://127.0.0.1:8101
+    subject: requester
+    sourceNamespaces: [dev-session]
+    kinds: [decision]
+    recoveryDays: 30

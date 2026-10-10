@@ -125,17 +125,22 @@ fn startup_value_disclosure_and_listener_activation_threats_are_enforced_by_prep
     assert!(!stdout.contains(runtime_config.to_str().expect("path is UTF-8")));
     let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
     // The document is structurally invalid (an unrecognized field with the
-    // required members absent), so doctor names that specific configuration
-    // cause instead of a generic runtime-configuration refusal.
-    assert_eq!(
-        report["diagnostics"][0]["code"],
-        "startup.runtime_config.document"
-    );
-    assert_tool_diagnostic(
-        &report["diagnostics"][0],
-        "runtime_configuration",
-        "correct_runtime_configuration",
-    );
+    // required members absent), so doctor reports every reader diagnostic,
+    // the unrecognized field among them, instead of a generic
+    // runtime-configuration refusal.
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics are a list");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic["code"] == "config.unknown-key" && diagnostic["path"] == "/unexpected"
+    }));
+    for diagnostic in diagnostics {
+        assert_tool_diagnostic(
+            diagnostic,
+            "runtime_configuration",
+            "correct_runtime_configuration",
+        );
+    }
 
     let listener = TcpListener::bind(address)
         .expect("startup preparation refuses without binding the configured listener");
@@ -153,11 +158,8 @@ fn doctor_names_the_specific_configuration_cause_instead_of_a_generic_refusal() 
     assert_eq!(status, 1);
     assert!(stderr.is_empty());
     let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
-    assert_eq!(
-        report["diagnostics"][0]["code"],
-        "startup.runtime_config.document"
-    );
-    assert_eq!(report["diagnostics"][0]["path"], "/");
+    assert_eq!(report["diagnostics"][0]["code"], "yaml.unexpected-end");
+    assert_eq!(report["diagnostics"][0]["path"], "/not/1");
     assert_tool_diagnostic(
         &report["diagnostics"][0],
         "runtime_configuration",
@@ -199,7 +201,7 @@ eventDestinations: {{}}\n",
     let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "startup.runtime_config.package_root_unavailable"
+        "breg.runtime.package-root-unavailable"
     );
     assert_eq!(report["diagnostics"][0]["path"], "/package/root");
     assert_tool_diagnostic(

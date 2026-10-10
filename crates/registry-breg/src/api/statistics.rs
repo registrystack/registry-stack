@@ -291,9 +291,6 @@ async fn refusal_for_operation(
     method: RefusalHttpMethod,
     operation_id: &str,
 ) -> Response {
-    if claims.principal().is_none() {
-        return anonymous_refusal(response, AnonymousRefusalReason::ReadConcealed);
-    }
     let Some(backend) = &service.statistics else {
         return unavailable();
     };
@@ -325,16 +322,13 @@ async fn dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<Route>,
     Extension(correlation): Extension<RequestCorrelation>,
-    claims: Option<Extension<VerifiedRequestClaims>>,
+    Authenticated(claims): Authenticated,
     deadline: Option<Extension<RequestDeadline>>,
     RawQuery(raw): RawQuery,
     headers: HeaderMap,
     Path(path): Path<HashMap<String, String>>,
     body: Body,
 ) -> Response {
-    let claims = claims
-        .map(|Extension(c)| c)
-        .unwrap_or_else(VerifiedRequestClaims::anonymous);
     let Some(dataset) = service.registry.statistical_datasets().get(&route.dataset) else {
         // Unknown IDs are caller input, so refusal auditing uses the fixed route kind.
         return refusal(

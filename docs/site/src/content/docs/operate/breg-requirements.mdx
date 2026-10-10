@@ -125,7 +125,7 @@ own note asks you to run it on a representative Linux host before you cite a num
 bounded by construction is easier to state: every request, lock, and migration runs under an
 operator-set timeout, the connection pool has a maximum size, spatial responses are capped and
 refuse rather than truncate, and metrics label sets are closed. The runtime applies no request rate
-limit of its own, so a registry that admits anonymous reads belongs behind one.
+limit of its own, so a registry belongs behind one.
 
 {/* Evidence: products/breg/loadtest/README.md; crates/registry-breg/src/runtime_config.rs, OperationalTimeouts;
     crates/registry-breg/src/postgres/config.rs, PoolBounds; crates/registry-breg/src/metrics.rs;

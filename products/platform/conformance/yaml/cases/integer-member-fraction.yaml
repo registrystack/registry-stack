@@ -1,0 +1,14 @@
+id: integer-member-fraction
+rules: [CFG-VAL-1, CFG-DIAG-6]
+summary: A number with a fraction in an integer member is refused, never converted.
+mutation:
+  member:
+    role: integer
+    value: "7.0"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.expected-integer
+      path: "{pointer}"
+      at: {line: 1, column: 1}
+      suggestedAction: Write digits only.

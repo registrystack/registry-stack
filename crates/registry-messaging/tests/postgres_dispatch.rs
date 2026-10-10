@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+)]
 // SPDX-License-Identifier: Apache-2.0
 
 //! Database-backed dispatch tests: the worker sends each accepted message
@@ -56,7 +60,8 @@ struct Scripted {
     rate: Option<u32>,
     started: Mutex<Vec<std::time::Instant>>,
     /// The provider's in-flight bound, and the slots a send waits for
-    /// before it leaves, as an HTTP provider's `concurrencyLimit` does.
+    /// before it leaves, as an HTTP provider's `maximumConcurrentRequests`
+    /// does.
     limit: Option<NonZeroUsize>,
     slots: Option<tokio::sync::Semaphore>,
     /// How long the first send takes, on top of `delay`.
@@ -440,7 +445,7 @@ async fn a_paced_provider_starts_one_send_per_interval() {
     );
 }
 
-/// A provider whose `concurrencyLimit` is below the worker's concurrency
+/// A provider whose `maximumConcurrentRequests` is below the worker's concurrency
 /// still has its sends leave one interval apart: an attempt takes its turn
 /// at the rate only once it holds one of the provider's slots, so attempts
 /// queued behind a slow send do not leave back to back when it ends.

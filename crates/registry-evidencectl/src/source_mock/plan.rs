@@ -1,4 +1,4 @@
-//! Strict, versioned materialized source-mock plan.
+//! Strict materialized source-mock plan.
 //!
 //! This module owns only the authored storage contract. OpenAPI discovery,
 //! generation, and response-schema validation remain with their respective
@@ -13,16 +13,26 @@ use std::{
 
 use anyhow::{bail, Context as _, Result};
 use chrono::{Datelike as _, NaiveDate};
-use registry_evidence_authoring::valid_local_identifier;
+use registry_evidence_authoring::{
+    formats::{decode_authored, envelope_lines, MOCK_PLAN, MOCK_PLAN_API_VERSION, MOCK_PLAN_KIND},
+    valid_local_identifier,
+};
+use registry_platform_yaml::Report;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-/// The only materialized plan version this implementation accepts.
-pub(super) const PLAN_VERSION: u32 = 1;
 /// The generator contract written by initial V1 materialization.
 pub(super) const GENERATOR_CONTRACT: &str = "evidencectl-source-mock-v1";
-/// A plan is authoring metadata, not a bulk-data container.
-pub(super) const MAX_PLAN_BYTES: usize = 1024 * 1024;
+/// A plan is authoring metadata, not a bulk-data container: it is held to
+/// the document size the shared reader accepts, which reads it.
+pub(super) const MAX_PLAN_BYTES: usize = registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES;
+/// The largest seed a plan stores: the greatest integer every JSON consumer
+/// reads exactly.
+pub(super) const MAX_SEED: u64 = 9_007_199_254_740_991;
+/// A generation seed, bounded where the reader reads it.
+pub(super) type Seed = registry_platform_yaml::BoundedU64<0, MAX_SEED>;
+/// The one response status a plan describes, bounded where the reader reads it.
+pub(super) type ResponseStatus = registry_platform_yaml::BoundedU32<200, 200>;
 pub(super) const MAX_OPERATIONS: usize = 256;
 pub(super) const MAX_CASES_PER_OPERATION: usize = 256;
 pub(super) const MAX_TOTAL_CASES: usize = 1024;
@@ -31,13 +41,18 @@ pub(super) const MAX_PATH_BYTES: usize = 512;
 pub(super) const MAX_PATH_PARAMETERS: usize = 16;
 pub(super) const MAX_PATH_PARAMETER_BYTES: usize = 4096;
 
-/// One strict `mocks/source.yaml` document.
+/// One strict `mocks/source.yaml` document. Its format version is the
+/// document's `apiVersion`, which the shared reader checks.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct MockPlan {
-    pub version: u32,
     pub openapi: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::Digest>")
+    )]
     pub openapi_digest: Option<Digest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation: Option<GenerationSettings>,
@@ -46,12 +61,19 @@ pub(super) struct MockPlan {
 
 /// Settings retained solely so `generate --config` can create missing bodies.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct GenerationSettings {
     pub contract: String,
-    pub seed: u64,
+    pub seed: Seed,
     pub as_of: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BTreeMap<registry_platform_yaml::LocalId, registry_platform_yaml::Digest>"
+        )
+    )]
     pub datasets: BTreeMap<String, Digest>,
 }
 
@@ -68,6 +90,7 @@ impl GenerationSettings {
 
 /// One configured GET operation. Method plus templated path is its identity.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PlanOperation {
     pub method: String,
@@ -79,13 +102,15 @@ pub(super) struct PlanOperation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PlanResponse {
-    pub status: u16,
+    pub status: ResponseStatus,
     pub media_type: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PlanCase {
     pub name: String,
@@ -94,9 +119,30 @@ pub(super) struct PlanCase {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PlanRequest {
+    #[cfg_attr(feature = "schema", schemars(schema_with = "path_parameters_schema"))]
     pub path_parameters: BTreeMap<String, Value>,
+}
+
+/// The closed shape of a case's path parameter bindings: each template
+/// parameter name maps to one safe scalar.
+#[cfg(feature = "schema")]
+fn path_parameters_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let names = generator.subschema_for::<registry_platform_yaml::ExternalId>();
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": names,
+        "maxProperties": MAX_PATH_PARAMETERS,
+        "additionalProperties": {
+            "anyOf": [
+                {"type": "string", "maxLength": MAX_PATH_PARAMETER_BYTES},
+                {"type": "boolean"},
+                {"type": "number"}
+            ]
+        }
+    })
 }
 
 /// A syntactically valid lowercase SHA-256 label.
@@ -159,20 +205,27 @@ impl<'de> Deserialize<'de> for Digest {
     }
 }
 
-/// Decode and structurally validate one complete plan.
-pub(super) fn parse_plan(bytes: &[u8]) -> Result<MockPlan> {
-    if bytes.is_empty() || bytes.len() > MAX_PLAN_BYTES {
-        bail!("mock plan must be a non-empty bounded YAML document");
-    }
-    let plan: MockPlan = serde_norway::from_slice(bytes).context("mock plan YAML is invalid")?;
-    validate_plan(&plan)?;
-    Ok(plan)
+/// Read one complete plan through the shared reader, then validate its
+/// structure.
+#[cfg(test)]
+pub(super) fn parse_plan(file: &str, bytes: &[u8]) -> Result<MockPlan> {
+    Ok(parse_plan_reporting(file, bytes)?.0)
 }
 
-/// Render the stable authored YAML spelling, with one trailing newline.
+/// Parse a plan and keep the warnings the reader reported on it.
+pub(super) fn parse_plan_reporting(file: &str, bytes: &[u8]) -> Result<(MockPlan, Report)> {
+    let decoded = decode_authored::<MockPlan>(file, bytes, &MOCK_PLAN)?;
+    validate_plan(&decoded.value)?;
+    Ok((decoded.value, decoded.document.warnings()))
+}
+
+/// Render the stable authored YAML spelling, envelope first, with one
+/// trailing newline.
 pub(super) fn render_plan(plan: &MockPlan) -> Result<Vec<u8>> {
     validate_plan(plan)?;
-    let mut rendered = serde_norway::to_string(plan).context("failed to render mock plan")?;
+    let mut rendered = envelope_lines(MOCK_PLAN_API_VERSION, MOCK_PLAN_KIND);
+    rendered
+        .push_str(&crate::authored::to_indented_yaml(plan).context("failed to render mock plan")?);
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
@@ -184,9 +237,6 @@ pub(super) fn render_plan(plan: &MockPlan) -> Result<Vec<u8>> {
 
 /// Validate the closed V1 structure without reading any referenced artifact.
 pub(super) fn validate_plan(plan: &MockPlan) -> Result<()> {
-    if plan.version != PLAN_VERSION {
-        bail!("mock plan version must be 1");
-    }
     validate_config_reference(&plan.openapi, "openapi")?;
     if let Some(generation) = &plan.generation {
         if generation.contract != GENERATOR_CONTRACT {
@@ -262,7 +312,8 @@ fn validate_operation(operation: &PlanOperation, index: usize) -> Result<()> {
         bail!("operation {index} method must be GET");
     }
     validate_route_template(&operation.path)?;
-    if operation.response.status != 200 || operation.response.media_type != "application/json" {
+    if operation.response.status.get() != 200 || operation.response.media_type != "application/json"
+    {
         bail!("operation {index} response must be 200 application/json");
     }
     if operation.cases.is_empty() || operation.cases.len() > MAX_CASES_PER_OPERATION {
@@ -406,6 +457,12 @@ fn validate_config_reference(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// The derived JSON Schema of one mock plan document.
+#[cfg(feature = "schema")]
+pub(crate) fn plan_schema() -> Value {
+    serde_json::to_value(schemars::schema_for!(MockPlan)).expect("a derived schema is JSON")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,7 +470,6 @@ mod tests {
 
     fn plan() -> MockPlan {
         MockPlan {
-            version: 1,
             openapi: "../source.openapi.yaml".to_owned(),
             openapi_digest: Some(
                 format!("sha256:{}", "a".repeat(64))
@@ -422,7 +478,7 @@ mod tests {
             ),
             generation: Some(GenerationSettings {
                 contract: GENERATOR_CONTRACT.to_owned(),
-                seed: 0,
+                seed: Seed::new(0).expect("seed"),
                 as_of: "2025-01-01".to_owned(),
                 datasets: BTreeMap::new(),
             }),
@@ -431,7 +487,7 @@ mod tests {
                 path: "/people/{person_id}".to_owned(),
                 operation_id: None,
                 response: PlanResponse {
-                    status: 200,
+                    status: ResponseStatus::new(200).expect("status"),
                     media_type: "application/json".to_owned(),
                 },
                 cases: vec![PlanCase {
@@ -451,28 +507,52 @@ mod tests {
     #[test]
     fn plan_round_trips_in_a_stable_strict_spelling() {
         let first = render_plan(&plan()).expect("render");
-        let parsed = parse_plan(&first).expect("parse");
+        let parsed = parse_plan("source.yaml", &first).expect("parse");
         let second = render_plan(&parsed).expect("render again");
 
         assert_eq!(first, second);
         assert!(first.ends_with(b"\n"));
+        assert!(String::from_utf8_lossy(&first).contains("operations:\n  - method:"));
         assert!(String::from_utf8(first)
             .expect("UTF-8")
             .contains("openapiDigest: sha256:aaaaaaaa"));
     }
 
     #[test]
-    fn unknown_fields_and_non_v1_versions_are_refused() {
-        let mut rendered = String::from_utf8(render_plan(&plan()).expect("render")).unwrap();
-        rendered.push_str("unknown: true\n");
-        assert!(parse_plan(rendered.as_bytes()).is_err());
-
-        let mut wrong = plan();
-        wrong.version = 2;
-        assert!(render_plan(&wrong).is_err());
-
-        let duplicate = "version: 1\nversion: 1\nopenapi: ../source.openapi.yaml\noperations: []\n";
-        assert!(parse_plan(duplicate.as_bytes()).is_err());
+    fn unknown_retired_and_duplicate_keys_are_refused_by_the_reader() {
+        let codes = |text: &str| {
+            let error = parse_plan("source.yaml", text.as_bytes()).expect_err("refused");
+            crate::authored::report_in(&error)
+                .expect("the reader's report")
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+                .collect::<Vec<_>>()
+        };
+        let rendered = String::from_utf8(render_plan(&plan()).expect("render")).unwrap();
+        assert!(rendered.starts_with(
+            "apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1\nkind: EvidenceMockPlan\n"
+        ));
+        assert_eq!(
+            codes(&format!("{rendered}unknown: true\n")),
+            [("config.unknown-key".to_owned(), "/unknown".to_owned())]
+        );
+        assert_eq!(
+            codes(&format!("{rendered}version: 1\n")),
+            [("config.removed-key".to_owned(), "/version".to_owned())]
+        );
+        assert_eq!(
+            codes("version: 1\nopenapi: ../source.openapi.yaml\noperations: []\n"),
+            [
+                ("config.missing-envelope".to_owned(), String::new()),
+                ("config.removed-key".to_owned(), "/version".to_owned())
+            ]
+        );
+        let duplicate = rendered.replace(
+            "openapi: ../source.openapi.yaml\n",
+            "openapi: ../source.openapi.yaml\nopenapi: ../source.openapi.yaml\n",
+        );
+        assert_eq!(codes(&duplicate)[0].0, "yaml.duplicate-key");
     }
 
     #[test]
@@ -485,6 +565,40 @@ mod tests {
             format!("sha512:{}", "a".repeat(64)),
         ] {
             assert!(invalid.parse::<Digest>().is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn a_seed_beyond_the_exact_integer_range_is_refused_by_the_reader() {
+        let rendered = String::from_utf8(render_plan(&plan()).expect("render")).unwrap();
+        let with_seed = |seed: u64| rendered.replace("seed: 0", &format!("seed: {seed}"));
+        assert!(parse_plan("source.yaml", with_seed(MAX_SEED).as_bytes()).is_ok());
+
+        let error =
+            parse_plan("source.yaml", with_seed(MAX_SEED + 1).as_bytes()).expect_err("refused");
+        let found = crate::authored::report_in(&error).expect("the reader's report");
+        let diagnostic = &found.diagnostics()[0];
+        assert_eq!(diagnostic.code, "config.out-of-range");
+        assert_eq!(diagnostic.path, "/generation/seed");
+        assert!(diagnostic.message.contains("9007199254740991"));
+        assert!(!diagnostic.message.contains("9007199254740992"));
+    }
+
+    #[test]
+    fn a_response_status_other_than_200_is_refused_by_the_reader_at_the_value() {
+        let rendered = String::from_utf8(render_plan(&plan()).expect("render")).unwrap();
+        for status in [199, 201] {
+            let error = parse_plan(
+                "source.yaml",
+                rendered
+                    .replace("status: 200", &format!("status: {status}"))
+                    .as_bytes(),
+            )
+            .expect_err("refused");
+            let found = crate::authored::report_in(&error).expect("the reader's report");
+            let diagnostic = &found.diagnostics()[0];
+            assert_eq!(diagnostic.code, "config.out-of-range");
+            assert_eq!(diagnostic.path, "/operations/0/response/status");
         }
     }
 

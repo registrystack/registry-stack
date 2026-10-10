@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -33,13 +34,17 @@ from ci_changes import (
     MESSAGING_PACKAGES,
     MESSAGING_TUTORIAL_INPUTS,
     STACK_CLIENT_PACKAGES,
+    CONFIG_CHECK_PACKAGES,
+    CONFIG_CONFORMANCE_INPUTS,
     CONFIG_CONFORMANCE_PACKAGES,
     SECURITY_WORKFLOW_GATES,
     SHARDS,
     LockChange,
     Workspace,
     classify,
+    config_format_inputs,
     lock_change,
+    matches,
     repo_docs_sources,
 )
 from run_cargo_packages import command_args, package_args
@@ -65,6 +70,18 @@ EVIDENCE_CONFIGURATION_GENERATOR = Path(
     "docs/site/scripts/generate-evidence-configuration.mjs"
 )
 AUTHORING_SCHEMA_DIRECTORY = Path("crates/registry-evidencectl/schemas/authoring")
+
+
+def config_conformance_runner() -> Any:
+    """The configuration conformance corpus runner, loaded as a module."""
+
+    script = Path("products/platform/scripts/run-config-conformance.py")
+    spec = importlib.util.spec_from_file_location("run_config_conformance", script)
+    assert spec is not None and spec.loader is not None
+    runner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = runner
+    spec.loader.exec_module(runner)
+    return runner
 
 
 def published_evidence_configuration_schemas() -> set[str]:
@@ -615,6 +632,8 @@ class CiChangesTest(unittest.TestCase):
             "products/platform/generated/runtime-config-blocks.schema.json",
             "products/platform/scripts/check-config-conformance.py",
             "products/breg/generated/runtime/runtime.schema.json",
+            "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
+            "products/breg/generated/review-runtime/review-runtime.schema.json",
             "products/casework/generated/runtime/runtime.schema.json",
             "products/scheduling/generated/runtime/runtime.schema.json",
         ):
@@ -627,6 +646,68 @@ class CiChangesTest(unittest.TestCase):
                 "config_conformance"
             ]
         )
+
+    def test_config_conventions_inputs_select_the_conformance_gate(self) -> None:
+        for path in (
+            "products/platform/config-formats.yaml",
+            "products/platform/config-conventions-exceptions.yaml",
+            "products/platform/CONFIG-CONVENTIONS.md",
+            "products/platform/scripts/check-config-conventions.py",
+            "products/platform/scripts/test_check_config_conventions.py",
+            "editors/configure.py",
+            # A schema nobody registered yet must reach the lint, which
+            # refuses it until it is registered or declared out of scope.
+            "products/render/generated/bundle/bundle.schema.json",
+            "products/casework/contracts/cli/NewReport.schema.json",
+            "products/evidence/contracts/new.schema.yaml",
+            "products/discovery/schemas/new.schema.json",
+            "crates/registry-render/schemas/new.schema.json",
+            # Reader crates outside the runtime conformance rows.
+            "crates/registry-bregctl/src/lib.rs",
+            "crates/registry-manifest-cli/src/main.rs",
+            "crates/registry-thunderid-tooling/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
+
+    def test_every_registered_configuration_format_input_is_routed(self) -> None:
+        """config-formats.yaml names the files and reader crates the
+        conventions lint reads; a change to any of them runs the lint. The
+        classifier reads them by line, so this holds the result equal to a
+        full YAML parse."""
+        root = Path(__file__).resolve().parents[2]
+        registry = yaml.safe_load(
+            (root / "products/platform/config-formats.yaml").read_text(encoding="utf-8")
+        )
+        keys = {"path", "file", "example", "driftCheck", "differentialTest"}
+        paths: set[str] = set()
+        crates: set[str] = set()
+
+        def collect(node: Any, key: str | None = None) -> None:
+            if isinstance(node, dict):
+                for name, value in node.items():
+                    collect(value, name)
+            elif isinstance(node, list):
+                for value in node:
+                    collect(value, key)
+            elif isinstance(node, str) and key in keys and node != "none":
+                paths.add(node)
+            elif isinstance(node, str) and key == "crate":
+                crates.add(node)
+
+        collect(registry)
+        self.assertIn("products/breg/examples/minimal/registry.yaml", paths)
+        self.assertIn("registry-bregctl", crates)
+        self.assertEqual(config_format_inputs(root), (frozenset(paths), frozenset(crates)))
+        self.assertLessEqual(crates, set(self.workspace.package_names))
+        for path in sorted(paths):
+            with self.subTest(path=path):
+                self.assertTrue((root / path).is_file())
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
 
     def test_every_config_conformance_row_is_routed(self) -> None:
         script = Path("products/platform/scripts/check-config-conformance.py")
@@ -659,6 +740,97 @@ class CiChangesTest(unittest.TestCase):
             if isinstance(row.digest_mismatch, gate.TestRef)
         }
         for path in sorted(digest_tests):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
+
+    def test_config_conformance_corpus_inputs_select_the_conformance_gate_by_name(
+        self,
+    ) -> None:
+        """The corpus, its harness, and its runner select the gate by name,
+        not only through the platform packages a products/platform path seeds."""
+        paths = [
+            path.as_posix()
+            for path in sorted(Path("products/platform/conformance").rglob("*"))
+            if path.is_file()
+        ] + [
+            "products/platform/scripts/run-config-conformance.py",
+            "products/platform/scripts/run-config-conformance.sh",
+            "products/platform/scripts/test_run_config_conformance.py",
+            "products/platform/scripts/test_check_config_conformance.py",
+        ]
+        self.assertIn("products/platform/conformance/yaml/formats.yaml", paths)
+        self.assertIn("products/platform/conformance/yaml/expected-failures.yaml", paths)
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertTrue(matches(path, *CONFIG_CONFORMANCE_INPUTS))
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
+
+    def test_config_check_packages_build_the_programs_the_corpus_runs(self) -> None:
+        """The corpus runner executes the registered check command of every
+        format it reaches, the commands its harness prepares with, and the
+        init commands its harness starts projects with. The packages whose
+        binaries those are: the job builds them, and a change to any of them,
+        or to anything they link, runs the job."""
+        runner = config_conformance_runner()
+        reached, _ = runner.partition_formats(
+            runner.load_registry(Path(runner.REGISTRY))
+        )
+        harness = runner.load_harness(Path(runner.CORPUS) / "formats.yaml")
+        commands = [str(fmt.check) for fmt in reached] + [
+            command for entry in harness.values() for command in entry.get("prepare", ())
+        ] + [entry["init"]["command"] for entry in harness.values() if "init" in entry]
+        programs = {shlex.split(command)[0] for command in commands}
+        binaries = {
+            target["name"]: package["name"]
+            for package in self.metadata["packages"]
+            for target in package["targets"]
+            if "bin" in target["kind"]
+        }
+        self.assertIn("messagingctl", programs)
+        self.assertIn("registry-render", programs)
+        self.assertLessEqual(programs, set(binaries))
+        self.assertEqual({binaries[program] for program in programs}, CONFIG_CHECK_PACKAGES)
+        steps = {
+            step.get("name"): step
+            for step in self.workflow_jobs["config-conformance"]["steps"]
+        }
+        build = steps["Build configuration check commands"]["run"].split()
+        self.assertEqual(
+            {build[index + 1] for index, word in enumerate(build) if word == "-p"},
+            CONFIG_CHECK_PACKAGES,
+        )
+        for package in sorted(CONFIG_CHECK_PACKAGES):
+            path = f"{self.workspace.roots[package]}/src/main.rs"
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
+
+    def test_every_config_conformance_staged_project_is_routed(self) -> None:
+        """The corpus runner stages a copy of each reached example's directory,
+        or of the project and copies its harness names, so a change anywhere in
+        one can change a result."""
+        runner = config_conformance_runner()
+        reached, _ = runner.partition_formats(
+            runner.load_registry(Path(runner.REGISTRY))
+        )
+        harness = runner.load_harness(Path(runner.CORPUS) / "formats.yaml")
+        sources = {
+            entry.get("project", Path(str(fmt.example)).parent.as_posix())
+            for fmt in reached
+            for entry in (harness.get(fmt.id, {}),)
+        } | {
+            copy["from"]
+            for entry in harness.values()
+            for copy in (entry.get("copies") or {}).values()
+        }
+        self.assertIn("crates/registry-evidencectl/templates/sqlite-extract", sources)
+        for source in sorted(sources):
+            path = source if Path(source).is_file() else f"{source}/conformance-probe.yaml"
             with self.subTest(path=path):
                 self.assertTrue(
                     classify(self.workspace, (path,))["config_conformance"]
@@ -1148,6 +1320,49 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn(f"fn {test.rsplit('::', 1)[1]}()", source)
 
+    def test_evidence_lifecycle_runs_the_reference_authoring_check_exactly(
+        self,
+    ) -> None:
+        script = next(
+            step["run"]
+            for step in self.workflow_jobs["evidence-tutorials"]["steps"]
+            if step.get("name") == "Test the exact local Evidence lifecycle"
+        )
+        test = (
+            "check::tests::"
+            "the_reference_authoring_example_checks_with_no_diagnostic"
+        )
+        name = test.rsplit("::", 1)[1]
+        # The check delegates fixture evaluation to the sibling `evidence`
+        # binary the job builds, so the test is ignored elsewhere and this
+        # step names it exactly: a renamed test would otherwise leave the
+        # step running zero tests.
+        self.assertRegex(
+            script,
+            rf"-p registry-evidencectl --lib \\\s*\n\s*{re.escape(test)} \\"
+            r"\s*\n\s*-- --ignored --exact \\",
+        )
+        self.assertIn(
+            "grep -q 'test result: ok\\. 1 passed' "
+            '"${RUNNER_TEMP}/evidence-reference-authoring.log" || '
+            '{ echo "::error::expected exactly one passing test for '
+            f'{name}"; exit 1; }}',
+            script,
+        )
+        source = Path("crates/registry-evidencectl/src/check.rs").read_text()
+        self.assertRegex(source, rf"#\[ignore = \"[^\"]+\"\]\s*\n\s*fn {name}\(\)")
+        # The test checks the reference example, so a change to it reaches
+        # the job that runs the test.
+        self.assertTrue(
+            classify(
+                self.workspace,
+                (
+                    "products/evidence/reference/authoring-projects/example/"
+                    "evidence-project.yaml",
+                ),
+            )["evidence_tutorial"]
+        )
+
     def test_casework_postgres_runs_task_approval_and_local_session_exactly(
         self,
     ) -> None:
@@ -1547,6 +1762,56 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(outputs["platform"])
                 self.assertTrue(outputs["platform_hygiene"])
 
+    def test_yaml_reader_boundary_inputs_select_platform_hygiene(self) -> None:
+        for path in (
+            "crates/registry-casework/src/config.rs",
+            "crates/registry-breg/tests/documented_access.rs",
+            "crates/registry-casework/Cargo.toml",
+            "Cargo.toml",
+            "crates/registry-breg-mcp/clippy.toml",
+            "crates/registry-casework/.clippy.toml",
+            ".cargo/config.toml",
+            "crates/registry-casework/.cargo/config",
+            "products/platform/config-formats.yaml",
+            "products/platform/scripts/check-yaml-reader-boundary.sh",
+            "products/platform/scripts/check-yaml-reader-boundary.py",
+            "products/platform/scripts/test_check_yaml_reader_boundary.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["platform_hygiene"])
+
+    def test_documentation_alone_skips_platform_hygiene(self) -> None:
+        for path in (
+            "products/platform/README.md",
+            "docs/site/src/content/docs/index.mdx",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(classify(self.workspace, (path,))["platform_hygiene"])
+
+    def test_shared_reader_changes_select_the_jobs_that_test_it(self) -> None:
+        outputs = classify(
+            self.workspace, ("crates/registry-platform-yaml/src/structure.rs",)
+        )
+        platform_shard = next(
+            entry
+            for entry in outputs["rust_matrix"]["include"]
+            if entry["name"] == "platform"
+        )
+        self.assertIn("registry-platform-yaml", platform_shard["packages"])
+        self.assertIn("registry-platform-config", outputs["rust_packages"])
+        self.assertTrue(outputs["platform"])
+        self.assertTrue(outputs["platform_assurance"])
+        self.assertTrue(outputs["config_conformance"])
+        for path in (
+            "products/platform/fuzz/fuzz_targets/yaml_decode.rs",
+            "products/platform/fuzz/fuzz_targets/yaml_reader.rs",
+            "products/platform/fuzz/fuzz_targets/yaml_support.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["platform"])
+                self.assertTrue(outputs["platform_assurance"])
+
     def test_dispatch_changes_select_the_job_running_its_postgres_suite(self) -> None:
         # The dispatch core's PostgreSQL suite runs in the Scheduling
         # PostgreSQL job, whose service database it borrows. A dispatch
@@ -1697,13 +1962,36 @@ class CiChangesTest(unittest.TestCase):
         for path in (
             "products/breg/generated/authoring/registry-project.schema.json",
             "products/breg/generated/runtime/runtime.schema.json",
+            "products/breg/generated/tools/journeys.v1.schema.json",
+            "products/casework/generated/project/project.schema.json",
             "products/casework/generated/runtime/runtime.schema.json",
             "products/scheduling/generated/runtime/runtime.schema.json",
+            "products/scheduling/generated/project/project.schema.json",
+            "products/scheduling/generated/records/records.schema.json",
+            "products/scheduling/generated/fixture/fixture.schema.json",
+            "products/messaging/generated/authoring/project.schema.json",
             "products/messaging/generated/runtime/runtime.schema.json",
             "products/discovery/schemas/origins.schema.json",
         ):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["editors"])
+
+    def test_a_casework_schema_change_runs_its_drift_check_on_a_pull_request(
+        self,
+    ) -> None:
+        # The casework test shard carries the schema drift step, so a pull
+        # request that touches a committed schema has to select it.
+        for path in (
+            "products/casework/generated/project/project.schema.json",
+            "products/casework/generated/runtime/runtime.schema.json",
+            "crates/registry-casework-core/src/config.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,), pull_request=True)
+                self.assertIn(
+                    "casework",
+                    {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+                )
 
     def test_a_test_only_editor_edge_does_not_satisfy_the_authoring_routing(
         self,
@@ -2307,6 +2595,17 @@ on:
                 self.assertTrue(outputs["docs"])
                 self.assertTrue(outputs["evidence_contracts"])
 
+    def test_evidence_client_schema_change_runs_evidence_contracts(self) -> None:
+        """The contracts job reproduces the client schemas from their readers."""
+        for path in (
+            "crates/registry-evidence-client/src/profile_file.rs",
+            "crates/registry-evidence-client/src/schema.rs",
+            "products/evidence/generated/client-profile/client-profile.schema.json",
+            "products/evidence/generated/client-contracts/client-contracts.schema.json",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["evidence_contracts"])
+
     def test_evidence_configuration_reference_change_runs_docs(self) -> None:
         """Docs tests read the reference that explains each published schema."""
         for path in (
@@ -2566,6 +2865,15 @@ class LockfileSelectionTest(unittest.TestCase):
 
     def assert_full(self, outputs: dict[str, Any]) -> None:
         self.assertEqual(outputs["rust_packages"], sorted(self.workspace.package_names))
+
+    def test_lock_only_yaml_reader_bump_selects_platform_hygiene(self) -> None:
+        # A reader release can move an entry point, which clippy reports only as
+        # a warning; the boundary probes fail on it.
+        change = self.change(bump_lock_package(self.lock, "serde_norway", "0.9.99"))
+        self.assertIsNotNone(change.members, change.reason)
+        self.assertIn("serde_norway", change.packages)
+        outputs = classify(self.workspace, ("Cargo.lock",), lock_change=change)
+        self.assertTrue(outputs["platform_hygiene"])
 
     def test_lock_only_leaf_bump_selects_only_its_consumers(self) -> None:
         change = self.change(bump_lock_package(self.lock, "pdf-writer", "0.15.1"))

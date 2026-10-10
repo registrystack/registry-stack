@@ -12,6 +12,8 @@ standards_referenced:
   - json-schema
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
 You decided what your service sends and to whom, and now you want to author what Registry Messaging
 may send on its behalf. This page covers the package: the providers messages travel through, the
 sender profiles callers select, the templates Messaging renders, and the access profiles that decide
@@ -69,11 +71,14 @@ reached. Run `messagingctl <command> --help` for each command's arguments.
 
 A human failure is one `error[CODE] PATH: MESSAGE` line on standard error, followed by a `next:`
 line naming what to do. With `--format json`, every report opens with `ok`, `command`, and
-`status`, and a failure lists its `diagnostics`, each with a `code`, `path`, `message`, and
-`suggestedAction`. The one exception is a successful `preview`, which prints the route body the
-HTTP preview answers, unwrapped.
+`status`, then names its format: `apiVersion` is
+`id.registrystack.org/formats/messaging/ctl-report/v1alpha1` and `kind` is `MessagingCtlReport`. A
+failure lists its `diagnostics`, each with a `code`, `path`, `message`, and `suggestedAction`. The
+one exception is a successful `preview`, which prints the route body the HTTP preview answers,
+unwrapped.
 
 {/* Evidence: crates/registry-messagingctl/src/lib.rs, Command;
+    crates/registry-messagingctl/src/report.rs, write;
     products/messaging/README.md, Running locally;
     scripts/cargo-runtime-library-path.sh, registry_cargo_build; CONTRIBUTING.md. */}
 
@@ -124,20 +129,25 @@ separate installed directory for handover.
 
 ## Declare providers and sender profiles
 
-`messaging.yaml` opens with its type and declares the providers messages travel through:
+`messaging.yaml` opens with its type and the project it names, then declares the providers messages
+travel through:
 
 ```yaml
-apiVersion: registry.registrystack.org/messaging-package/v1alpha1
-kind: MessagingPackage
+apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1
+kind: MessagingProject
+project:
+  id: starter
+  version: "1"
 providers:
   - id: mail-relay
-    kind: smtp
+    type: smtp
   - id: sms-gateway
-    kind: http
+    type: http
     idempotentSubmit: true
 ```
 
-A provider's `kind` is `smtp`, which carries email, or `http`, which carries whatever its scripts
+`project.id` is a local identifier, and `project.version` a text label, so quote a numeric one. A
+provider's `type` is `smtp`, which carries email, or `http`, which carries whatever its scripts
 send. `idempotentSubmit: true` declares that the provider drops a repeat submission carrying the
 same idempotency key. Only an `http` provider may set it, and only then does its prepare script see
 the key. Every key in the manifest is closed: an unknown field is a refusal, not a line that is
@@ -224,13 +234,13 @@ accessProfiles:
 | Key | Meaning |
 | --- | --- |
 | `principalClaim` | The token claim naming the caller. With the issuer, it scopes the messages a sender may read and cancel |
-| `requiredScopes` | Scopes the token must carry |
+| `requiredScopes` | Required. At least one scope the token must carry, or `unrestricted` to require none |
 | `requesterClients` | The OAuth clients this profile admits. A client belongs to exactly one profile, and the operator's runtime file must admit it |
 | `actorKind` | `human`, `agent`, or `service`. Omitted means any |
 | `role` | `sender` submits and previews. `operator` reads and cancels every message and may not submit |
 | `senderProfiles`, `templates` | What a sender may use: at least one of each. An operator lists none |
 | `allowDirectContent` | Lets a sender submit text instead of naming a template. An operator may not set it |
-| `requestsPerMinute`, `burst`, `dailyLimit` | Positive limits on the profile's callers |
+| `requestsPerMinute`, `burst`, `maximumMessagesPerDay` | Limits on the profile's callers: 1 to 60000 requests a minute, a burst of 1 to 10000, and, when set, 1 to 10000000 messages a day |
 
 Messaging inherits no authorization from a calling product. A service allowed to act on a case is
 not thereby allowed to send; this profile decides. Keep `allowDirectContent` off unless a caller
@@ -245,7 +255,7 @@ issuer and subject, and a submission past the burst is refused `429 rate-limit.e
 `Retry-After` header. The bucket lives in the runtime process, so each replica enforces its own and
 a restart refills it.
 
-`dailyLimit` bounds the messages the whole profile accepted in the last 24 hours. It is counted from
+`maximumMessagesPerDay` bounds the messages the whole profile accepted in the last 24 hours. It is counted from
 the accepted messages when a submission is accepted, so it holds across replicas and restarts. A
 submission past it is refused `429 quota.exceeded`, with `Retry-After` set to when the oldest
 counted message leaves the window. A replayed submission is charged to the rate but not to the
@@ -281,6 +291,8 @@ A version directory holds:
 The starter's email version declares:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/messaging/template/v1alpha1
+kind: MessagingTemplate
 channel: email
 locales: [en, fr]
 parts: [subject, text, html]
@@ -317,6 +329,8 @@ it names. The starter's `sms-gateway` is a generic JSON gateway that deduplicate
 key and reports delivery through a signed callback:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/messaging/provider/v1alpha1
+kind: MessagingProvider
 prepareScript: scripts/prepare.rhai
 interpretScript: scripts/interpret.rhai
 receiptScript: scripts/receipt.rhai
@@ -326,7 +340,7 @@ request:
 responseHeaders: [x-request-id]
 capabilities:
   receipts: callback
-  concurrencyLimit: 8
+  maximumConcurrentRequests: 8
 ```
 
 | Key | Meaning |
@@ -337,18 +351,18 @@ capabilities:
 | `request.method` | `post`, or `get`, which the operator's runtime file must acknowledge |
 | `request.headers`, `responseHeaders` | The only header names the prepare script may set and the interpret script may read |
 | `capabilities.receipts` | `none`, `callback`, or `reconcile`. Only `callback` gives messages a delivery report |
-| `capabilities.concurrencyLimit` | 1 to 64. The operator's connection may lower it, never raise it |
+| `capabilities.maximumConcurrentRequests` | 1 to 64. The operator's connection may lower it, never raise it |
 | `capabilities.ratePerSecond` | Optional, 1 to 1000. Paces how often this runtime process starts a send |
 
 With `ratePerSecond` set, at most one send to the provider starts every `1 / ratePerSecond` seconds
-in each runtime process. An attempt first waits for one of the connection's `concurrencyLimit` sends
+in each runtime process. An attempt first waits for one of the connection's `maximumConcurrentRequests` sends
 in flight, then for its slot, so the rate spaces requests as they leave, even when sends queue behind
 a slow one. Both waits together last up to ten seconds on top of the send's own time budget, and never
 past the message's `expiresAt`. An attempt whose slot does not open in time sends nothing and is
 retried under its dispatch policy; a message whose expiry passes first is not sent again, and expires,
 or stays `unknown` when an earlier attempt may have reached the provider and its policy retries.
 
-`provider.yaml` is closed and at most 64 KiB, and each script is at most 64 KiB and must compile
+`provider.yaml` is closed and at most 1 MiB, and each script is at most 64 KiB and must compile
 with exactly its entry point when the package loads. A file the provider does not name, a hidden
 entry, or a directory for an `smtp` provider is refused.
 
@@ -397,6 +411,7 @@ template: appointment-reminder-sms 1 (sms)
   sample en: 1 segment(s), gsm7 85 units
 access profile: case-notices (sender)
 access profile: operations (operator)
+0 errors, 0 warnings in 18 files
 ```
 
 `messagingctl preview` renders one template version with the data you give it, so you can read
@@ -484,6 +499,14 @@ verified file buffers. Editing the authoring project never changes what a runnin
 
 {/* Evidence: crates/registry-messaging/src/package.rs; crates/registry-messagingctl/src/lib.rs;
     crates/registry-platform-config/src/package.rs; products/messaging/RUNTIME-CONFIG.md. */}
+
+## Check commands
+
+Every file Registry Messaging reads has a command that checks it offline, with no service running. Each prints
+the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../../reference/configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="messaging" />
 
 ## Next
 

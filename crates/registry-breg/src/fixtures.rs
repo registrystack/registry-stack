@@ -19,6 +19,12 @@ use axum::Router;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httpsec::{response_trace_id, TraceId};
 use registry_platform_oidc::{JwksFetcher, TokenVerifier};
+use registry_platform_yaml::{
+    shape_union, tagged_union, ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Node,
+    RemovedKey, Report, RetiredApiVersion, Severity, Source, UniqueList,
+};
+#[cfg(feature = "schema")]
+use registry_platform_yaml::{BoundedU32, Digest as FormatDigest, LocalId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -29,9 +35,7 @@ use crate::api::{HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture
 use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use crate::auth::RegistryAuthenticator;
 use crate::compiler::{compile_project_with_assets, module_digest_with_assets, CompileProfile};
-use crate::contract::{
-    parse_module_yaml, parse_project_yaml, redact_authored_values, ModuleAssetSource,
-};
+use crate::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 use crate::contract::{AccessProfileSource, LookupValueOrigin, Operation};
 use crate::data::{validate_field_value, DataImportOperation, DataImportPlan, FieldValue};
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
@@ -39,6 +43,7 @@ use crate::event_destination::EventDestinationActivationError;
 use crate::import_authority::{
     ImportAuthorityCloseRequest, ImportAuthorityOpenRequest, ImportAuthorityOperatorService,
 };
+use crate::literal_text::{LiteralText, WRITE_THE_VALUE};
 use crate::model::CompiledRoute;
 use crate::model::{
     ActionRouteKind, CompiledAction, CompiledActionPermission, CompiledActionRoute,
@@ -59,9 +64,64 @@ use crate::runtime_config::RuntimeConfig;
 #[cfg(feature = "postgres-test")]
 use crate::startup::PreparedServer;
 
-const JOURNEY_API_VERSION: &str = "registry.registrystack.org/breg-journeys/v1";
-const RECEIPT_API_VERSION: &str = "registry.registrystack.org/breg-schema-test-receipt/v2";
-const RECEIPT_KIND: &str = "SchemaTestReceipt";
+/// The journeys apiVersion this release reads and `init` writes.
+pub const JOURNEYS_API_VERSION: &str = "id.registrystack.org/formats/breg/journeys/v1";
+/// The journeys kind.
+pub const JOURNEYS_KIND: &str = "BRegJourneys";
+/// The journeys format: its envelope, the header it retired, and the keys it
+/// renamed (CFG-CHANGE-2).
+pub const JOURNEYS_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: JOURNEYS_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(JOURNEYS_API_VERSION)],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: "registry.registrystack.org/breg-journeys/v1",
+            replacement: "Start the file with `apiVersion: id.registrystack.org/formats/breg/journeys/v1` and `kind: BRegJourneys`, write each request's `operation: <form>` as `type: <form>` in kebab case (`submit_request` becomes `submit-request`), and rename `recordRef`, `etagRef`, `proposalVersionRef`, `effectDigestRef`, and `conditionRef`, including the `recordRef` marker inside request data, to `recordCapture`, `etagCapture`, `proposalVersionCapture`, `effectDigestCapture`, and `conditionCapture`.",
+        }],
+    },
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/journeys/*/steps/*/request/operation",
+            replacement: "Name the request form with `type:` in kebab case, for example `type: submit-request`.",
+        },
+        RemovedKey {
+            pointer: "/journeys/*/steps/*/request/recordRef",
+            replacement: "Rename `recordRef` to `recordCapture`.",
+        },
+        RemovedKey {
+            pointer: "/journeys/*/steps/*/request/etagRef",
+            replacement: "Rename `etagRef` to `etagCapture`.",
+        },
+        RemovedKey {
+            pointer: "/journeys/*/steps/*/request/proposalVersionRef",
+            replacement: "Rename `proposalVersionRef` to `proposalVersionCapture`.",
+        },
+        RemovedKey {
+            pointer: "/journeys/*/steps/*/request/effectDigestRef",
+            replacement: "Rename `effectDigestRef` to `effectDigestCapture`.",
+        },
+        RemovedKey {
+            pointer: "/journeys/*/steps/*/request/preconditions/*/conditionRef",
+            replacement: "Rename `conditionRef` to `conditionCapture`.",
+        },
+    ],
+};
+/// The schema-test receipt apiVersion `bregctl test` writes.
+pub const RECEIPT_API_VERSION: &str = "id.registrystack.org/formats/breg/schema-test-receipt/v2";
+/// The schema-test receipt kind.
+pub const RECEIPT_KIND: &str = "BRegSchemaTestReceipt";
+/// The schema-test receipt format and the header it retired (CFG-CHANGE-2).
+pub const SCHEMA_TEST_RECEIPT_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: RECEIPT_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(RECEIPT_API_VERSION)],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: "registry.registrystack.org/breg-schema-test-receipt/v2",
+            replacement: "Run `bregctl test` again with this bregctl; it writes the receipt with the current header.",
+        }],
+    },
+    removed_keys: &[],
+};
 const MAX_JOURNEY_FILE_BYTES: usize = 1024 * 1024;
 const MAX_JOURNEYS: usize = 128;
 const MAX_STEPS_PER_JOURNEY: usize = 128;
@@ -76,7 +136,7 @@ const MAX_BEARER_TOKEN_BYTES: usize = 32 * 1024;
 const MIN_SUPPORTED_POSTGRES_MAJOR: u16 = 15;
 const MAX_SUPPORTED_POSTGRES_MAJOR: u16 = 18;
 
-type CredentialMap = BTreeMap<(String, String), Option<Zeroizing<String>>>;
+type CredentialMap = BTreeMap<(String, String), Zeroizing<String>>;
 
 /// Value-free failures while preparing the runtime used by schema tests.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -122,6 +182,7 @@ pub enum LogicalReferenceRefusal {
     StepIdentifier,
     EntityOrAction,
     CaptureSource,
+    RetiredRecordMarker,
 }
 
 impl fmt::Display for LogicalReferenceRefusal {
@@ -136,6 +197,10 @@ impl fmt::Display for LogicalReferenceRefusal {
             Self::StepIdentifier => "the step identifier is not a stable identifier",
             Self::EntityOrAction => "the step names both an entity and an action, or neither",
             Self::CaptureSource => "the request names a capture no earlier step declares",
+            Self::RetiredRecordMarker => {
+                "the request data writes the retired `{recordRef: ...}` marker; write a captured \
+                 record as `{recordCapture: <capture>}`"
+            }
         })
     }
 }
@@ -144,7 +209,6 @@ impl fmt::Display for LogicalReferenceRefusal {
 pub enum FixtureError {
     JourneyTooLarge,
     JourneyShapeRefused,
-    JourneyVersionRefused,
     JourneyBoundsRefused,
     DuplicateIdentifier,
     LogicalReferenceRefused,
@@ -166,13 +230,13 @@ pub enum FixtureError {
         expected: u16,
         actual: u16,
     },
-    /// A journeys document that stops matching the grammar, reported with the
-    /// path it stops at. The member, the alternatives the grammar accepts, and
-    /// the source location are carried; authored values are not.
-    JourneyShapeInvalid {
-        path: String,
-        message: String,
-    },
+    /// A journeys document the shared reader refused: its diagnostics, each
+    /// with a code, a path, a position, and the fix, and never an authored
+    /// value (CFG-DIAG-1).
+    JourneyDocument(Report),
+    /// A schema-test receipt the shared reader refused, or one that is not
+    /// the canonical bytes `bregctl test` writes (CFG-DIAG-1).
+    ReceiptDocument(Report),
     /// A refusal that belongs to one journey rather than to one of its steps.
     JourneyRefused {
         journey_index: usize,
@@ -211,8 +275,19 @@ impl fmt::Display for FixtureError {
                 "expected HTTP {expected}, received HTTP {actual}"
             );
         }
-        if let Self::JourneyShapeInvalid { path, message } = self {
-            return write!(formatter, "`{path}`: {message}");
+        if let Self::JourneyDocument(report) = self {
+            return write!(
+                formatter,
+                "the fixture journeys document was refused\n{}",
+                report.render_human().trim_end()
+            );
+        }
+        if let Self::ReceiptDocument(report) = self {
+            return write!(
+                formatter,
+                "the schema test receipt was refused\n{}",
+                report.render_human().trim_end()
+            );
         }
         if let Self::JourneyRefused {
             journey_index,
@@ -223,12 +298,6 @@ impl fmt::Display for FixtureError {
             return write!(
                 formatter,
                 "journeys[{journey_index}] `{journey_id}`: {message}"
-            );
-        }
-        if let Self::JourneyVersionRefused = self {
-            return write!(
-                formatter,
-                "the fixture journeys document must set `apiVersion: {JOURNEY_API_VERSION}`"
             );
         }
         formatter.write_str(match self {
@@ -253,9 +322,9 @@ impl fmt::Display for FixtureError {
             | Self::LogicalReference(_)
             | Self::ResponseStatusMismatch { .. }
             | Self::StepFailed { .. }
-            | Self::JourneyShapeInvalid { .. }
-            | Self::JourneyRefused { .. }
-            | Self::JourneyVersionRefused => {
+            | Self::JourneyDocument(_)
+            | Self::ReceiptDocument(_)
+            | Self::JourneyRefused { .. } => {
                 unreachable!("handled above")
             }
         })
@@ -264,23 +333,38 @@ impl fmt::Display for FixtureError {
 
 impl std::error::Error for FixtureError {}
 
+/// The JSON Schema of the journeys members the reader decodes. The header
+/// is checked and removed before decoding, so the publisher adds it.
+#[cfg(feature = "schema")]
+pub fn journeys_schema() -> schemars::Schema {
+    schemars::schema_for!(JourneyDocument)
+}
+
 #[derive(Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct JourneyDocument {
-    api_version: String,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
     journeys: Vec<JourneySource>,
 }
 
 #[derive(Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct JourneySource {
+    #[serde(deserialize_with = "members::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     id: String,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
     steps: Vec<StepSource>,
 }
 
 #[derive(Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct StepSource {
+    #[serde(deserialize_with = "members::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     id: String,
     #[serde(default)]
     action: Option<String>,
@@ -291,34 +375,55 @@ struct StepSource {
     claims: ClaimsSource,
     request: ActionSource,
     expect: ExpectationSource,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "members::optional_local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
     capture: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "members::local_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "members::local_id_map_schema")
+    )]
     capture_results: BTreeMap<String, String>,
 }
 
+/// One request form. `type` names the form; the members beside it are the
+/// form's own. Request bodies (`items`, `data`, `values`, `input`, and a
+/// change's `value`) are the registry's HTTP API bodies, carried as written.
 #[derive(Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
+    remote = "Self",
     deny_unknown_fields,
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase",
-    tag = "operation"
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 enum ActionSource {
     Import {
+        #[serde(deserialize_with = "members::http_objects")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(schema_with = "members::http_objects_schema")
+        )]
         items: Vec<Map<String, Value>>,
     },
     Create {
+        #[serde(deserialize_with = "members::http_object")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(schema_with = "members::http_object_schema")
+        )]
         data: Map<String, Value>,
     },
     Get {
-        record_ref: String,
+        record_capture: String,
     },
     List {},
     Query {
         #[serde(default)]
-        select: BTreeSet<String>,
-        #[serde(default)]
+        select: UniqueList<String>,
+        #[serde(default, deserialize_with = "members::top")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<BoundedU32<1, 100>>"))]
         top: Option<u16>,
         #[serde(default)]
         count: bool,
@@ -327,67 +432,131 @@ enum ActionSource {
     },
     Lookup {
         selector: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "members::http_object")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(schema_with = "members::http_object_schema")
+        )]
         values: Map<String, Value>,
     },
     ReadPath {
         path: String,
-        record_ref: String,
+        record_capture: String,
         #[serde(default)]
-        select: BTreeSet<String>,
-        #[serde(default)]
+        select: UniqueList<String>,
+        #[serde(default, deserialize_with = "members::top")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<BoundedU32<1, 100>>"))]
         top: Option<u16>,
         #[serde(default)]
         count: bool,
     },
     Patch {
-        record_ref: String,
-        etag_ref: String,
+        record_capture: String,
+        etag_capture: String,
         changes: Vec<FieldChangeSource>,
     },
     Batch {
         items: Vec<BatchItemSource>,
     },
     TargetConditions {
-        #[serde(default)]
+        #[serde(default, deserialize_with = "members::http_object")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(schema_with = "members::http_object_schema")
+        )]
         input: Map<String, Value>,
     },
     Invoke {
-        #[serde(default)]
+        #[serde(default, deserialize_with = "members::http_object")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(schema_with = "members::http_object_schema")
+        )]
         input: Map<String, Value>,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "members::external_id_map")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(
+                schema_with = "members::external_id_map_schema::<ImmediateActionPreconditionSource>"
+            )
+        )]
         preconditions: BTreeMap<String, ImmediateActionPreconditionSource>,
         #[serde(default)]
         idempotency_key: Option<String>,
     },
     SubmitRequest {
-        record_ref: String,
-        etag_ref: String,
+        record_capture: String,
+        etag_capture: String,
     },
     ReviseRequest {
-        record_ref: String,
-        etag_ref: String,
+        record_capture: String,
+        etag_capture: String,
         rebase: bool,
     },
     CancelRequest {
-        record_ref: String,
-        etag_ref: String,
+        record_capture: String,
+        etag_capture: String,
     },
     ApplyRequest {
-        record_ref: String,
-        etag_ref: String,
-        #[serde(default)]
+        record_capture: String,
+        etag_capture: String,
+        #[serde(default, deserialize_with = "members::proposal_version")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "Option<BoundedU32<1, { u32::MAX }>>")
+        )]
         proposal_version: Option<u32>,
         #[serde(default)]
-        proposal_version_ref: Option<String>,
-        #[serde(default)]
+        proposal_version_capture: Option<String>,
+        #[serde(default, deserialize_with = "members::digest")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<FormatDigest>"))]
         effect_digest: Option<String>,
         #[serde(default)]
-        effect_digest_ref: Option<String>,
+        effect_digest_capture: Option<String>,
     },
 }
+tagged_union!(ActionSource);
 
 impl ActionSource {
+    /// Copy each request body from the document the request was read from.
+    /// `body` answers a pointer relative to the request. The reader checked
+    /// each body's node kind only; the registry's HTTP API reads its members.
+    fn fill_bodies(&mut self, body: &dyn Fn(&str) -> Option<Value>) {
+        match self {
+            Self::Import { items } => {
+                for (index, item) in items.iter_mut().enumerate() {
+                    fill_object(item, body(&format!("/items/{index}")));
+                }
+            }
+            Self::Create { data } => fill_object(data, body("/data")),
+            Self::Lookup { values, .. } => fill_object(values, body("/values")),
+            Self::Patch { changes, .. } => {
+                for (index, change) in changes.iter_mut().enumerate() {
+                    if let Some(value) = body(&format!("/changes/{index}/value")) {
+                        change.value = value;
+                    }
+                }
+            }
+            Self::Batch { items } => {
+                for (index, item) in items.iter_mut().enumerate() {
+                    let BatchItemSource::Create { data } = item;
+                    fill_object(data, body(&format!("/items/{index}/data")));
+                }
+            }
+            Self::TargetConditions { input } | Self::Invoke { input, .. } => {
+                fill_object(input, body("/input"));
+            }
+            Self::Get { .. }
+            | Self::List {}
+            | Self::Query { .. }
+            | Self::ReadPath { .. }
+            | Self::SubmitRequest { .. }
+            | Self::ReviseRequest { .. }
+            | Self::CancelRequest { .. }
+            | Self::ApplyRequest { .. } => {}
+        }
+    }
+
     fn operation(&self) -> Operation {
         match self {
             Self::Import { .. } => Operation::Import,
@@ -427,22 +596,30 @@ impl ActionSource {
 }
 
 #[derive(Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ImmediateActionPreconditionSource {
     #[serde(default)]
     if_match: Option<String>,
     #[serde(default)]
-    condition_ref: Option<String>,
+    condition_capture: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct FieldChangeSource {
     field: String,
+    #[serde(deserialize_with = "members::http_value")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "members::http_value_schema")
+    )]
     value: Value,
 }
 
 #[derive(Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct BboxSource {
     west: String,
@@ -458,21 +635,41 @@ impl BboxSource {
 }
 
 #[derive(Clone, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "operation")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(
+    remote = "Self",
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 enum BatchItemSource {
-    Create { data: Map<String, Value> },
+    Create {
+        #[serde(deserialize_with = "members::http_object")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(schema_with = "members::http_object_schema")
+        )]
+        data: Map<String, Value>,
+    },
 }
+tagged_union!(BatchItemSource);
 
 #[derive(Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ClaimsSource {
     #[serde(default)]
     principal: Option<String>,
     #[serde(default)]
-    scopes: BTreeSet<String>,
+    scopes: UniqueList<String>,
     #[serde(default)]
     purpose: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "members::external_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "members::external_id_map_schema::<DirectClaimSource>")
+    )]
     direct_claims: BTreeMap<String, DirectClaimSource>,
     #[serde(default)]
     actor_kind: Option<crate::contract::ActorKindSource>,
@@ -482,12 +679,24 @@ struct ClaimsSource {
     actor_subject: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(untagged)]
+impl ClaimsSource {
+    /// The authored scopes as a set, for comparison with a profile's.
+    fn scope_set(&self) -> BTreeSet<String> {
+        self.scopes.iter().cloned().collect()
+    }
+}
+
+#[derive(Clone)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(untagged))]
 enum DirectClaimSource {
     String(String),
     StringSet(Vec<String>),
 }
+shape_union!(DirectClaimSource {
+    scalar => String,
+    list => StringSet
+});
 
 impl DirectClaimSource {
     fn verified_value(&self) -> Result<VerifiedClaimValue, FixtureError> {
@@ -507,20 +716,29 @@ impl DirectClaimSource {
 }
 
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
 enum ExpectedOutcome {
     Success,
     Refusal,
 }
 
 #[derive(Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ExpectationSource {
     outcome: ExpectedOutcome,
+    #[serde(deserialize_with = "members::status")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU32<100, 599>"))]
     status: u16,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "members::http_object")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "members::http_object_schema")
+    )]
     fields: Map<String, Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "members::count")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<BoundedU32<0, 100>>"))]
     count: Option<usize>,
     #[serde(default)]
     problem_code: Option<String>,
@@ -530,6 +748,185 @@ struct ExpectationSource {
     entity_id: Option<String>,
     #[serde(default)]
     field_id: Option<String>,
+}
+
+impl ExpectationSource {
+    /// Copy the expected fields from the document, as
+    /// [`ActionSource::fill_bodies`] does for request bodies.
+    fn fill_bodies(&mut self, body: &dyn Fn(&str) -> Option<Value>) {
+        fill_object(&mut self.fields, body("/fields"));
+    }
+}
+
+fn fill_object(target: &mut Map<String, Value>, value: Option<Value>) {
+    if let Some(Value::Object(object)) = value {
+        *target = object;
+    }
+}
+
+/// Member decoders that read a value through a shared reader type and keep
+/// the field's own Rust type, so a refusal carries the reader's code and
+/// position (CFG-QTY-4, CFG-ID-1, CFG-ID-2, CFG-VAL-6).
+mod members {
+    use std::collections::BTreeMap;
+
+    use registry_platform_yaml::{BoundedU32, Digest, ExternalId, Invalid, LocalId};
+    use serde::de::IgnoredAny;
+    use serde::{Deserialize, Deserializer};
+    use serde_json::{Map, Value};
+
+    pub(super) fn local_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+        LocalId::deserialize(deserializer).map(LocalId::into_string)
+    }
+
+    pub(super) fn optional_local_id<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<String>, D::Error> {
+        local_id(deserializer).map(Some)
+    }
+
+    pub(super) fn local_id_map<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<String, String>, D::Error> {
+        let map = BTreeMap::<LocalId, LocalId>::deserialize(deserializer)?;
+        Ok(map
+            .into_iter()
+            .map(|(key, value)| (key.into_string(), value.into_string()))
+            .collect())
+    }
+
+    pub(super) fn external_id_map<'de, D: Deserializer<'de>, V: Deserialize<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<String, V>, D::Error> {
+        let map = BTreeMap::<ExternalId, V>::deserialize(deserializer)?;
+        Ok(map
+            .into_iter()
+            .map(|(key, value)| (key.into_string(), value))
+            .collect())
+    }
+
+    pub(super) fn status<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
+        let status = BoundedU32::<100, 599>::deserialize(deserializer)?;
+        u16::try_from(status.get()).map_err(|_| Invalid::out_of_range(100, 599).into_error())
+    }
+
+    pub(super) fn count<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<usize>, D::Error> {
+        let count = BoundedU32::<0, 100>::deserialize(deserializer)?;
+        usize::try_from(count.get())
+            .map(Some)
+            .map_err(|_| Invalid::out_of_range(0, 100).into_error())
+    }
+
+    pub(super) fn top<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u16>, D::Error> {
+        let top = BoundedU32::<1, 100>::deserialize(deserializer)?;
+        u16::try_from(top.get())
+            .map(Some)
+            .map_err(|_| Invalid::out_of_range(1, 100).into_error())
+    }
+
+    pub(super) fn postgres_major<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<u16, D::Error> {
+        const MIN: u32 = super::MIN_SUPPORTED_POSTGRES_MAJOR as u32;
+        const MAX: u32 = super::MAX_SUPPORTED_POSTGRES_MAJOR as u32;
+        let major = BoundedU32::<MIN, MAX>::deserialize(deserializer)?;
+        u16::try_from(major.get()).map_err(|_| Invalid::out_of_range(MIN, MAX).into_error())
+    }
+
+    pub(super) fn proposal_version<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u32>, D::Error> {
+        BoundedU32::<1, { u32::MAX }>::deserialize(deserializer).map(|version| Some(version.get()))
+    }
+
+    pub(super) fn digest<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<String>, D::Error> {
+        Digest::deserialize(deserializer).map(|digest| Some(digest.into_string()))
+    }
+
+    /// A request or expectation body: the reader checks that it is a
+    /// mapping, and the body itself is copied from the document afterwards
+    /// (see `ActionSource::fill_bodies`), because the registry's HTTP API
+    /// reads its members, null included.
+    pub(super) fn http_object<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Map<String, Value>, D::Error> {
+        BTreeMap::<String, IgnoredAny>::deserialize(deserializer)?;
+        Ok(Map::new())
+    }
+
+    pub(super) fn http_objects<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<Map<String, Value>>, D::Error> {
+        let items = Vec::<BTreeMap<String, IgnoredAny>>::deserialize(deserializer)?;
+        Ok(vec![Map::new(); items.len()])
+    }
+
+    pub(super) fn http_value<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Value, D::Error> {
+        IgnoredAny::deserialize(deserializer)?;
+        Ok(Value::Null)
+    }
+
+    #[cfg(feature = "schema")]
+    const HTTP_BODY: &str = "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.";
+
+    #[cfg(feature = "schema")]
+    pub(super) fn http_object_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "description": HTTP_BODY,
+            "x-registry-foreign": "breg-http-api",
+        })
+    }
+
+    #[cfg(feature = "schema")]
+    pub(super) fn http_objects_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "description": HTTP_BODY,
+                "x-registry-foreign": "breg-http-api",
+            },
+        })
+    }
+
+    #[cfg(feature = "schema")]
+    pub(super) fn http_value_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": HTTP_BODY,
+            "x-registry-foreign": "breg-http-api",
+        })
+    }
+
+    #[cfg(feature = "schema")]
+    pub(super) fn local_id_map_schema(
+        generator: &mut schemars::SchemaGenerator,
+    ) -> schemars::Schema {
+        let names = generator.subschema_for::<LocalId>();
+        schemars::json_schema!({
+            "type": "object",
+            "propertyNames": names,
+            "additionalProperties": generator.subschema_for::<LocalId>(),
+        })
+    }
+
+    #[cfg(feature = "schema")]
+    pub(super) fn external_id_map_schema<V: schemars::JsonSchema>(
+        generator: &mut schemars::SchemaGenerator,
+    ) -> schemars::Schema {
+        let names = generator.subschema_for::<ExternalId>();
+        schemars::json_schema!({
+            "type": "object",
+            "propertyNames": names,
+            "additionalProperties": generator.subschema_for::<V>(),
+        })
+    }
 }
 
 /// A complete journey suite that has been resolved against one exact compiled
@@ -630,8 +1027,100 @@ struct CaptureSource {
     condition_map: bool,
 }
 
+/// Read a journeys document through the shared reader: the envelope, every
+/// unknown or renamed key, and each member's grammar, reported with its
+/// position and never with an authored value. Request and expectation bodies
+/// are then copied from the document, because the registry's HTTP API, not
+/// this format, reads their members.
+fn read_journey_document(bytes: &[u8]) -> Result<JourneyDocument, FixtureError> {
+    let decoded = registry_platform_yaml::Reader::new(FIXTURE_JOURNEYS_PATH)
+        .with_hook(&mut LiteralText {
+            remedy: WRITE_THE_VALUE,
+        })
+        .decode::<JourneyDocument>(bytes, &Expect::one(&JOURNEYS_FORMAT))
+        .map_err(FixtureError::JourneyDocument)?;
+    let root = decoded.document.root();
+    let mut document = decoded.value;
+    for (journey_index, journey) in document.journeys.iter_mut().enumerate() {
+        for (step_index, step) in journey.steps.iter_mut().enumerate() {
+            let step_pointer = format!("/journeys/{journey_index}/steps/{step_index}");
+            let request = |pointer: &str| {
+                root.pointer(&format!("{step_pointer}/request{pointer}"))
+                    .map(Node::to_json_value)
+            };
+            step.request.fill_bodies(&request);
+            let expect = |pointer: &str| {
+                root.pointer(&format!("{step_pointer}/expect{pointer}"))
+                    .map(Node::to_json_value)
+            };
+            step.expect.fill_bodies(&expect);
+        }
+    }
+    Ok(document)
+}
+
+/// Decode a journeys document a caller already read through the shared
+/// reader: every unknown key and each member's grammar, reported under the
+/// name the caller read it by. The references are resolved by
+/// [`validate_fixture_journeys`].
+pub fn check_journeys_document(document: &registry_platform_yaml::Document) -> Result<(), Report> {
+    document.decode::<JourneyDocument>().map(|_| ())
+}
+
+/// One journey step's identity, the access profile it runs under, and the
+/// caller claims it asks for.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JourneyStepProfile {
+    pub journey_id: String,
+    pub step_id: String,
+    pub access_profile: String,
+    /// The step's `claims.scopes`, or `None` when it writes no `scopes`.
+    pub scopes: Option<Vec<String>>,
+    /// The step's `claims.purpose`.
+    pub purpose: Option<String>,
+}
+
+/// Read the steps of a journeys document through the shared reader, without
+/// resolving them against a registry, so local tooling can bind each step to
+/// a client by its profile.
+pub fn journey_step_profiles(bytes: &[u8]) -> Result<Vec<JourneyStepProfile>, FixtureError> {
+    if bytes.is_empty() || bytes.len() > MAX_JOURNEY_FILE_BYTES {
+        return Err(FixtureError::JourneyTooLarge);
+    }
+    let decoded = registry_platform_yaml::Reader::new(FIXTURE_JOURNEYS_PATH)
+        .with_hook(&mut LiteralText {
+            remedy: WRITE_THE_VALUE,
+        })
+        .decode::<JourneyDocument>(bytes, &Expect::one(&JOURNEYS_FORMAT))
+        .map_err(FixtureError::JourneyDocument)?;
+    let root = decoded.document.root();
+    let mut profiles = Vec::new();
+    for (journey_index, journey) in decoded.value.journeys.into_iter().enumerate() {
+        for (step_index, step) in journey.steps.into_iter().enumerate() {
+            let claims = root
+                .pointer(&format!(
+                    "/journeys/{journey_index}/steps/{step_index}/claims"
+                ))
+                .map(Node::to_json_value);
+            let declares_scopes = claims
+                .as_ref()
+                .and_then(Value::as_object)
+                .is_some_and(|claims| claims.contains_key("scopes"));
+            profiles.push(JourneyStepProfile {
+                journey_id: journey.id.clone(),
+                step_id: step.id,
+                access_profile: step.access_profile,
+                scopes: declares_scopes.then(|| step.claims.scopes.into_vec()),
+                purpose: step.claims.purpose,
+            });
+        }
+    }
+    Ok(profiles)
+}
+
 /// Parse and resolve all journey references before any request executor is
-/// called. YAML errors are deliberately collapsed into a value-free refusal.
+/// called. A document the reader refuses carries the reader's diagnostics;
+/// later refusals name a journey or a step and no authored value.
 pub fn validate_fixture_journeys(
     bytes: &[u8],
     registry: &CompiledRegistry,
@@ -639,22 +1128,7 @@ pub fn validate_fixture_journeys(
     if bytes.is_empty() || bytes.len() > MAX_JOURNEY_FILE_BYTES {
         return Err(FixtureError::JourneyTooLarge);
     }
-    let deserializer = serde_norway::Deserializer::from_slice(bytes);
-    let document: JourneyDocument =
-        serde_path_to_error::deserialize(deserializer).map_err(|error| {
-            let path = error.path().to_string();
-            FixtureError::JourneyShapeInvalid {
-                path: if path.is_empty() {
-                    "the journeys document".to_owned()
-                } else {
-                    path
-                },
-                message: redact_authored_values(&error.inner().to_string()),
-            }
-        })?;
-    if document.api_version != JOURNEY_API_VERSION {
-        return Err(FixtureError::JourneyVersionRefused);
-    }
+    let document = read_journey_document(bytes)?;
     if document.journeys.is_empty() || document.journeys.len() > MAX_JOURNEYS {
         return Err(FixtureError::JourneyBoundsRefused);
     }
@@ -964,31 +1438,31 @@ fn validate_action_references(
     step_entity: Option<&str>,
 ) -> Result<(), FixtureError> {
     let references: &[&str] = match action {
-        ActionSource::Get { record_ref } => &[record_ref],
-        ActionSource::ReadPath { record_ref, .. } => &[record_ref],
+        ActionSource::Get { record_capture } => &[record_capture],
+        ActionSource::ReadPath { record_capture, .. } => &[record_capture],
         ActionSource::Patch {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
             ..
-        } => &[record_ref, etag_ref],
+        } => &[record_capture, etag_capture],
         ActionSource::SubmitRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
         }
         | ActionSource::ReviseRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
             ..
         }
         | ActionSource::CancelRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
         }
         | ActionSource::ApplyRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
             ..
-        } => &[record_ref, etag_ref],
+        } => &[record_capture, etag_capture],
         ActionSource::Import { .. }
         | ActionSource::Create { .. }
         | ActionSource::List { .. }
@@ -1040,7 +1514,7 @@ fn validate_action_references(
     }
     if let ActionSource::Invoke { preconditions, .. } = action {
         for condition in preconditions.values() {
-            let Some(reference) = condition.condition_ref.as_deref() else {
+            let Some(reference) = condition.condition_capture.as_deref() else {
                 continue;
             };
             let Some(source) = captures.get(reference) else {
@@ -1067,11 +1541,11 @@ fn validate_action_references(
 
 fn etag_references(action: &ActionSource) -> Vec<&str> {
     match action {
-        ActionSource::Patch { etag_ref, .. }
-        | ActionSource::SubmitRequest { etag_ref, .. }
-        | ActionSource::ReviseRequest { etag_ref, .. }
-        | ActionSource::CancelRequest { etag_ref, .. }
-        | ActionSource::ApplyRequest { etag_ref, .. } => vec![etag_ref],
+        ActionSource::Patch { etag_capture, .. }
+        | ActionSource::SubmitRequest { etag_capture, .. }
+        | ActionSource::ReviseRequest { etag_capture, .. }
+        | ActionSource::CancelRequest { etag_capture, .. }
+        | ActionSource::ApplyRequest { etag_capture, .. } => vec![etag_capture],
         _ => Vec::new(),
     }
 }
@@ -1136,12 +1610,17 @@ fn collect_value_record_refs<'a>(
 ) -> Result<(), FixtureError> {
     match value {
         Value::Object(object) => {
-            if let Some(record_ref) = object.get("recordRef") {
+            if object.len() == 1 && object.contains_key("recordRef") {
+                return Err(FixtureError::LogicalReference(
+                    LogicalReferenceRefusal::RetiredRecordMarker,
+                ));
+            }
+            if let Some(record_capture) = object.get("recordCapture") {
                 if object.len() != 1 {
                     return Err(FixtureError::LogicalReferenceRefused);
                 }
                 references.push(
-                    record_ref
+                    record_capture
                         .as_str()
                         .ok_or(FixtureError::LogicalReferenceRefused)?,
                 );
@@ -1166,12 +1645,12 @@ fn collect_value_record_refs<'a>(
 fn request_action_proposal_refs(action: &ActionSource) -> Vec<&str> {
     match action {
         ActionSource::ApplyRequest {
-            proposal_version_ref,
-            effect_digest_ref,
+            proposal_version_capture,
+            effect_digest_capture,
             ..
-        } => proposal_version_ref
+        } => proposal_version_capture
             .iter()
-            .chain(effect_digest_ref.iter())
+            .chain(effect_digest_capture.iter())
             .map(String::as_str)
             .collect(),
         _ => Vec::new(),
@@ -1183,25 +1662,15 @@ fn validate_claims(
     profile: &AccessProfileSource,
     outcome: ExpectedOutcome,
 ) -> Result<(), FixtureError> {
-    if profile.anonymous {
-        if claims.principal.is_some()
-            || !claims.scopes.is_empty()
-            || claims.purpose.is_some()
-            || !claims.direct_claims.is_empty()
-            || claims.actor_kind.is_some()
-            || claims.requester_client.is_some()
-            || claims.actor_subject.is_some()
-        {
-            return Err(FixtureError::AuthorityWideningRefused);
-        }
-        return Ok(());
-    }
     if profile.principal_claim.is_none()
         || claims
             .principal
             .as_deref()
             .is_none_or(|value| value.is_empty() || value.len() > MAX_BINDING_BYTES)
-        || !claims.scopes.is_subset(&profile.required_scopes)
+        || !claims
+            .scopes
+            .iter()
+            .all(|scope| profile.required_scopes.contains(scope))
     {
         return Err(FixtureError::AuthorityWideningRefused);
     }
@@ -1240,7 +1709,7 @@ fn validate_claims(
     }
     if outcome == ExpectedOutcome::Success
         && (claims.principal.is_none()
-            || claims.scopes != profile.required_scopes
+            || claims.scope_set() != *profile.required_scopes
             || (!profile.required_purposes.is_empty() && claims.purpose.is_none())
             || boundary_claims
                 .iter()
@@ -1263,19 +1732,18 @@ fn action_profile_from_grant(grant: &CompiledActionPermission) -> AccessProfileS
     AccessProfileSource {
         id: grant.profile_id.clone(),
         default: grant.default,
-        anonymous: grant.anonymous,
         actor_kind: grant.actor_kind,
-        requester_clients: grant.requester_clients.clone(),
+        requester_clients: grant.requester_clients.clone().into(),
         task_grant: None,
         principal_claim: grant.principal_claim.clone(),
-        required_scopes: grant.required_scopes.clone(),
-        required_purposes: grant.required_purposes.clone(),
-        operations: grant.operations.clone(),
-        readable_fields: BTreeSet::new(),
+        required_scopes: grant.required_scopes.clone().into(),
+        required_purposes: grant.required_purposes.clone().into(),
+        operations: grant.operations.clone().into(),
+        readable_fields: Default::default(),
         readable_request_fields: Default::default(),
-        writable_fields: BTreeSet::new(),
-        filterable_fields: BTreeSet::new(),
-        sortable_fields: BTreeSet::new(),
+        writable_fields: Default::default(),
+        filterable_fields: Default::default(),
+        sortable_fields: Default::default(),
         spatial_queries: None,
         row_boundaries: grant
             .targets
@@ -1288,7 +1756,7 @@ fn action_profile_from_grant(grant: &CompiledActionPermission) -> AccessProfileS
         lookups: Vec::new(),
         read_paths: Vec::new(),
         apply_targets: Vec::new(),
-        submitter_targets: BTreeSet::new(),
+        submitter_targets: Default::default(),
         request_presence: Vec::new(),
         allow_count: false,
         revision_access: false,
@@ -1322,13 +1790,13 @@ fn validate_immediate_action_fields(
                 if !condition_inputs.contains(name) {
                     return Err(FixtureError::LogicalReferenceRefused);
                 }
-                if condition.if_match.is_some() == condition.condition_ref.is_some() {
+                if condition.if_match.is_some() == condition.condition_capture.is_some() {
                     return Err(FixtureError::LogicalReferenceRefused);
                 }
                 if let Some(tag) = condition.if_match.as_deref() {
                     validate_action_if_match(tag)?;
                 }
-                if let Some(reference) = condition.condition_ref.as_deref() {
+                if let Some(reference) = condition.condition_capture.as_deref() {
                     if !valid_stable_id(reference) {
                         return Err(FixtureError::LogicalReferenceRefused);
                     }
@@ -1413,7 +1881,7 @@ fn fixture_action_input_value_is_valid(
     if let crate::contract::FieldTypeSource::Reference { target, .. } = &declared.field_type {
         if let Some(reference) = value.as_object().and_then(|object| {
             (object.len() == 1)
-                .then(|| object.get("recordRef"))
+                .then(|| object.get("recordCapture"))
                 .flatten()
                 .and_then(Value::as_str)
         }) {
@@ -1713,8 +2181,8 @@ fn validate_request_action_plan(
 
 fn validate_request_action_proposal_binding(action: &ActionSource) -> Result<(), FixtureError> {
     let binding = request_action_binding(action)?;
-    if binding.proposal_version.is_some() == binding.proposal_version_ref.is_some()
-        || binding.effect_digest.is_some() == binding.effect_digest_ref.is_some()
+    if binding.proposal_version.is_some() == binding.proposal_version_capture.is_some()
+        || binding.effect_digest.is_some() == binding.effect_digest_capture.is_some()
         || binding.proposal_version == Some(0)
     {
         return Err(FixtureError::LogicalReferenceRefused);
@@ -1727,24 +2195,24 @@ fn validate_request_action_proposal_binding(action: &ActionSource) -> Result<(),
 
 struct RequestActionBinding<'a> {
     proposal_version: Option<u32>,
-    proposal_version_ref: Option<&'a str>,
+    proposal_version_capture: Option<&'a str>,
     effect_digest: Option<&'a str>,
-    effect_digest_ref: Option<&'a str>,
+    effect_digest_capture: Option<&'a str>,
 }
 
 fn request_action_binding(action: &ActionSource) -> Result<RequestActionBinding<'_>, FixtureError> {
     match action {
         ActionSource::ApplyRequest {
             proposal_version,
-            proposal_version_ref,
+            proposal_version_capture,
             effect_digest,
-            effect_digest_ref,
+            effect_digest_capture,
             ..
         } => Ok(RequestActionBinding {
             proposal_version: *proposal_version,
-            proposal_version_ref: proposal_version_ref.as_deref(),
+            proposal_version_capture: proposal_version_capture.as_deref(),
             effect_digest: effect_digest.as_deref(),
-            effect_digest_ref: effect_digest_ref.as_deref(),
+            effect_digest_capture: effect_digest_capture.as_deref(),
         }),
         _ => Err(FixtureError::LogicalReferenceRefused),
     }
@@ -1809,7 +2277,9 @@ fn validate_structured_query(
         if path.is_empty()
             || path.len() > MAX_IDENTIFIER_BYTES
             || (count && !grant.allow_count)
-            || !select.is_subset(&grant.readable_fields)
+            || !select
+                .iter()
+                .all(|field| grant.readable_fields.contains(field))
             || select
                 .iter()
                 .any(|field| !compiled_field_exists(target, field))
@@ -1942,15 +2412,15 @@ fn source_field_id(
 
 fn internalize_field_set(
     entity: &crate::model::CompiledEntity,
-    fields: &BTreeSet<String>,
-) -> Result<BTreeSet<String>, FixtureError> {
+    fields: &[String],
+) -> Result<UniqueList<String>, FixtureError> {
     let mut normalized = BTreeSet::new();
     for field in fields {
         if !normalized.insert(source_field_id(entity, field)?) {
             return Err(FixtureError::LogicalReferenceRefused);
         }
     }
-    Ok(normalized)
+    selected_fields(normalized)
 }
 
 fn internalize_data(
@@ -1982,8 +2452,8 @@ fn internalize_entity_action(
         ActionSource::Create { data } => ActionSource::Create {
             data: internalize_data(entity, data)?,
         },
-        ActionSource::Get { record_ref } => ActionSource::Get {
-            record_ref: record_ref.clone(),
+        ActionSource::Get { record_capture } => ActionSource::Get {
+            record_capture: record_capture.clone(),
         },
         ActionSource::List { .. } => ActionSource::List {},
         ActionSource::Query {
@@ -2003,7 +2473,7 @@ fn internalize_entity_action(
         },
         ActionSource::ReadPath {
             path,
-            record_ref,
+            record_capture,
             select,
             top,
             count,
@@ -2015,19 +2485,19 @@ fn internalize_entity_action(
                 .ok_or(FixtureError::LogicalReferenceRefused)?;
             ActionSource::ReadPath {
                 path: path.clone(),
-                record_ref: record_ref.clone(),
+                record_capture: record_capture.clone(),
                 select: internalize_field_set(target, select)?,
                 top: *top,
                 count: *count,
             }
         }
         ActionSource::Patch {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
             changes,
         } => ActionSource::Patch {
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
+            record_capture: record_capture.clone(),
+            etag_capture: etag_capture.clone(),
             changes: changes
                 .iter()
                 .map(|change| {
@@ -2049,42 +2519,42 @@ fn internalize_entity_action(
                 .collect::<Result<Vec<_>, FixtureError>>()?,
         },
         ActionSource::SubmitRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
         } => ActionSource::SubmitRequest {
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
+            record_capture: record_capture.clone(),
+            etag_capture: etag_capture.clone(),
         },
         ActionSource::ReviseRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
             rebase,
         } => ActionSource::ReviseRequest {
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
+            record_capture: record_capture.clone(),
+            etag_capture: etag_capture.clone(),
             rebase: *rebase,
         },
         ActionSource::CancelRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
         } => ActionSource::CancelRequest {
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
+            record_capture: record_capture.clone(),
+            etag_capture: etag_capture.clone(),
         },
         ActionSource::ApplyRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
             proposal_version,
-            proposal_version_ref,
+            proposal_version_capture,
             effect_digest,
-            effect_digest_ref,
+            effect_digest_capture,
         } => ActionSource::ApplyRequest {
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
+            record_capture: record_capture.clone(),
+            etag_capture: etag_capture.clone(),
             proposal_version: *proposal_version,
-            proposal_version_ref: proposal_version_ref.clone(),
+            proposal_version_capture: proposal_version_capture.clone(),
             effect_digest: effect_digest.clone(),
-            effect_digest_ref: effect_digest_ref.clone(),
+            effect_digest_capture: effect_digest_capture.clone(),
         },
         ActionSource::TargetConditions { .. } | ActionSource::Invoke { .. } => {
             return Err(FixtureError::LogicalReferenceRefused)
@@ -2124,12 +2594,12 @@ fn field_api_name<'a>(entity: &'a crate::model::CompiledEntity, field_id: &str) 
         .map(|field| field.api_name.as_str())
 }
 
-fn externalize_field_set(
+fn externalize_field_set<'a>(
     entity: &crate::model::CompiledEntity,
-    fields: &BTreeSet<String>,
+    fields: impl IntoIterator<Item = &'a String>,
 ) -> Result<BTreeSet<String>, FixtureError> {
     fields
-        .iter()
+        .into_iter()
         .map(|field| {
             entity
                 .attachments
@@ -2139,6 +2609,11 @@ fn externalize_field_set(
                 .ok_or(FixtureError::LogicalReferenceRefused)
         })
         .collect()
+}
+
+/// A selection as an ordered list of distinct fields.
+fn selected_fields(fields: BTreeSet<String>) -> Result<UniqueList<String>, FixtureError> {
+    UniqueList::new(fields.into_iter().collect()).map_err(|_| FixtureError::LogicalReferenceRefused)
 }
 
 fn externalize_data(
@@ -2169,8 +2644,8 @@ fn externalize_action(
         ActionSource::Create { data } => ActionSource::Create {
             data: externalize_data(entity, data)?,
         },
-        ActionSource::Get { record_ref } => ActionSource::Get {
-            record_ref: record_ref.clone(),
+        ActionSource::Get { record_capture } => ActionSource::Get {
+            record_capture: record_capture.clone(),
         },
         ActionSource::List { .. } => ActionSource::List {},
         ActionSource::Query {
@@ -2179,7 +2654,7 @@ fn externalize_action(
             count,
             bbox,
         } => ActionSource::Query {
-            select: externalize_field_set(entity, select)?,
+            select: selected_fields(externalize_field_set(entity, select.iter())?)?,
             top: *top,
             count: *count,
             bbox: bbox.clone(),
@@ -2190,7 +2665,7 @@ fn externalize_action(
         },
         ActionSource::ReadPath {
             path,
-            record_ref,
+            record_capture,
             select,
             top,
             count,
@@ -2202,19 +2677,19 @@ fn externalize_action(
                 .ok_or(FixtureError::LogicalReferenceRefused)?;
             ActionSource::ReadPath {
                 path: path.clone(),
-                record_ref: record_ref.clone(),
-                select: externalize_field_set(target, select)?,
+                record_capture: record_capture.clone(),
+                select: selected_fields(externalize_field_set(target, select.iter())?)?,
                 top: *top,
                 count: *count,
             }
         }
         ActionSource::Patch {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
             changes,
         } => ActionSource::Patch {
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
+            record_capture: record_capture.clone(),
+            etag_capture: etag_capture.clone(),
             changes: changes
                 .iter()
                 .map(|change| {
@@ -2250,42 +2725,42 @@ fn externalize_action(
             idempotency_key: idempotency_key.clone(),
         },
         ActionSource::SubmitRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
         } => ActionSource::SubmitRequest {
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
+            record_capture: record_capture.clone(),
+            etag_capture: etag_capture.clone(),
         },
         ActionSource::ReviseRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
             rebase,
         } => ActionSource::ReviseRequest {
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
+            record_capture: record_capture.clone(),
+            etag_capture: etag_capture.clone(),
             rebase: *rebase,
         },
         ActionSource::CancelRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
         } => ActionSource::CancelRequest {
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
+            record_capture: record_capture.clone(),
+            etag_capture: etag_capture.clone(),
         },
         ActionSource::ApplyRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
             proposal_version,
-            proposal_version_ref,
+            proposal_version_capture,
             effect_digest,
-            effect_digest_ref,
+            effect_digest_capture,
         } => ActionSource::ApplyRequest {
-            record_ref: record_ref.clone(),
-            etag_ref: etag_ref.clone(),
+            record_capture: record_capture.clone(),
+            etag_capture: etag_capture.clone(),
             proposal_version: *proposal_version,
-            proposal_version_ref: proposal_version_ref.clone(),
+            proposal_version_capture: proposal_version_capture.clone(),
             effect_digest: effect_digest.clone(),
-            effect_digest_ref: effect_digest_ref.clone(),
+            effect_digest_capture: effect_digest_capture.clone(),
         },
     })
 }
@@ -2710,7 +3185,7 @@ impl PostgresFixtureTestRunner {
             .bearer_tokens
             .get(self.bearer_index)
             .ok_or(FixtureError::ExecutionRefused)?;
-        fixture_request(&journey.id, step, &self.observations, Some(bearer)).map(Some)
+        fixture_request(&journey.id, step, &self.observations, bearer).map(Some)
     }
 
     /// Execute every validated journey through the captured Registry router.
@@ -2823,7 +3298,7 @@ impl CompletedPostgresFixtureTest {
 pub struct SchemaTestCredentialBinding {
     journey_id: String,
     step_id: String,
-    bearer_token: Option<Zeroizing<String>>,
+    bearer_token: Zeroizing<String>,
 }
 
 impl SchemaTestCredentialBinding {
@@ -2835,15 +3310,7 @@ impl SchemaTestCredentialBinding {
         Self {
             journey_id: journey_id.into(),
             step_id: step_id.into(),
-            bearer_token: Some(bearer_token),
-        }
-    }
-
-    pub fn anonymous(journey_id: impl Into<String>, step_id: impl Into<String>) -> Self {
-        Self {
-            journey_id: journey_id.into(),
-            step_id: step_id.into(),
-            bearer_token: None,
+            bearer_token,
         }
     }
 }
@@ -2854,8 +3321,7 @@ impl fmt::Debug for SchemaTestCredentialBinding {
             .debug_struct("SchemaTestCredentialBinding")
             .field("journey_id", &self.journey_id)
             .field("step_id", &self.step_id)
-            .field("has_bearer_token", &self.bearer_token.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -2866,8 +3332,8 @@ pub struct SchemaTestCredentialBindings {
 
 impl SchemaTestCredentialBindings {
     /// Close the credential inventory against one exact validated suite before
-    /// any database preparation is necessary. Protected steps require one
-    /// bearer value and anonymous steps require an explicit anonymous binding.
+    /// any database preparation is necessary. Every step requires one bearer
+    /// value: the registry serves authenticated callers only.
     pub fn new(
         suite: &ValidatedFixtureJourneys,
         bindings: Vec<SchemaTestCredentialBinding>,
@@ -2879,12 +3345,10 @@ impl SchemaTestCredentialBindings {
 
     fn validate(&self, suite: &ValidatedFixtureJourneys) -> Result<(), FixtureError> {
         let expected = suite.journeys.iter().flat_map(|journey| {
-            journey.steps.iter().map(move |step| {
-                (
-                    (journey.id.as_str(), step.id.as_str()),
-                    step.profile.anonymous,
-                )
-            })
+            journey
+                .steps
+                .iter()
+                .map(move |step| (journey.id.as_str(), step.id.as_str()))
         });
         if self.bindings.len() > MAX_TOTAL_STEPS {
             return Err(FixtureError::JourneyBoundsRefused);
@@ -2892,22 +3356,16 @@ impl SchemaTestCredentialBindings {
         if self.bindings.len() != expected.clone().count() {
             return Err(FixtureError::RequestConstructionRefused);
         }
-        let expected = expected.collect::<BTreeMap<_, _>>();
+        let expected = expected.collect::<BTreeSet<_>>();
         let mut actual = BTreeSet::new();
         for binding in &self.bindings {
             if !valid_stable_id(&binding.journey_id) || !valid_stable_id(&binding.step_id) {
                 return Err(FixtureError::RequestConstructionRefused);
             }
             let key = (binding.journey_id.as_str(), binding.step_id.as_str());
-            let Some(anonymous) = expected.get(&key) else {
-                return Err(FixtureError::RequestConstructionRefused);
-            };
-            if !actual.insert(key)
-                || match (*anonymous, binding.bearer_token.as_ref()) {
-                    (true, None) => false,
-                    (false, Some(token)) => !valid_bearer_token(token),
-                    (true, Some(_)) | (false, None) => true,
-                }
+            if !expected.contains(&key)
+                || !actual.insert(key)
+                || !valid_bearer_token(&binding.bearer_token)
             {
                 return Err(FixtureError::RequestConstructionRefused);
             }
@@ -3027,19 +3485,11 @@ async fn execute_schema_test_with_key_source(
             let bearer = credential_map
                 .get(&(journey.id.clone(), step.id.clone()))
                 .ok_or_else(|| step_failure(FixtureError::RequestConstructionRefused))?;
-            match (step.profile.anonymous, bearer.as_ref()) {
-                (true, None) => {}
-                (true, Some(_)) | (false, None) => {
-                    return Err(step_failure(FixtureError::RequestConstructionRefused));
-                }
-                (false, Some(token)) => {
-                    runtime
-                        .authenticate_exact(step, token.as_str())
-                        .await
-                        .map_err(&step_failure)?;
-                }
-            }
-            let bearer_token = bearer.as_ref().map(|token| token.as_str());
+            runtime
+                .authenticate_exact(step, bearer.as_str())
+                .await
+                .map_err(&step_failure)?;
+            let bearer_token = bearer.as_str();
             let response = if matches!(step.action, ActionSource::Import { .. }) {
                 runtime
                     .execute_import(step, &observations, bearer_token)
@@ -3265,12 +3715,11 @@ impl SchemaTestRuntime {
         &mut self,
         step: &ValidatedStep,
         observations: &BTreeMap<String, Observation>,
-        bearer_token: Option<&str>,
+        token: &str,
     ) -> Result<Response<Body>, FixtureError> {
         let ActionSource::Import { items } = &step.action else {
             return Err(FixtureError::RequestConstructionRefused);
         };
-        let token = bearer_token.ok_or(FixtureError::RequestConstructionRefused)?;
         let mut input = Vec::new();
         for item in items {
             let data = resolve_fixture_value_refs(&Value::Object(item.clone()), observations)?;
@@ -3438,7 +3887,7 @@ fn assert_exact_claims(
     mapped: &VerifiedRequestClaims,
     scopes: &BTreeSet<String>,
 ) -> Result<(), FixtureError> {
-    if scopes != &claims.scopes
+    if scopes != &claims.scope_set()
         || mapped.principal_claim() != profile.principal_claim.as_deref()
         || mapped.principal() != claims.principal.as_deref()
         || mapped.purpose() != claims.purpose.as_deref()
@@ -3550,7 +3999,7 @@ fn fixture_request(
     journey_id: &str,
     step: &ValidatedStep,
     observations: &BTreeMap<String, Observation>,
-    bearer_token: Option<&str>,
+    bearer_token: &str,
 ) -> Result<Request<Body>, FixtureError> {
     let mut path = step.route.path().to_owned();
     let mut method = Method::GET;
@@ -3570,8 +4019,8 @@ fn fixture_request(
             )?}))?;
             content_type = Some("application/json");
         }
-        ActionSource::Get { record_ref } => {
-            let record_id = observed_record_id(observations, record_ref)?;
+        ActionSource::Get { record_capture } => {
+            let record_id = observed_record_id(observations, record_capture)?;
             path = path.replace("{record_id}", record_id);
         }
         ActionSource::List { .. } => {}
@@ -3596,23 +4045,23 @@ fn fixture_request(
         }
         ActionSource::ReadPath {
             path: read_path,
-            record_ref,
+            record_capture,
             select,
             top,
             count,
         } => {
-            let record_id = observed_record_id(observations, record_ref)?;
+            let record_id = observed_record_id(observations, record_capture)?;
             path = path.replace("{record_id}", record_id);
             extra_query_options =
                 fixture_query_options(step, Some(read_path), select, *top, *count, None)?;
         }
         ActionSource::Patch {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
             changes,
         } => {
-            let record_id = observed_record_id(observations, record_ref)?;
-            let etag = observed_etag(observations, etag_ref)?;
+            let record_id = observed_record_id(observations, record_capture)?;
+            let etag = observed_etag(observations, etag_capture)?;
             path = path.replace("{record_id}", record_id);
             method = Method::PATCH;
             body = json_body(&Value::Array(
@@ -3639,26 +4088,26 @@ fn fixture_request(
             content_type = Some("application/json");
         }
         ActionSource::SubmitRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
         }
         | ActionSource::ReviseRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
             ..
         }
         | ActionSource::CancelRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
         }
         | ActionSource::ApplyRequest {
-            record_ref,
-            etag_ref,
+            record_capture,
+            etag_capture,
             ..
         } => {
-            let record_id = observed_record_id(observations, record_ref)?;
+            let record_id = observed_record_id(observations, record_capture)?;
             let action_if_match =
-                captured_request_action_if_match(observations, etag_ref, &step.action)?;
+                captured_request_action_if_match(observations, etag_capture, &step.action)?;
             path = path.replace("{record_id}", record_id);
             method = Method::POST;
             body = json_body(&request_action_body(&step.action, observations)?)?;
@@ -3758,33 +4207,28 @@ fn fixture_request(
                 .map_err(|_| FixtureError::RequestConstructionRefused)?,
         );
     }
-    if let Some(token) = bearer_token {
-        request.headers_mut().insert(
-            AUTHORIZATION,
-            format!("Bearer {token}")
-                .parse()
-                .map_err(|_| FixtureError::RequestConstructionRefused)?,
-        );
-    } else {
-        request.extensions_mut().insert(verified_claims(step)?);
-    }
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        format!("Bearer {bearer_token}")
+            .parse()
+            .map_err(|_| FixtureError::RequestConstructionRefused)?,
+    );
     Ok(request)
 }
 
 fn fixture_query_options(
     step: &ValidatedStep,
     _read_path: Option<&str>,
-    select: &BTreeSet<String>,
+    select: &[String],
     top: Option<u16>,
     count: bool,
     bbox: Option<&BboxSource>,
 ) -> Result<Vec<(&'static str, String)>, FixtureError> {
     let mut parameters = Vec::new();
     if !select.is_empty() {
-        parameters.push((
-            "$select",
-            select.iter().cloned().collect::<Vec<_>>().join(","),
-        ));
+        let mut fields = select.to_vec();
+        fields.sort();
+        parameters.push(("$select", fields.join(",")));
     }
     if let Some(top) = top {
         parameters.push(("$top", top.to_string()));
@@ -3868,12 +4312,12 @@ fn request_action_body(
         ActionSource::ReviseRequest { rebase, .. } => Ok(json!({"rebase": *rebase})),
         ActionSource::ApplyRequest { .. } => {
             let binding = request_action_binding(action)?;
-            let version = match (binding.proposal_version, binding.proposal_version_ref) {
+            let version = match (binding.proposal_version, binding.proposal_version_capture) {
                 (Some(version), None) => version,
                 (None, Some(reference)) => captured_proposal_version(observations, reference)?,
                 _ => return Err(FixtureError::RequestConstructionRefused),
             };
-            let digest = match (binding.effect_digest, binding.effect_digest_ref) {
+            let digest = match (binding.effect_digest, binding.effect_digest_capture) {
                 (Some(digest), None) => digest.to_owned(),
                 (None, Some(reference)) => captured_effect_digest(observations, reference)?,
                 _ => return Err(FixtureError::RequestConstructionRefused),
@@ -3897,7 +4341,7 @@ fn immediate_action_preconditions_body(
         .map(|(input_api_name, condition)| {
             let if_match = match (
                 condition.if_match.as_deref(),
-                condition.condition_ref.as_deref(),
+                condition.condition_capture.as_deref(),
             ) {
                 (Some(value), None) => {
                     validate_action_if_match(value)?;
@@ -3995,60 +4439,6 @@ fn captured_effect_digest(
     Ok(digest.to_owned())
 }
 
-fn verified_claims(step: &ValidatedStep) -> Result<VerifiedRequestClaims, FixtureError> {
-    if step.profile.anonymous {
-        return Ok(VerifiedRequestClaims::anonymous());
-    }
-    let principal_claim = step
-        .profile
-        .principal_claim
-        .as_deref()
-        .ok_or(FixtureError::RequestConstructionRefused)?;
-    let principal = step
-        .claims
-        .principal
-        .as_deref()
-        .ok_or(FixtureError::RequestConstructionRefused)?;
-    let direct_claims = step
-        .claims
-        .direct_claims
-        .iter()
-        .map(|(name, value)| {
-            value
-                .verified_value()
-                .map(|value| (name.clone(), value))
-                .map_err(|_| FixtureError::RequestConstructionRefused)
-        })
-        .collect::<Result<BTreeMap<_, _>, _>>()?;
-    let actor_kind = match (step.profile.actor_kind, step.claims.actor_kind) {
-        (None, None) => registry_platform_oidc::ActorKind::Service,
-        (Some(expected), Some(actual)) if expected == actual => match actual {
-            crate::contract::ActorKindSource::Human => registry_platform_oidc::ActorKind::Human,
-            crate::contract::ActorKindSource::Agent => registry_platform_oidc::ActorKind::Agent,
-            crate::contract::ActorKindSource::Service => registry_platform_oidc::ActorKind::Service,
-        },
-        _ => return Err(FixtureError::RequestConstructionRefused),
-    };
-    VerifiedRequestClaims::authenticated_with_actor_kind(
-        principal_claim,
-        principal,
-        step.claims.scopes.clone(),
-        step.claims.purpose.clone(),
-        direct_claims,
-        actor_kind,
-    )
-    .and_then(|claims_context| {
-        claims_context.with_contextual_authority(
-            Some(actor_kind),
-            step.claims.requester_client.clone(),
-            step.claims.actor_subject.clone(),
-            None,
-            BTreeMap::new(),
-        )
-    })
-    .map_err(|_| FixtureError::RequestConstructionRefused)
-}
-
 async fn accept_response(
     step: &ValidatedStep,
     response: Response<Body>,
@@ -4140,10 +4530,10 @@ async fn capture_request_results(
     observations: &mut BTreeMap<String, Observation>,
     pool: &RuntimePool,
 ) -> Result<(), FixtureError> {
-    let ActionSource::ApplyRequest { record_ref, .. } = &step.action else {
+    let ActionSource::ApplyRequest { record_capture, .. } = &step.action else {
         return Err(FixtureError::ResponseShapeRefused);
     };
-    let request_id = observed_record_id(observations, record_ref)?;
+    let request_id = observed_record_id(observations, record_capture)?;
     if document.get("id").and_then(Value::as_str) != Some(request_id) {
         return Err(FixtureError::ResponseShapeRefused);
     }
@@ -5452,10 +5842,15 @@ impl fmt::Debug for ValidatedSchemaTestCandidate {
     }
 }
 
+/// The receipt `bregctl test` writes after every journey passed. The shared
+/// reader checks and removes the header before the members are decoded, so
+/// the header members are written from the format and never read.
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SchemaTestReceipt {
+    #[serde(skip_deserializing, default = "receipt_api_version")]
     api_version: String,
+    #[serde(skip_deserializing, default = "receipt_kind")]
     kind: String,
     registry_revision: String,
     project_source_revision: String,
@@ -5464,6 +5859,7 @@ pub struct SchemaTestReceipt {
     prior_package_digest: Option<String>,
     source_closure_sha256: String,
     migration_plan_sha256: String,
+    #[serde(deserialize_with = "members::postgres_major")]
     postgres_major: u16,
     target_managed_schema_fingerprint: String,
     successful_journey_ids: Vec<String>,
@@ -5491,6 +5887,42 @@ impl SchemaTestReceipt {
     pub fn successful_journey_ids(&self) -> &[String] {
         &self.successful_journey_ids
     }
+
+    pub fn registry_revision(&self) -> &str {
+        &self.registry_revision
+    }
+
+    pub fn project_source_revision(&self) -> &str {
+        &self.project_source_revision
+    }
+
+    pub fn prior_package_digest(&self) -> Option<&str> {
+        self.prior_package_digest.as_deref()
+    }
+
+    pub fn source_closure_sha256(&self) -> &str {
+        &self.source_closure_sha256
+    }
+
+    pub fn migration_plan_sha256(&self) -> &str {
+        &self.migration_plan_sha256
+    }
+
+    pub fn target_managed_schema_fingerprint(&self) -> &str {
+        &self.target_managed_schema_fingerprint
+    }
+
+    pub fn journey_file_sha256(&self) -> &str {
+        &self.journey_file_sha256
+    }
+}
+
+fn receipt_api_version() -> String {
+    RECEIPT_API_VERSION.to_owned()
+}
+
+fn receipt_kind() -> String {
+    RECEIPT_KIND.to_owned()
 }
 
 /// Build a receipt only from the unforgeable all-success token and exact
@@ -5555,22 +5987,66 @@ pub fn validate_schema_test_receipt_for_package(
 }
 
 fn parse_canonical_schema_test_receipt(bytes: &[u8]) -> Result<SchemaTestReceipt, FixtureError> {
-    if bytes.is_empty() || bytes.len() > MAX_RECEIPT_BYTES {
-        return Err(FixtureError::ReceiptShapeRefused);
-    }
-    let value = parse_json_strict(bytes).map_err(|_| FixtureError::ReceiptShapeRefused)?;
-    let canonical = canonicalize_json(&value).map_err(|_| FixtureError::ReceiptShapeRefused)?;
-    if canonical != bytes {
-        return Err(FixtureError::ReceiptShapeRefused);
-    }
-    let receipt: SchemaTestReceipt =
-        serde_json::from_value(value).map_err(|_| FixtureError::ReceiptShapeRefused)?;
+    let receipt = read_schema_test_receipt(RECEIPT_FILE, bytes)?;
     if !(MIN_SUPPORTED_POSTGRES_MAJOR..=MAX_SUPPORTED_POSTGRES_MAJOR)
         .contains(&receipt.postgres_major)
     {
         return Err(FixtureError::ReceiptBindingRefused);
     }
     Ok(receipt)
+}
+
+/// The name `bregctl test` gives the receipt it writes.
+pub const RECEIPT_FILE: &str = "schema-test-receipt.json";
+const RECEIPT_REWRITE_ACTION: &str =
+    "Run `bregctl test` again to write the receipt; do not edit it by hand.";
+
+/// Read a schema-test receipt through the shared reader, naming it `file` in
+/// diagnostics. A receipt is the canonical JSON `bregctl test` wrote, so the
+/// reader's diagnostics come first and bytes in any other layout are then
+/// refused at the document's start; no member is compared with a candidate
+/// here.
+pub fn read_schema_test_receipt(
+    file: &str,
+    bytes: &[u8],
+) -> Result<SchemaTestReceipt, FixtureError> {
+    if bytes.len() > MAX_RECEIPT_BYTES {
+        let mut diagnostic = Diagnostic::error(
+            "breg.receipt.too-large",
+            "",
+            format!(
+                "the schema-test receipt is larger than {} KiB",
+                MAX_RECEIPT_BYTES / 1024
+            ),
+            RECEIPT_REWRITE_ACTION,
+        );
+        diagnostic.artifact = Some(RECEIPT_KIND.to_owned());
+        diagnostic.source = Some(Source {
+            file: file.to_owned(),
+            line: None,
+            column: None,
+        });
+        return Err(FixtureError::ReceiptDocument(Report::new(vec![diagnostic])));
+    }
+    let decoded = registry_platform_yaml::Reader::new(file)
+        .decode::<SchemaTestReceipt>(bytes, &Expect::one(&SCHEMA_TEST_RECEIPT_FORMAT))
+        .map_err(FixtureError::ReceiptDocument)?;
+    let canonical = decoded
+        .value
+        .canonical_bytes()
+        .map_err(|_| FixtureError::ReceiptShapeRefused)?;
+    if canonical != bytes {
+        return Err(FixtureError::ReceiptDocument(Report::new(vec![decoded
+            .document
+            .diagnostic_at_value(
+                Severity::Error,
+                "breg.receipt.not-canonical",
+                "",
+                "the schema-test receipt is not laid out as the canonical JSON `bregctl test` writes",
+                RECEIPT_REWRITE_ACTION,
+            )])));
+    }
+    Ok(decoded.value)
 }
 
 fn receipt_for_candidate(
@@ -6383,6 +6859,10 @@ fn encoded_sha256(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
+    )]
     use super::*;
 
     use crate::compiler::module_digest;
@@ -6391,14 +6871,22 @@ mod tests {
         PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
     };
 
+    /// A request decoded the way the journeys reader decodes one: the shape
+    /// first, then each HTTP body read from the authored value.
+    fn action_from_json(value: Value) -> Result<ActionSource, serde_json::Error> {
+        let mut action: ActionSource = serde_json::from_value(value.clone())?;
+        action.fill_bodies(&|pointer| value.pointer(pointer).cloned());
+        Ok(action)
+    }
+
     #[test]
     fn fixture_request_actions_expose_only_source_owned_lifecycle_operations() {
-        for operation in ["approve_request", "reject_request", "request_revision"] {
-            let source = json!({"operation":operation, "stage":"review", "recordRef":"record", "etagRef":"record", "proposalVersion":1, "effectDigest":format!("sha256:{}", "a".repeat(64))});
-            assert!(serde_json::from_value::<ActionSource>(source).is_err());
+        for operation in ["approve-request", "reject-request", "request-revision"] {
+            let source = json!({"type":operation, "stage":"review", "recordCapture":"record", "etagCapture":"record", "proposalVersion":1, "effectDigest":format!("sha256:{}", "a".repeat(64))});
+            assert!(action_from_json(source).is_err());
         }
-        let action: ActionSource = serde_json::from_value(json!({
-            "operation":"apply_request", "recordRef":"record", "etagRef":"record",
+        let action = action_from_json(json!({
+            "type":"apply-request", "recordCapture":"record", "etagCapture":"record",
             "proposalVersion":1,
             "effectDigest":format!("sha256:{}", "a".repeat(64))
         }))
@@ -6411,11 +6899,12 @@ mod tests {
 
     #[test]
     fn fixture_import_is_a_bounded_success_operation() {
-        let action: ActionSource = serde_json::from_value(json!({
-            "operation": "import",
+        let action = action_from_json(json!({
+            "type": "import",
             "items": [{"code": "AA"}, {"code": "BB"}]
         }))
         .unwrap();
+        assert!(matches!(&action, ActionSource::Import { items } if items[1]["code"] == "BB"));
         assert_eq!(action.operation(), Operation::Import);
         assert_eq!(action.route_id("country"), "records.country.import");
         let profile: AccessProfileSource = serde_json::from_value(json!({
@@ -6605,7 +7094,7 @@ mod tests {
             VerifiedRequestClaims::authenticated(
                 "registry_principal",
                 "fixture-registrar",
-                claims.scopes.clone(),
+                claims.scope_set(),
                 claims.purpose.clone(),
                 direct,
             )
@@ -6613,7 +7102,7 @@ mod tests {
         };
         let exact = mapped(&["owner-a", "owner-b"], true);
         assert_eq!(
-            assert_exact_claims(&claims, &profile, &exact, &claims.scopes),
+            assert_exact_claims(&claims, &profile, &exact, &claims.scope_set()),
             Ok(())
         );
         for mismatched in [
@@ -6622,14 +7111,14 @@ mod tests {
             mapped(&["owner-a", "owner-b"], false),
         ] {
             assert_eq!(
-                assert_exact_claims(&claims, &profile, &mismatched, &claims.scopes),
+                assert_exact_claims(&claims, &profile, &mismatched, &claims.scope_set()),
                 Err(FixtureError::AuthorityWideningRefused)
             );
         }
         let mut undeclared = claims.clone();
         undeclared.direct_claims.remove("district");
         assert_eq!(
-            assert_exact_claims(&undeclared, &profile, &exact, &claims.scopes),
+            assert_exact_claims(&undeclared, &profile, &exact, &claims.scope_set()),
             Err(FixtureError::AuthorityWideningRefused)
         );
         let widened_scopes =
@@ -6730,7 +7219,7 @@ mod tests {
         let mapped = VerifiedRequestClaims::authenticated(
             "registry_principal",
             "fixture-recipient",
-            claims.scopes.clone(),
+            claims.scope_set(),
             None,
             BTreeMap::new(),
         )
@@ -6745,29 +7234,8 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            assert_exact_claims(&claims, &profile, &mapped, &claims.scopes),
+            assert_exact_claims(&claims, &profile, &mapped, &claims.scope_set()),
             Ok(())
-        );
-    }
-
-    #[test]
-    fn fixture_claims_use_a_service_actor_only_for_actor_neutral_profiles() {
-        let fixture = package_fixture(DIGEST_A);
-        let suite = validate_fixture_journeys(JOURNEY_SOURCE, fixture.package.registry())
-            .expect("strict suite validates");
-        let step = &suite.journeys[0].steps[0];
-        assert_eq!(
-            verified_claims(step)
-                .expect("actor-neutral fixture claims construct")
-                .actor_kind(),
-            Some(registry_platform_oidc::ActorKind::Service)
-        );
-
-        let mut actor_bound = step.clone();
-        actor_bound.profile.actor_kind = Some(crate::contract::ActorKindSource::Agent);
-        assert_eq!(
-            verified_claims(&actor_bound).unwrap_err(),
-            FixtureError::RequestConstructionRefused
         );
     }
 
@@ -6780,7 +7248,8 @@ mod tests {
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const DIGEST_B: &str =
         "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const RHAI_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+    const RHAI_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: list-people
     steps:
@@ -6788,7 +7257,7 @@ journeys:
         entity: person
         accessProfile: person-operator
         claims: {principal: fixture-operator, purpose: person-maintenance}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 
@@ -6872,25 +7341,11 @@ journeys:
         );
 
         let mut missing_bearer = exact();
-        missing_bearer[0] =
-            SchemaTestCredentialBinding::anonymous("widget-lifecycle", "create-widget");
+        missing_bearer.remove(0);
         assert_eq!(
             SchemaTestCredentialBindings::new(&suite, missing_bearer).unwrap_err(),
             FixtureError::RequestConstructionRefused
         );
-
-        let mut anonymous_suite = suite.clone();
-        anonymous_suite.journeys[0].steps[0].profile.anonymous = true;
-        let mut bearer_for_anonymous = exact();
-        assert_eq!(
-            SchemaTestCredentialBindings::new(&anonymous_suite, bearer_for_anonymous).unwrap_err(),
-            FixtureError::RequestConstructionRefused
-        );
-        bearer_for_anonymous = exact();
-        bearer_for_anonymous[0] =
-            SchemaTestCredentialBinding::anonymous("widget-lifecycle", "create-widget");
-        SchemaTestCredentialBindings::new(&anonymous_suite, bearer_for_anonymous)
-            .expect("explicit anonymous mode matches the anonymous step");
 
         for token in [
             "",
@@ -7057,6 +7512,17 @@ journeys:
         ));
     }
 
+    fn remove_nulls(value: &mut Value) {
+        match value {
+            Value::Object(members) => {
+                members.retain(|_, member| !member.is_null());
+                members.values_mut().for_each(remove_nulls);
+            }
+            Value::Array(items) => items.iter_mut().for_each(remove_nulls),
+            _ => {}
+        }
+    }
+
     #[test]
     fn evidence_contract_assets_survive_prepared_and_verified_schema_test_rederivation() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -7067,7 +7533,12 @@ journeys:
         .unwrap();
         let identity = source.package.as_mut().unwrap();
         identity.source_revision = "fixture-project-source".into();
-        let project = serde_json::to_vec(&source).unwrap();
+        // The serialized source writes an absent optional member as null,
+        // which an authored file never carries; the package build reads the
+        // source as authored.
+        let mut project = serde_json::to_value(&source).unwrap();
+        remove_nulls(&mut project);
+        let project = serde_json::to_vec(&project).unwrap();
         let assets = source
             .evidence_providers
             .iter()
@@ -7268,25 +7739,56 @@ journeys:
     ) {
         let noncanonical = [bytes, b"\n"].concat();
         assert_eq!(
-            validate_schema_test_receipt_for_package(&noncanonical, &fixture.prepared, suite),
-            Err(FixtureError::ReceiptShapeRefused)
+            receipt_document_codes(validate_schema_test_receipt_for_package(
+                &noncanonical,
+                &fixture.prepared,
+                suite
+            )),
+            [("breg.receipt.not-canonical".to_owned(), String::new())]
         );
 
         let mut unknown: Value = serde_json::from_slice(bytes).expect("receipt parses");
         unknown["unknownAuthority"] = json!(true);
         let unknown = canonicalize_json(&unknown).expect("unknown receipt canonicalizes");
         assert_eq!(
-            validate_schema_test_receipt_for_package(&unknown, &fixture.prepared, suite),
-            Err(FixtureError::ReceiptShapeRefused)
+            receipt_document_codes(validate_schema_test_receipt_for_package(
+                &unknown,
+                &fixture.prepared,
+                suite
+            )),
+            [(
+                "config.unknown-key".to_owned(),
+                "/unknownAuthority".to_owned()
+            )]
         );
         assert_eq!(
-            validate_schema_test_receipt_for_package(
+            receipt_document_codes(validate_schema_test_receipt_for_package(
                 &vec![b'x'; MAX_RECEIPT_BYTES + 1],
                 &fixture.prepared,
                 suite,
-            ),
-            Err(FixtureError::ReceiptShapeRefused)
+            )),
+            [("breg.receipt.too-large".to_owned(), String::new())]
         );
+        for (field, replacement, code) in [
+            (
+                "apiVersion",
+                json!("registry.invalid/v2"),
+                "config.unsupported-api-version",
+            ),
+            ("kind", json!("ActivationApproval"), "config.wrong-kind"),
+        ] {
+            let mut changed: Value = serde_json::from_slice(bytes).expect("receipt parses");
+            changed[field] = replacement;
+            let changed = canonicalize_json(&changed).expect("changed receipt canonicalizes");
+            assert_eq!(
+                receipt_document_codes(validate_schema_test_receipt_for_package(
+                    &changed,
+                    &fixture.prepared,
+                    suite
+                )),
+                [(code.to_owned(), format!("/{field}"))]
+            );
+        }
 
         let changed_journey_bytes = [JOURNEY_SOURCE, b"\n# reviewed change\n"].concat();
         let changed_suite =
@@ -7310,8 +7812,6 @@ journeys:
         );
 
         for (field, replacement) in [
-            ("apiVersion", json!("registry.invalid/v2")),
-            ("kind", json!("ActivationApproval")),
             ("registryRevision", json!(DIGEST_B)),
             ("projectSourceRevision", json!("another-source")),
             ("compilerSourceRevision", json!("another-compiler")),
@@ -7319,7 +7819,6 @@ journeys:
             ("migrationPlanSha256", json!(DIGEST_B)),
             ("targetManagedSchemaFingerprint", json!(DIGEST_B)),
             ("priorPackageDigest", json!(DIGEST_B)),
-            ("postgresMajor", json!(19)),
             ("successfulJourneyIds", json!(["another-journey"])),
             ("journeyFileSha256", json!(DIGEST_B)),
         ] {
@@ -7331,6 +7830,21 @@ journeys:
                 Err(FixtureError::ReceiptBindingRefused)
             ));
         }
+
+        let mut unsupported: Value = serde_json::from_slice(bytes).expect("receipt parses");
+        unsupported["postgresMajor"] = json!(19);
+        let unsupported = canonicalize_json(&unsupported).expect("changed receipt canonicalizes");
+        let Err(FixtureError::ReceiptDocument(report)) =
+            validate_schema_test_receipt_for_package(&unsupported, &fixture.prepared, suite)
+        else {
+            panic!("an unsupported PostgreSQL major is refused by the reader");
+        };
+        let found: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(found, [("config.out-of-range", "/postgresMajor")]);
     }
 
     fn assert_candidate_build_substitutions_are_refused(
@@ -7518,11 +8032,100 @@ journeys:
             receipt[field] = value;
             let changed = canonicalize_json(&receipt).expect("changed receipt canonicalizes");
             assert_eq!(
-                revalidate_schema_test_receipt(&changed, candidate, suite),
-                Err(FixtureError::ReceiptShapeRefused),
+                receipt_document_codes(revalidate_schema_test_receipt(&changed, candidate, suite)),
+                [("config.unknown-key".to_owned(), format!("/{field}"))],
                 "{field}"
             );
         }
+    }
+
+    fn receipt_document_codes(
+        result: Result<SchemaTestReceipt, FixtureError>,
+    ) -> Vec<(String, String)> {
+        match result {
+            Err(FixtureError::ReceiptDocument(report)) => report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+                .collect(),
+            other => panic!("expected a receipt document refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_registered_receipt_example_reads() {
+        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/examples/formats/schema-test-receipt.json");
+        let bytes = std::fs::read(example).expect("the receipt example reads");
+        let receipt =
+            parse_canonical_schema_test_receipt(&bytes).expect("the receipt example is accepted");
+        assert_eq!(receipt.canonical_bytes().expect("canonical"), bytes);
+    }
+
+    #[test]
+    fn a_receipt_with_a_retired_header_names_the_command_that_rewrites_it() {
+        let receipt = |api_version: &str, kind: &str| {
+            canonicalize_json(&json!({
+                "apiVersion": api_version,
+                "kind": kind,
+                "compilerSourceRevision": "compiler",
+                "journeyFileSha256": DIGEST_A,
+                "migrationPlanSha256": DIGEST_A,
+                "postgresMajor": 16,
+                "projectSourceRevision": "source",
+                "registryRevision": DIGEST_A,
+                "sourceClosureSha256": DIGEST_A,
+                "successfulJourneyIds": ["journey"],
+                "targetManagedSchemaFingerprint": DIGEST_A,
+            }))
+            .expect("receipt canonicalizes")
+        };
+        let retired = "registry.registrystack.org/breg-schema-test-receipt/v2";
+
+        let Err(FixtureError::ReceiptDocument(report)) = read_schema_test_receipt(
+            "build/schema-test-receipt.json",
+            &receipt(retired, RECEIPT_KIND),
+        ) else {
+            panic!("a retired receipt header is refused");
+        };
+        let [diagnostic] = report.diagnostics() else {
+            panic!("one diagnostic: {report:?}");
+        };
+        assert_eq!(diagnostic.code, "config.retired-api-version");
+        assert_eq!(diagnostic.path, "/apiVersion");
+        assert!(diagnostic.suggested_action.contains("bregctl test"));
+        assert_eq!(
+            diagnostic
+                .source
+                .as_ref()
+                .map(|source| source.file.as_str()),
+            Some("build/schema-test-receipt.json")
+        );
+
+        // The kind was renamed with the header, so an old receipt is refused
+        // for its kind first; the message names the kind this reads.
+        let Err(FixtureError::ReceiptDocument(report)) =
+            read_schema_test_receipt(RECEIPT_FILE, &receipt(retired, "SchemaTestReceipt"))
+        else {
+            panic!("an old receipt is refused");
+        };
+        let codes: Vec<&str> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_ref())
+            .collect();
+        assert_eq!(codes, ["config.retired-api-version", "config.wrong-kind"]);
+        let wrong_kind = &report.diagnostics()[1];
+        assert!(wrong_kind.message.contains(RECEIPT_KIND));
+
+        let current =
+            read_schema_test_receipt(RECEIPT_FILE, &receipt(RECEIPT_API_VERSION, RECEIPT_KIND))
+                .expect("a current receipt reads");
+        assert_eq!(current.postgres_major, 16);
+        assert_eq!(
+            current.canonical_bytes().expect("receipt canonicalizes"),
+            receipt(RECEIPT_API_VERSION, RECEIPT_KIND)
+        );
     }
 
     async fn assert_closed_response_negatives(
@@ -7829,7 +8432,7 @@ journeys:
         for journey in &suite.journeys {
             let mut observations = BTreeMap::<String, Observation>::new();
             for (index, step) in journey.steps.iter().enumerate() {
-                let _request = fixture_request("test-journey", step, &observations, None)?;
+                let _request = fixture_request("test-journey", step, &observations, "a.b.c")?;
                 let response = scripted_response(index, mode)?;
                 let status = response.status();
                 let headers = response.headers().clone();
@@ -7887,8 +8490,8 @@ journeys:
             profile,
             response_readable_fields: BTreeSet::new(),
             action: ActionSource::SubmitRequest {
-                record_ref: "before-submit".to_owned(),
-                etag_ref: "before-submit".to_owned(),
+                record_capture: "before-submit".to_owned(),
+                etag_capture: "before-submit".to_owned(),
             },
             problem_bindings: FixtureProblemBindings::default(),
             expect: ExpectationSource {
@@ -7937,7 +8540,7 @@ journeys:
             },
         );
 
-        let request = fixture_request("test-journey", &step, &observations, Some("a.b.c"))
+        let request = fixture_request("test-journey", &step, &observations, "a.b.c")
             .expect("request action uses discovered action precondition");
         assert_eq!(
             request
@@ -7955,7 +8558,7 @@ journeys:
             .expect("request metadata is object")
             .remove("actions");
         assert_eq!(
-            fixture_request("test-journey", &step, &observations, Some("a.b.c")).unwrap_err(),
+            fixture_request("test-journey", &step, &observations, "a.b.c").unwrap_err(),
             FixtureError::RequestConstructionRefused
         );
     }
@@ -8085,8 +8688,8 @@ journeys:
             profile,
             response_readable_fields: BTreeSet::new(),
             action: ActionSource::SubmitRequest {
-                record_ref: "before-submit".to_owned(),
-                etag_ref: "before-submit".to_owned(),
+                record_capture: "before-submit".to_owned(),
+                etag_capture: "before-submit".to_owned(),
             },
             problem_bindings: FixtureProblemBindings::default(),
             expect: ExpectationSource {
@@ -8210,12 +8813,12 @@ journeys:
 
         let mut concealed = plan_refused_step();
         concealed.action = ActionSource::ApplyRequest {
-            record_ref: "before-apply".to_owned(),
-            etag_ref: "before-apply".to_owned(),
+            record_capture: "before-apply".to_owned(),
+            etag_capture: "before-apply".to_owned(),
             proposal_version: None,
-            proposal_version_ref: None,
+            proposal_version_capture: None,
             effect_digest: None,
-            effect_digest_ref: None,
+            effect_digest_capture: None,
         };
         concealed.expect.status = 409;
         concealed.expect.problem_code = Some("mutation.conflict".to_owned());

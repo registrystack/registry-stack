@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::{parse_project_json, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_SLOTS};
+use registry_breg::contract::{
+    parse_project_json, parse_project_yaml, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_SLOTS,
+};
 use registry_breg::diagnostics::CompileFailure;
 use registry_breg::CompiledRegistry;
 use serde_json::{json, Value};
@@ -29,13 +31,13 @@ fn source() -> Value {
             }
         }],
         "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","permissions":[{
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                 "entity":"request",
                 "operations":["get","list","create","patch","submit_request","apply_request"],
                 "readableFields":["item","label","supporting-file"],
                 "writableFields":["item","label","supporting-file"],
-                "applyTargets":[{"entity":"item","rowBoundaries":[]}],
-                "rowBoundaries":[]
+                "applyTargets":[{"entity":"item","rowBoundaries":"unrestricted"}],
+                "rowBoundaries":"unrestricted"
             }]
         }]
     })
@@ -164,16 +166,26 @@ fn attachment_declarations_enforce_request_scope_bounds_and_closed_shape() {
     candidate["entities"][0]["attachments"] = json!([slot()]);
     assert_diagnostic(
         &candidate,
-        "attachment.entity.not_request",
+        "breg.attachment.entity-not-request",
         "entities[id=item].attachments",
     );
     for maximum in [0, MAX_ATTACHMENT_BYTES + 1] {
         let mut candidate = source();
         candidate["entities"][1]["attachments"][0]["maximumBytes"] = json!(maximum);
-        assert_diagnostic(
-            &candidate,
-            "attachment.maximum_bytes.bounds_invalid",
-            "entities[id=request].attachments[0].maximumBytes",
+        let failure = parse_project_yaml(&serde_json::to_vec(&candidate).unwrap())
+            .expect_err("an attachment byte bound outside its range is refused when read");
+        let refused = failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            refused,
+            vec![(
+                "config.out-of-range",
+                "project.entities[1].attachments[0].maximumBytes"
+            )],
+            "{failure:?}"
         );
     }
     let mut candidate = source();
@@ -186,7 +198,7 @@ fn attachment_declarations_enforce_request_scope_bounds_and_closed_shape() {
         .collect::<Vec<_>>());
     assert_diagnostic(
         &candidate,
-        "attachment.slots.bounds_invalid",
+        "breg.attachment.slots-bounds-invalid",
         "entities[id=request].attachments",
     );
     for member in ["backend", "bucket", "url", "sha256"] {
@@ -205,7 +217,7 @@ fn attachment_ids_refuse_invalid_duplicate_and_field_collisions() {
     candidate["entities"][1]["attachments"] = json!([slot(), slot()]);
     assert_diagnostic(
         &candidate,
-        "attachment.id.duplicate",
+        "breg.attachment.id-duplicate",
         "entities[id=request].attachments[1].id",
     );
     for id in ["id", "revision", "item", "label"] {
@@ -213,7 +225,7 @@ fn attachment_ids_refuse_invalid_duplicate_and_field_collisions() {
         candidate["entities"][1]["attachments"][0]["id"] = json!(id);
         assert_diagnostic(
             &candidate,
-            "attachment.id.collision",
+            "breg.attachment.id-collision",
             "entities[id=request].attachments[0].id",
         );
     }
@@ -222,7 +234,7 @@ fn attachment_ids_refuse_invalid_duplicate_and_field_collisions() {
     candidate["entities"][1]["attachments"][0]["id"] = json!("support");
     assert_diagnostic(
         &candidate,
-        "attachment.id.collision",
+        "breg.attachment.id-collision",
         "entities[id=request].attachments[0].id",
     );
     for id in ["../file", "", "File", "file/name"] {
@@ -230,7 +242,7 @@ fn attachment_ids_refuse_invalid_duplicate_and_field_collisions() {
         candidate["entities"][1]["attachments"][0]["id"] = json!(id);
         assert_diagnostic(
             &candidate,
-            "identifier.invalid",
+            "breg.identifier.invalid",
             "entities[id=request].attachments[0].id",
         );
     }
@@ -243,7 +255,7 @@ fn content_types_are_bounded_concrete_and_unique() {
         candidate["entities"][1]["attachments"][0]["contentTypes"] = types;
         assert_diagnostic(
             &candidate,
-            "attachment.content_types.bounds_invalid",
+            "breg.attachment.content-types-bounds-invalid",
             "entities[id=request].attachments[0].contentTypes",
         );
     }
@@ -262,7 +274,7 @@ fn content_types_are_bounded_concrete_and_unique() {
         candidate["entities"][1]["attachments"][0]["contentTypes"] = json!([content_type]);
         assert_diagnostic(
             &candidate,
-            "attachment.content_type.invalid",
+            "breg.attachment.content-type-invalid",
             "entities[id=request].attachments[0].contentTypes[0]",
         );
     }
@@ -271,7 +283,7 @@ fn content_types_are_bounded_concrete_and_unique() {
         json!(["application/pdf", "application/pdf"]);
     assert_diagnostic(
         &candidate,
-        "attachment.content_type.duplicate",
+        "breg.attachment.content-type-duplicate",
         "entities[id=request].attachments[0].contentTypes[1]",
     );
     candidate["entities"][1]["attachments"][0]["contentTypes"] = json!([
@@ -284,13 +296,13 @@ fn content_types_are_bounded_concrete_and_unique() {
 }
 
 #[test]
-fn attachments_cannot_be_anonymous_or_scalar_query_inputs() {
+fn attachments_cannot_be_scalar_query_inputs() {
     for member in ["filterableFields", "sortableFields"] {
         let mut candidate = source();
         candidate["accessProfiles"][0]["permissions"][0][member] = json!(["supporting-file"]);
         assert_diagnostic(
             &candidate,
-            "attachment.access.processing_unsupported",
+            "breg.attachment.access-processing-unsupported",
             &format!(
                 "entities[id=request].accessProfiles[id=operator].{member}[value=supporting-file]"
             ),
@@ -301,15 +313,8 @@ fn attachments_cannot_be_anonymous_or_scalar_query_inputs() {
         json!([{"field":"supporting-file", "claim":"owner", "operator":"equals"}]);
     assert_diagnostic(
         &candidate,
-        "attachment.access.processing_unsupported",
+        "breg.attachment.access-processing-unsupported",
         "entities[id=request].accessProfiles[id=operator].rowBoundaries[0].field",
-    );
-    let mut candidate = source();
-    candidate["accessProfiles"][0]["anonymous"] = json!(true);
-    assert_diagnostic(
-        &candidate,
-        "attachment.access.authentication_required",
-        "entities[id=request].accessProfiles[id=operator].readableFields[value=supporting-file]",
     );
 }
 
@@ -320,7 +325,7 @@ fn attachment_slots_are_not_scalar_effect_inputs() {
         json!("supporting-file");
     assert_diagnostic(
         &candidate,
-        "change_request.effect.value_field_unknown",
+        "breg.change-request.effect-value-field-unknown",
         "entities[id=request].changeRequest.effects[id=apply-label].set[field=label]",
     );
 }
