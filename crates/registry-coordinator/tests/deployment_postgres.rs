@@ -47,6 +47,172 @@ async fn serve_fixture(state: HttpState) -> (String, tokio::task::JoinHandle<()>
     });
     (origin, task)
 }
+async fn assert_authenticated_run_validation(
+    http: &reqwest::Client,
+    origin: &str,
+    database: &str,
+    namespace: &str,
+    operator: &str,
+    producer: &str,
+) {
+    let routes = [
+        ("GET", ""),
+        ("GET", "/inspect"),
+        ("POST", "/retry-same"),
+        ("POST", "/cancel"),
+        ("POST", "/reconcile"),
+    ];
+    let absent = Uuid::new_v4().to_string();
+    let long_id = "x".repeat(46);
+    let (mut locker, connection) = tokio_postgres::connect(database, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let lock = locker.transaction().await.unwrap();
+    lock.batch_execute(&format!(
+        "LOCK TABLE {namespace}.runs IN ACCESS EXCLUSIVE MODE"
+    ))
+    .await
+    .unwrap();
+    // Authentication, action refusal and malformed identifiers must answer
+    // while any attempted run lookup would be blocked by this table lock.
+    let checks = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        for (method, suffix) in routes {
+            for id in ["not-a-uuid", &long_id, "%FF", &absent] {
+                for credential in [None, Some("not.a.valid-token")] {
+                    let mut request = http
+                        .request(
+                            method.parse().unwrap(),
+                            format!("{origin}/v1/runs/{id}{suffix}"),
+                        )
+                        .header("content-type", "application/json")
+                        .body("{");
+                    if let Some(credential) = credential {
+                        request = request.bearer_auth(credential);
+                    }
+                    let response = request.send().await.unwrap();
+                    assert_eq!(
+                        response.status(),
+                        401,
+                        "{method} {suffix} refuses credentials first"
+                    );
+                    assert_eq!(response.headers()["www-authenticate"], "Bearer");
+                    assert_eq!(response.headers()["cache-control"], "no-store");
+                    assert_eq!(
+                        response.json::<Value>().await.unwrap()["code"],
+                        "access.unauthenticated"
+                    );
+                }
+            }
+            for id in ["not-a-uuid", &long_id, "%FF"] {
+                let response = http
+                    .request(
+                        method.parse().unwrap(),
+                        format!("{origin}/v1/runs/{id}{suffix}"),
+                    )
+                    .bearer_auth(operator)
+                    .header("content-type", "application/json")
+                    .body("{")
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), 400);
+                assert!(response.headers().get("www-authenticate").is_none());
+                let problem = response.json::<Value>().await.unwrap();
+                assert_eq!(problem["code"], "request.invalid");
+                assert!(!problem.to_string().contains(id));
+            }
+            if !suffix.is_empty() {
+                let response = http
+                    .request(
+                        method.parse().unwrap(),
+                        format!("{origin}/v1/runs/not-a-uuid{suffix}"),
+                    )
+                    .bearer_auth(producer)
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), 403);
+                assert!(response.headers().get("www-authenticate").is_none());
+                assert_eq!(
+                    response.json::<Value>().await.unwrap()["code"],
+                    "access.denied"
+                );
+            }
+        }
+        for query in [
+            "limit=not-an-integer",
+            "limit=0",
+            "limit=101",
+            "unknown=1",
+            "limit=1&limit=2",
+        ] {
+            for (credential, expected, code) in [
+                (None, 401, "access.unauthenticated"),
+                (Some("not.a.valid-token"), 401, "access.unauthenticated"),
+                (Some(operator), 400, "request.invalid"),
+            ] {
+                let mut request = http.get(format!("{origin}/v1/runs?{query}"));
+                if let Some(credential) = credential {
+                    request = request.bearer_auth(credential);
+                }
+                let response = request.send().await.unwrap();
+                assert_eq!(response.status(), expected);
+                assert_eq!(
+                    response
+                        .headers()
+                        .get("www-authenticate")
+                        .map(|value| value.to_str().unwrap()),
+                    if expected == 401 {
+                        Some("Bearer")
+                    } else {
+                        None
+                    }
+                );
+                assert_eq!(response.json::<Value>().await.unwrap()["code"], code);
+            }
+        }
+    })
+    .await;
+    lock.rollback().await.unwrap();
+    assert!(
+        checks.is_ok(),
+        "authentication or malformed input attempted a run database read"
+    );
+    // The accepted UUID syntaxes still reach the authorized absence lookup.
+    for id in [
+        absent.clone(),
+        absent.replace('-', ""),
+        format!("{{{absent}}}"),
+        format!("urn:uuid:{absent}"),
+    ] {
+        for (method, suffix) in routes {
+            let response = http
+                .request(
+                    method.parse().unwrap(),
+                    format!("{origin}/v1/runs/{id}{suffix}"),
+                )
+                .bearer_auth(operator)
+                .header("content-type", "application/json")
+                .body("{")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 404);
+            assert!(response.headers().get("www-authenticate").is_none());
+        }
+    }
+    // Transport body bounds remain before product parsing or authorization.
+    let oversized = http
+        .post(format!("{origin}/v1/runs/{absent}/cancel"))
+        .body("x".repeat(65_537))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(oversized.status(), 413);
+}
 async fn fixture_job_state(
     admin: &tokio_postgres::Client,
     namespace: &str,
@@ -734,6 +900,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     let a = token("producer", "owner-a", "coordinator:start");
     let b = token("producer", "owner-b", "coordinator:start");
     let op = token("operator", "operator-1", "coordinator:operate");
+    assert_authenticated_run_validation(&http, &origin, &database, &namespace, &op, &a).await;
     let input = json!({"applicationId":"00000000-0000-4000-8000-000000000001","sendAfter":(Utc::now()+chrono::Duration::minutes(20)).to_rfc3339()});
     assert_bounded_readiness(&http, &origin, &database, &namespace).await;
     // A different config is initially compatible with an empty deployment.

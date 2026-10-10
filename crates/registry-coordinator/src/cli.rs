@@ -398,16 +398,27 @@ async fn remote(
         )
     })?;
     if !status.is_success() {
+        let (code, message, action) = if status.is_server_error() {
+            (
+                "service-unavailable",
+                "the service could not complete the operation",
+                "restore service availability and inspect the original run before attempting same-command recovery",
+            )
+        } else {
+            (
+                "service-refused",
+                "the authenticated service refused the operation",
+                "inspect caller policy and current run status before repeating the operation",
+            )
+        };
         return Err(PocError::new(
-            "service-refused",
+            code,
             value["message"]
                 .as_str()
                 .filter(|text| text.len() <= 256)
-                .unwrap_or("the authenticated service refused the operation"),
+                .unwrap_or(message),
         )
-        .suggest(value["suggestedAction"].as_str().unwrap_or(
-            "inspect caller policy and current run status before repeating the operation",
-        )));
+        .suggest(value["suggestedAction"].as_str().unwrap_or(action)));
     }
     Ok(value)
 }

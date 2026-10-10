@@ -10,7 +10,10 @@ use crate::{
 };
 use axum::{
     body::Bytes,
-    extract::{rejection::JsonRejection, DefaultBodyLimit, FromRequest, Path, Query, State},
+    extract::{
+        rejection::{JsonRejection, PathRejection, QueryRejection},
+        DefaultBodyLimit, FromRequest, Path, Query, State,
+    },
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -120,6 +123,12 @@ fn problem(error: PocError) -> Response {
         "cache-control",
         axum::http::HeaderValue::from_static("no-store"),
     );
+    if status == StatusCode::UNAUTHORIZED {
+        response.headers_mut().insert(
+            axum::http::header::WWW_AUTHENTICATE,
+            axum::http::HeaderValue::from_static("Bearer"),
+        );
+    }
     response
 }
 async fn caller(s: &HttpState, headers: &HeaderMap) -> Result<Caller> {
@@ -255,6 +264,60 @@ mod readiness_tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }
+
+#[cfg(test)]
+mod problem_tests {
+    use super::*;
+
+    #[test]
+    fn only_credential_refusal_returns_a_bearer_challenge() {
+        for (code, status, challenge) in [
+            (
+                "access.unauthenticated",
+                StatusCode::UNAUTHORIZED,
+                Some("Bearer"),
+            ),
+            ("access.denied", StatusCode::FORBIDDEN, None),
+            ("access.unavailable", StatusCode::SERVICE_UNAVAILABLE, None),
+            ("store-unavailable", StatusCode::SERVICE_UNAVAILABLE, None),
+            ("request.invalid", StatusCode::BAD_REQUEST, None),
+        ] {
+            let response = problem(PocError::new(code, "synthetic boundary refusal"));
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                response
+                    .headers()
+                    .get(axum::http::header::WWW_AUTHENTICATE)
+                    .map(|value| value.to_str().unwrap()),
+                challenge
+            );
+            assert_eq!(response.headers()["cache-control"], "no-store");
+        }
+    }
+
+    #[test]
+    fn openapi_documents_challenges_only_on_authenticated_route_401s() {
+        let document = openapi();
+        for operation in document["paths"]
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|path| path.as_object().unwrap().values())
+        {
+            if operation.get("security").is_some() {
+                assert_eq!(
+                    operation["responses"]["401"]["headers"]["WWW-Authenticate"]["schema"]["const"],
+                    "Bearer"
+                );
+                for status in ["400", "403", "404", "503"] {
+                    assert!(operation["responses"][status]["headers"]
+                        .get("WWW-Authenticate")
+                        .is_none());
+                }
+            }
+        }
+    }
+}
 type BoundedBody = std::result::Result<Bytes, axum::extract::rejection::BytesRejection>;
 fn request_body<T: DeserializeOwned>(body: BoundedBody) -> Result<T> {
     let bytes =
@@ -328,18 +391,29 @@ async fn start(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBody
     .await;
     answer(result)
 }
+type RunPath = std::result::Result<Path<String>, PathRejection>;
 async fn run_caller(
     s: &HttpState,
     headers: &HeaderMap,
-    run: Uuid,
+    run: RunPath,
     action: Action,
-) -> Result<Caller> {
+) -> Result<(Caller, Uuid)> {
     let c = caller(s, headers).await?;
     c.authorize(action, None)?;
+    let Path(run) =
+        run.map_err(|_| PocError::new("request.invalid", "supply a bounded UUID run identifier"))?;
+    // Business parsing follows authentication and action policy. Preserve the
+    // UUID forms accepted by the former typed extractor, within their bound.
+    let run = if run.len() <= 45 {
+        Uuid::parse_str(&run).ok()
+    } else {
+        None
+    }
+    .ok_or_else(|| PocError::new("request.invalid", "supply a bounded UUID run identifier"))?;
     let status = s.store.status_owned(run, &c.actor).await?;
     c.authorize(action, Some(&status.workflow_id))
         .map_err(|_| PocError::new("run-absent", "run was not found"))?;
-    Ok(c)
+    Ok((c, run))
 }
 fn answer(result: Result<Value>) -> Response {
     match result {
@@ -358,20 +432,27 @@ fn encode(value: impl serde::Serialize) -> Result<Value> {
     serde_json::to_value(value)
         .map_err(|_| PocError::new("status-unavailable", "cannot encode protected result"))
 }
-async fn status(State(s): State<HttpState>, headers: HeaderMap, Path(run): Path<Uuid>) -> Response {
+async fn status(State(s): State<HttpState>, headers: HeaderMap, run: RunPath) -> Response {
     answer(
         async {
-            let c = run_caller(&s, &headers, run, Action::Status).await?;
+            let (c, run) = run_caller(&s, &headers, run, Action::Status).await?;
             encode(s.store.status_owned(run, &c.actor).await?)
         }
         .await,
     )
 }
-async fn list(State(s): State<HttpState>, headers: HeaderMap, Query(q): Query<List>) -> Response {
+async fn list(
+    State(s): State<HttpState>,
+    headers: HeaderMap,
+    query: std::result::Result<Query<List>, QueryRejection>,
+) -> Response {
     answer(
         async {
             let c = caller(&s, &headers).await?;
             let flows = c.authorized_flows(Action::Status)?;
+            let Query(q) = query.map_err(|_| {
+                PocError::new("request.invalid", "supply the declared bounded list query")
+            })?;
             if !(1..=100).contains(&q.limit) {
                 return Err(PocError::new(
                     "request.invalid",
@@ -388,14 +469,10 @@ async fn binding(s: &HttpState, run: Uuid, c: &Caller) -> Result<String> {
     let definition = s.store.definition_owned(run, &c.actor).await?;
     s.runtime.binding_digest_for(&definition.workflow)
 }
-async fn inspect(
-    State(s): State<HttpState>,
-    headers: HeaderMap,
-    Path(run): Path<Uuid>,
-) -> Response {
+async fn inspect(State(s): State<HttpState>, headers: HeaderMap, run: RunPath) -> Response {
     answer(
         async {
-            let c = run_caller(&s, &headers, run, Action::Inspect).await?;
+            let (c, run) = run_caller(&s, &headers, run, Action::Inspect).await?;
             encode(
                 s.store
                     .inspect_runtime_owned(run, &s.runtime, &c.actor)
@@ -408,12 +485,12 @@ async fn inspect(
 async fn retry(
     State(s): State<HttpState>,
     headers: HeaderMap,
-    Path(run): Path<Uuid>,
+    run: RunPath,
     body: BoundedBody,
 ) -> Response {
     answer(
         async {
-            let c = run_caller(&s, &headers, run, Action::RetrySame).await?;
+            let (c, run) = run_caller(&s, &headers, run, Action::RetrySame).await?;
             let reason: Reason = json_body(&headers, body).await?;
             s.store
                 .retry_same_owned(run, &binding(&s, run, &c).await?, &c.actor, &reason.reason)
@@ -426,12 +503,12 @@ async fn retry(
 async fn cancel(
     State(s): State<HttpState>,
     headers: HeaderMap,
-    Path(run): Path<Uuid>,
+    run: RunPath,
     body: BoundedBody,
 ) -> Response {
     answer(
         async {
-            let c = run_caller(&s, &headers, run, Action::Cancel).await?;
+            let (c, run) = run_caller(&s, &headers, run, Action::Cancel).await?;
             let reason: Reason = json_body(&headers, body).await?;
             encode(s.store.cancel_owned(run, &c.actor, &reason.reason).await?)
         }
@@ -441,12 +518,12 @@ async fn cancel(
 async fn reconcile(
     State(s): State<HttpState>,
     headers: HeaderMap,
-    Path(run): Path<Uuid>,
+    run: RunPath,
     body: BoundedBody,
 ) -> Response {
     answer(
         async {
-            let c = run_caller(&s, &headers, run, Action::Reconcile).await?;
+            let (c, run) = run_caller(&s, &headers, run, Action::Reconcile).await?;
             let reason: Reason = json_body(&headers, body).await?;
             encode(
                 s.store
@@ -668,6 +745,10 @@ pub fn openapi() -> Value {
     ];
     for (path, method, id, request, response) in operations {
         let mut op = json!({"operationId":id,"security":[{"bearer":[]}],"responses":{"200":{"description":"Authorized result","content":{"application/json":{"schema":{"$ref":format!("#/components/schemas/{}",response.unwrap_or("Problem"))}}}},"400":{"description":"Invalid bounded request"},"401":{"description":"Verified access token required"},"403":{"description":"Current caller policy refused"},"404":{"description":"Absent or unauthorized run"},"409":{"description":"State or recovery conflict"},"503":{"description":"Database, audit or verifier unavailable"}}});
+        op["responses"]["401"]["headers"] = json!({"WWW-Authenticate":{
+            "description":"Bearer authentication challenge for missing or refused credentials.",
+            "schema":{"type":"string","const":"Bearer"}
+        }});
         if method == "post" {
             op["responses"]["415"] =
                 json!({"description":"JSON media type required after caller authorization"});
