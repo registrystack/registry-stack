@@ -4,6 +4,14 @@ This fragment describes the final v0.40.0 interface. An `Old` or `Before`
 example is an earlier file, request, response, or value to replace; every
 current example and diagnostic below uses the final v0.40.0 spelling.
 
+## BREAKING: wallet delivery names its runtime file with `--runtime-config`
+
+In v0.39.0, `evidence-oid4vci check`, `inspect`, and `serve` took `--config`
+or `EVIDENCE_OID4VCI_CONFIG`. In v0.40.0 they take `--runtime-config FILE`
+or `EVIDENCE_OID4VCI_RUNTIME_CONFIG`, with no alias for either old name.
+Replace the flag and variable in scripts, service definitions, and deployment
+configuration. Relative paths remain accepted.
+
 ## Evidence clients and OID4VCI
 
 Every change the configuration conventions make to the `evidence-oid4vci`
@@ -113,7 +121,7 @@ reference and resolved by the shared secret providers when `serve` or
   log `the secret reference configured at <member path> could not be resolved: <reason>`
   when it fails, naming the member and never the reference or the key. Migration: a
   deployment step that relied on `check` to prove the key file was readable
-  runs `evidence-oid4vci inspect --config <file>` instead, which resolves the
+  runs `evidence-oid4vci inspect --runtime-config <file>` instead, which resolves the
   key and reads the Evidence metadata.
 
 ### BREAKING: offer restrictions are stated, not defaulted
@@ -175,7 +183,7 @@ position.
 
 ### BREAKING: `evidence-oid4vci check` reports in the shared diagnostic shape
 
-- `check --config <file>` prints every problem it finds in a pass, each on standard error as
+- `check --runtime-config FILE` prints every problem it finds in a pass, each on standard error as
   `error[CODE] FILE:LINE:COLUMN /json/pointer` followed by the message and a
   `next:` line, then a count of errors and warnings. The old command logged
   one JSON tracing line naming the first problem. Migration: a script that

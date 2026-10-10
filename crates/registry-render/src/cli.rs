@@ -59,8 +59,7 @@ pub enum Command {
         /// Retired. Use `registry-render package` after check succeeds.
         #[arg(long, hide = true)]
         seal: bool,
-        /// Runtime file to check offline, as `registry-render serve` reads
-        /// it, with no package, secret material, or listener.
+        /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime: Option<PathBuf>,
         /// Fill `${NAME}` expressions in the runtime file from the process
@@ -178,15 +177,14 @@ pub enum Command {
     },
     /// Serve the HTTP rendering API (see the runtime YAML).
     Serve {
-        /// Absolute path of the runtime file naming the package, listener,
-        /// secrets, and limits.
-        #[arg(long = "runtime-config", value_name = "FILE")]
+        /// Runtime configuration file.
+        #[arg(long = "runtime-config", value_name = "ABSOLUTE_FILE")]
         runtime: PathBuf,
     },
     /// Probe a running server's /health.
     Healthcheck {
-        /// Absolute path of the runtime file naming the server to probe.
-        #[arg(long = "runtime-config", value_name = "FILE")]
+        /// Runtime configuration file.
+        #[arg(long = "runtime-config", value_name = "ABSOLUTE_FILE")]
         runtime: PathBuf,
     },
     /// Hidden: one supervised render (used by `registry-render serve`).

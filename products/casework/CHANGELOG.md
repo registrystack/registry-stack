@@ -6,6 +6,9 @@ v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
 Fresh installation creates the current schema directly, without conversion
 or discard of earlier rows.
 
+- Runtime file flags use the help text "Runtime configuration file" and
+  show `ABSOLUTE_FILE` wherever an absolute input path is required.
+
 - BREAKING: `caseworkctl simulate` takes its file as `--simulation FILE`
   (was `--fixture FILE`): the command reads a `CaseworkSimulation`, and a
   fixture is the other file kind `caseworkctl test` runs. There is no alias,

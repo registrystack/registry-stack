@@ -11,7 +11,7 @@
       "options": [
         {
           "display": "--runtime-config <ABSOLUTE_FILE>",
-          "description": "Absolute path to the runtime configuration file",
+          "description": "Runtime configuration file",
           "always_required": true,
           "repeatable": false,
           "default_values": [],
@@ -50,7 +50,7 @@
       "options": [
         {
           "display": "--runtime-config <FILE>",
-          "description": "Gateway runtime file. `serve` requires an absolute path; `check` also accepts a relative one",
+          "description": "Runtime configuration file",
           "always_required": true,
           "repeatable": false,
           "default_values": [],
@@ -164,7 +164,7 @@
       "options": [
         {
           "display": "--runtime-config <FILE>",
-          "description": "Review page runtime file. `serve` requires an absolute path; `check` also accepts a relative one",
+          "description": "Runtime configuration file",
           "always_required": true,
           "repeatable": false,
           "default_values": [],
@@ -502,7 +502,7 @@
             },
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime file to check offline against PROJECT, as `breg` reads it, with no package, database, network, or secret material (`package.root` is not read; `breg` verifies the package at startup). A symbolic link at any component of this path is refused.",
+              "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -1961,7 +1961,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute runtime configuration whose configured package is the baseline. A symbolic link at any component of this path is refused.",
+              "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2166,7 +2166,7 @@
             },
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute runtime configuration for test database access and secret resolution. A symbolic link at any component of this path is refused.",
+              "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -2277,7 +2277,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute runtime configuration for deployment identity, roles, and database access. A symbolic link at any component of this path is refused.",
+              "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -2366,7 +2366,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute runtime configuration for deployment identity, roles, and database access. A symbolic link at any component of this path is refused.",
+              "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -2437,7 +2437,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute runtime configuration for deployment identity, roles, and database access. A symbolic link at any component of this path is refused.",
+              "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -2481,7 +2481,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+              "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -2525,7 +2525,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+              "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -2603,7 +2603,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2647,7 +2647,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2754,7 +2754,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -2816,7 +2816,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3561,7 +3561,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3616,7 +3616,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3687,7 +3687,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3794,7 +3794,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3867,7 +3867,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3938,7 +3938,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4009,7 +4009,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4089,7 +4089,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4160,7 +4160,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4231,7 +4231,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4333,12 +4333,12 @@
               "invocation": "bregctl evidence-retention erase-expired",
               "about": "Delete expired assertion bytes and verification context; receipts remain replayable",
               "long_about": null,
-              "usage": "bregctl evidence-retention erase-expired [OPTIONS] --runtime-config <RUNTIME_CONFIG> --before <BEFORE>",
+              "usage": "bregctl evidence-retention erase-expired [OPTIONS] --runtime-config <ABSOLUTE_FILE> --before <BEFORE>",
               "arguments": [],
               "options": [
                 {
-                  "display": "--runtime-config <RUNTIME_CONFIG>",
-                  "description": "Absolute runtime configuration path containing the migration connection binding",
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4422,12 +4422,12 @@
               "invocation": "bregctl idempotency-retention erase-expired",
               "about": "Drop held responses past their receipt horizon; every key stays spent and a retry is still refused",
               "long_about": null,
-              "usage": "bregctl idempotency-retention erase-expired [OPTIONS] --runtime-config <RUNTIME_CONFIG> --before <BEFORE>",
+              "usage": "bregctl idempotency-retention erase-expired [OPTIONS] --runtime-config <ABSOLUTE_FILE> --before <BEFORE>",
               "arguments": [],
               "options": [
                 {
-                  "display": "--runtime-config <RUNTIME_CONFIG>",
-                  "description": "Absolute runtime configuration path containing the migration connection binding",
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4516,7 +4516,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4625,7 +4625,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4696,7 +4696,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4740,7 +4740,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4820,7 +4820,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4864,7 +4864,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -4997,7 +4997,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -5050,7 +5050,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute Base Registry Engine runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -5102,12 +5102,12 @@
       "invocation": "casework",
       "about": "Run and maintain Registry Casework",
       "long_about": null,
-      "usage": "casework --runtime-config <FILE> <COMMAND>",
+      "usage": "casework --runtime-config <ABSOLUTE_FILE> <COMMAND>",
       "arguments": [],
       "options": [
         {
-          "display": "--runtime-config <FILE>",
-          "description": "Absolute path to the runtime configuration file.",
+          "display": "--runtime-config <ABSOLUTE_FILE>",
+          "description": "Runtime configuration file",
           "always_required": true,
           "repeatable": false,
           "default_values": [],
@@ -5140,7 +5140,7 @@
           "invocation": "casework serve",
           "about": "Run the Casework HTTP service",
           "long_about": null,
-          "usage": "casework --runtime-config <FILE> serve",
+          "usage": "casework --runtime-config <ABSOLUTE_FILE> serve",
           "arguments": [],
           "options": [
             {
@@ -5452,7 +5452,7 @@
             },
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime file to check offline against PROJECT, as `casework serve` reads it, with no package, database, network, or secret material (`package.root` is not read; `casework serve` verifies the package at startup)",
+              "description": "Runtime configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -5649,7 +5649,7 @@
           "invocation": "caseworkctl package",
           "about": "Package validated policy and exact imported descriptions for deployment",
           "long_about": "Package validated policy and exact imported descriptions for deployment. The package is the unit caseworkctl plan and apply activate: a new directory holding the checked policy and the source descriptions it pins, named by the runtime configuration. bregctl package is a different verb that builds a Base Registry Engine (BReg) registry package from a tested BReg project.",
-          "usage": "caseworkctl package [OPTIONS] <PROJECT>",
+          "usage": "caseworkctl package [OPTIONS] <--output <DIRECTORY>|--dry-run> <PROJECT>",
           "arguments": [
             {
               "display": "<PROJECT>",
@@ -5715,6 +5715,14 @@
           ],
           "constraints": [
             {
+              "kind": "required-exactly-one",
+              "when": null,
+              "arguments": [
+                "--output <DIRECTORY>",
+                "--dry-run"
+              ]
+            },
+            {
               "kind": "mutually-exclusive",
               "when": null,
               "arguments": [
@@ -5775,12 +5783,12 @@
           "invocation": "caseworkctl doctor",
           "about": "Check live database, issuer, source and directory readiness",
           "long_about": null,
-          "usage": "caseworkctl doctor [OPTIONS] --runtime-config <FILE>",
+          "usage": "caseworkctl doctor [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <FILE>",
-              "description": "Absolute runtime configuration selecting the package and startup bindings",
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -5819,12 +5827,12 @@
           "invocation": "caseworkctl plan",
           "about": "Report what applying the configured package would change, without writing",
           "long_about": null,
-          "usage": "caseworkctl plan [OPTIONS] --runtime-config <FILE>",
+          "usage": "caseworkctl plan [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <FILE>",
-              "description": "Absolute runtime configuration selecting the package and the database",
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -5863,12 +5871,12 @@
           "invocation": "caseworkctl apply",
           "about": "Apply the configured package with migration authority and record it as active",
           "long_about": null,
-          "usage": "caseworkctl apply [OPTIONS] --runtime-config <FILE>",
+          "usage": "caseworkctl apply [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <FILE>",
-              "description": "Absolute runtime configuration selecting the package and the database",
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -5925,12 +5933,12 @@
           "invocation": "caseworkctl status",
           "about": "Report the active package, every activation, and the runtime role mode",
           "long_about": null,
-          "usage": "caseworkctl status [OPTIONS] --runtime-config <FILE>",
+          "usage": "caseworkctl status [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <FILE>",
-              "description": "Absolute runtime configuration selecting the package and the database",
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -6018,7 +6026,7 @@
               "options": [
                 {
                   "display": "--runtime-config <FILE>",
-                  "description": "Runtime configuration file; defaults to runtime.yaml in the project",
+                  "description": "Runtime configuration file",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -6144,7 +6152,7 @@
               "options": [
                 {
                   "display": "--runtime-config <FILE>",
-                  "description": "Runtime configuration file; defaults to runtime.yaml in the project",
+                  "description": "Runtime configuration file",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -6246,7 +6254,7 @@
               "options": [
                 {
                   "display": "--runtime-config <FILE>",
-                  "description": "Runtime configuration file; defaults to runtime.yaml in the project",
+                  "description": "Runtime configuration file",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -6840,7 +6848,7 @@
           "options": [
             {
               "display": "--runtime-config <FILE>",
-              "description": "The closed operator runtime file that binds the governed package",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -7023,7 +7031,7 @@
           "options": [
             {
               "display": "--runtime-config <FILE>",
-              "description": "The closed operator runtime file that binds the governed package",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -7100,7 +7108,7 @@
           "options": [
             {
               "display": "--runtime-config <FILE>",
-              "description": "The closed operator runtime file that binds the governed package",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -7296,17 +7304,17 @@
           "invocation": "evidence-oid4vci check",
           "about": "Check the runtime file offline, as `serve` reads it, then exit",
           "long_about": "Check the runtime file offline, as `serve` reads it, then exit. Reads the one file and nothing else: no network, no socket, and no secret material. It does not prove that the client key resolves or that its JWK parses: `serve` or `inspect` proves both when it starts. Exits 0 when nothing is refused, 1 when something is refused or, under --deny-warnings, a warning is reported, 2 when the command line is invalid, and 3 when the file cannot be read.",
-          "usage": "evidence-oid4vci check [OPTIONS] --config <CONFIG>",
+          "usage": "evidence-oid4vci check [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--config <CONFIG>",
-              "description": "Wallet-delivery runtime file",
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
-              "environment": "EVIDENCE_OID4VCI_CONFIG"
+              "environment": "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
             },
             {
               "display": "--format <FORMAT>",
@@ -7358,17 +7366,17 @@
           "invocation": "evidence-oid4vci inspect",
           "about": "Validate the deployment and print its derived protocol metadata",
           "long_about": null,
-          "usage": "evidence-oid4vci inspect --config <CONFIG>",
+          "usage": "evidence-oid4vci inspect --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--config <CONFIG>",
-              "description": "Wallet-delivery runtime file",
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
-              "environment": "EVIDENCE_OID4VCI_CONFIG"
+              "environment": "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
             },
             {
               "display": "-h, --help",
@@ -7418,17 +7426,17 @@
           "invocation": "evidence-oid4vci serve",
           "about": "Serve the delivery endpoints until terminated",
           "long_about": null,
-          "usage": "evidence-oid4vci serve --config <CONFIG>",
+          "usage": "evidence-oid4vci serve --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--config <CONFIG>",
-              "description": "Wallet-delivery runtime file",
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
-              "environment": "EVIDENCE_OID4VCI_CONFIG"
+              "environment": "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
             },
             {
               "display": "-h, --help",
@@ -9225,8 +9233,8 @@
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <FILE>",
-              "description": "Absolute Evidence Gateway runtime configuration file to inspect",
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -9299,14 +9307,14 @@
               "kind": "requires-all",
               "when": "--require-audit-under <ABSOLUTE_DIRECTORY>",
               "arguments": [
-                "--runtime-config <FILE>"
+                "--runtime-config <ABSOLUTE_FILE>"
               ]
             },
             {
               "kind": "requires-all",
               "when": "--without-audit-lock",
               "arguments": [
-                "--runtime-config <FILE>"
+                "--runtime-config <ABSOLUTE_FILE>"
               ]
             },
             {
@@ -9322,7 +9330,7 @@
               "when": null,
               "arguments": [
                 "--json",
-                "--runtime-config <FILE>"
+                "--runtime-config <ABSOLUTE_FILE>"
               ]
             },
             {
@@ -9330,7 +9338,7 @@
               "when": null,
               "arguments": [
                 "--project <PROJECT>",
-                "--runtime-config <FILE>"
+                "--runtime-config <ABSOLUTE_FILE>"
               ]
             }
           ],
@@ -12385,12 +12393,12 @@
       "invocation": "messaging",
       "about": "Run and maintain Registry Messaging",
       "long_about": null,
-      "usage": "messaging --runtime-config <FILE> <COMMAND>",
+      "usage": "messaging --runtime-config <ABSOLUTE_FILE> <COMMAND>",
       "arguments": [],
       "options": [
         {
-          "display": "--runtime-config <FILE>",
-          "description": "Absolute path to the runtime configuration file.",
+          "display": "--runtime-config <ABSOLUTE_FILE>",
+          "description": "Runtime configuration file",
           "always_required": true,
           "repeatable": false,
           "default_values": [],
@@ -12423,7 +12431,7 @@
           "invocation": "messaging serve",
           "about": "Run the Messaging HTTP service",
           "long_about": null,
-          "usage": "messaging --runtime-config <FILE> serve",
+          "usage": "messaging --runtime-config <ABSOLUTE_FILE> serve",
           "arguments": [],
           "options": [
             {
@@ -12611,7 +12619,7 @@
           "options": [
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime file to check offline against the package --package or --project names, or else the one its `package.root` names",
+              "description": "Runtime configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -12735,7 +12743,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute path to the runtime configuration file",
+              "description": "Runtime configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -12849,7 +12857,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute path to the runtime configuration file",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -12893,7 +12901,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute path to the runtime configuration file",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -12955,7 +12963,7 @@
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Absolute path to the runtime configuration file",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -13033,7 +13041,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute path to the runtime configuration file",
+                  "description": "Runtime configuration file",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -13116,7 +13124,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute path to the runtime configuration file",
+                  "description": "Runtime configuration file",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -13170,7 +13178,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute path to the runtime configuration file",
+                  "description": "Runtime configuration file",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -13233,7 +13241,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute path to the runtime configuration file",
+                  "description": "Runtime configuration file",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -13308,7 +13316,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute path to the runtime configuration file",
+                  "description": "Runtime configuration file",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -13397,7 +13405,7 @@
               "options": [
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
-                  "description": "Absolute path to the runtime configuration file",
+                  "description": "Runtime configuration file",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -13678,7 +13686,7 @@
             },
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime file to check offline, as `registry-render serve` reads it, with no package, secret material, or listener",
+              "description": "Runtime configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -14028,12 +14036,12 @@
           "invocation": "registry-render serve",
           "about": "Serve the HTTP rendering API (see the runtime YAML)",
           "long_about": null,
-          "usage": "registry-render serve --runtime-config <FILE>",
+          "usage": "registry-render serve --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <FILE>",
-              "description": "Absolute path of the runtime file naming the package, listener, secrets, and limits",
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -14058,12 +14066,12 @@
           "invocation": "registry-render healthcheck",
           "about": "Probe a running server's /health",
           "long_about": null,
-          "usage": "registry-render healthcheck --runtime-config <FILE>",
+          "usage": "registry-render healthcheck --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
             {
-              "display": "--runtime-config <FILE>",
-              "description": "Absolute path of the runtime file naming the server to probe",
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -14090,12 +14098,12 @@
       "invocation": "scheduling",
       "about": "Run and maintain Registry Scheduling",
       "long_about": null,
-      "usage": "scheduling --runtime-config <FILE> <COMMAND>",
+      "usage": "scheduling --runtime-config <ABSOLUTE_FILE> <COMMAND>",
       "arguments": [],
       "options": [
         {
-          "display": "--runtime-config <FILE>",
-          "description": "Absolute path to the runtime configuration file.",
+          "display": "--runtime-config <ABSOLUTE_FILE>",
+          "description": "Runtime configuration file",
           "always_required": true,
           "repeatable": false,
           "default_values": [],
@@ -14128,7 +14136,7 @@
           "invocation": "scheduling serve",
           "about": "Run the Scheduling HTTP service",
           "long_about": null,
-          "usage": "scheduling --runtime-config <FILE> serve",
+          "usage": "scheduling --runtime-config <ABSOLUTE_FILE> serve",
           "arguments": [],
           "options": [
             {
@@ -14272,7 +14280,7 @@
             },
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime file to check offline against PROJECT, as `scheduling serve` reads it, with no package, database, network, or secret material (`package.root` is not read; `scheduling serve` verifies the package at startup)",
+              "description": "Runtime configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -14418,7 +14426,7 @@
           "invocation": "schedulingctl package",
           "about": "Write the checked policy into a new package directory the runtime verifies",
           "long_about": null,
-          "usage": "schedulingctl package [OPTIONS] <PROJECT>",
+          "usage": "schedulingctl package [OPTIONS] <--output <DIRECTORY>|--dry-run> <PROJECT>",
           "arguments": [
             {
               "display": "<PROJECT>",
@@ -14484,6 +14492,14 @@
           ],
           "constraints": [
             {
+              "kind": "required-exactly-one",
+              "when": null,
+              "arguments": [
+                "--output <DIRECTORY>",
+                "--dry-run"
+              ]
+            },
+            {
               "kind": "mutually-exclusive",
               "when": null,
               "arguments": [
@@ -14504,7 +14520,7 @@
           "options": [
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime configuration document of the deployment",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -14548,7 +14564,7 @@
           "options": [
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime configuration document of the deployment to activate",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -14610,7 +14626,7 @@
           "options": [
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime configuration document of the deployment",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -14683,17 +14699,8 @@
               "invocation": "schedulingctl records apply",
               "about": "Replace the deployment's environment records in one attributable write",
               "long_about": null,
-              "usage": "schedulingctl records apply [OPTIONS] <RUNTIME_CONFIG> <RECORDS>",
+              "usage": "schedulingctl records apply [OPTIONS] --runtime-config <FILE> <RECORDS>",
               "arguments": [
-                {
-                  "display": "<RUNTIME_CONFIG>",
-                  "description": "Runtime configuration document of the deployment to write",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
                 {
                   "display": "<RECORDS>",
                   "description": "Environment records document: locations, pools, and exceptions",
@@ -14705,6 +14712,15 @@
                 }
               ],
               "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
@@ -14739,19 +14755,18 @@
           "invocation": "schedulingctl intents",
           "about": "List delivery intents a deployment's sweep has stopped carrying",
           "long_about": null,
-          "usage": "schedulingctl intents [OPTIONS] <RUNTIME_CONFIG>",
-          "arguments": [
+          "usage": "schedulingctl intents [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
             {
-              "display": "<RUNTIME_CONFIG>",
-              "description": "Runtime configuration document of the deployment to read",
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
-            }
-          ],
-          "options": [
+            },
             {
               "display": "--limit <LIMIT>",
               "description": "Most intents to list",
