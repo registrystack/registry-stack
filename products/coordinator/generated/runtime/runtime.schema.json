@@ -278,6 +278,102 @@
       ],
       "type": "object"
     },
+    "DecisionAuthorization": {
+      "description": "Explicit service identity. Local authorization is limited to numeric loopback.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bearer": {
+              "additionalProperties": false,
+              "properties": {
+                "principal": {
+                  "$ref": "#/$defs/ExternalId"
+                },
+                "tokenRef": {
+                  "$ref": "#/$defs/SecretReference"
+                }
+              },
+              "required": [
+                "tokenRef",
+                "principal"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "bearer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "local": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "local"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DecisionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 8000,
+          "format": "uint64",
+          "maximum": 8000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "authorization": {
+          "$ref": "#/$defs/DecisionAuthorization"
+        },
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "pattern": "^[^\\s\\\\]+$"
+        },
+        "maximumRequestBytes": {
+          "default": 65536,
+          "format": "uint64",
+          "maximum": 65536,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumResponseBytes": {
+          "default": 65536,
+          "format": "uint64",
+          "maximum": 65536,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "model": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "protocol": {
+          "$ref": "#/$defs/DecisionProtocol"
+        }
+      },
+      "required": [
+        "protocol",
+        "baseUrl",
+        "model",
+        "authorization"
+      ],
+      "type": "object"
+    },
+    "DecisionProtocol": {
+      "enum": [
+        "system-one",
+        "openai-decisions"
+      ],
+      "type": "string"
+    },
     "DeploymentConfig": {
       "additionalProperties": false,
       "properties": {
@@ -700,6 +796,16 @@
           "required": [
             "externalHttpConnections"
           ]
+        },
+        {
+          "properties": {
+            "decisionConnections": {
+              "minProperties": 1
+            }
+          },
+          "required": [
+            "decisionConnections"
+          ]
         }
       ]
     }
@@ -714,7 +820,7 @@
         "$ref": "#/$defs/ConnectionConfig"
       },
       "default": {},
-      "description": "Omitted means no product bindings; at least one product or external HTTP connection is required.",
+      "description": "Omitted means no product bindings; at least one product, external HTTP or decision connection is required.",
       "maxProperties": 16,
       "propertyNames": {
         "$ref": "#/$defs/LocalId"
@@ -735,6 +841,18 @@
         }
       ],
       "unevaluatedProperties": false
+    },
+    "decisionConnections": {
+      "additionalProperties": {
+        "$ref": "#/$defs/DecisionConfig"
+      },
+      "default": {},
+      "description": "Omitted means decision evaluation is unavailable. Names must be distinct from product and external HTTP connections.",
+      "maxProperties": 16,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     },
     "deployment": {
       "$ref": "#/$defs/DeploymentConfig"

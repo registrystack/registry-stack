@@ -4083,6 +4083,8 @@ formats:
       boolean: /deployment/authentication/policies/1/operator
       set: /connections/applications/authorization/scopes
     securityMembers:
+      - pointer: /decisionConnections
+        whenOmitted: refused
       - pointer: /deployment/listener/bind
         whenOmitted: refused
       - pointer: /deployment/authentication/allowedClients

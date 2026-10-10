@@ -172,7 +172,8 @@
           "effect": {
             "enum": [
               "read",
-              "mutation"
+              "mutation",
+              "evaluation"
             ],
             "type": "string"
           },
@@ -184,7 +185,8 @@
               "read-availability",
               "create-appointment",
               "invoke-breg-action",
-              "external-get"
+              "external-get",
+              "evaluate-decision"
             ],
             "type": "string"
           },
@@ -205,7 +207,8 @@
             "enum": [
               "read-again",
               "same-command-and-receipt",
-              "same-command"
+              "same-command",
+              "hold-after-dispatch"
             ],
             "type": "string"
           },
@@ -362,6 +365,10 @@
           "bindingDigest": {
             "type": "string"
           },
+          "cancelRequested": {
+            "description": "Cancellation is irreversible and prevents later workflow effects; an uncertain evaluation may still have run at its provider.",
+            "type": "boolean"
+          },
           "deadlineAt": {
             "format": "date-time",
             "type": "string"
@@ -423,6 +430,7 @@
           "admittedAt",
           "deadlineAt",
           "uncertain",
+          "cancelRequested",
           "restoreReviewRequired"
         ],
         "type": "object"

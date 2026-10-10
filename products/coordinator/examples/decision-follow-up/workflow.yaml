@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: decision-follow-up
+  version: "1"
+input:
+  type: object
+  additionalProperties: false
+  required: [applicationId, summary]
+  properties:
+    applicationId: {type: string, format: uuid}
+    summary: {type: string, minLength: 1, maxLength: 4000}
+connections:
+  assessor: decision
+  applications: breg
+functionsFile: functions.rhai
+deadlineSeconds: 300
+start: assess
+steps:
+  assess:
+    type: call
+    connection: assessor
+    operation: evaluate-decision
+    input: {function: assessment_request, arguments: [{type: input}]}
+    next: route
+  route:
+    type: choose
+    choose: {function: assessment_route, arguments: [{type: step, step: assess}]}
+    cases: {request: request-information, skip: skipped, review: review}
+  request-information:
+    type: call
+    connection: applications
+    operation: invoke-breg-action
+    input: {function: action_request, arguments: [{type: input}]}
+    next: accepted
+  accepted:
+    type: finish
+    outcome: information-requested
+    output: {function: action_result, arguments: [{type: step, step: request-information}]}
+  skipped:
+    type: finish
+    outcome: no-action
+  review:
+    type: finish
+    outcome: needs-review
+outcomes:
+  information-requested:
+    type: object
+    additionalProperties: false
+    required: [actionApplicationId]
+    properties:
+      actionApplicationId: {type: string, format: uuid}
+  no-action: {type: "null"}
+  needs-review: {type: "null"}

@@ -110,6 +110,7 @@ The supported operation inventory is fixed:
 | `create-appointment` | Scheduling | Mutation | Same command and read-only receipt |
 | `invoke-breg-action` | BReg | Mutation | Same prepared command; no read-only receipt |
 | `external-get` | Configured external HTTP service | Read | Read again |
+| `evaluate-decision` | Configured typed decision service | Evaluation | Hold after uncertain dispatch |
 
 `invoke-breg-action` takes an action identifier and an object of action inputs.
 It requires a standing BReg service identity and a profile that permits that
@@ -128,6 +129,21 @@ GET, rejects redirects, and returns the validated `{status, body}` JSON value.
 An omitted authorization block means a public read, with no borrowed caller
 credential. See the [configuration reference](../../docs/site/src/content/docs/reference/coordinator-configuration.mdx)
 for limits and defaults.
+
+`evaluate-decision` accepts typed predicate, choice and rubric-score questions.
+Bind its logical `decision` connection under `runtime.decisionConnections` using
+the System One or OpenAI Decisions protocol. The exact request is frozen before
+sending; the validated result is saved before the next step. Rhai can apply
+thresholds to the saved answers, then a separate product call acquires its own
+authority. A refused or uncertain model result grants no authority.
+
+An evaluation may be billable and cannot be treated as a repeatable read. An
+ambiguous dispatch stops without automatic retry, `retry-same` or receipt
+reconciliation. Cancel and make a separately authorized new start if another
+potentially billable evaluation is appropriate. The
+[decision example](examples/decision-follow-up/README.md) demonstrates offline
+branching and distinguishes model refusal from transport uncertainty. General
+structured generation, model tools and asynchronous jobs are not supported.
 
 ## Add a maintained operation
 
@@ -236,6 +252,7 @@ cargo test --locked -p registry-coordinator --features schema \
   --test cli_authoring --test runtime_config \
   --test deployment_surface --test http_boundary --test scheduling_adapter \
   --test breg_action_adapter --test external_http --test external_runtime \
+  --test decision_protocol --test decision_runtime \
   --test catalog_scenarios --test operation_compatibility
 products/coordinator/scripts/check-schemas.sh
 cargo run --locked -p registry-coordinator --bin coordinatorctl -- openapi \

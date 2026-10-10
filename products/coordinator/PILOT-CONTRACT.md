@@ -16,9 +16,9 @@ binds its logical connections to endpoints and identities.
 YAML owns the finite graph and waits; pure Rhai maps values and selects an authored
 branch. Functions cannot make calls, acquire credentials or add runtime steps.
 
-The seven supported operations are `read-record`, `submit-message`,
-`read-scheduling`, `read-availability`, `create-appointment`, `invoke-breg-action`
-and `external-get`. The first five keep their original product contracts.
+The eight supported operations are `read-record`, `submit-message`,
+`read-scheduling`, `read-availability`, `create-appointment`, `invoke-breg-action`,
+`external-get`, and `evaluate-decision`. The first five keep their original product contracts.
 Messaging submission and Scheduling appointment creation support same-command
 recovery and read-only original-key receipts. Base Registry Engine (BReg) action
 invocation supports same-command recovery without a read-only action receipt. The four read
@@ -67,6 +67,20 @@ original command and idempotency key are retained for bounded recovery.
 If evaluating the following wait fails, the successful call and its output stay
 recorded. The run fails with `mapping-invalid`; the accepted call cannot be
 replayed to repair the mapping.
+
+`evaluate-decision` uses an explicitly configured System One or OpenAI Decisions
+protocol binding, bounded state and typed questions. Preparation is inert; the
+exact request is saved before dispatch and the validated result is committed
+with the next checkpoint. Evaluation is neither a repeatable read nor a Registry
+mutation. Possible dispatch marks the result uncertain. Without proven provider
+replay or original-result lookup, automatic and operator replay are refused.
+A completed result is reused on restart. OpenAI per-question refusal is a typed
+answer. A System One HTTP refusal stops
+the call; it is not a negative answer or a typed review result. A malformed or
+lost reply remains an uncertain call.
+Pure workflow policy interprets results before a separately authorized effect.
+Model identity and native confidence are retained without claiming immutable
+weights, determinism, accuracy or interchangeable confidence calibration.
 
 ## Deployment and custody
 
@@ -136,6 +150,14 @@ held work within its existing deadline, or cancel it. Calls and waits retain the
 deadlines; local `choose` and `finish` steps keep their existing completion
 semantics. See the [deployment runbook](DEPLOYMENT.md) for the procedure and
 executable restore test.
+
+An uncertain evaluation with `hold-after-dispatch` recovery may be cancelled
+and explicitly abandoned during complete execution recovery once its active
+lease has ended. The protected definition and original prepared request must
+match. Release rechecks eligibility and allows unrelated work to resume while
+retaining `uncertain`, `cancelRequested`, the original request and spent start
+identity. It never resumes the cancelled run or establishes its remote outcome.
+Unknown product mutations do not qualify for this exception.
 
 `coordinatorctl check --project DIRECTORY` checks `workflow.yaml` and
 `functions.rhai`, plus optional `runtime.yaml` and `scenarios.yaml` companions.

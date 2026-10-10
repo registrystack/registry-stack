@@ -109,6 +109,32 @@ for institutional endpoints; plain HTTP requires an explicit numeric loopback
 address. See the [external directory example](examples/external-directory/runtime.yaml)
 and [configuration reference](../../docs/site/src/content/docs/reference/coordinator-configuration.mdx).
 
+For `evaluate-decision`, bind a logical `decision` connection under
+`decisionConnections`. Select `system-one` or `openai-decisions`, an explicit
+`baseUrl` and `model`, and either `authorization.bearer` with `tokenRef` and
+`principal`, or explicit `authorization.local: {}` on numeric loopback. The
+configured principal identifies the model account across credential rotation;
+ensure a replacement key belongs to that same account. Request and response
+limits default to 65,536 bytes and the attempt limit to 8000 milliseconds.
+These limits can be reduced. Names across all three connection maps must be
+unique, with at most 16 in total.
+
+Review the data your mappings disclose before activating a remote model binding.
+Model calls may incur cost. Inputs and results use Coordinator's existing protected
+state and retention; provider retention remains your provider/account contract.
+A model alias can change upstream even when the local binding is unchanged.
+Use an immutable release/deployment identifier when your provider offers one.
+No failover or model substitution occurs within an admitted command.
+
+If evaluation completion becomes unknown, inspection reports
+`hold-after-dispatch` and refuses `retry-same` and reconciliation. Cancellation
+sets `cancelRequested` while preserving `uncertain` and the attention state;
+it cannot undo provider processing. A separately authorized new start can evaluate
+again, with possible additional cost and a different answer. The
+[decision example](examples/decision-follow-up/README.md) includes refusal and
+unknown-result cases; terminal `needs-review` returns control to the caller and
+does not create a resumable approval task.
+
 Create separate migration and runtime PostgreSQL roles. The migration role owns
 the dedicated schema. The runtime role must not own that schema, inherit
 migration authority, create objects, or write activation/schema ledgers. Apply
@@ -363,6 +389,15 @@ review mark is resolved by a final authoritative receipt with no later external
 call, or complete execution history and prior fencing are explicitly attested.
 Do not cancel a restored run to erase its unresolved external-effect history.
 
+A cancelled uncertain evaluation can be abandoned without blocking unrelated
+work forever. Once its active lease has ended, complete execution recovery can
+clear its restore review after validating the protected definition and prepared
+request. Hold release checks those conditions again. `cancelRequested: true`
+and `uncertain: true` remain visible; the request, unknown outcome and spent
+start identity remain retained, and the run can never resume or replay. This
+exception applies only to evaluations with `hold-after-dispatch` recovery.
+Unknown product mutations still require their original recovery procedure.
+
 When complete PITR/WAL or separately retained authoritative execution evidence
 establishes that history, an operator may use `complete-execution-recovery
 --recovery-reference REFERENCE --execution-history-complete
@@ -389,8 +424,12 @@ hold release never start these steps automatically. Prepared safe-read retries
 keep their ordinary pending behavior. Explicitly retry a held wait to restore
 its original scheduled instant atomically; a future wait does not advance early.
 Active leases, prepared mutating leased or unknown calls, uncertain outcomes
-and expired receipts remain protected. Recovery does not establish an external
+and expired receipts remain protected. The cancelled-evaluation exception above
+allows hold release without resolving or discarding the unknown outcome.
+Recovery does not establish an external
 outcome for any of these calls.
+Prepared evaluations restored before recorded dispatch intent also retain the
+conservative hold; the abandonment exception requires recorded uncertainty.
 
 After `release-restore-hold`, inspect safe settled work and use `retry-same`
 only when its original deadline permits it, or cancel and retain it when no

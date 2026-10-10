@@ -170,7 +170,8 @@
         "read-availability",
         "create-appointment",
         "invoke-breg-action",
-        "external-get"
+        "external-get",
+        "evaluate-decision"
       ],
       "type": "string"
     },
@@ -179,7 +180,8 @@
         "breg",
         "messaging",
         "scheduling",
-        "external-http"
+        "external-http",
+        "decision"
       ],
       "type": "string"
     },
