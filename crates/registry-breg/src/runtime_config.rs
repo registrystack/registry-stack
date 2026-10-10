@@ -1883,7 +1883,7 @@ impl OidcVerifierConfig {
         let leeway = oidc_leeway(raw.leeway_milliseconds)?;
         let jwks_source = OidcJwksSource::from_block(raw.provider.jwks_source)?;
         Ok(Self {
-            issuer: raw.provider.issuer,
+            issuer: raw.provider.issuer.into_string(),
             audience: raw.provider.audience,
             allowed_algorithm: raw.allowed_algorithm,
             access_token_type: raw.access_token_type,
@@ -2062,7 +2062,9 @@ impl OidcJwksSource {
     fn from_block(block: JwksSource) -> Result<Self> {
         match block {
             JwksSource::Discovery {} => Ok(Self::Discovery),
-            JwksSource::Uri { uri } => Ok(Self::Uri { uri }),
+            JwksSource::Uri { uri } => Ok(Self::Uri {
+                uri: uri.into_string(),
+            }),
             JwksSource::Static { document_ref } => Ok(Self::Static {
                 document_ref: parse_secret_reference(
                     document_ref,

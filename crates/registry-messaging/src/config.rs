@@ -817,7 +817,7 @@ impl RuntimeConfig {
         let fetcher = match &self.authentication.oidc.provider.jwks_source {
             OidcJwksSource::Discovery {} => {
                 let discovery = fetch_discovery(&OidcDiscoveryConfig {
-                    issuer: self.authentication.oidc.provider.issuer.clone(),
+                    issuer: self.authentication.oidc.provider.issuer.to_string(),
                     jwks_uri_override: None,
                     discovery_timeout: Duration::from_secs(5),
                     max_doc_bytes: 1024 * 1024,
@@ -827,7 +827,7 @@ impl RuntimeConfig {
                 JwksFetcher::new(discovery.jwks_uri, JwksFetcherConfig::defaults())
             }
             OidcJwksSource::Uri { uri } => {
-                JwksFetcher::new(uri.clone(), JwksFetcherConfig::defaults())
+                JwksFetcher::new(uri.to_string(), JwksFetcherConfig::defaults())
             }
             OidcJwksSource::Static { document_ref } => {
                 let document = secrets.resolve(document_ref).map_err(|error| {
@@ -854,7 +854,7 @@ impl RuntimeConfig {
     #[must_use]
     pub fn verifier_profile(&self) -> TokenVerifierConfig {
         TokenVerifierConfig::access_token_profile(
-            self.authentication.oidc.provider.issuer.clone(),
+            self.authentication.oidc.provider.issuer.to_string(),
             vec![self.authentication.oidc.provider.audience.clone()],
             vec![Algorithm::RS256, Algorithm::ES256],
             access_token_typ_set(MESSAGING_ACCESS_TOKEN_TYPE),
@@ -1844,7 +1844,7 @@ pub(crate) mod tests {
             "127.0.0.1:9107".parse().unwrap()
         );
         assert_eq!(
-            config.authentication.oidc.provider.issuer,
+            config.authentication.oidc.provider.issuer.as_str(),
             "https://fallback.test"
         );
 
@@ -1909,8 +1909,12 @@ pub(crate) mod tests {
         ] {
             let error = RuntimeConfig::load_with_environment(&path, &|_| Some(value.to_owned()))
                 .unwrap_err();
-            assert!(matches!(error, RuntimeConfigError::Block(_)), "{error}");
+            assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
             assert_eq!(error.pointer(), "/authentication/oidc/issuer");
+            assert!(
+                error.to_string().contains("config.invalid-value"),
+                "{error}"
+            );
         }
     }
 

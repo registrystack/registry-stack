@@ -16,10 +16,10 @@
       "pattern": "^[^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+$"
     },
     "CodelistVersion": {
-      "description": "A version of 1 to 128 bytes without a NUL character, such as '2026-01'.",
+      "description": "A version of 1 to 128 characters without control characters, such as '2026-01'.",
       "maxLength": 128,
       "minLength": 1,
-      "pattern": "^[^\\u0000]+$",
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "type": "string"
     },
     "ExternalId": {

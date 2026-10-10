@@ -2941,7 +2941,10 @@ fn a_substituted_value_cannot_inject_document_structure() {
         _ => env_lookup(name),
     })
     .expect_err("a substituted newline stays inside the issuer string");
-    assert_eq!(error, RuntimeConfigError::InvalidOidc);
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.invalid-value", "/authentication/oidc/issuer")
+    );
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains("issuer.example"));
     assert!(!rendered.contains("entities"));
@@ -3038,21 +3041,26 @@ fn oidc_issuer_and_audience_follow_the_shared_issuer_block() {
         env_lookup,
     )
     .expect("a loopback http issuer serves local development");
-    for issuer in [
-        "urn:breg:issuer",
-        "http://issuer.example",
-        "https://user:secret@issuer.example",
-        "https://issuer.example#fragment",
+    for (issuer, typed_refusal) in [
+        ("urn:breg:issuer", true),
+        ("http://issuer.example", false),
+        ("https://user:secret@issuer.example", true),
+        ("https://issuer.example#fragment", false),
     ] {
-        assert_eq!(
-            parse_runtime_config_with_env(
-                &base.replace("https://issuer.example", issuer),
-                env_lookup
-            )
-            .expect_err("issuer outside the shared block refused"),
-            RuntimeConfigError::InvalidOidc,
-            "{issuer}"
-        );
+        let error = parse_runtime_config_with_env(
+            &base.replace("https://issuer.example", issuer),
+            env_lookup,
+        )
+        .expect_err("issuer outside the shared block refused");
+        if typed_refusal {
+            assert_eq!(
+                reader_refusal(&error),
+                ("config.invalid-value", "/authentication/oidc/issuer"),
+                "{issuer}"
+            );
+        } else {
+            assert_eq!(error, RuntimeConfigError::InvalidOidc, "{issuer}");
+        }
     }
     let long_audience = "a".repeat(513);
     assert_eq!(
@@ -3079,17 +3087,25 @@ fn jwks_source_uri_kind_skips_discovery_under_the_shared_rules() {
     assert!(!debug.contains("https://issuer.example/jwks"));
     parse_runtime_config_with_env(&with_uri("http://127.0.0.1:8095/jwks"), env_lookup)
         .expect("loopback http uri source parses");
-    for uri in [
-        "http://issuer.example/jwks",
-        "https://user:secret@issuer.example/jwks",
-        "file:///etc/jwks.json",
+    for (uri, typed_refusal) in [
+        ("http://issuer.example/jwks", false),
+        ("https://user:secret@issuer.example/jwks", true),
+        ("file:///etc/jwks.json", true),
     ] {
-        assert_eq!(
-            parse_runtime_config_with_env(&with_uri(uri), env_lookup)
-                .expect_err("uri outside the shared rules refused"),
-            RuntimeConfigError::InvalidOidc,
-            "{uri}"
-        );
+        let error = parse_runtime_config_with_env(&with_uri(uri), env_lookup)
+            .expect_err("uri outside the shared rules refused");
+        if typed_refusal {
+            assert_eq!(
+                reader_refusal(&error),
+                (
+                    "config.invalid-value",
+                    "/authentication/oidc/jwksSource/uri"
+                ),
+                "{uri}"
+            );
+        } else {
+            assert_eq!(error, RuntimeConfigError::InvalidOidc, "{uri}");
+        }
     }
 }
 

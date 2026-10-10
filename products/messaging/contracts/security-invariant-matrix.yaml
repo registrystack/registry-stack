@@ -30,6 +30,10 @@ invariants:
       each be listed, direct content needs the profile's explicit opt-in, and
       only the sender role submits. Authentication, role checks, and per-caller
       rate admission happen before the router buffers the submission body.
+      Before constructing authentication, the runtime loader reads issuer
+      and explicit JWKS URI through the shared checked URL type, refusing
+      backslashes and rewritten host text with value-free diagnostics. Issuer
+      comparison stays textual and existing HTTPS and loopback policy applies.
     refusal: >-
       Refuse with profile.not-authorized for a sender profile, template, or
       direct content outside the profile, and with operation.not-authorized

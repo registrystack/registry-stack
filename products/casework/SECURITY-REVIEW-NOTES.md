@@ -398,6 +398,19 @@ family (review_http).
 - The inbox still refuses a whole page with `work-item.proposal-changed` when
   the source's binding generation moved; only single-item reads changed.
 
+### Checked issuer and JWKS URLs
+
+The configured issuer and explicit JWKS URI use the shared checked `Url`
+before authentication is constructed, refusing backslashes and host text the
+URL parser rewrites with value-free `config.invalid-value` at the member.
+ASCII DNS case differences, punycode and IPv6 literals remain accepted; issuer
+comparison stays textual. Existing HTTPS policy and supervised development
+loopback permission are unchanged. The shared
+`issuer_and_jwks_uri_are_checked_urls_when_read` test pins the new refusals and
+ordinary inputs. Casework's `the_oidc_issuer_and_clients_are_the_shared_blocks`
+in `crates/registry-casework/src/config.rs` pins the remote HTTP refusal at
+`/authentication/oidc/issuer`.
+
 ### PostgreSQL support floor
 
 Activation and startup require PostgreSQL 17 or newer. The shared activation

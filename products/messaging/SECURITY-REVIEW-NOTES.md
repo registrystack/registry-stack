@@ -43,6 +43,17 @@ type, unadmitted client, undeclared exchange) and
 forged signature, another audience). They are cited under MESSAGING-SEC-04 in
 `contracts/security-test-traceability.yaml`.
 
+The configured issuer and explicit JWKS URI use the shared checked `Url`
+type before authentication is constructed. Backslashes and host text the URL
+parser rewrites are refused with `config.invalid-value` at the member, without
+repeating its value. ASCII DNS case differences, punycode, and IPv6 literals
+remain accepted, and the issuer is still compared as written. Existing HTTPS
+and supervised loopback rules remain in force. The shared
+`issuer_and_jwks_uri_are_checked_urls_when_read` test covers refusals and
+ordinary configurations; Messaging's
+`an_expanded_value_can_never_change_the_document_shape` proves that an
+expanded invalid issuer is refused at `/authentication/oidc/issuer`.
+
 ## Authorization
 
 Threat: an authenticated caller sends through a sender identity or template
