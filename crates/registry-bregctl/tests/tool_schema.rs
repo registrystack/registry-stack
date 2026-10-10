@@ -305,7 +305,7 @@ fn full_descriptor() -> Value {
 /// Where a full descriptor writes each word list the schema defines. A step's
 /// `type` is the one list written inline, so it has its own row.
 const DESCRIPTOR_WORD_LISTS: &[(&str, &str)] = &[
-    ("CompiledRegistryChangeClass", "/changeClass"),
+    ("ReviewedMigrationChangeClass", "/changeClass"),
     ("CompiledRegistryChangeCode", "/covers/0/code"),
     ("CompiledRegistryChangeTargetKind", "/covers/0/target/kind"),
     ("ReviewedMigrationRecovery", "/recovery"),
@@ -401,9 +401,9 @@ fn the_reader_accepts_every_word_the_migration_descriptor_schema_enumerates() {
             checked += 1;
         }
     }
-    // 5 change classes, 63 change codes, 14 target kinds, 1 recovery,
+    // 3 change classes, 63 change codes, 14 target kinds, 1 recovery,
     // 2 history choices, 4 object kinds, and 1 cursor protocol.
-    assert_eq!(checked, 90);
+    assert_eq!(checked, 88);
 
     let steps = &definitions["ReviewedMigrationStepDescriptor"]["oneOf"];
     let types: Vec<&str> = steps
@@ -424,6 +424,42 @@ fn the_reader_accepts_every_word_the_migration_descriptor_schema_enumerates() {
             "field-encryption-backfill"
         ]
     );
+}
+
+/// Additive changes need no reviewed descriptor, and unsupported changes
+/// cannot be made executable by describing them as reviewed migration work.
+#[test]
+fn reviewed_migration_schema_refuses_classes_the_checker_refuses() {
+    use registry_breg::migration_plan::{check_migration_descriptor, MIGRATION_DESCRIPTOR_FORMAT};
+    use registry_platform_yaml::{Expect, Reader};
+
+    let documents = documents().expect("the tool schemas generate");
+    let schema = compile(&documents["migration-descriptor.v1alpha1.schema.json"]);
+    for (class, accepted) in [
+        ("compatible-additive", false),
+        ("data-backfill-required", true),
+        ("access-or-disclosure-change", true),
+        ("destructive-or-irreversible", true),
+        ("unsupported", false),
+    ] {
+        let mut descriptor = example(DESCRIPTOR);
+        descriptor["changeClass"] = Value::from(class);
+        let bytes = serde_json::to_vec(&descriptor).expect("descriptor serializes");
+        let document = Reader::new("descriptor.json")
+            .read(&bytes, &Expect::one(&MIGRATION_DESCRIPTOR_FORMAT))
+            .expect("the descriptor has the current envelope");
+        let findings =
+            check_migration_descriptor(&document, None).expect("the checker reads the descriptor");
+        let class_refused = findings.iter().any(|diagnostic| {
+            diagnostic.code == "breg.migration.change-class" && diagnostic.path == "/changeClass"
+        });
+        assert_eq!(class_refused, !accepted, "checker class: {class}");
+        assert_eq!(
+            schema.is_valid(&descriptor),
+            accepted,
+            "schema class: {class}"
+        );
+    }
 }
 
 /// The schema refuses what the reader refuses, at the same member: an

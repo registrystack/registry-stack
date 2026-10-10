@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The reviewed migration descriptor schema lists only the three change classes
+  its semantic checker accepts. It refuses `compatible-additive` and
+  `unsupported`, matching the existing `breg.migration.change-class` refusal;
+  compiled package classifications remain unchanged.
+
 v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
 Fresh installation creates the current schema directly, without conversion
 or discard of earlier rows.

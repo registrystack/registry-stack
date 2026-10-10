@@ -30,16 +30,6 @@
       ],
       "type": "string"
     },
-    "CompiledRegistryChangeClass": {
-      "enum": [
-        "compatible-additive",
-        "data-backfill-required",
-        "access-or-disclosure-change",
-        "destructive-or-irreversible",
-        "unsupported"
-      ],
-      "type": "string"
-    },
     "CompiledRegistryChangeCode": {
       "enum": [
         "registry-identity-changed",
@@ -189,6 +179,15 @@
         "sqlPath"
       ],
       "type": "object"
+    },
+    "ReviewedMigrationChangeClass": {
+      "description": "The descriptor's schema vocabulary mirrors `descriptor_problems`, while\ncompiled package changes retain their broader internal classification.",
+      "enum": [
+        "data-backfill-required",
+        "access-or-disclosure-change",
+        "destructive-or-irreversible"
+      ],
+      "type": "string"
     },
     "ReviewedMigrationObject": {
       "additionalProperties": false,
@@ -427,7 +426,7 @@
       "type": "string"
     },
     "changeClass": {
-      "$ref": "#/$defs/CompiledRegistryChangeClass"
+      "$ref": "#/$defs/ReviewedMigrationChangeClass"
     },
     "covers": {
       "items": {
