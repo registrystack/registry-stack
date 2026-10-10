@@ -315,12 +315,12 @@ class Journey:
                         "--assertion-key-file", destination / (client + "-key"))
 
     def spawn(self, binary, runtime, label):
-        log = open(self.root / "logs" / f"{label}.log", "wb")
         args = [str(self.bin / binary), "--runtime-config", str(runtime)]
         if binary != "coordinator":
             args.append("serve")
-        child = subprocess.Popen(args, env=self.env, stdout=log, stderr=log)
-        self.children.append((child, log))
+        with open(self.root / "logs" / f"{label}.log", "wb") as log:
+            child = subprocess.Popen(args, env=self.env, stdout=log, stderr=log)
+            self.children.append((child, log))
         return child
 
     def stop(self, child):
@@ -440,7 +440,7 @@ class Journey:
         page = http("GET", self.urls["casework"] + "/v1/review-tasks?queue=review&limit=25", human, headers=human_headers)
         item = next(row for row in page["items"] if row["state"] == "open")
         task_url = self.urls["casework"] + "/v1/review-tasks/" + item["taskId"]
-        claimed = http("POST", task_url + "/claim", human, headers={**human_headers,
+        http("POST", task_url + "/claim", human, headers={**human_headers,
                        "If-Match":f'"{item["revision"]}"', "Idempotency-Key":str(uuid.uuid4())})
         http("GET", task_url + "/task-templates", human, headers=human_headers)
         def approve(template):
@@ -692,7 +692,7 @@ class Journey:
         package = self.root / "messaging-package"
         self.ctl("messagingctl", "package", project, "--output", package)
         keys = self.root / "coordinator-secrets"
-        reader = self.export(owner, "application-reader", keys)
+        self.export(owner, "application-reader", keys)
         sender = self.export(owner, "case-system", keys)
         assert sender["resource"] == "urn:example:messaging", "client export must use registered Messaging resource"
         secret = self.root / "messaging-secrets"
@@ -735,9 +735,9 @@ class Journey:
                 "scopeClaim":"scope","allowedClients":["case-system"],"jwksSource":{"kind":"static","documentRef":"secret:file/jwks"}}},
             "audit":{"destination":"file","path":str(self.root / "audit/messaging.ndjson"),"hashKeyRef":"secret:file/audit-key"}})
         self.ctl("messagingctl", "apply", "--runtime-config", runtime)
-        log = open(self.root / "logs/messaging.log", "wb")
-        child = subprocess.Popen([str(self.bin / "messaging"),"--runtime-config",str(runtime),"serve"], env=self.env, stdout=log, stderr=log)
-        self.children.append((child, log))
+        with open(self.root / "logs/messaging.log", "wb") as log:
+            child = subprocess.Popen([str(self.bin / "messaging"),"--runtime-config",str(runtime),"serve"], env=self.env, stdout=log, stderr=log)
+            self.children.append((child, log))
         for _ in range(100):
             assert child.poll() is None, "Messaging exited; inspect its private log"
             try:

@@ -258,25 +258,36 @@ production credentials are needed to author a project.
 
 The governed-action and external-directory examples have deterministic scenarios;
 adapter checks use mock HTTP services and durable-state checks use PostgreSQL.
-For native BReg action acceptance, run this explicit helper from the checkout:
+For native BReg action and notice acceptance, run this explicit helper from the checkout:
 
 ```sh
 python3 products/coordinator/scripts/test-breg-action.py --env /absolute/path/coordinator-test.env
 ```
 
 Provide Python 3, the current checkout's Cargo build prerequisites, and
-`COORDINATOR_TEST_DATABASE_URL` in the environment or named file. The URL must
-name an owned disposable PostgreSQL 17+ database on loopback, with authority to
-create and drop unique fixture databases and roles. The helper builds current
-`breg` and `bregctl` binaries. It provisions synthetic credentials and fixture
-data, creates and removes only its unique databases and roles, and does not reset
-the named database. No live service credentials are required.
+distinct `COORDINATOR_TEST_DATABASE_URL` and
+`COORDINATOR_MESSAGING_TEST_DATABASE_URL` values in the environment or named file.
+Each URL must name an owned disposable PostgreSQL 17+ database on loopback.
+The Coordinator database identity needs authority to create and drop unique
+fixture databases and roles; both database identities must create and drop
+fixture schemas. The helper builds current `breg`, `bregctl`, `messaging` and
+`messagingctl` binaries and provisions synthetic credentials and data. Successful
+runs clean up UUID-owned fixture resources without resetting the named databases.
+Assertion failures can retain diagnostic Coordinator and Messaging schemas.
+No live service credentials are required.
 
-The native check proves one governed patch was accepted despite a lost response.
+The first native check proves one governed patch was accepted despite a lost response.
 Reconstructed `HttpAdapters` reload the saved preparation and recover with the
 same body, key and conditions, leaving one applied record revision and returning
 the same application receipt. It checks fresh metadata, refusal through a real
-read-only profile, and no receipt lookup during reconciliation. Separate
-PostgreSQL worker tests cover crash durability. This does not establish a full
-Coordinator process journey or native proof of the action-plus-notice example.
-The helper is an explicit contributor check, not a new CI gate.
+read-only profile, and no BReg receipt lookup during reconciliation.
+
+The second check executes `Worker` and `Store` through a real BReg action and a
+real Messaging notice submission. After the accepted notice reply is dropped,
+reconstructed objects recover through the exact original notice receipt lookup.
+The action and notice are not resubmitted, and duplicate start admission returns
+the original run. This proves message acceptance, not provider delivery.
+Reconstruction replaces Rust objects; it does not restart the Coordinator OS
+process. The separate `process_restart` target retains process restart coverage.
+The combined BReg, Casework, Scheduling and Messaging journey remains deferred.
+The helper remains an explicit contributor check, not a new CI gate.

@@ -170,16 +170,25 @@ read-only action receipt contract. Reconciliation can resolve an uncertain
 outcome; a definite retryable reply requires
 same-command retry.
 
-The governed-action adapter has both mock HTTP checks and an explicit native
-BReg acceptance check. The native check observes a committed patch after response
+The governed-action adapter has both mock HTTP checks and explicit native
+acceptance checks. The first native check observes a committed patch after response
 loss, reconstructs the adapters from saved preparation, and recovers with the
 same body, key and conditions. It verifies one applied record revision, the same
 application receipt, fresh metadata, a real read-only profile refusal and no
-receipt lookup. PostgreSQL worker checks separately exercise preparation and
-crash durability. This does not establish a full Coordinator process journey
-or native proof of the action-plus-notice example.
+receipt lookup. The second uses actual `Worker` and `Store` objects with a real
+BReg action and Messaging notice. It drops the accepted notice reply, reconstructs
+the objects, and resolves the notice through its exact original receipt lookup.
+Neither action nor notice is repeated; duplicate start admission returns the
+original run. Acceptance does not establish provider delivery. Object
+reconstruction is distinct from OS-process restart, which retains separate
+`process_restart` coverage. PostgreSQL worker checks separately exercise
+preparation and crash durability. The combined BReg, Casework, Scheduling and
+Messaging journey remains deferred.
 See [the contributor checks](README.md#verify-a-change)
-for the explicit helper and its disposable loopback database prerequisites.
+for the explicit helper and its two distinct disposable loopback databases.
+Successful runs clean up UUID-owned fixture resources; assertion failures may
+retain diagnostic Coordinator and Messaging schemas. This explicit contributor
+check does not add a CI gate.
 Native Casework and BReg applications may compose a governed application action
 with a separate optional notice through their owning APIs.
 
