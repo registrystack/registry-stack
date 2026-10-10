@@ -37,7 +37,7 @@ def _target_debug() -> pathlib.Path:
     # CARGO_BUILD_TARGET_DIR, a relative value and the `target` default all
     # resolve exactly as they did for that build.
     metadata = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+        ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"],
         cwd=_WORKSPACE_ROOT,
         capture_output=True,
         check=False,
