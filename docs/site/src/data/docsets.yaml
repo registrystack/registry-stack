@@ -35,6 +35,40 @@ docsets:
       registry-breg-services:
         version: main source (unreleased)
         ref: HEAD
+  - id: v0.40.0
+    label: v0.40.0
+    path: /v/0.40.0/
+    status: archived
+    availability: candidate
+    source: registry-stack-v0.40.0
+    repo_docs_source: monorepo
+    published_at: 2026-10-10
+    description: Registry Stack v0.40.0 beta-52 candidate documentation set.
+    products:
+      registry-stack:
+        version: v0.40.0
+        ref: v0.40.0
+      registry-manifest:
+        version: v0.40.0
+        ref: v0.40.0
+      registry-evidence:
+        version: v0.40.0
+        ref: v0.40.0
+      registry-casework:
+        version: v0.40.0
+        ref: v0.40.0
+      registry-scheduling:
+        version: v0.40.0
+        ref: v0.40.0
+      registry-render:
+        version: v0.40.0
+        ref: v0.40.0
+      registry-messaging:
+        version: v0.40.0
+        ref: v0.40.0
+      registry-breg-services:
+        version: v0.40.0
+        ref: v0.40.0
   - id: v0.39.0
     label: v0.39.0
     path: /v/0.39.0/
