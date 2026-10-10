@@ -156,6 +156,10 @@ pub struct MachineClient {
 pub struct TokenExchangeClient {
     pub assertion_resource_server_id: String,
     pub assertion_scope: String,
+    /// Explicit ordinary permissions on other registered resources. Empty
+    /// retains institutional bootstrap-only role validation. These permissions
+    /// add no signed grant attributes or exchange authority.
+    pub ordinary_resource_permissions: Vec<(String, Vec<String>)>,
 }
 
 /// One external authority, rendered as a native exchange-only OIDC connection.
@@ -286,6 +290,30 @@ pub(crate) fn valid_uuid(value: &str) -> bool {
 /// server will see: RFC 6749 scope-token bytes, which `:` belongs to.
 fn valid_permission(value: &str) -> bool {
     registry_platform_httputil::valid_scope_token(value)
+}
+
+fn registered_permission(server: &ResourceServer, scope: &str) -> bool {
+    server.resources.iter().any(|resource| {
+        let mut path = vec![resource.handle.as_str()];
+        let mut parent = resource.parent.as_deref();
+        while let Some(handle) = parent {
+            if path.len() >= server.resources.len() {
+                return false;
+            }
+            let Some(ancestor) = server.resources.iter().find(|entry| entry.handle == handle)
+            else {
+                return false;
+            };
+            path.push(ancestor.handle.as_str());
+            parent = ancestor.parent.as_deref();
+        }
+        path.reverse();
+        let prefix = path.join(":");
+        resource
+            .actions
+            .iter()
+            .any(|action| scope == format!("{prefix}:{}", action.handle))
+    })
 }
 
 fn private_file_name(path: &std::path::Path) -> bool {
@@ -588,22 +616,55 @@ impl IssuerDescription {
                     .flat_map(|role| &role.permissions)
                     .collect();
                 let first_party = first_party_clients.contains(&client.client_id);
-                let exact_bootstrap = !permissions.is_empty()
+                let mut ordinary_servers = BTreeSet::new();
+                if exchange.ordinary_resource_permissions.len() > 7
+                    || exchange
+                        .ordinary_resource_permissions
+                        .iter()
+                        .any(|(id, scopes)| {
+                            id == &exchange.assertion_resource_server_id
+                                || !ordinary_servers.insert(id)
+                                || scopes.is_empty()
+                                || scopes.len() > 32
+                                || scopes.iter().collect::<BTreeSet<_>>().len() != scopes.len()
+                                || self
+                                    .resource_servers
+                                    .iter()
+                                    .find(|server| &server.id == id)
+                                    .is_none_or(|server| {
+                                        scopes.iter().any(|scope| {
+                                            !valid_permission(scope)
+                                                || scope.contains('*')
+                                                || !registered_permission(server, scope)
+                                        })
+                                    })
+                        })
+                {
+                    return refuse("ordinary exchange-client permissions require distinct non-bootstrap registered resources and exact bounded scopes");
+                }
+                let bootstrap_present = permissions.iter().any(|(server, scopes)| {
+                    server == &exchange.assertion_resource_server_id
+                        && scopes.contains(&exchange.assertion_scope)
+                });
+                let bounded_institutional_permissions = bootstrap_present
                     && permissions.iter().all(|(server, scopes)| {
-                        server == &exchange.assertion_resource_server_id
-                            && !scopes.is_empty()
-                            && scopes
-                                .iter()
-                                .all(|scope| scope == &exchange.assertion_scope)
+                        !scopes.is_empty()
+                            && scopes.iter().all(|scope| {
+                                server == &exchange.assertion_resource_server_id
+                                    && scope == &exchange.assertion_scope
+                                    || exchange.ordinary_resource_permissions.iter().any(
+                                        |(id, allowed)| id == server && allowed.contains(scope),
+                                    )
+                            })
                     });
                 let authored_first_party_permission = first_party
                     && permissions.iter().any(|(server, scopes)| {
                         server == &exchange.assertion_resource_server_id
                             && scopes.contains(&exchange.assertion_scope)
                     });
-                if !exact_bootstrap && !authored_first_party_permission {
+                if !bounded_institutional_permissions && !authored_first_party_permission {
                     return refuse(
-                        "exchange client permissions must contain the first-party bound or equal the institutional bootstrap bound",
+                        "exchange client permissions must contain the first-party bound or match the institutional bootstrap and explicit ordinary bounds",
                     );
                 }
             }
@@ -798,6 +859,7 @@ mod tests {
         description.machine_clients[0].token_exchange = Some(TokenExchangeClient {
             assertion_resource_server_id: description.resource_servers[0].id.clone(),
             assertion_scope: "evidence:invoke".into(),
+            ordinary_resource_permissions: Vec::new(),
         });
         description
     }
@@ -1025,6 +1087,93 @@ mod tests {
         let mut description = exchange_description();
         description.roles[0].assigned_agents.clear();
         assert!(description.validate().is_err());
+    }
+
+    fn ordinary_permission_description() -> IssuerDescription {
+        let mut description = exchange_description();
+        crate::local::declare_resource(
+            &mut description,
+            "urn:synthetic:ordinary",
+            &["records:read".into(), "records:write".into()],
+        )
+        .unwrap();
+        let server = description.resource_servers.last().unwrap().id.clone();
+        description.machine_clients[0]
+            .token_exchange
+            .as_mut()
+            .unwrap()
+            .ordinary_resource_permissions = vec![(server.clone(), vec!["records:read".into()])];
+        description.roles[0]
+            .permissions
+            .push((server, vec!["records:read".into()]));
+        description
+    }
+
+    #[test]
+    fn institutional_exchange_allows_only_explicit_exact_ordinary_permissions() {
+        let description = ordinary_permission_description();
+        assert!(description.validate().is_ok());
+        let mut without_opt_in = description.clone();
+        without_opt_in.machine_clients[0]
+            .token_exchange
+            .as_mut()
+            .unwrap()
+            .ordinary_resource_permissions
+            .clear();
+        assert!(without_opt_in.validate().is_err());
+        let mut extra = description.clone();
+        extra.roles[0].permissions[1].1.push("records:write".into());
+        assert!(extra.validate().is_err());
+        let mut extra_role = description.roles[0].clone();
+        extra_role.id = "0197aaaa-0000-7000-8000-0000000000c2".into();
+        extra_role.permissions = vec![(
+            description.resource_servers.last().unwrap().id.clone(),
+            vec!["records:write".into()],
+        )];
+        let mut other_role = description.clone();
+        other_role.roles.push(extra_role);
+        assert!(other_role.validate().is_err());
+        let mut expanded_bootstrap = description.clone();
+        expanded_bootstrap.roles[0].permissions[0]
+            .1
+            .push("evidence:write".into());
+        assert!(expanded_bootstrap.validate().is_err());
+        let mut absent = description;
+        absent.roles[0].permissions.remove(0);
+        assert!(absent.validate().is_err());
+    }
+
+    #[test]
+    fn ordinary_allowlists_refuse_unknown_bootstrap_wildcard_duplicate_and_unbounded_grants() {
+        let base = ordinary_permission_description();
+        let ordinary = base.resource_servers.last().unwrap().id.clone();
+        let bootstrap = base.machine_clients[0]
+            .token_exchange
+            .as_ref()
+            .unwrap()
+            .assertion_resource_server_id
+            .clone();
+        for grants in [
+            vec![(
+                "0197aaaa-0000-7000-8000-0000000000ff".into(),
+                vec!["records:read".into()],
+            )],
+            vec![(ordinary.clone(), vec!["records:undeclared".into()])],
+            vec![(ordinary.clone(), vec!["records:*".into()])],
+            vec![(bootstrap, vec!["evidence:invoke".into()])],
+            vec![(ordinary.clone(), vec![])],
+            vec![(ordinary.clone(), vec!["records:read".into(); 2])],
+            vec![(ordinary.clone(), vec!["records:read".into()]); 8],
+            vec![(ordinary.clone(), vec!["records:read".into(); 33])],
+        ] {
+            let mut description = base.clone();
+            description.machine_clients[0]
+                .token_exchange
+                .as_mut()
+                .unwrap()
+                .ordinary_resource_permissions = grants;
+            assert!(description.validate().is_err());
+        }
     }
 
     #[test]

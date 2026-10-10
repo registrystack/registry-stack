@@ -346,6 +346,26 @@ impl MessagingClient {
         )
     }
 
+    fn message_receipt<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        idempotency_key: &str,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let request: SubmitMessageRequest = input(py, request)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .message_receipt(&token, idempotency_key, &request),
+                )
+            }),
+        )
+    }
+
     fn message<'py>(
         &self,
         py: Python<'py>,

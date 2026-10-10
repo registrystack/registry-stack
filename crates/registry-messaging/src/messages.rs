@@ -1031,6 +1031,88 @@ impl MessageService {
         crate::receipts::record_receipt(&self.messages.store, &self.audit, provider, receipt).await
     }
 
+    /// Read only a retained success receipt under the original owner and key.
+    /// No content rendering, new submission, dispatch or receipt write occurs.
+    pub async fn message_receipt(
+        &self,
+        caller: &Caller,
+        key: &str,
+        body: &[u8],
+    ) -> Result<MessageReceipt, ProblemCode> {
+        let actor = self
+            .audit
+            .principal_pseudonym(&caller.identity)
+            .map_err(|_| ProblemCode::ServiceUnavailable)?;
+        let record = json!({"event": "messaging.message.receipt-read", "actor": actor});
+        let mut audit = self
+            .audit
+            .begin(record.clone())
+            .await
+            .map_err(|_| ProblemCode::ServiceUnavailable)?;
+        let result = async {
+            let value = parse_json_strict(body).map_err(|_| ProblemCode::RequestInvalid)?;
+            let canonical =
+                canonicalize_json(&value).map_err(|_| ProblemCode::RequestUnprocessable)?;
+            // The closed submission shape is checked, but its template is never
+            // loaded or rendered during observation.
+            serde_json::from_value::<SubmitMessageRequest>(value)
+                .map_err(|_| ProblemCode::RequestUnprocessable)?;
+            let request_hash = idempotency_key(REQUEST_HASH_DOMAIN, &[&canonical]);
+            let reference = idempotency_key_reference(&caller.identity, SUBMIT_OPERATION, key);
+            let mut client = self
+                .messages
+                .store
+                .client()
+                .await
+                .map_err(|_| ProblemCode::ServiceUnavailable)?;
+            let tx = client
+                .build_transaction()
+                .read_only(true)
+                .start()
+                .await
+                .map_err(|_| ProblemCode::ServiceUnavailable)?;
+            let stored = lookup_key(&tx, &reference)
+                .await
+                .map_err(|_| ProblemCode::ServiceUnavailable)?
+                .ok_or(ProblemCode::ReceiptUnresolved)?;
+            if stored.spent
+                || stored.request_hash.as_deref() != Some(request_hash.as_str())
+                || stored.status != Some(202)
+                || stored.message_id.is_none()
+            {
+                return Err(ProblemCode::ReceiptUnresolved);
+            }
+            let receipt = stored
+                .receipt
+                .and_then(|value| serde_json::from_value::<MessageReceipt>(value).ok())
+                .filter(|receipt| {
+                    Some(receipt.id.as_str())
+                        == stored
+                            .message_id
+                            .as_ref()
+                            .map(|id| id.to_string())
+                            .as_deref()
+                })
+                .ok_or(ProblemCode::ReceiptUnresolved)?;
+            tx.commit()
+                .await
+                .map_err(|_| ProblemCode::ServiceUnavailable)?;
+            Ok(receipt)
+        }
+        .await;
+        let mut response = record;
+        response["outcome"] = json!(if result.is_ok() {
+            "observed"
+        } else {
+            "unresolved"
+        });
+        audit
+            .respond(response)
+            .await
+            .map_err(|_| ProblemCode::ServiceUnavailable)?;
+        result
+    }
+
     /// Record one prepared submission under `key`, or answer the receipt
     /// the key already holds.
     ///

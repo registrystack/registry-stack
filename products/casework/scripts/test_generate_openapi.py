@@ -60,6 +60,23 @@ class GeneratedOpenApiTests(unittest.TestCase):
         cls.contract = GENERATOR.load_rust_contract(ROOT)
         cls.openapi = GENERATOR.document(cls.contract)
 
+    def test_deferred_templates_keep_immediate_default_and_explicit_window_ceiling(self) -> None:
+        schemas = self.openapi["components"]["schemas"]
+        template = schemas["TaskTemplate"]
+        mode = template["properties"]["authorizationMode"]
+        self.assertEqual(["immediate", "deferred"], mode["enum"])
+        self.assertEqual("immediate", mode["default"])
+        self.assertNotIn("authorizationMode", template["required"])
+        window = template["allOf"][0]
+        self.assertEqual(["authorizationMode"], window["if"]["required"])
+        self.assertEqual(900, window["else"]["properties"]["lifetimeSeconds"]["maximum"])
+        self.assertEqual(604800, window["then"]["properties"]["lifetimeSeconds"]["maximum"])
+        for name in ("TaskTemplatePreview", "TaskGrantView"):
+            self.assertEqual(mode, schemas[name]["properties"]["authorizationMode"])
+            self.assertNotIn("authorizationMode", schemas[name]["required"])
+        self.assertNotIn("assignmentGeneration", schemas["TaskGrantView"]["properties"])
+        self.assertNotIn("authorizationMode", schemas["TaskApprovalRequest"]["properties"])
+
     def test_every_operation_has_its_exact_rust_owned_response_contract(self) -> None:
         framework = set(self.contract["frameworkProblems"])
         signatures = set()

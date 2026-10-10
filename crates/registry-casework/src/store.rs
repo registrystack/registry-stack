@@ -58,7 +58,7 @@ const CLOCK_STAFFING_INBOX_SPELLING_MIGRATION: &str =
     include_str!("../migrations/0025_clock_staffing_inbox_spelling.sql");
 
 /// Every schema version in ledger order.
-pub(crate) const MIGRATIONS: [(i64, &str); 25] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 26] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -90,6 +90,10 @@ pub(crate) const MIGRATIONS: [(i64, &str); 25] = [
     (23, REVIEW_OUTCOME_SPELLING_MIGRATION),
     (24, HISTORY_EVENT_SPELLING_MIGRATION),
     (25, CLOCK_STAFFING_INBOX_SPELLING_MIGRATION),
+    (
+        26,
+        include_str!("../migrations/0026_review_assignment_generation.sql"),
+    ),
 ];
 
 /// The newest schema version this binary knows how to run against.

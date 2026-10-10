@@ -70,7 +70,7 @@ The public surface:
 | `CODES` | Every reader code and its meaning. |
 | `ScalarHook`, `ScalarSite`, `Refusal` | Inspect or replace scalars while the tree is built. |
 | `Invalid`, `Invalid::into_error()` | What a checking type returns: the expectation and the fix, never the value. `into_error()` turns it into any deserializer's error. |
-| `LocalId`, `ExternalId`, `Digest`, `Url`, `ProjectIdentity`, `DataLiteral` | Shared value types (CFG-ID, CFG-VAL). |
+| `LocalId`, `ExternalId`, `Digest`, `Url`, `ProjectIdentity`, `DataLiteral`, `ForeignValue` | Shared value types (CFG-ID, CFG-VAL). |
 | `BoundedU32<MIN, MAX>`, `BoundedU64<MIN, MAX>` | Integers with both bounds in the type and the schema (CFG-QTY-4). |
 | `UniqueList<T>`, `UniqueIdList<T>` with `Identified` | A set (`config.duplicate-item`) and a list of named items (`config.duplicate-id`) (CFG-ID-5, CFG-ID-6). |
 | `tagged_union!`, `shape_union!`, `SHARED_BLOCK_PREFIX` | The serde recipes below. |
@@ -200,7 +200,8 @@ Plain scalars resolve through one table (CFG-VAL-1), documented in
 - a decimal integer is an integer, and with a fraction or an exponent
   (`1.5`, `1e3`) a number; `-0` reads as 0;
 - `~`, `null` (in three casings), and an empty value are null, which only
-  `DataLiteral` accepts (CFG-EMPTY-1); an optional member is written by
+  `DataLiteral` or an explicit `ForeignValue` subtree accepts
+  (CFG-EMPTY-1, CFG-EMBED-2); an optional member is written by
   leaving the key out;
 - a leading zero (`0123`), a bare point (`.5`, `5.`), a base prefix
   (`0x1F`, `0o17`, `0b101`), and `.inf` or `.nan` are refused as
@@ -491,3 +492,12 @@ cargo test --locked -p registry-platform-yaml --all-features
 The `yaml_reader` fuzz target in `products/platform/fuzz` feeds arbitrary
 bytes to the reader, with and without a substituting hook, and decodes the
 result into a type that uses every shared type and recipe.
+
+### Foreign JSON trees
+
+An embedded JSON document or payload uses `ForeignValue` explicitly. This type
+accepts nested nulls, lists and mappings; ordinary configuration still refuses
+null. Syntax checks, duplicate-key refusal, tags, aliases, and size and depth
+bounds also apply inside foreign trees. Its schema marks `x-registry-foreign:
+json`; a field holding a particular foreign specification overrides this with
+that specification, for example `json-schema-2020-12`.

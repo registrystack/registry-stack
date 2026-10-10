@@ -113,6 +113,13 @@
           "type": "object",
           "x-registry-passthrough": "Claim values are written into the development token as given."
         },
+        "grants": {
+          "description": "Additional explicit permissions on declared resource audiences. These\ndo not change default token scopes or the exchange bootstrap scope.",
+          "items": {
+            "$ref": "#/$defs/LocalPermissionGrant"
+          },
+          "type": "array"
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
@@ -475,6 +482,26 @@
       ],
       "type": "object"
     },
+    "LocalTaskGrantStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "client": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "sourceIssuer": {
+          "$ref": "#/$defs/ExternalId"
+        }
+      },
+      "required": [
+        "sourceIssuer",
+        "baseUrl",
+        "client"
+      ],
+      "type": "object"
+    },
     "SecretProvidersConfig": {
       "additionalProperties": false,
       "anyOf": [
@@ -668,6 +695,17 @@
         "$ref": "#/$defs/Seed"
       },
       "type": "array"
+    },
+    "taskGrantStatus": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LocalTaskGrantStatus"
+      },
+      "default": {},
+      "description": "Exact Casework status services for compiled task-grant profiles.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     }
   },
   "required": [

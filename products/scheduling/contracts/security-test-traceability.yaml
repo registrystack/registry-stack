@@ -25,12 +25,17 @@ entries:
       - {path: crates/registry-scheduling/src/runtime.rs, name: the_offering_pool_anchors_are_collected_without_duplicates}
   - id: SCHEDULING-SEC-03
     tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: configured_task_status_is_fresh_for_a_capacity_commit_and_its_replay}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: inactive_mismatched_and_unavailable_task_status_commit_no_capacity}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: unconfigured_status_accepts_only_the_legacy_remaining_lifetime}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_blocked_past_its_access_token_deadline_never_books}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_grant_that_lapses_before_the_commit_never_books}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_foreign_actor_does_not_learn_the_current_revision}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_edge_refuses_unauthenticated_callers_and_unauthorized_mutations}
       - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: expiry_uses_earlier_token_or_grant_deadline_and_refuses_exact_deadline}
   - id: SCHEDULING-SEC-04
     tests:
+      - {path: crates/registry-scheduling/src/auth.rs, name: an_unconfigured_legacy_grant_need_not_carry_status_binding_members}
       - {path: crates/registry-scheduling/src/auth.rs, name: a_partial_grant_is_refused_as_invalid_claims}
       - {path: crates/registry-scheduling/src/auth.rs, name: a_complete_task_grant_is_extracted_and_bound_to_the_deployment}
       - {path: crates/registry-scheduling/src/auth.rs, name: a_read_without_the_reads_scope_is_a_profile_refusal_but_still_mutates}
@@ -117,6 +122,7 @@ entries:
       - {path: crates/registry-scheduling-client/tests/http_boundary.rs, name: edge_answers_stay_edge_talk}
   - id: SCHEDULING-SEC-14
     tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: original_appointment_receipt_disclosure_requires_both_audit_entries}
       - {path: crates/registry-scheduling/src/audit.rs, name: a_response_record_is_stamped_with_its_identity_exactly_once}
       - {path: crates/registry-scheduling/src/audit.rs, name: a_request_record_omits_only_the_decision}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_hold_confirms_into_an_appointment_with_attributable_history}
@@ -264,6 +270,8 @@ entries:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_callers, features: [postgres-test]}
   - id: SCHEDULING-SEC-34
     tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: original_appointment_receipt_is_readable_without_a_grant_and_never_creates_capacity}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: original_appointment_receipt_authenticates_before_parsing_its_bounded_body}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: rotating_the_audit_key_keeps_existing_claims_with_their_owner}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: one_caller_cannot_outrun_the_hold_ceiling_across_two_pools}
       - {path: crates/registry-scheduling/src/service.rs, name: a_success_replay_receipt_projects_through_the_same_document}

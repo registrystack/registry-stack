@@ -1,0 +1,187 @@
+# Executable synthetic replies and virtual time. No credentials or live I/O.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: notice-accepted-after-virtual-wait
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    sendAfter: '2026-10-09T09:16:00Z'
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            noticeAllowed: true
+            email: person@example.invalid
+    notify:
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000002
+        status: queued
+  expect:
+    path:
+    - due
+    - read-application
+    - permission
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: message-accepted
+    output:
+      messageId: 00000000-0000-4000-8000-000000000002
+    workflowElapsedSeconds: 960
+- id: permission-withdrawn
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    sendAfter: '2026-10-09T09:16:00Z'
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            noticeAllowed: false
+  expect:
+    path:
+    - due
+    - read-application
+    - permission
+    - skipped
+    state: completed
+    outcome:
+      type: named
+      value: no-current-permission
+    output: null
+    workflowElapsedSeconds: 960
+- id: same-command-after-response-loss
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    sendAfter: '2026-10-09T09:16:00Z'
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            noticeAllowed: true
+            email: person@example.invalid
+    notify:
+    - type: uncertain
+      code: transport-uncertain
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000002
+        status: queued
+  expect:
+    path:
+    - due
+    - read-application
+    - permission
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: message-accepted
+    output:
+      messageId: 00000000-0000-4000-8000-000000000002
+    workflowElapsedSeconds: 960
+  recovery:
+    notify: retry-same
+- id: read-only-reconciliation-after-response-loss
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    sendAfter: '2026-10-09T09:16:00Z'
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            noticeAllowed: true
+            email: person@example.invalid
+    notify:
+    - type: uncertain
+      code: transport-uncertain
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000002
+        status: queued
+  expect:
+    path:
+    - due
+    - read-application
+    - permission
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: message-accepted
+    output:
+      messageId: 00000000-0000-4000-8000-000000000002
+    workflowElapsedSeconds: 960
+  recovery:
+    notify: reconcile
+- id: expired-receipt-does-not-prove-no-effect
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    sendAfter: '2026-10-09T09:16:00Z'
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            noticeAllowed: true
+            email: person@example.invalid
+    notify:
+    - type: receipt-expired
+  expect:
+    path:
+    - due
+    - read-application
+    - permission
+    - notify
+    state: uncertain
+    workflowElapsedSeconds: 960
+    outcome:
+      type: none
+- id: refusal-after-unknown-preserves-unknown
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    sendAfter: '2026-10-09T09:16:00Z'
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            noticeAllowed: true
+            email: person@example.invalid
+    notify:
+    - type: uncertain
+      code: transport-uncertain
+    - type: refused
+      code: product-forbidden
+  expect:
+    path:
+    - due
+    - read-application
+    - permission
+    - notify
+    state: uncertain
+    workflowElapsedSeconds: 960
+    outcome:
+      type: none
+  recovery:
+    notify: retry-same

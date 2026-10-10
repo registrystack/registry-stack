@@ -123,6 +123,19 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length", "0"))
         body = self.rfile.read(length).decode("utf-8")
         self.observe(body)
+        if self.path == "/tenant/v1/messages/receipt":
+            failures = {
+                "unresolved-key-canary": ("receipt.unresolved", 409, "Original receipt unresolved", "No retained success receipt matches this caller, key, and original request. The original outcome remains unknown; this is not evidence that no effect occurred."),
+                "denied-key-canary": ("operation.not-authorized", 403, "Operation not authorized", "server-detail-canary"),
+                "unavailable-key-canary": ("service.unavailable", 503, "Service unavailable", "server-detail-canary"),
+            }
+            failure = failures.get(self.headers.get("idempotency-key"))
+            if failure:
+                self.respond_problem(*failure)
+            else:
+                self.respond(200, {"id": MESSAGE_ID, "status": "queued", "links": LINKS})
+            return
+
         if self.path == f"/tenant/v1/messages/{MESSAGE_ID}/cancel":
             self.respond(200, CANCELLED_VIEW)
             return
@@ -396,6 +409,46 @@ class NativeRequestTests(unittest.TestCase):
             client.health()
         self.assertEqual(raised.exception.kind, "transport")
         self.assertIsInstance(raised.exception.transport_kind, str)
+
+    def test_receipt_observation_preserves_the_original_request_key_and_current_token(self) -> None:
+        result = self.client.message_receipt("current-token", "original-key", SUBMISSION)
+        self.assertEqual(result, {"kind": "complete", "value": {"id": MESSAGE_ID, "status": "queued", "links": LINKS}, "trace_id": TRACE_ID})
+        self.assertEqual(len(_Handler.observations), 1)
+        observed = _Handler.observations[0]
+        self.assertEqual(observed["method"], "POST")
+        self.assertEqual(observed["path"], "/tenant/v1/messages/receipt")
+        self.assertEqual(observed["authorization"], "Bearer current-token")
+        self.assertEqual(observed["idempotency_key"], "original-key")
+        self.assertEqual(json.loads(observed["body"]), SUBMISSION)
+
+    def test_receipt_observation_maps_unresolved_and_refused_without_retry_or_disclosure(self) -> None:
+        for key, code, status in [
+            ("unresolved-key-canary", "receipt.unresolved", 409),
+            ("denied-key-canary", "operation.not-authorized", 403),
+            ("unavailable-key-canary", "service.unavailable", 503),
+        ]:
+            with self.subTest(code=code):
+                _Handler.observations.clear()
+                with self.assertRaises(MessagingClientError) as raised:
+                    self.client.message_receipt("token-canary", key, SUBMISSION)
+                error = raised.exception
+                self.assertEqual(error.kind, "problem")
+                self.assertEqual(error.code, code)
+                self.assertEqual(error.status, status)
+                self.assertEqual(error.trace_id, TRACE_ID)
+                self.assertEqual(error.outcome_unknown, status >= 500)
+                rendered = "\n".join((str(error), repr(error), repr(vars(error))))
+                for canary in [key, "token-canary", "server-detail-canary"]:
+                    self.assertNotIn(canary, rendered)
+                self.assertEqual(len(_Handler.observations), 1)
+                self.assertEqual(_Handler.observations[0]["path"], "/tenant/v1/messages/receipt")
+
+    def test_receipt_observation_refuses_invalid_key_or_request_before_exchange(self) -> None:
+        for key, request in [("two words", SUBMISSION), ("key", {**SUBMISSION, "extra": True})]:
+            with self.assertRaises(MessagingClientError) as raised:
+                self.client.message_receipt("token", key, request)
+            self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(_Handler.observations, [])
 
 
 if __name__ == "__main__":

@@ -84,3 +84,11 @@ and lifetime; the grant list omits stored subjects. Agent assertion and grant
 status calls take only a bearer token and grant ID, without human or source
 profile headers. Neither binding retains credentials or resends a mutation
 beyond the bounded same-key retry above.
+
+Previews and grant views include `authorizationMode: "deferred"` for a deferred
+template; omission means the existing immediate mode. Approval still selects
+only the governed template ID and version. Keep the grant ID, original deadline,
+and business operation's idempotency key across a delay or restart. Acquire a
+fresh assertion when executing; its short credential lifetime does not extend
+the approved deadline. See the [task-grant lifecycle](../../products/casework/TASK_GRANTS.md)
+for expiry, revocation, and changes that require another approval.

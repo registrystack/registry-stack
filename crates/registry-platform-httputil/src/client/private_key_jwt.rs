@@ -294,6 +294,33 @@ pub fn valid_scope_token(value: &str) -> bool {
         })
 }
 
+/// Validate the exact scope list accepted by [`PrivateKeyJwt`] without keys or I/O.
+/// The list must be nonempty, unique and within the provider's token and wire bounds.
+pub fn validate_requested_scopes(scopes: &[String]) -> Result<(), TokenError> {
+    let refuse = |reason| TokenError::Configuration { reason };
+    if scopes.is_empty() {
+        return Err(refuse("the requested scopes must state at least one scope"));
+    }
+    if scopes.len() > MAXIMUM_REQUESTED_SCOPES {
+        return Err(refuse("the requested scopes must be at most 32 values"));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for value in scopes {
+        if value.len() > MAXIMUM_REQUESTED_SCOPE_BYTES || !valid_scope_token(value) {
+            return Err(refuse(
+                "the requested scopes must be 1..=256 byte RFC 6749 scope-tokens",
+            ));
+        }
+        if !seen.insert(value.as_str()) {
+            return Err(refuse("the requested scopes must not repeat a value"));
+        }
+    }
+    if scopes.join(" ").len() > MAXIMUM_SCOPE_PARAMETER_BYTES {
+        return Err(refuse("the requested scopes must encode within 4096 bytes"));
+    }
+    Ok(())
+}
+
 /// Split a scope string as RFC 6749 defines it: one or more scope-tokens
 /// separated by exactly one space each. A leading or trailing space, a doubled
 /// space, or a byte outside the `scope-token` set is a value no
@@ -362,6 +389,45 @@ pub struct PrivateKeyJwtConfig {
 }
 
 impl PrivateKeyJwtConfig {
+    /// Check the nonsecret client identity and credential transport fields.
+    /// This performs no key import, certificate loading or network access.
+    ///
+    /// # Errors
+    /// Returns the same configuration refusals as provider construction for an
+    /// empty client/audience or an unsafe token endpoint.
+    pub fn check_identity(
+        token_endpoint: &Url,
+        client_id: &str,
+        audience: Option<&str>,
+    ) -> Result<(), TokenError> {
+        let refuse = |reason: &'static str| TokenError::Configuration { reason };
+        if client_id.trim().is_empty() {
+            return Err(refuse("the client identifier must not be empty"));
+        }
+        // Only a stated audience can be empty. A caller that stated none gets the
+        // token endpoint, which is a parsed URL and therefore never is.
+        if audience.is_some_and(|audience| audience.trim().is_empty()) {
+            return Err(refuse("the assertion audience must not be empty"));
+        }
+        if !token_endpoint.username().is_empty()
+            || token_endpoint.password().is_some()
+            || token_endpoint.fragment().is_some()
+        {
+            return Err(refuse(
+                "the token endpoint must carry no credentials or fragment",
+            ));
+        }
+        // The assertion authenticates the client, so it is as sensitive in transit
+        // as the access token it is exchanged for, and the same transport rule
+        // applies to both.
+        if !transport_protects_the_credential(token_endpoint) {
+            return Err(refuse(
+                "the token endpoint must use HTTPS, or HTTP with a loopback host",
+            ));
+        }
+        Ok(())
+    }
+
     /// Authenticate as `client_id` at `token_endpoint`, signing with
     /// `client_key`.
     ///
@@ -745,34 +811,11 @@ impl PrivateKeyJwt {
     ) -> Result<Self, TokenError> {
         let refuse = |reason: &'static str| TokenError::Configuration { reason };
 
-        if config.client_id.trim().is_empty() {
-            return Err(refuse("the client identifier must not be empty"));
-        }
-        // Only a stated audience can be empty. A caller that stated none gets the
-        // token endpoint, which is a parsed URL and therefore never is.
-        if config
-            .audience
-            .as_ref()
-            .is_some_and(|audience| audience.trim().is_empty())
-        {
-            return Err(refuse("the assertion audience must not be empty"));
-        }
-        if !config.token_endpoint.username().is_empty()
-            || config.token_endpoint.password().is_some()
-            || config.token_endpoint.fragment().is_some()
-        {
-            return Err(refuse(
-                "the token endpoint must carry no credentials or fragment",
-            ));
-        }
-        // The assertion authenticates the client, so it is as sensitive in transit
-        // as the access token it is exchanged for, and the same transport rule
-        // applies to both.
-        if !transport_protects_the_credential(&config.token_endpoint) {
-            return Err(refuse(
-                "the token endpoint must use HTTPS, or HTTP with a loopback host",
-            ));
-        }
+        PrivateKeyJwtConfig::check_identity(
+            &config.token_endpoint,
+            &config.client_id,
+            config.audience.as_deref(),
+        )?;
         // The assertion header names the algorithm so the server can verify
         // without guessing, which means it must state what this key actually
         // signs with rather than one fixed name. Restricting the client to a
@@ -851,28 +894,8 @@ impl PrivateKeyJwt {
         // for the same reason as every other refusal above: a set the provider
         // would refuse to send belongs in one construction-time failure.
         let (scope, requested_scopes) = if let Some(scopes) = &config.scopes {
-            if scopes.is_empty() {
-                return Err(refuse("the requested scopes must state at least one scope"));
-            }
-            if scopes.len() > MAXIMUM_REQUESTED_SCOPES {
-                return Err(refuse("the requested scopes must be at most 32 values"));
-            }
-            let mut seen = std::collections::BTreeSet::new();
-            for value in scopes {
-                if value.len() > MAXIMUM_REQUESTED_SCOPE_BYTES || !valid_scope_token(value) {
-                    return Err(refuse(
-                        "the requested scopes must be 1..=256 byte RFC 6749 scope-tokens",
-                    ));
-                }
-                if !seen.insert(value.as_str()) {
-                    return Err(refuse("the requested scopes must not repeat a value"));
-                }
-            }
-            let canonical = scopes.join(" ");
-            if canonical.len() > MAXIMUM_SCOPE_PARAMETER_BYTES {
-                return Err(refuse("the requested scopes must encode within 4096 bytes"));
-            }
-            (Some(canonical), scopes.clone())
+            validate_requested_scopes(scopes)?;
+            (Some(scopes.join(" ")), scopes.clone())
         } else {
             (None, Vec::new())
         };
@@ -2747,9 +2770,109 @@ mod tests {
         );
     }
 
+    #[test]
+    fn requested_scope_validation_preserves_reasons_and_exact_bounds() {
+        for (scopes, reason) in [
+            (vec![], "the requested scopes must state at least one scope"),
+            (
+                (0..33).map(|i| format!("scope:{i}")).collect(),
+                "the requested scopes must be at most 32 values",
+            ),
+            (
+                vec!["a".repeat(257)],
+                "the requested scopes must be 1..=256 byte RFC 6749 scope-tokens",
+            ),
+            (
+                vec!["bad scope".into()],
+                "the requested scopes must be 1..=256 byte RFC 6749 scope-tokens",
+            ),
+            (
+                vec!["read".into(), "read".into()],
+                "the requested scopes must not repeat a value",
+            ),
+            (
+                (0..16)
+                    .map(|i| format!("{i:x}{}", "a".repeat(255)))
+                    .collect(),
+                "the requested scopes must encode within 4096 bytes",
+            ),
+        ] {
+            assert_eq!(
+                validate_requested_scopes(&scopes),
+                Err(TokenError::Configuration { reason })
+            );
+        }
+        for scopes in [
+            (0..32).map(|i| format!("scope:{i}")).collect::<Vec<_>>(),
+            vec!["a".repeat(256)],
+            (0..16)
+                .map(|i| format!("{i:x}{}", "a".repeat(if i == 15 { 255 } else { 254 })))
+                .collect(),
+        ] {
+            validate_requested_scopes(&scopes).unwrap();
+        }
+    }
+
     /// A provider that could not authenticate, could not protect its assertion in
     /// transit, or could not sign at all fails at construction rather than once
     /// per request.
+    #[test]
+    fn nonsecret_identity_check_keeps_the_constructor_transport_and_identity_rules() {
+        for endpoint in [
+            "https://identity.invalid/token?realm=test",
+            "http://127.0.0.1:1/token",
+            "http://[::1]:1/token",
+            "http://localhost:1/token",
+        ] {
+            let endpoint = Url::parse(endpoint).unwrap();
+            PrivateKeyJwtConfig::check_identity(&endpoint, "client", None).unwrap();
+            PrivateKeyJwtConfig::check_identity(&endpoint, "client", Some("urn:identity:test"))
+                .unwrap();
+        }
+        for (endpoint, client, audience, reason) in [
+            (
+                "https://identity.test/token",
+                "",
+                None,
+                "the client identifier must not be empty",
+            ),
+            (
+                "https://identity.test/token",
+                "  ",
+                None,
+                "the client identifier must not be empty",
+            ),
+            (
+                "https://identity.test/token",
+                "client",
+                Some("  "),
+                "the assertion audience must not be empty",
+            ),
+            (
+                "https://user@identity.test/token",
+                "client",
+                None,
+                "the token endpoint must carry no credentials or fragment",
+            ),
+            (
+                "https://identity.test/token#fragment",
+                "client",
+                None,
+                "the token endpoint must carry no credentials or fragment",
+            ),
+            (
+                "http://identity.test/token",
+                "client",
+                None,
+                "the token endpoint must use HTTPS, or HTTP with a loopback host",
+            ),
+        ] {
+            assert!(
+                matches!(PrivateKeyJwtConfig::check_identity(&Url::parse(endpoint).unwrap(),client,audience),Err(TokenError::Configuration {reason:actual}) if actual==reason)
+            );
+        }
+    }
+
     #[test]
     fn an_unusable_provider_configuration_is_refused() {
         let cases: Vec<(&str, PrivateKeyJwtConfig)> = vec![

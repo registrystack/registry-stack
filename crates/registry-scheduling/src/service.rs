@@ -21,7 +21,10 @@ use registry_platform_audit::{
 };
 use registry_platform_calendar::CalendarInterval;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_oidc::GrantClaims;
+use registry_platform_oidc::{
+    task_grant::{TaskGrantError, TaskGrantStatusBinding, TaskGrantStatusRegistry},
+    GrantClaims,
+};
 use registry_scheduling_core::{
     admission_request_hash, evaluate_exact_time_admission, evaluate_window_admission,
     location_closure_intervals, location_open_intervals, type_uri, AdmissionRequest,
@@ -36,6 +39,7 @@ use registry_scheduling_core::{
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use std::borrow::Cow;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::audit::{request_record, unfinished_record, with_event_id, SchedulingAudit};
@@ -65,6 +69,11 @@ pub const MAXIMUM_PAGE_LIMIT: usize = 200;
 /// a wider ask is served from the first 62 days and continues by cursor.
 const MAXIMUM_AVAILABILITY_SPAN_DAYS: i64 = 62;
 
+/// The remaining lifetime an entirely unconfigured deployment accepts on
+/// its legacy offline path. Configuring any status authority disables this
+/// path for every source, including an unlisted one.
+const LEGACY_TASK_GRANT_REMAINING_SECONDS: u64 = 900;
+
 /// The audit reference class for a booking caller, hashed over the verified
 /// issuer and subject pair. History and audit carry this pseudonym, never the
 /// raw identity; ownership of a claim is decided on the verified pair instead,
@@ -89,8 +98,16 @@ pub struct Caller {
     /// is retained. History and audit carry the pseudonym instead.
     pub issuer: String,
     pub subject: String,
+    /// The verified access token's own deadline. Capacity transactions use
+    /// the earlier of this and the grant deadline, bounding the interval
+    /// between fresh status and commit even for a long-lived grant.
+    pub credential_exp_unix: u64,
     /// The verified task grant, when the token carried one.
     pub grant: Option<GrantClaims>,
+    /// Subject claims copied only from the verified credential. Legacy task
+    /// tokens may omit them; a configured status registry then refuses the
+    /// missing exact binding before a capacity transaction opens.
+    pub task_grant_subjects: Option<std::collections::BTreeMap<String, Value>>,
 }
 
 impl Caller {
@@ -167,6 +184,7 @@ pub struct SchedulingService {
     audit: SchedulingAudit,
     attempt_receipt_days: i64,
     hooks: Option<ActivatedHooks>,
+    task_grant_status: Option<Arc<TaskGrantStatusRegistry>>,
 }
 
 impl SchedulingService {
@@ -191,12 +209,19 @@ impl SchedulingService {
             audit,
             attempt_receipt_days: i64::from(attempt_receipt_days),
             hooks: None,
+            task_grant_status: None,
         }
     }
 
     #[must_use]
     pub fn with_hooks(mut self, hooks: ActivatedHooks) -> Self {
         self.hooks = Some(hooks);
+        self
+    }
+
+    #[must_use]
+    pub fn with_task_grant_status(mut self, status: Option<Arc<TaskGrantStatusRegistry>>) -> Self {
+        self.task_grant_status = status;
         self
     }
 
@@ -612,7 +637,7 @@ impl SchedulingService {
             facts_revision,
         )?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, HOLD_CREATE_ACTION)
+            .audit_request(caller, &grant, HOLD_CREATE_ACTION, now)
             .await?;
         let outcome = self
             .store
@@ -672,7 +697,7 @@ impl SchedulingService {
         let commitment =
             self.commitment(caller, &actor, &grant, &release_key, &request_hash, now, 0)?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, HOLD_RELEASE_ACTION)
+            .audit_request(caller, &grant, HOLD_RELEASE_ACTION, now)
             .await?;
         let outcome = self.store.release_hold(hold_id, commitment).await;
         self.commitment_outcome(
@@ -753,7 +778,7 @@ impl SchedulingService {
             facts_revision,
         )?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION)
+            .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION, now)
             .await?;
         let outcome = self
             .store
@@ -799,7 +824,7 @@ impl SchedulingService {
             facts_revision,
         )?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION)
+            .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION, now)
             .await?;
         let outcome = self
             .store
@@ -819,6 +844,78 @@ impl SchedulingService {
             facts_revision,
         )
         .await
+    }
+
+    /// Observe the original success receipt without replaying a command.
+    /// Ordinary read authority is checked at the HTTP boundary; lookup stays
+    /// scoped to the verified issuer and subject even after task authority ends.
+    pub async fn appointment_receipt(
+        &self,
+        caller: &Caller,
+        key: &str,
+        request: &CreateAppointmentRequest,
+        now: DateTime<Utc>,
+    ) -> Result<AppointmentDocument, ServiceError> {
+        let (scope, request_hash) = match (&request.hold, &request.admission) {
+            (None, Some(admission)) => (
+                "appointment:create".to_owned(),
+                admission_request_hash(admission),
+            ),
+            (Some(hold), None) => {
+                let hold = Uuid::parse_str(hold)
+                    .map_err(|_| ServiceError::Problem(ProblemCode::RequestInvalid))?;
+                (
+                    format!("hold:{hold}:confirm"),
+                    canonical_hash(&json!({"hold": hold}))?,
+                )
+            }
+            _ => return Err(ServiceError::Problem(ProblemCode::RequestInvalid)),
+        };
+        let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
+        let record = json!({"event": "scheduling.appointment.receipt-read", "actor": actor});
+        let mut audit = self.audit.begin(Uuid::new_v4(), record.clone(),
+            json!({"event": "scheduling.appointment.receipt-read", "actor": actor, "outcome": "unfinished"}))
+            .await.map_err(|_| ServiceError::Problem(ProblemCode::ServiceUnavailable))?;
+        let result = async {
+            let receipt = self
+                .store
+                .appointment_receipt(
+                    &caller.issuer,
+                    &caller.subject,
+                    &scope,
+                    key,
+                    &request_hash,
+                    now,
+                )
+                .await?
+                .ok_or(ServiceError::Problem(ProblemCode::ReceiptUnresolved))?;
+            let claim = receipt
+                .get("claim")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<ClaimRow>(value).ok())
+                .ok_or(ServiceError::Problem(ProblemCode::ReceiptUnresolved))?;
+            if receipt.get("kind").and_then(Value::as_str) != Some("booking") {
+                return Err(ServiceError::Problem(ProblemCode::ReceiptUnresolved));
+            }
+            Ok(appointment_document(
+                &claim,
+                &self.policy,
+                self.revision(),
+                Some(&receipt),
+            ))
+        }
+        .await;
+        let mut response = record;
+        response["outcome"] = json!(if result.is_ok() {
+            "observed"
+        } else {
+            "unresolved"
+        });
+        audit
+            .respond(response)
+            .await
+            .map_err(|_| ServiceError::Problem(ProblemCode::ServiceUnavailable))?;
+        result
     }
 
     /// One appointment by id, visible to the caller that owns it.
@@ -939,7 +1036,7 @@ impl SchedulingService {
             facts_revision,
         )?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, APPOINTMENT_RESCHEDULE_ACTION)
+            .audit_request(caller, &grant, APPOINTMENT_RESCHEDULE_ACTION, now)
             .await?;
         let outcome = self
             .store
@@ -1005,7 +1102,7 @@ impl SchedulingService {
             0,
         )?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, APPOINTMENT_CANCEL_ACTION)
+            .audit_request(caller, &grant, APPOINTMENT_CANCEL_ACTION, now)
             .await?;
         let outcome = self
             .store
@@ -1293,6 +1390,67 @@ impl SchedulingService {
             })
     }
 
+    /// Establish that this exact grant is current immediately before the
+    /// request audit and capacity transaction. No database lock is held while
+    /// the remote authority is called. A configured registry is authoritative
+    /// for every source, so an unknown source is a refusal and never reaches
+    /// the bounded legacy path.
+    async fn require_current_task_grant(
+        &self,
+        caller: &Caller,
+        grant: &GrantClaims,
+        operation: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), ServiceError> {
+        let verdict =
+            if let Some(status) = &self.task_grant_status {
+                match caller.task_grant_subjects.clone().and_then(|subjects| {
+                    TaskGrantStatusBinding::from_verified(grant, subjects).ok()
+                }) {
+                    Some(binding) => status.check(&binding).await,
+                    None => Err(TaskGrantError::Refused),
+                }
+            } else {
+                let now = u64::try_from(now.timestamp()).map_err(|_| {
+                    ServiceError::internal("the task-grant clock observation is not representable")
+                })?;
+                if grant.exp() > now
+                    && grant.exp().saturating_sub(now) <= LEGACY_TASK_GRANT_REMAINING_SECONDS
+                {
+                    Ok(())
+                } else {
+                    Err(TaskGrantError::Refused)
+                }
+            };
+        match verdict {
+            Ok(()) => Ok(()),
+            Err(TaskGrantError::Refused) => {
+                self.record_refusal(
+                    Uuid::new_v4(),
+                    audit_record(
+                        &self.hasher,
+                        &self.scheduling_id,
+                        caller,
+                        grant,
+                        operation,
+                        AuthorizationOutcome::Denied,
+                        "authorization.refused",
+                    ),
+                )
+                .await?;
+                Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized))
+            }
+            Err(TaskGrantError::Unavailable) => {
+                tracing::warn!("the task-grant authority could not establish current status");
+                Err(ServiceError::Problem(ProblemCode::ServiceUnavailable))
+            }
+            Err(TaskGrantError::Configuration) => {
+                tracing::error!("the activated task-grant status registry became unusable");
+                Err(ServiceError::Problem(ProblemCode::ServiceUnavailable))
+            }
+        }
+    }
+
     /// Append the `request` entry of one commitment and return the
     /// correlation its `response` entry will carry, with the handle that owes
     /// it. It names the caller, the grant, and the operation the capacity
@@ -1306,7 +1464,10 @@ impl SchedulingService {
         caller: &Caller,
         grant: &GrantClaims,
         operation: &str,
+        now: DateTime<Utc>,
     ) -> Result<(Uuid, AuditRequest), ServiceError> {
+        self.require_current_task_grant(caller, grant, operation, now)
+            .await?;
         let record = audit_record(
             &self.hasher,
             &self.scheduling_id,
@@ -1474,7 +1635,7 @@ impl SchedulingService {
             idempotency_key,
             request_hash,
             attempt_expires_at,
-            grant_exp_unix: Some(grant.exp()),
+            grant_exp_unix: Some(grant.exp().min(caller.credential_exp_unix)),
             hooks: self.hooks.as_ref(),
         })
     }

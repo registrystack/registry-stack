@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/runtime/v1alpha1
+kind: CoordinatorRuntimeConfig
+# Offline check reads references, never their secret values.
+secretProviders:
+  environment: {}
+  file:
+    root: /private/tmp/coordinator-secrets
+database:
+  runtimeUrlRef: secret:env/COORDINATOR_TEST_DATABASE_URL
+  migrationUrlRef: secret:env/COORDINATOR_TEST_DATABASE_URL
+namespace: coordinator_demo
+connections:
+  applications:
+    product: breg
+    baseUrl: http://127.0.0.1:8100
+    profile: follow-up-reader
+    authorization:
+      tokenEndpoint: http://127.0.0.1:8090/token
+      clientId: application-reader
+      signingKeyRef: secret:file/client-key
+      resource: urn:example:applications
+      scopes: [applications:read]
+  notices:
+    product: messaging
+    baseUrl: http://127.0.0.1:8101
+    authorization:
+      tokenEndpoint: http://127.0.0.1:8090/token
+      clientId: case-system
+      signingKeyRef: secret:file/client-key
+      resource: urn:example:messaging
+      scopes: [messaging:send]

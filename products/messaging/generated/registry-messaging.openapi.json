@@ -252,6 +252,7 @@
               "profile.not-authorized",
               "quota.exceeded",
               "rate-limit.exceeded",
+              "receipt.unresolved",
               "request.body-too-large",
               "request.invalid",
               "request.method-not-allowed",
@@ -295,6 +296,7 @@
               "https://id.registrystack.org/problems/registry-messaging/profile/not-authorized",
               "https://id.registrystack.org/problems/registry-messaging/quota/exceeded",
               "https://id.registrystack.org/problems/registry-messaging/rate-limit/exceeded",
+              "https://id.registrystack.org/problems/registry-messaging/receipt/unresolved",
               "https://id.registrystack.org/problems/registry-messaging/request/body-too-large",
               "https://id.registrystack.org/problems/registry-messaging/request/invalid",
               "https://id.registrystack.org/problems/registry-messaging/request/method-not-allowed",
@@ -1018,6 +1020,313 @@
           }
         ],
         "summary": "Submit one message through a sender profile the caller's access profile lists, rendered from a template version at acceptance or, where the profile allows it, from direct content. The `Idempotency-Key` header is required: the same key and request answer the stored receipt again."
+      }
+    },
+    "/v1/messages/receipt": {
+      "post": {
+        "operationId": "readMessageReceipt",
+        "parameters": [
+          {
+            "description": "Scopes a retry to the caller's issuer and subject: the same key and request answer the stored receipt again, across an audit key rotation too. A retry is authorized and rendered again before its key is looked up, so a 403 or 422 answer to an exact retry does not mean the first attempt failed.",
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageReceipt"
+                }
+              }
+            },
+            "description": "The operation succeeded."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.invalid"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "authentication.refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: authentication.refused.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "required": true,
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "profile.not-authorized"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: profile.not-authorized."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "receipt.unresolved"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: receipt.unresolved."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.body-too-large"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.body-too-large."
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.unsupported-media-type"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.unsupported-media-type."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.unprocessable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.unprocessable."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "rate-limit.exceeded"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: rate-limit.exceeded.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read the retained original acceptance receipt for this caller, key and exact request without submitting or rendering a message. An unresolved receipt does not establish that no effect occurred."
       }
     },
     "/v1/messages/{message_id}": {

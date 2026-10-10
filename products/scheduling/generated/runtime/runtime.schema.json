@@ -483,6 +483,48 @@
       "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
       "type": "string"
     },
+    "TaskGrantStatusConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "description": "HTTPS service base; plaintext HTTP is allowed only on loopback."
+        },
+        "caBundleRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "caseworkResource": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The status service audience, which must be an absolute resource URI."
+        },
+        "clientAssertionAudience": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "clientId": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "privateKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "sourceIssuer": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The exact authority identifier, including an absolute URN issuer.\nIt is compared rather than fetched and must be an absolute resource URI."
+        },
+        "tokenEndpoint": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "sourceIssuer",
+        "baseUrl",
+        "tokenEndpoint",
+        "clientAssertionAudience",
+        "clientId",
+        "privateKeyRef",
+        "caseworkResource"
+      ],
+      "type": "object"
+    },
     "TlsTermination": {
       "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
       "enum": [
@@ -648,6 +690,14 @@
     },
     "secretProviders": {
       "$ref": "#/$defs/SecretProvidersConfig"
+    },
+    "taskGrantStatus": {
+      "default": [],
+      "description": "Fresh Casework status endpoints keyed by the original grant issuer.\nAn empty list preserves the bounded legacy path for grants with no\nmore than fifteen minutes left; any configured entry makes status\nmandatory for every commitment.",
+      "items": {
+        "$ref": "#/$defs/TaskGrantStatusConfig"
+      },
+      "type": "array"
     }
   },
   "required": [

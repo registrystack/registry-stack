@@ -106,7 +106,7 @@ CFG-SCHEMA-3).
 **CFG-ENV-2 (MUST). `apiVersion` is
 `id.registrystack.org/formats/<product>/<format>/<version>`.** `<product>` is
 the product token (CFG-ENV-3). `kind` matches
-`^(BReg|Casework|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Platform)([A-Z][a-z0-9]+)+$`,
+`^(BReg|Casework|Coordinator|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Platform)([A-Z][a-z0-9]+)+$`,
 with acronyms written as words (`Mcp`, `Oid4vci`). `<format>` derives from
 `kind`: remove the product prefix; remove a trailing `Config`; split the rest
 before each uppercase letter; lowercase each word and join with `-`. The
@@ -137,6 +137,7 @@ prefix, and is unique across the stack.**
 |---|---|
 | `BReg` | `breg` |
 | `Casework` | `casework` |
+| `Coordinator` | `coordinator` |
 | `Scheduling` | `scheduling` |
 | `Messaging` | `messaging` |
 | `Discovery` | `discovery` |
@@ -697,7 +698,7 @@ A path longer than 120 characters is shown as its first and last 60 joined by
 
 **CFG-DIAG-3 (MUST). Codes are dotted, lowercase, each segment kebab-case.**
 A product code is `<product>.<area>.<condition>` with the product token
-(`breg`, `casework`, `scheduling`, `messaging`, `discovery`, `render`,
+(`breg`, `casework`, `coordinator`, `scheduling`, `messaging`, `discovery`, `render`,
 `evidence`, `manifest`, `platform`); a shared reader code is
 `<namespace>.<condition>`, with `yaml` for syntax and `config` for envelope,
 key, and type problems. A code is never reused for a different condition.

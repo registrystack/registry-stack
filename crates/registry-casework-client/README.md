@@ -50,6 +50,12 @@ revision the caller displayed and a caller-supplied idempotency key.
 Response-loss recovery reuses the original key and the server's stored
 prepared attempt.
 
+The native Rust `CaseworkTaskAssertionSource` obtains a fresh task assertion
+using only the agent's narrow bootstrap scope. A Casework 4xx refusal, including
+an expired, revoked, or absent grant, becomes a fixed-text invalid credential
+error. HTTP 408, 429, 5xx, and transport failures remain transient. The source does
+not resend an assertion request or expose remote problem values in token errors.
+
 ## Unknown outcomes and the same-key retry
 
 A 5xx answer may follow a commit, and so may a timeout or a broken exchange

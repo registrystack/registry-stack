@@ -488,3 +488,34 @@ test('migration preserves author edits made while the collector runs', async () 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('new unreviewed binaries stay draft while unchanged reviewed pages stay current', () => {
+  const catalog = fixtureCatalog();
+  catalog.binaries.find((binary) => binary.name === 'coordinatorctl').subcommands.push(command('start', 'coordinatorctl'));
+  const excluded = ['coordinator', 'coordinatorctl'];
+  const reviewed = { ...catalog, binaries: catalog.binaries.filter((binary) => !excluded.includes(binary.name)) };
+  const metadata = fixtureReviewMetadata({
+    status: 'current',
+    last_reviewed: '2026-10-06',
+    reviewed_source_version: reviewed.source_version,
+    reviewed_catalog_sha256: catalogDigest(catalog, { unreviewed_binaries: excluded }),
+    reviewed_content_sha256: contentDigest(catalog, { unreviewed_binaries: excluded }),
+    unreviewed_binaries: excluded,
+  });
+  const pages = renderCatalog(catalog, metadata);
+  assert.match(pages.get('breg.mdx'), /status: current/u);
+  assert.doesNotMatch(pages.get('breg.mdx'), /draft: true/u);
+  assert.match(pages.get('coordinatorctl.mdx'), /status: draft\ndraft: true/u);
+  assert.match(pages.get('coordinatorctl.mdx'), /last_reviewed: "unreviewed"/u);
+  assert.match(pages.get('coordinatorctl/start.mdx'), /status: draft\ndraft: true/u);
+  assert.doesNotMatch(pages.get('index.mdx'), /\.\/coordinator(?:ctl)?\//u);
+  assert.match(pages.get('index.mdx'), /\.\/breg\//u);
+
+  const changed = structuredClone(catalog);
+  changed.binaries.find((binary) => binary.name === 'breg').about += ' Changed';
+  assert.throws(() => validateReviewMetadata(metadata, changed), /current command content/u);
+  assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: [...excluded, 'breg'] }, changed), /current command content/u);
+  assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: null }, catalog), /array of strings/u);
+  assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: ['unknown'] }, catalog), /unknown binary/u);
+  assert.throws(() => validateReviewMetadata({ ...metadata, unreviewed_binaries: ['coordinator', 'coordinator'] }, catalog), /duplicates/u);
+});

@@ -264,6 +264,8 @@ pub enum RuntimeConfigError {
     Reader(ReaderRefusal),
     #[error("runtime configuration contains an invalid deployment binding")]
     InvalidBinding,
+    #[error("runtime configuration taskGrantStatus must contain at most 32 unique absolute source issuers; configure safe service/token URLs, non-empty client and assertion audience, and absolute resource identifiers")]
+    InvalidTaskGrantStatus,
     #[error(
         "runtime configuration identity.instanceId must start with a lowercase letter and hold at most 64 lowercase letters, digits, `-`, or `_`; set identity.instanceId to such a value"
     )]
@@ -324,6 +326,7 @@ impl RuntimeConfigError {
         match self {
             Self::Reader(refusal) => &refusal.deciding_diagnostic().code,
             Self::InvalidBinding => "breg.runtime.invalid-binding",
+            Self::InvalidTaskGrantStatus => "breg.runtime.invalid-task-grant-status",
             Self::InvalidInstanceId => "breg.runtime.invalid-instance-id",
             Self::EnvironmentIdentityConflict => "breg.runtime.environment-identity-conflict",
             Self::InvalidListener => "breg.runtime.invalid-listener",
@@ -356,6 +359,7 @@ impl RuntimeConfigError {
         match self {
             Self::Reader(refusal) => &refusal.deciding_diagnostic().path,
             Self::InvalidBinding | Self::Secret => "",
+            Self::InvalidTaskGrantStatus => "/taskGrantStatus",
             Self::InvalidInstanceId => "/identity/instanceId",
             Self::EnvironmentIdentityConflict => "/identity/databaseInitializationEnvironment",
             Self::InvalidListener => "/listener",
@@ -387,6 +391,7 @@ impl RuntimeConfigError {
     fn suggested_action(&self) -> &'static str {
         match self {
             Self::Reader(_) => "",
+            Self::InvalidTaskGrantStatus => "Configure at most 32 distinct taskGrantStatus source issuers, safe service/token URLs, a client and assertion audience, and absolute resource identifiers.",
             Self::InvalidBinding => {
                 "Give every identity value as trimmed text without control characters, and declare in the runtime file, with a valid endpoint and credential, every task grant status source, Evidence provider, review authority, and review executor the package relies on."
             }
@@ -690,7 +695,11 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
         ["attachmentStorage" | "attachmentVerification", "endpoint"]
         | ["eventDestinations", _, "origin"]
         | ["evidenceProviders", _, "baseUrl"]
-        | ["taskGrantStatus", _, "baseUrl" | "sourceIssuer"]
+        | ["taskGrantStatus", _, "baseUrl"
+        | "sourceIssuer"
+        | "tokenEndpoint"
+        | "clientAssertionAudience"
+        | "caseworkResource"]
         | ["reviewAuthorities" | "reviewExecutors", _, "endpoint"]
         | ["reviewAuthorities" | "reviewExecutors", _, "privateKeyJwt", "tokenEndpoint" | "assertionAudience" | "resource"] => {
             "https://deferred.invalid/"
@@ -759,6 +768,11 @@ impl RuntimeConfig {
                 .map_err(|_| RuntimeConfigError::InvalidFieldEncryption)?;
         let package = PackageConfig::from_raw(raw.package)?;
         let authentication = AuthenticationConfig::from_raw(raw.authentication)?;
+        crate::task_grant::TaskGrantStatusRegistry::validate_configuration(
+            &raw.task_grant_status,
+            &authentication.oidc.audience,
+        )
+        .map_err(|_| RuntimeConfigError::InvalidTaskGrantStatus)?;
         let audit = AuditConfig::from_raw(raw.audit)?;
         let cursor = CursorConfig::from_raw(raw.cursor)?;
         let event_destinations = EventDestinationConfigs::from_raw(raw.event_destinations)

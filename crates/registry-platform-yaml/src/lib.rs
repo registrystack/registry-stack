@@ -57,7 +57,8 @@
 //! - decoding stops at the first other error, which is placed at the node
 //!   it concerns; the rest of the mapping it stopped in is still checked
 //!   for unknown keys (CFG-DIAG-5);
-//! - null is refused everywhere except inside [`DataLiteral`] (CFG-EMPTY-1);
+//! - null is refused everywhere except inside [`DataLiteral`] or an explicit
+//!   [`ForeignValue`] subtree (CFG-EMPTY-1, CFG-EMBED-2);
 //!   an optional member is written by leaving the key out;
 //! - an integer, a boolean, or a number is written as one, never as quoted
 //!   text, and a value a hook substituted is always text (CFG-VAL-1);
@@ -129,8 +130,8 @@ pub use messages::{CodeInfo, CODES};
 pub use node::{escape_pointer_segment, Entry, Node, NodeValue, Position, ScalarStyle, Span, Text};
 pub use structure::{Refusal, ScalarHook, ScalarSite, MAXIMUM_DEPTH};
 pub use types::{
-    BoundedU32, BoundedU64, DataLiteral, Digest, ExternalId, Identified, LocalId, ProjectIdentity,
-    UniqueIdList, UniqueList, Url, MAXIMUM_EXTERNAL_ID_CHARS, MAXIMUM_URL_CHARS,
+    BoundedU32, BoundedU64, DataLiteral, Digest, ExternalId, ForeignValue, Identified, LocalId,
+    ProjectIdentity, UniqueIdList, UniqueList, Url, MAXIMUM_EXTERNAL_ID_CHARS, MAXIMUM_URL_CHARS,
 };
 #[doc(hidden)]
 pub use union::__private;

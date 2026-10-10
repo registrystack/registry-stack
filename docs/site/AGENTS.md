@@ -38,7 +38,11 @@ production hostnames. Follow the repository's `SECURITY.md` for suspected vulner
   three values to record after review. `npm run cli-reference:digest -- --migrate`
   upgrades a v2 record only after proving the content still matches its recorded
   full digest, preserving review dates and provenance. Legacy v2 records retain
-  their exact-version check. Setting the record back to `draft` hides every CLI
+  their exact-version check. Optional v3 `unreviewed_binaries` keeps new binary
+  trees draft and out of the published index while the recorded digests must
+  still cover the remaining catalog exactly. Unknown or duplicate names are
+  refused. Remove an exclusion only after human review and record the new
+  digest; generation never advances review provenance. Setting the record back to `draft` hides every CLI
   page from the site; do that only deliberately.
 - For `src/content/docs/products/**`, edit the owning source and metadata listed
   in `src/data/repo-docs.yaml`. The sync script generates the site copies.

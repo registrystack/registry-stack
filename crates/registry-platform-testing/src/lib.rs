@@ -224,11 +224,31 @@ pub fn sign_ed25519_compact_jwt_with_key(
     kid: &str,
     claims: Value,
 ) -> String {
+    let header = json!({"alg": "EdDSA", "typ": typ, "kid": kid});
+    sign_compact_jwt_header(private, header, claims)
+}
+
+/// Sign a fixture JWT using the supplied key's shared crypto algorithm.
+///
+/// # Panics
+///
+/// Panics if the fixture key cannot determine an algorithm or sign.
+#[must_use]
+pub fn sign_compact_jwt_with_key(
+    private: &PrivateJwk,
+    typ: &str,
+    kid: &str,
+    claims: Value,
+) -> String {
     let header = json!({
-        "alg": "EdDSA",
+        "alg": private.algorithm().expect("fixture signing algorithm is supported").jwa_name(),
         "typ": typ,
         "kid": kid,
     });
+    sign_compact_jwt_header(private, header, claims)
+}
+
+fn sign_compact_jwt_header(private: &PrivateJwk, header: Value, claims: Value) -> String {
     let signing_input = format!("{}.{}", encode_json(&header), encode_json(&claims));
     let signature = sign(signing_input.as_bytes(), private).expect("fixture key signs JWT");
     format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(signature))

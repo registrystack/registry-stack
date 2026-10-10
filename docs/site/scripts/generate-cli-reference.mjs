@@ -31,6 +31,8 @@ export const expectedBinaries = [
   'bregctl',
   'casework',
   'caseworkctl',
+  'coordinator',
+  'coordinatorctl',
   'evidence',
   'evidence-oid4vci',
   'evidencectl',
@@ -61,6 +63,7 @@ const groups = [
     binaries: ['breg-mcp', 'breg-review'],
     product: 'registry-breg-services',
   },
+  { title: 'Registry Coordinator', binaries: ['coordinator', 'coordinatorctl'] },
   { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
   { title: 'Registry Scheduling', binaries: ['scheduling', 'schedulingctl'] },
   { title: 'Registry Messaging', binaries: ['messaging', 'messagingctl'], product: 'registry-messaging' },
@@ -248,18 +251,19 @@ export function validateCatalog(catalog) {
   return catalog;
 }
 
-export function catalogDigest(catalog) {
+export function catalogDigest(catalog, metadata = {}) {
   validateCatalog(catalog);
-  return createHash('sha256').update(JSON.stringify(catalog)).digest('hex');
+  return createHash('sha256').update(JSON.stringify(reviewedSubset(catalog, metadata))).digest('hex');
 }
 
 // Release identity remains in catalogDigest; only the explicit source version is
 // excluded from editorial content. Versions appearing in help/defaults still count.
-export function contentDigest(catalog) {
+export function contentDigest(catalog, metadata = {}) {
   validateCatalog(catalog);
+  const reviewed = reviewedSubset(catalog, metadata);
   return createHash('sha256').update(JSON.stringify({
     schema_version: catalog.schema_version,
-    binaries: catalog.binaries,
+    binaries: reviewed.binaries,
   })).digest('hex');
 }
 
@@ -270,6 +274,21 @@ function validCalendarDate(value) {
   return date.getUTCFullYear() === year
     && date.getUTCMonth() === month - 1
     && date.getUTCDate() === day;
+}
+
+// Explicitly unreviewed additions cannot borrow the existing catalog's review.
+// The old digest must still exactly cover every remaining binary and command.
+function reviewedSubset(catalog, metadata) {
+  const excluded = Object.hasOwn(metadata, 'unreviewed_binaries') ? metadata.unreviewed_binaries : [];
+  stringArray(excluded, 'CLI reference review metadata.unreviewed_binaries');
+  if (new Set(excluded).size !== excluded.length) {
+    throw new Error('CLI reference review metadata.unreviewed_binaries contains duplicates');
+  }
+  const known = new Set(catalog.binaries.map((binary) => binary.name));
+  if (excluded.some((name) => !known.has(name))) {
+    throw new Error('CLI reference review metadata.unreviewed_binaries contains an unknown binary');
+  }
+  return { ...catalog, binaries: catalog.binaries.filter((binary) => !excluded.includes(binary.name)) };
 }
 
 export function validateReviewMetadata(metadata, catalog) {
@@ -284,11 +303,16 @@ export function validateReviewMetadata(metadata, catalog) {
       'reviewed_source_version',
       'reviewed_catalog_sha256',
       ...(legacy ? [] : ['reviewed_content_sha256']),
+      ...(Object.hasOwn(metadata ?? {}, 'unreviewed_binaries') ? ['unreviewed_binaries'] : []),
     ]),
     'CLI reference review metadata',
   );
   if (!legacy && metadata.schema_version !== reviewSchemaVersion) {
     throw new Error(`CLI reference review metadata must use ${reviewSchemaVersion}`);
+  }
+  reviewedSubset(catalog, metadata);
+  if (legacy && Object.hasOwn(metadata, 'unreviewed_binaries')) {
+    throw new Error('unreviewed_binaries requires v3 CLI review metadata');
   }
   if (!['draft', 'current'].includes(metadata.status)) {
     throw new Error('CLI reference review metadata.status must be draft or current');
@@ -328,13 +352,13 @@ export function validateReviewMetadata(metadata, catalog) {
     if (!/^[0-9a-f]{64}$/u.test(metadata.reviewed_content_sha256 ?? '')) {
       throw new Error('CLI reference review metadata.reviewed_content_sha256 must be a lowercase SHA-256 digest');
     }
-    if (metadata.reviewed_content_sha256 !== contentDigest(catalog)) {
+    if (metadata.reviewed_content_sha256 !== contentDigest(catalog, metadata)) {
       throw new Error('CLI reference review metadata does not cover the current command content; review the changed reference before updating its review record');
     }
   }
   // Preserve and verify the source identity recorded at the actual human review.
   const reviewedCatalog = { ...catalog, source_version: metadata.reviewed_source_version };
-  if (metadata.reviewed_catalog_sha256 !== catalogDigest(reviewedCatalog)) {
+  if (metadata.reviewed_catalog_sha256 !== catalogDigest(reviewedCatalog, metadata)) {
     throw new Error('CLI reference review metadata does not cover the current command catalog digest');
   }
   return metadata;
@@ -596,9 +620,11 @@ function renderIndex(catalog, reviewMetadata, sourceDigest) {
     `The pages in this section are generated from the public Clap command trees for Registry Stack source version ${inlineCode(catalog.source_version)} and catalog SHA-256 ${inlineCode(sourceDigest)}. Hidden implementation commands are omitted.`,
   ];
   for (const group of groups) {
+    const published = group.binaries.filter((name) => !(reviewMetadata.unreviewed_binaries ?? []).includes(name));
+    if (published.length === 0) continue;
     if (group.product) lines.push('', `<DocsetProduct product="${group.product}">`);
     lines.push('', `## ${group.title}`, '', '| Binary | Description |', '| --- | --- |');
-    for (const name of group.binaries) {
+    for (const name of published) {
       const binary = binaries.get(name);
       lines.push(`| [${inlineCode(name)}](./${name}/) | ${tableText(binary.about)} |`);
     }
@@ -619,11 +645,16 @@ export function renderCatalog(catalog, reviewMetadata) {
   const sourceDigest = catalogDigest(catalog);
   validateReviewMetadata(reviewMetadata, catalog);
   const files = new Map([['index.mdx', renderIndex(catalog, reviewMetadata, sourceDigest)]]);
-  const add = (command) => {
-    files.set(commandPath(command), renderCommand(command, catalog, reviewMetadata, sourceDigest));
-    command.subcommands.forEach(add);
-  };
-  catalog.binaries.forEach(add);
+  for (const binary of catalog.binaries) {
+    const metadata = (reviewMetadata.unreviewed_binaries ?? []).includes(binary.name)
+      ? { ...reviewMetadata, status: 'draft', last_reviewed: 'unreviewed' }
+      : reviewMetadata;
+    const addBinary = (command) => {
+      files.set(commandPath(command), renderCommand(command, catalog, metadata, sourceDigest));
+      command.subcommands.forEach(addBinary);
+    };
+    addBinary(binary);
+  }
   return files;
 }
 

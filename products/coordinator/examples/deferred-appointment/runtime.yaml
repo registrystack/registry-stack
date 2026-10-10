@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/runtime/v1alpha1
+kind: CoordinatorRuntimeConfig
+secretProviders:
+  file:
+    root: /run/registry-coordinator/secrets
+  environment: {}
+database:
+  runtimeUrlRef: secret:env/COORDINATOR_DATABASE_URL
+  migrationUrlRef: secret:env/COORDINATOR_MIGRATION_URL
+  trustedRootCertificateRef: secret:file/postgres-root.pem
+namespace: coordinator_deferred
+connections:
+  applications:
+    product: breg
+    baseUrl: https://breg.example.org
+    profile: follow-up-reader
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-reader
+      signingKeyRef: secret:file/reader-jwk
+      resource: urn:example:applications
+      scopes: [applications:read]
+  catalogue:
+    product: scheduling
+    baseUrl: https://scheduling.example.org
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-catalogue
+      signingKeyRef: secret:file/catalogue-jwk
+      resource: urn:example:scheduling
+      scopes: [scheduling:read]
+  bookings:
+    product: scheduling
+    baseUrl: https://scheduling.example.org
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-booking-agent
+      signingKeyRef: secret:file/bookings-jwk
+      resource: urn:example:scheduling
+      scopes: [scheduling:commit]
+      taskAuthority:
+        baseUrl: https://casework.example.org
+        issuer: https://casework.example.org
+        subject: registered-booking-agent
+        exchangeAudience: https://issuer.example.org/oauth/token
+        bootstrapResource: urn:example:casework
+    observationAuthorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-booking-agent
+      signingKeyRef: secret:file/bookings-jwk
+      resource: urn:example:scheduling
+      scopes: [scheduling:read]
+  notices:
+    product: messaging
+    baseUrl: https://messaging.example.org
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-notices
+      signingKeyRef: secret:file/notices-jwk
+      resource: urn:example:messaging
+      scopes: [messaging:send]
+deployment:
+  databaseId: coordinator-institution-deferred
+  runtimeRole: coordinator_runtime
+  package:
+    root: /opt/registry-coordinator/package
+    expectedDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  listener:
+    bind: 127.0.0.1:8108
+    tlsTermination: operator-controlled-upstream
+  authentication:
+    issuer: https://issuer.example.org
+    audience: urn:example:coordinator
+    jwksSource:
+      kind: discovery
+    allowedClients: [institution-producer, institution-operator]
+    policies:
+      - clientId: institution-producer
+        requiredScopes: [coordinator:start]
+        flows: [deferred-appointment]
+        actions: [start, status]
+      - clientId: institution-operator
+        requiredScopes: [coordinator:operate]
+        flows: [deferred-appointment]
+        actions: [status, inspect, retry-same, cancel, reconcile, doctor, restore-hold, release-restore-hold, release-admission-hold, complete-execution-recovery, retain]
+        operator: true
+  auditFile: /var/lib/registry-coordinator/audit.jsonl
+  auditKeyRef: secret:file/audit-key
+  activeStateKey: 1
+  stateKeys:
+    "1":
+      keyRef: secret:file/state-key-1
+  admissionKeyRef: secret:file/admission-key

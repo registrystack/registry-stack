@@ -84,7 +84,9 @@ invariants:
       The core's check_message_visibility decision, applied on the status and
       cancel routes after authentication against the stored submitter: only
       the submitter and operator profiles see a message, and a missing message
-      answers exactly like an invisible one.
+      answers exactly like an invisible one. Original receipt lookup requires
+      the exact submitter issuer and subject, original key, and canonical request
+      hash; a different principal never gains receipt ownership.
     refusal: >-
       Answer 404 message.not-visible to every other caller, whether or not the
       message exists.
@@ -120,6 +122,8 @@ invariants:
       acceptDuplicates. The provider idempotency capability is stored at
       acceptance and controls the key sent on every later attempt, even
       after a package upgrade removes that capability.
+      Original receipt observation never resubmits and remains available
+      independently of the caller's submission rate budget.
     refusal: >-
       Record unknown and never send again without an operator settle.
     negativeTest:

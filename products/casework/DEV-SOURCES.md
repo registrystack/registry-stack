@@ -124,6 +124,21 @@ present, and its resource servers refuse a token exchanged from any other.
 Casework copies those exact client pairs into its private state, keeps its own
 task signing key, and neither starts nor stops the owner's issuer. An owner
 session change or unavailable issuer is refused before restart.
+Borrowed sessions require a stable `principalClaim`, such as
+`registry_principal`, in every Casework access profile. Explicitly register that
+claim for each client in both projects. `sub` identifies the BREG owner's
+subject and cannot stand in for Casework's local directory principal.
+
+Known integration and shared-registration mismatches report a fixed diagnostic
+category and the clients-file section to correct, even before private session
+logs exist. Compare the owner's explicit actor claims as well as the client ID,
+resource, scopes and exchange registration. These configuration refusals exit 1;
+filesystem and network failures retain their operational failure category.
+Reports omit the private cause and rejected values. A borrowed `sub` profile
+reports `caseworkctl.dev.borrowed-principal-invalid` at
+`casework.yaml:/accessProfiles/principalClaim`; an invalid source adapter reports
+`caseworkctl.dev.source-binding-invalid` at
+`dev-clients.yaml:/integrations/sources`. Each includes a fixed correction action.
 `browserClients` is an optional explicit list of auth-code application IDs
 admitted to Casework's local runtime. Each must be registered by the shared
 owner for this exact resource; a browser app mapped to another resource is

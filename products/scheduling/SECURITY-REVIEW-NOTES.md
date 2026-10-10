@@ -39,18 +39,14 @@ audit entries. The threats this surface answers:
    for explanations, and requires a complete scheduling grant (service,
    location, actions) for every commitment. A partially formed grant set
    is refused as a credentials problem, never honoured partially.
-2. **A token that was valid at the door commits after its grant lapsed.**
-   The grant's expiry is re-checked inside the capacity transaction,
-   immediately before the claim commits, against a fresh observation of
-   the store's clock taken after every lock wait, not against the
-   request's own entry time: a transaction delayed by contention cannot
-   carry a lapsed grant to a commit. The full bounds are matched once
-   at the service before the transaction opens; re-reading them inside
-   would only defend against a grant revoked or narrowed at the issuer,
-   and the runtime does not ask the issuer for a grant's status (matrix
-   deferral SCHEDULING-DEF-01, recorded in the published reference and
-   reasoned in "Grant status stays out of the capacity transaction"
-   below).
+2. **A grant already invalid at the fresh status observation, or an expired
+   credential, commits capacity.** A runtime configured with task-grant
+   authorities obtains a fresh exact status before every capacity transaction
+   and receipt replay. The outbound call completes before database locks are
+   taken. Inside the transaction, the earlier of the verified access-token and
+   grant deadlines is re-checked after every lock wait and immediately before
+   commit. An unconfigured runtime admits only the bounded legacy path for a
+   grant with at most 900 seconds left.
 3. **A deployment is reached over a public interface by accident.** The
    listener must bind a private address or an explicitly declared
    container network; anything else refuses to start.
@@ -756,58 +752,60 @@ the guard needs a decision on a schema floor, because without one an
 unsupported upgrade from before the audit writer would drop unpublished
 audit rows silently.
 
-## Grant status stays out of the capacity transaction
+## Fresh task-grant status stays outside the capacity transaction
 
-Casework answers a resource server's question about a task grant's
-current status at `GET /v1/task-grants/{grantId}/status`, and the Base
-Registry Engine (BReg) asks it before each task-granted write. Scheduling
-does not ask, and SCHEDULING-DEF-01 stays deferred with its reason
-restated. This is an authorization decision, so it is recorded here; the
-runtime and its tests are unchanged.
+Casework answers a resource server's question about a task grant's current
+status at `GET /v1/task-grants/{grantId}/status`. Scheduling now uses the
+shared platform status transport before each capacity commitment and each
+idempotent receipt replay when `taskGrantStatus` is configured. This keeps
+Scheduling independent of Casework's implementation crate while sharing the
+same exact wire contract with BReg.
 
-**Threat.** A grant revoked at Casework, or invalidated there because its
-holder lost eligibility or its template retired, still commits capacity at
-Scheduling until its deadline passes: the token the agent already holds
-carries the bounds, and Scheduling never asks whether the grant is still
-active.
+**Threat.** A grant revoked at Casework, invalidated by a holder reassignment,
+or changed at the authority could otherwise keep committing capacity through
+an already issued access token. A request could also receive an active status
+answer and then wait on a capacity lock until its short execution credential
+expired.
 
-**Decision.** Keep the deferral. A grant Casework mints lives at most 900
-seconds from its approval (`TASK_GRANT_LIFETIME_SECONDS` in
-`crates/registry-casework-core/src/task_grant.rs`, which every task
-template is held to), and Scheduling re-checks the grant's expiry inside
-the capacity transaction, after every lock wait and immediately before
-the claim commits (SCHEDULING-SEC-03). The exposure is therefore the rest
-of one short deadline. A status call would put Casework's availability
-inside every capacity transaction: each commitment would hold its
-capacity locks while it waits on another product, and would have to
-refuse while that product is unreachable, because answering without the
-status would make the check decorative. BReg accepts that cost for most
-of its writes: it asks inside the write's transaction, waits at most five
-seconds, and refuses the write when no answer arrives in that time. For a
-change-request apply and an Evidence-guarded action it asks before the
-transaction opens and re-checks only the grant's expiry inside it, which
-keeps the locks free but leaves the window between the answer and the
-commit, so that shape narrows the exposure without closing it.
+**Decision.** The authority must answer with `active: true` and reproduce the
+exact grant id, source issuer, principal, client, resource, purpose, bounds,
+signed subject values, and deadline. A mismatch, inactive response, incomplete
+signed binding, or unlisted source is an authorization refusal. An authority
+or service credential outage, including a malformed authority response, is a
+service outage. Positive answers are never cached, and the complete attempt,
+including acquisition of the service credential, has a ten-second limit.
 
-**Revisit trigger.** An adopter needs a revocation to take effect faster
-than a grant expires. Closing the deferral then adds a Scheduling adapter
-over `registry-casework-client`, which relaxes the MVP dependency sentence
-in `AGENTS.md` and `products/scheduling/scripts/check_dependency_direction.py`
-in the same change, and promotes SCHEDULING-DEF-01 to an enforced row with
-the negative test that earns it.
+The status call completes before the capacity transaction opens, so it holds no
+capacity lock while waiting on another product. The transaction then checks
+the earlier of the verified access-token and grant deadlines after every lock
+wait and immediately before commit. This bounds the interval between status
+and commit by the short execution credential, even when the grant remains live
+for days. It does not create a distributed transaction: a withdrawal after a
+positive status answer can still race the in-flight local commit.
 
-**Tests.** None change. `a_grant_that_lapses_before_the_commit_never_books`
-and `every_mutation_rechecks_expiry_after_its_writes` (SCHEDULING-SEC-03,
-`crates/registry-scheduling/tests/postgres_commitments.rs`) remain the
-proof that the compensating expiry re-check holds.
+An entirely unconfigured runtime accepts the legacy offline path only when the
+grant has no more than 900 seconds remaining at request entry. Any configured
+status entry disables that fallback for all grants, including sources that are
+not listed. New deployments that accept deferred grants must configure status.
 
-**Accepted residual.** The 900-second ceiling is Casework's, not
-Scheduling's. Scheduling verifies a grant's deadline but does not cap how
-far ahead it lies, and its token verifier sets no maximum token lifetime,
-so a deployment that accepts grants minted by another authority takes
-that authority's grant lifetime as its revocation window. Holding that
-authority to deadlines no longer than Casework's is the deployment's
-responsibility; Scheduling does not enforce it.
+**Tests.** `configured_task_status_is_fresh_for_a_capacity_commit_and_its_replay`
+proves that an initial capacity claim and its duplicate operation each obtain
+a fresh status while the ledger records one effect.
+`inactive_mismatched_and_unavailable_task_status_commit_no_capacity` covers
+closed refusals and authority outage.
+`unconfigured_status_accepts_only_the_legacy_remaining_lifetime` pins the
+900-second compatibility path, and
+`a_commitment_blocked_past_its_access_token_deadline_never_books` holds a real
+PostgreSQL capacity lock until the execution credential has expired. All are in
+`crates/registry-scheduling/tests/postgres_commitments.rs` and carry
+SCHEDULING-SEC-03.
+
+**Accepted residual.** The signed token does not identify whether Casework
+issued the grant in immediate or deferred mode. On a deployment with no status
+configuration, the final 15 minutes of an originally deferred grant therefore
+qualify for the bounded legacy path. Operators who accept deferred grants close
+that residual by configuring at least one status authority, which makes status
+mandatory for every source.
 
 ## A spent key forgets its caller
 
@@ -912,9 +910,7 @@ claims this strands.
 
 ## Known deferrals
 
-The matrix records four deferrals with their compensating controls.
-SCHEDULING-DEF-01 is stated in threat 2 above and reasoned in "Grant
-status stays out of the capacity transaction"; the other three are
+The matrix records three deferrals with their compensating controls. They are
 restated here as the index the matrix's `recordedIn` points at:
 
 - **SCHEDULING-DEF-04, the channel is not bound to the verified caller.**
@@ -941,3 +937,20 @@ relations, including an empty database. Older servers refuse with an upgrade
 instruction before migrations or activation writes. The shared
 `postgres_version_floor_precedes_missing_ledger_observation` database test
 covers that entry point; unit tests pin the 16/17 version boundary.
+
+## Original receipt observation
+
+Threat: recovery submits a second effect after cancellation, expiry, or restore,
+or accepts a different caller's receipt as evidence of its original command.
+The receipt lookup uses current ordinary read authority, the original verified
+issuer and subject, the exact operation key, and the existing canonical request
+hash. It reads only retained successful receipts and never renders, writes business state,
+replays, or creates an attempt. Task lineage already stored with the original
+operation is preserved. A different standing identity gains no ownership.
+
+Missing, changed, erased, expired, and non-success receipts all answer the
+value-free `409 receipt.unresolved`. That response establishes no absence of
+effect. A durable audit request precedes the database lookup and its response
+precedes disclosure of the receipt. Payloads, keys, and raw identities never
+enter these audit records. The focused PostgreSQL receipt tests exercise
+ownership, exact-request refusal, retention, and unchanged product state.

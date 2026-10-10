@@ -1,0 +1,494 @@
+# Executable synthetic replies and virtual time. No credentials or live I/O.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: appointment-and-notice-accepted
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    bookAfter: '2026-10-09T09:16:00Z'
+    searchStart: '2026-10-10T10:00:00Z'
+    searchEnd: '2026-10-10T11:00:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000003
+      expiresAt: 1791620000
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            appointmentAllowed: true
+            email: person@example.invalid
+    metadata:
+    - type: success
+      value:
+        schedulingId: pilot
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items:
+        - kind: slot
+          start: '2026-10-10T10:00:00Z'
+          end: '2026-10-10T10:30:00Z'
+          free: 1
+        nextCursor: null
+    book:
+    - type: success
+      value:
+        appointmentId: appointment-one
+        offering: application-review
+        start: '2026-10-10T10:00:00Z'
+        end: '2026-10-10T10:30:00Z'
+    notify:
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000002
+        status: queued
+  expect:
+    path:
+    - read-application
+    - eligibility
+    - due
+    - metadata
+    - availability
+    - capacity
+    - book
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: appointment-and-message-accepted
+    output:
+      appointmentId: appointment-one
+      messageId: 00000000-0000-4000-8000-000000000002
+    workflowElapsedSeconds: 960
+- id: source-declines-appointment
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    bookAfter: '2026-10-09T09:16:00Z'
+    searchStart: '2026-10-10T10:00:00Z'
+    searchEnd: '2026-10-10T11:00:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000003
+      expiresAt: 1791620000
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            appointmentAllowed: false
+  expect:
+    path:
+    - read-application
+    - eligibility
+    - skipped
+    state: completed
+    outcome:
+      type: named
+      value: no-current-eligibility
+    output: null
+    workflowElapsedSeconds: 0
+- id: capacity-unavailable
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    bookAfter: '2026-10-09T09:16:00Z'
+    searchStart: '2026-10-10T10:00:00Z'
+    searchEnd: '2026-10-10T11:00:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000003
+      expiresAt: 1791620000
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            appointmentAllowed: true
+            email: person@example.invalid
+    metadata:
+    - type: success
+      value:
+        schedulingId: pilot
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items: []
+        nextCursor: null
+  expect:
+    path:
+    - read-application
+    - eligibility
+    - due
+    - metadata
+    - availability
+    - capacity
+    - no-capacity
+    state: completed
+    outcome:
+      type: named
+      value: no-current-capacity
+    output: null
+    workflowElapsedSeconds: 960
+- id: booking-response-loss-same-command
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    bookAfter: '2026-10-09T09:16:00Z'
+    searchStart: '2026-10-10T10:00:00Z'
+    searchEnd: '2026-10-10T11:00:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000003
+      expiresAt: 1791620000
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            appointmentAllowed: true
+            email: person@example.invalid
+    metadata:
+    - type: success
+      value:
+        schedulingId: pilot
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items:
+        - kind: slot
+          start: '2026-10-10T10:00:00Z'
+          end: '2026-10-10T10:30:00Z'
+          free: 1
+        nextCursor: null
+    book:
+    - type: uncertain
+      code: transport-uncertain
+    - type: success
+      value:
+        appointmentId: appointment-one
+        offering: application-review
+        start: '2026-10-10T10:00:00Z'
+        end: '2026-10-10T10:30:00Z'
+    notify:
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000002
+        status: queued
+  expect:
+    path:
+    - read-application
+    - eligibility
+    - due
+    - metadata
+    - availability
+    - capacity
+    - book
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: appointment-and-message-accepted
+    output:
+      appointmentId: appointment-one
+      messageId: 00000000-0000-4000-8000-000000000002
+    workflowElapsedSeconds: 960
+  recovery:
+    book: retry-same
+- id: booking-original-receipt-reconciliation
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    bookAfter: '2026-10-09T09:16:00Z'
+    searchStart: '2026-10-10T10:00:00Z'
+    searchEnd: '2026-10-10T11:00:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000003
+      expiresAt: 1791620000
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            appointmentAllowed: true
+            email: person@example.invalid
+    metadata:
+    - type: success
+      value:
+        schedulingId: pilot
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items:
+        - kind: slot
+          start: '2026-10-10T10:00:00Z'
+          end: '2026-10-10T10:30:00Z'
+          free: 1
+        nextCursor: null
+    book:
+    - type: uncertain
+      code: transport-uncertain
+    - type: success
+      value:
+        appointmentId: appointment-one
+        offering: application-review
+        start: '2026-10-10T10:00:00Z'
+        end: '2026-10-10T10:30:00Z'
+    notify:
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000002
+        status: queued
+  expect:
+    path:
+    - read-application
+    - eligibility
+    - due
+    - metadata
+    - availability
+    - capacity
+    - book
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: appointment-and-message-accepted
+    output:
+      appointmentId: appointment-one
+      messageId: 00000000-0000-4000-8000-000000000002
+    workflowElapsedSeconds: 960
+  recovery:
+    book: reconcile
+- id: grant-revoked
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    bookAfter: '2026-10-09T09:16:00Z'
+    searchStart: '2026-10-10T10:00:00Z'
+    searchEnd: '2026-10-10T11:00:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000003
+      expiresAt: 1791620000
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            appointmentAllowed: true
+            email: person@example.invalid
+    metadata:
+    - type: success
+      value:
+        schedulingId: pilot
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items:
+        - kind: slot
+          start: '2026-10-10T10:00:00Z'
+          end: '2026-10-10T10:30:00Z'
+          free: 1
+        nextCursor: null
+    book:
+    - type: refused
+      code: credential-refused
+  expect:
+    path:
+    - read-application
+    - eligibility
+    - due
+    - metadata
+    - availability
+    - capacity
+    - book
+    state: refused
+    workflowElapsedSeconds: 960
+    outcome:
+      type: none
+- id: temporary-authority-outage
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    bookAfter: '2026-10-09T09:16:00Z'
+    searchStart: '2026-10-10T10:00:00Z'
+    searchEnd: '2026-10-10T11:00:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000003
+      expiresAt: 1791620000
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            appointmentAllowed: true
+            email: person@example.invalid
+    metadata:
+    - type: success
+      value:
+        schedulingId: pilot
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items:
+        - kind: slot
+          start: '2026-10-10T10:00:00Z'
+          end: '2026-10-10T10:30:00Z'
+          free: 1
+        nextCursor: null
+    book:
+    - type: retryable
+      code: credential-unavailable
+    - type: success
+      value:
+        appointmentId: appointment-one
+        offering: application-review
+        start: '2026-10-10T10:00:00Z'
+        end: '2026-10-10T10:30:00Z'
+    notify:
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000002
+        status: queued
+  expect:
+    path:
+    - read-application
+    - eligibility
+    - due
+    - metadata
+    - availability
+    - capacity
+    - book
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: appointment-and-message-accepted
+    output:
+      appointmentId: appointment-one
+      messageId: 00000000-0000-4000-8000-000000000002
+    workflowElapsedSeconds: 960
+  recovery:
+    book: retry-same
+- id: booking-receipt-expired
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    bookAfter: '2026-10-09T09:16:00Z'
+    searchStart: '2026-10-10T10:00:00Z'
+    searchEnd: '2026-10-10T11:00:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000003
+      expiresAt: 1791620000
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            appointmentAllowed: true
+            email: person@example.invalid
+    metadata:
+    - type: success
+      value:
+        schedulingId: pilot
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items:
+        - kind: slot
+          start: '2026-10-10T10:00:00Z'
+          end: '2026-10-10T10:30:00Z'
+          free: 1
+        nextCursor: null
+    book:
+    - type: receipt-expired
+  expect:
+    path:
+    - read-application
+    - eligibility
+    - due
+    - metadata
+    - availability
+    - capacity
+    - book
+    state: uncertain
+    workflowElapsedSeconds: 960
+    outcome:
+      type: none
+- id: revocation-after-unknown-remains-unknown
+  admittedAt: '2026-10-09T09:00:00Z'
+  input:
+    applicationId: 00000000-0000-4000-8000-000000000001
+    bookAfter: '2026-10-09T09:16:00Z'
+    searchStart: '2026-10-10T10:00:00Z'
+    searchEnd: '2026-10-10T11:00:00Z'
+    grant:
+      id: 00000000-0000-4000-8000-000000000003
+      expiresAt: 1791620000
+  replies:
+    read-application:
+    - type: success
+      value:
+        data:
+          domainData:
+            appointmentAllowed: true
+            email: person@example.invalid
+    metadata:
+    - type: success
+      value:
+        schedulingId: pilot
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items:
+        - kind: slot
+          start: '2026-10-10T10:00:00Z'
+          end: '2026-10-10T10:30:00Z'
+          free: 1
+        nextCursor: null
+    book:
+    - type: uncertain
+      code: transport-uncertain
+    - type: refused
+      code: credential-refused
+  expect:
+    path:
+    - read-application
+    - eligibility
+    - due
+    - metadata
+    - availability
+    - capacity
+    - book
+    state: uncertain
+    workflowElapsedSeconds: 960
+    outcome:
+      type: none
+  recovery:
+    book: retry-same

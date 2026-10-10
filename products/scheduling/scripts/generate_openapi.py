@@ -67,6 +67,7 @@ ROUTES = {
     "/v1/holds",
     "/v1/holds/{hold_id}",
     "/v1/appointments",
+    "/v1/appointments/receipt",
     "/v1/appointments/{appointment_id}",
     "/v1/appointments/{appointment_id}/reschedule",
     "/v1/appointments/{appointment_id}/cancel",
@@ -145,6 +146,7 @@ ROUTE_HANDLERS = {
     ("POST", "/v1/holds"): "create_hold",
     ("DELETE", "/v1/holds/{hold_id}"): "release_hold",
     ("POST", "/v1/appointments"): "create_appointment",
+    ("POST", "/v1/appointments/receipt"): "appointment_receipt",
     ("GET", "/v1/appointments"): "list_appointments",
     ("GET", "/v1/appointments/{appointment_id}"): "get_appointment",
     ("POST", "/v1/appointments/{appointment_id}/reschedule"): "reschedule_appointment",
@@ -165,6 +167,7 @@ OPERATION_IDS = {
     ("POST", "/v1/holds"): "createHold",
     ("DELETE", "/v1/holds/{hold_id}"): "releaseHold",
     ("POST", "/v1/appointments"): "createAppointment",
+    ("POST", "/v1/appointments/receipt"): "readAppointmentReceipt",
     ("GET", "/v1/appointments"): "listAppointmentsByExternalReference",
     ("GET", "/v1/appointments/{appointment_id}"): "getAppointment",
     ("POST", "/v1/appointments/{appointment_id}/reschedule"): "rescheduleAppointment",
@@ -238,6 +241,7 @@ OPERATION_PROBLEMS = {
     + ["hold.released", "idempotency.expired", "service.unavailable"],
     ("POST", "/v1/appointments"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY
     + OFFERING + ["hold.expired", "hold.released", "service.unavailable"],
+    ("POST", "/v1/appointments/receipt"): EDGE + AUTHENTICATION + JSON_BODY + ["receipt.unresolved", "service.unavailable"],
     ("GET", "/v1/appointments"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
     ("GET", "/v1/appointments/{appointment_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY + STORAGE,
     # A reschedule resolves its offering from the appointment rather than from
@@ -814,6 +818,13 @@ def document(contract: dict) -> dict:
             idempotency=True,
             description="Carries exactly one of hold or admission. Confirming transfers the hold's own reservation, so capacity is re-checked only for identity: the hold must still be active and unexpired, its policy revision still current, and its holder still the caller. A direct create is evaluated against the live ledger like a hold, and commits instead of reserving. Both branches demand a complete task grant naming the offering's service, location, and appointment.create.",
         )},
+        "/v1/appointments/receipt": {"post": operation(
+            "Read the original appointment receipt",
+            "AppointmentDocument",
+            body="CreateAppointmentRequest",
+            idempotency=True,
+            description="Reads only a retained success receipt matching the verified caller's issuer and subject, the original key, and the original request. It requires current ordinary read authority, can observe work after task authority ends, and never creates or replays a capacity command. Missing, expired, changed, or refused receipts are receipt.unresolved; this is not evidence that no effect occurred.",
+        )},
         "/v1/appointments/{appointment_id}": {"get": operation(
             "Read one owned appointment",
             "AppointmentDocument",
@@ -965,6 +976,9 @@ def handler_wiring(
         # so a multi-line parameter list is read whole.
         parameters = signature[signature.index("(") + 1 : signature.rindex(")")]
         json_body = re.search(r"Json\(\w+\):\s*Json<([A-Za-z0-9_]+)>", parameters)
+        if json_body is None:
+            # A protected body can be extracted explicitly after authentication.
+            json_body = re.search(r"Json::<([A-Za-z0-9_]+)>::from_request\(", body)
         query = re.search(r"Query\(\w+\):\s*Query<([A-Za-z0-9_]+)>", parameters)
         path_parameters = re.findall(r"Path\((\w+)\):\s*Path<([A-Za-z0-9_:]+)>", parameters)
         authority = "unauthenticated"

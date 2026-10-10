@@ -11,10 +11,41 @@ use uuid::Uuid;
 
 pub const TASK_GRANT_LIFETIME_SECONDS: u64 = 900;
 pub const TASK_ASSERTION_LIFETIME_SECONDS: u64 = 60;
+/// Explicit opt-in authorization ceiling. This never changes credential TTLs.
+pub const DEFERRED_TASK_GRANT_LIFETIME_SECONDS: u64 = 7 * 24 * 60 * 60;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskAuthorizationMode {
+    #[default]
+    Immediate,
+    Deferred,
+}
+
+impl TaskAuthorizationMode {
+    pub fn is_immediate(&self) -> bool {
+        *self == Self::Immediate
+    }
+    pub fn maximum_lifetime_seconds(self) -> u64 {
+        match self {
+            Self::Immediate => TASK_GRANT_LIFETIME_SECONDS,
+            Self::Deferred => DEFERRED_TASK_GRANT_LIFETIME_SECONDS,
+        }
+    }
+}
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(
+    feature = "schema",
+    schemars(extend("allOf" = [{
+        "if": {"properties": {"authorizationMode": {"const": "deferred"}}, "required": ["authorizationMode"]},
+        "then": {"properties": {"lifetimeSeconds": {"maximum": DEFERRED_TASK_GRANT_LIFETIME_SECONDS}}},
+        "else": {"properties": {"lifetimeSeconds": {"maximum": TASK_GRANT_LIFETIME_SECONDS}}}
+    }]))
+)]
 pub struct TaskTemplate {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
@@ -61,10 +92,18 @@ pub struct TaskTemplate {
         schemars(with = "BTreeMap<registry_platform_yaml::ExternalId, String>")
     )]
     pub subjects: BTreeMap<String, String>,
-    #[serde(deserialize_with = "crate::typed::bounded_u64::<_, 1, TASK_GRANT_LIFETIME_SECONDS>")]
+    /// Immediate authorizations last at most fifteen minutes. Deferred is an
+    /// explicit governed window of at most seven days; assertion TTL stays sixty seconds.
+    #[serde(default, skip_serializing_if = "TaskAuthorizationMode::is_immediate")]
+    pub authorization_mode: TaskAuthorizationMode,
+    #[serde(
+        deserialize_with = "crate::typed::bounded_u64::<_, 1, DEFERRED_TASK_GRANT_LIFETIME_SECONDS>"
+    )]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "registry_platform_yaml::BoundedU64<1, TASK_GRANT_LIFETIME_SECONDS>")
+        schemars(
+            with = "registry_platform_yaml::BoundedU64<1, DEFERRED_TASK_GRANT_LIFETIME_SECONDS>"
+        )
     )]
     pub lifetime_seconds: u64,
 }
@@ -613,12 +652,13 @@ impl TaskTemplate {
                 );
             }
         }
-        if self.lifetime_seconds == 0 || self.lifetime_seconds > TASK_GRANT_LIFETIME_SECONDS {
+        let maximum_lifetime = self.authorization_mode.maximum_lifetime_seconds();
+        if self.lifetime_seconds == 0 || self.lifetime_seconds > maximum_lifetime {
             findings.push(
                 "casework.task-template.lifetime-out-of-range",
                 "/lifetimeSeconds",
                 format!(
-                    "expected a whole number of seconds from 1 to {TASK_GRANT_LIFETIME_SECONDS}"
+                    "expected a whole number of seconds from 1 to {maximum_lifetime} for this authorizationMode"
                 ),
                 "Write a lifetime within the bound.",
             );
@@ -760,6 +800,9 @@ pub struct ReviewTaskGrant {
     pub task_id: Uuid,
     pub request_id: Uuid,
     pub task_revision: i64,
+    /// Deferred authorization pins responsibility independently of draft edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_generation: Option<i64>,
     pub holder: IssuerPrincipal,
     pub template: TaskTemplate,
     pub template_digest: crate::ContentDigest,
@@ -960,6 +1003,83 @@ mod tests {
     }
 
     #[test]
+    fn deferred_authorization_requires_explicit_mode_and_bounded_duration() {
+        let project: CaseworkProject = serde_json::from_value(serde_json::json!({
+            "apiVersion": crate::CASEWORK_API_VERSION, "kind": crate::CASEWORK_KIND,
+            "casework": {"id":"tasks", "version":"1"},
+            "accessProfiles":[{"id":"staff", "principalClaim":"sub", "requiredScopes":["casework:staff"], "role":"staff"}],
+            "queues":[{"id":"review", "label":"Review"}],
+            "sources":[{"id":"source", "adapter":"test", "description":"Test source", "requests":[{"entity":"request", "queue":"review"}]}]
+        })).unwrap();
+        let mut template: TaskTemplate = serde_json::from_value(serde_json::json!({
+            "id":"summary", "version":"1", "label":"Prepare summary",
+            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
+            "itemKinds":["request"], "itemStates":["claimed"],
+            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
+            "client":"agent-client", "resource":"urn:test:breg", "scopes":["records:get", "records:draft"],
+            "purpose":"prepare-summary", "bounds":{"type":"breg", "permissions":[{"collection":"records", "operations":["get"]}]},
+            "subjects":{"subject_reference":"subject-reference"}, "lifetimeSeconds":900
+        })).unwrap();
+        let immediate = serde_json::to_value(&template).unwrap();
+        assert!(immediate.get("authorizationMode").is_none());
+        assert_eq!(
+            template.authorization_mode,
+            TaskAuthorizationMode::Immediate
+        );
+        template.lifetime_seconds = 901;
+        assert!(template.check(&project).is_err());
+        template.authorization_mode = TaskAuthorizationMode::Deferred;
+        assert!(template.check(&project).is_ok());
+        template.lifetime_seconds = DEFERRED_TASK_GRANT_LIFETIME_SECONDS;
+        assert!(template.check(&project).is_ok());
+        template.lifetime_seconds += 1;
+        assert!(template.check(&project).is_err());
+        template.lifetime_seconds = 0;
+        assert!(template.check(&project).is_err());
+        let mut deferred = immediate.clone();
+        deferred["authorizationMode"] = serde_json::json!("deferred");
+        deferred["lifetimeSeconds"] = serde_json::json!(DEFERRED_TASK_GRANT_LIFETIME_SECONDS);
+        assert!(serde_json::from_value::<TaskTemplate>(deferred.clone())
+            .unwrap()
+            .check(&project)
+            .is_ok());
+        for invalid_lifetime in [0, DEFERRED_TASK_GRANT_LIFETIME_SECONDS + 1] {
+            let mut invalid = deferred.clone();
+            invalid["lifetimeSeconds"] = serde_json::json!(invalid_lifetime);
+            assert!(serde_json::from_value::<TaskTemplate>(invalid).is_err());
+        }
+        #[cfg(feature = "schema")]
+        {
+            let schema = serde_json::to_value(schemars::schema_for!(TaskTemplate)).unwrap();
+            let validator = jsonschema::JSONSchema::options()
+                .with_draft(jsonschema::Draft::Draft202012)
+                .compile(&schema)
+                .unwrap();
+            assert!(validator.is_valid(&immediate));
+            assert!(validator.is_valid(&deferred));
+            let mut implicit_long = immediate.clone();
+            implicit_long["lifetimeSeconds"] = serde_json::json!(901);
+            assert!(!validator.is_valid(&implicit_long));
+            implicit_long["authorizationMode"] = serde_json::json!("immediate");
+            assert!(!validator.is_valid(&implicit_long));
+            let mut overlong = deferred.clone();
+            overlong["lifetimeSeconds"] =
+                serde_json::json!(DEFERRED_TASK_GRANT_LIFETIME_SECONDS + 1);
+            assert!(!validator.is_valid(&overlong));
+        }
+        let mut invalid = immediate.clone();
+        invalid["authorizationMode"] = serde_json::json!("standing");
+        assert!(serde_json::from_value::<TaskTemplate>(invalid).is_err());
+        assert_eq!(
+            serde_json::to_value(
+                serde_json::from_value::<TaskTemplate>(immediate.clone()).unwrap()
+            )
+            .unwrap(),
+            immediate
+        );
+    }
+
+    #[test]
     fn proposal_identity_ignores_only_mutable_source_revision() {
         let binding = SourceBinding {
             source_revision: "before".into(),
@@ -1147,6 +1267,10 @@ pub struct TaskTemplatePreview {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_context: Option<EvidenceRequesterContext>,
     pub subjects: BTreeMap<String, Value>,
+    /// Immediate authorizations last at most fifteen minutes. Deferred is an
+    /// explicit governed window of at most seven days; assertion TTL stays sixty seconds.
+    #[serde(default, skip_serializing_if = "TaskAuthorizationMode::is_immediate")]
+    pub authorization_mode: TaskAuthorizationMode,
     pub lifetime_seconds: u64,
 }
 
@@ -1173,6 +1297,10 @@ pub struct TaskGrantView {
     pub bounds: TaskGrantBounds,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_context: Option<EvidenceRequesterContext>,
+    /// Immediate authorizations last at most fifteen minutes. Deferred is an
+    /// explicit governed window of at most seven days; assertion TTL stays sixty seconds.
+    #[serde(default, skip_serializing_if = "TaskAuthorizationMode::is_immediate")]
+    pub authorization_mode: TaskAuthorizationMode,
     pub expires_at: u64,
     pub invalidated: bool,
 }

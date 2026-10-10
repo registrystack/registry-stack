@@ -103,6 +103,22 @@ impl MessagingClient {
     }
 
     #[napi]
+    pub async fn message_receipt(
+        &self,
+        token: String,
+        idempotency_key: String,
+        request: Value,
+    ) -> Result<MessagingOutcome> {
+        let token = bearer(token)?;
+        let request: SubmitMessageRequest = input(request)?;
+        outcome(
+            self.inner
+                .message_receipt(&token, &idempotency_key, &request)
+                .await,
+        )
+    }
+
+    #[napi]
     pub async fn message(&self, token: String, message_id: String) -> Result<MessagingOutcome> {
         let token = bearer(token)?;
         outcome(self.inner.message(&token, &message_id).await)

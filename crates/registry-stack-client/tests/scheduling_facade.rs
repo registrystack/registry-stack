@@ -68,6 +68,9 @@ async fn every_scheduling_method_names_its_types(
     let _: SchedulingComplete<AppointmentDocument> = client
         .create_appointment(auth(), idempotency_key, requests.create)
         .await?;
+    let _: SchedulingComplete<AppointmentDocument> = client
+        .appointment_receipt(auth(), idempotency_key, requests.create)
+        .await?;
     let _: SchedulingComplete<AppointmentDocument> =
         client.get_appointment(auth(), identifier).await?;
     let _: SchedulingComplete<PageDocument<AppointmentDocument>> = client

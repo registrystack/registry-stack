@@ -343,6 +343,10 @@ async fn metadata_and_jwks_describe_the_server() {
         );
         assert_eq!(metadata["token_endpoint"], server.token_endpoint());
         assert_eq!(metadata["jwks_uri"], server.jwks_uri());
+        assert_eq!(
+            metadata["id_token_signing_alg_values_supported"],
+            json!(["EdDSA"])
+        );
         assert_eq!(metadata["response_types_supported"], json!(["code"]));
         assert_eq!(
             metadata["code_challenge_methods_supported"],
@@ -379,6 +383,98 @@ async fn metadata_and_jwks_describe_the_server() {
         keys[0].get("d").is_none(),
         "the JWKS publishes no private member"
     );
+}
+
+#[tokio::test]
+async fn supplied_es256_signing_key_is_used_by_http_issuance_metadata_and_verifier() {
+    let issuer_key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap();
+    let expected_kid = issuer_key.kid.clone().unwrap();
+    let client_key = client_key();
+    let server = TestAuthorizationServer::builder()
+        .with_signing_key(issuer_key)
+        .client(
+            TestClient::new(GATEWAY)
+                .with_public_jwk(client_key.public())
+                .with_resource(REGISTRY_AUDIENCE)
+                .with_actor_kind(TestActorKind::Service),
+        )
+        .start()
+        .await;
+    let metadata: Value = http()
+        .get(server.discovery_url())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        metadata["id_token_signing_alg_values_supported"],
+        json!(["ES256"])
+    );
+    let jwks: Value = http()
+        .get(server.jwks_uri())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(jwks["keys"][0]["alg"], "ES256");
+    assert_eq!(jwks["keys"][0]["kid"], expected_kid);
+    assert!(jwks["keys"][0].get("d").is_none());
+    let token = provider(
+        &server,
+        GATEWAY,
+        &client_key,
+        Some(REGISTRY_AUDIENCE),
+        &["records:read"],
+    )
+    .bearer_token()
+    .await
+    .unwrap();
+    let token = bearer_text(&token);
+    assert_eq!(header_of(&token)["alg"], "ES256");
+    assert_eq!(header_of(&token)["kid"], expected_kid);
+    verified(&server, REGISTRY_AUDIENCE, &token).await;
+    let assertion = assertion(
+        &client_key,
+        GATEWAY,
+        &server.token_endpoint(),
+        "es256-exchange",
+    );
+    let (status, exchanged) = post_form(
+        &server,
+        &[
+            ("grant_type", TOKEN_EXCHANGE),
+            ("client_assertion_type", JWT_BEARER),
+            ("client_assertion", &assertion),
+            ("subject_token_type", ACCESS_TOKEN_URN),
+            ("subject_token", &token),
+            ("resource", REGISTRY_AUDIENCE),
+            ("scope", "records:read"),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let exchanged = exchanged["access_token"].as_str().unwrap();
+    assert_eq!(header_of(exchanged)["alg"], "ES256");
+    verified(&server, REGISTRY_AUDIENCE, exchanged).await;
+    assert!(verifier(&server, OTHER_AUDIENCE)
+        .await
+        .verify(&token)
+        .await
+        .is_err());
+    let mut segments: Vec<_> = token.split('.').map(str::to_owned).collect();
+    let mut signature = URL_SAFE_NO_PAD.decode(&segments[2]).unwrap();
+    signature[0] ^= 1;
+    segments[2] = URL_SAFE_NO_PAD.encode(signature);
+    assert!(verifier(&server, REGISTRY_AUDIENCE)
+        .await
+        .verify(&segments.join("."))
+        .await
+        .is_err());
+    server.stop().await;
 }
 
 #[tokio::test]

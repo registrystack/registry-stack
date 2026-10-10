@@ -248,6 +248,7 @@
                 "precondition.required",
                 "prerequisite.missing",
                 "profile.not-authorized",
+                "receipt.unresolved",
                 "request.body-too-large",
                 "request.invalid",
                 "request.method-not-allowed",

@@ -215,6 +215,7 @@ never hand-edited.
 |---|---|---|
 | `GET /health` | none | `200` with an empty body while the process serves |
 | `GET /ready` | none | `200` when the database carries every expected migration, its activation ledger names the configured database identity and served package active under the current runtime role, and its audit writer is healthy, `503 service.unavailable` otherwise |
+| `POST /v1/messages/receipt` | bearer, current caller profile, original `Idempotency-Key` and request | `200` original success receipt for its owner; `409 receipt.unresolved` when retained evidence does not match; no send or mutation |
 | `POST /v1/messages` | bearer, an access profile listing the sender profile and template, and an `Idempotency-Key` header | `202` with the message receipt; the same key and request answer the stored receipt again; `429 rate-limit.exceeded` past the caller's rate and `429 quota.exceeded` past the profile's daily limit, both with `Retry-After` |
 | `GET /v1/messages/{message_id}` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the status derived from the dispatch state and the delivery report, both of those, the recipient's channel with the value `redacted`, and the attempts; `404 message.not-visible` for any other message |
 | `POST /v1/messages/{message_id}/cancel` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the cancelled status; `409 message.dispatch-started` once dispatch started, `409 message.terminal` once it is final |
@@ -335,3 +336,15 @@ cargo run -p registry-messaging --features schema --example runtime-schema -- \
 cargo run -p registry-messaging --features schema --example openapi -- \
   --output products/messaging/generated
 ```
+
+## Observe an original receipt
+
+`POST /v1/messages/receipt` accepts the original request body and `Idempotency-Key`
+under current ordinary read authority. It returns `200` with the retained
+original success receipt for the same verified issuer and configured principal. It never
+repeats the business operation. A same-principal read credential can observe
+work after task authority ends; another service identity cannot impersonate
+that principal. `409 receipt.unresolved` covers unavailable evidence such as
+a missing, expired, or changed receipt and does not prove that no effect occurred.
+
+For an issuer/subject-bound pilot, configure the Messaging caller profile with `principalClaim: sub`. Other profiles retain the product’s existing configured principal ownership rule, and cannot substitute a different principal to observe an original receipt.

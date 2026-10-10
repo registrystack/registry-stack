@@ -1418,30 +1418,30 @@
       "properties": {
         "baseUrl": {
           "$ref": "#/$defs/Url",
-          "description": "The Casework base URL the status check calls. It is `https`; `http`\nis accepted only for a loopback host, for local development."
+          "description": "HTTPS service base; plaintext HTTP is allowed only on loopback."
         },
         "caBundleRef": {
-          "$ref": "#/$defs/SecretReference",
-          "description": "PEM CA bundle for Casework and its token endpoint. Omitted, the\nplatform's trusted roots verify them."
+          "$ref": "#/$defs/SecretReference"
         },
         "caseworkResource": {
-          "type": "string"
+          "$ref": "#/$defs/ExternalId",
+          "description": "The status service audience, which must be an absolute resource URI."
         },
         "clientAssertionAudience": {
-          "type": "string"
+          "$ref": "#/$defs/ExternalId"
         },
         "clientId": {
-          "type": "string"
+          "$ref": "#/$defs/ExternalId"
         },
         "privateKeyRef": {
           "$ref": "#/$defs/SecretReference"
         },
         "sourceIssuer": {
-          "$ref": "#/$defs/Url",
-          "description": "The Casework task authority's issuer, exactly as Casework states it.\n`http` and `https` are both accepted, since the value is compared, not\nfetched."
+          "$ref": "#/$defs/ExternalId",
+          "description": "The exact authority identifier, including an absolute URN issuer.\nIt is compared rather than fetched and must be an absolute resource URI."
         },
         "tokenEndpoint": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         }
       },
       "required": [

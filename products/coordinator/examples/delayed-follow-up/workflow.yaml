@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: delayed-follow-up
+  version: "1"
+input:
+  type: object
+  additionalProperties: false
+  required: [applicationId, sendAfter]
+  properties:
+    applicationId: {type: string, format: uuid}
+    sendAfter: {type: string, format: date-time}
+connections:
+  applications: breg
+  notices: messaging
+functionsFile: functions.rhai
+deadlineSeconds: 2592000
+start: due
+steps:
+  due:
+    type: wait-until
+    waitUntil: {function: send_after, arguments: [{type: input}]}
+    next: read-application
+  read-application:
+    type: call
+    connection: applications
+    operation: read-record
+    input: {function: read_request, arguments: [{type: input}]}
+    next: permission
+  permission:
+    type: choose
+    choose: {function: notice_route, arguments: [{type: step, step: read-application}]}
+    cases: {send: notify, skip: skipped}
+  notify:
+    type: call
+    connection: notices
+    operation: submit-message
+    input: {function: notice_request, arguments: [{type: input}, {type: step, step: read-application}]}
+    next: accepted
+  accepted:
+    type: finish
+    outcome: message-accepted
+    output: {function: receipt_result, arguments: [{type: step, step: notify}]}
+  skipped:
+    type: finish
+    outcome: no-current-permission
+outcomes:
+  message-accepted:
+    type: object
+    additionalProperties: false
+    required: [messageId]
+    properties:
+      messageId: {type: string, format: uuid}
+  no-current-permission:
+    type: "null"

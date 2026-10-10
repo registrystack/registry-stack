@@ -21,6 +21,7 @@
 //! partial grant claims is a malformed credential, refused here rather than
 //! half-trusted later.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,6 +30,7 @@ use registry_platform_oidc::{
     actor_kind, grant_claims, ClaimNames, JwksFetcher, OidcError, TokenVerifier,
     TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
 };
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::config::OidcConfig;
@@ -126,6 +128,21 @@ impl SchedulingAuthenticator {
                 .verify_context(&verified, &self.audience)
                 .map_err(|_| AuthenticationError::Profile)?;
         }
+        // Casework exchanges preserve approved subjects in the signed
+        // `identity` object. Keep only an object-shaped value. The shared
+        // binding validates its field and value bounds before any use. The
+        // entirely unconfigured legacy path did not require this member, so
+        // absence or an older shape remains a status-binding miss rather than
+        // changing bearer admission; a configured service fails that miss
+        // closed before capacity is touched.
+        let task_grant_subjects = grant.as_ref().and_then(|_| {
+            verified
+                .claims
+                .extra
+                .get("identity")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<BTreeMap<String, Value>>(value).ok())
+        });
         let issuer = verified
             .claims
             .iss
@@ -138,12 +155,19 @@ impl SchedulingAuthenticator {
             .clone()
             .filter(|subject| !subject.is_empty())
             .ok_or(AuthenticationError::Claims)?;
+        let credential_exp_unix = verified
+            .claims
+            .exp
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or(AuthenticationError::Claims)?;
         Ok((
             Caller {
                 actor_kind: kind.as_str().to_owned(),
                 issuer,
                 subject,
+                credential_exp_unix,
                 grant,
+                task_grant_subjects,
             },
             verified.scopes,
         ))
@@ -328,7 +352,7 @@ mod tests {
         json!({
             "registry_actor_kind": "agent",
             "registry_purpose": "registry-update",
-            "registry_grant_id": "grant-1",
+            "registry_grant_id": "11111111-1111-4111-8111-111111111111",
             "registry_grant_source_issuer": "https://authority.test",
             "registry_grant_client": CLIENT,
             "registry_grant_resource": resource,
@@ -341,6 +365,7 @@ mod tests {
                     "actions": ["hold.create", "appointment.create"],
                 }],
             },
+            "identity": {"subject_reference": "synthetic-subject"},
             "registry_approver": "approver-1",
         })
     }
@@ -447,6 +472,23 @@ mod tests {
             .actions()
             .iter()
             .any(|action| action == "hold.create"));
+    }
+
+    #[tokio::test]
+    async fn an_unconfigured_legacy_grant_need_not_carry_status_binding_members() {
+        let mut grant = grant_claims_value(AUDIENCE);
+        grant["registry_grant_id"] = json!("grant-1");
+        grant
+            .as_object_mut()
+            .expect("grant claims are an object")
+            .remove("identity");
+        let credential = token(merged("scheduling-read", grant));
+        let caller = authenticator()
+            .authenticate_mutate(&credential)
+            .await
+            .expect("the legacy grant still reaches the service");
+        assert!(caller.grant.is_some());
+        assert!(caller.task_grant_subjects.is_none());
     }
 
     #[tokio::test]

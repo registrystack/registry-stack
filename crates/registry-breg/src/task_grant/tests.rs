@@ -111,7 +111,8 @@ async fn activated_status_client_uses_the_configured_assertion_audience_and_chec
     }))
     .unwrap();
     let mut wrong = config.clone();
-    wrong.client_assertion_audience = format!("http://{address}/token");
+    wrong.client_assertion_audience =
+        registry_platform_yaml::ExternalId::new(format!("http://{address}/token")).unwrap();
     let wrong = TaskGrantStatusRegistry::activate(&[wrong], "urn:breg:test", &secrets).unwrap();
     assert_eq!(
         wrong.check(&binding).await,

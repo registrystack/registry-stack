@@ -64,7 +64,13 @@ In-process OIDC issuer. Key methods:
 In-process OAuth 2.0 authorization server, behind the
 `test-authorization-server` feature. It serves OIDC discovery, RFC 8414
 metadata, a JWKS, `/authorize`, and `/token` over loopback HTTP, and issues RFC
-9068 `at+jwt` access tokens signed with the Ed25519 fixture key.
+9068 `at+jwt` access tokens signed with the Ed25519 fixture key by default.
+The builder's `with_signing_key(PrivateJwk)` accepts a supplied key with a
+registered `kid`, for example one generated with shared crypto's
+`generate_private_jwk(GeneratedKeyAlgorithm::Es256)`. Issuance, public JWKS,
+metadata and `verifier_config` follow that key's algorithm. This lets tests
+exercise a product's normal RS256/ES256 verifier configuration without an
+algorithm override. It remains an in-memory test issuer, not an operator issuer.
 
 - `/authorize` runs the authorization-code grant with PKCE S256 only. Redirect
   URIs match exactly. It is test-only: nobody signs in, and the code is issued
@@ -108,6 +114,8 @@ Also tracks request body size (used by `assert_max_request_bytes`).
 
 ### JWT signing helpers
 
+- `sign_compact_jwt_with_key(private, typ, kid, claims)`: sign with the
+  supplied key's algorithm through shared crypto.
 - `sign_ed25519_compact_jwt(private_jwk, typ, kid, claims)`: parse a JWK
   string then sign a compact JWT with the given `typ` and `kid`.
 - `sign_ed25519_compact_jwt_with_key(private, typ, kid, claims)`: sign with

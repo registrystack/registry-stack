@@ -47,7 +47,11 @@ use zeroize::Zeroizing;
 const DATABASE_NAME: &str = "casework_dev";
 const MIGRATION_ROLE: &str = "casework_dev_migration";
 const RUNTIME_ROLE: &str = "casework_dev_runtime";
+// Pull the digest-identical Docker Official Images mirror. Public help keeps
+// the canonical upstream tag and digest, whose image identity is unchanged.
 const IMAGE: &str =
+    "public.ecr.aws/docker/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
+const CANONICAL_IMAGE: &str =
     "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const LABEL: &str = "org.registrystack.caseworkctl.dev-owner";
 /// Loopback ports a first start takes when no flag names one. Each lies below
@@ -3533,6 +3537,26 @@ fn retained_audit(state: &State) -> Result<()> {
 /// hold absolute paths or a supervisor cause, and are never reported.
 #[derive(Debug)]
 pub(crate) enum DevFailure {
+    /// A known authored integration contract refused before service launch.
+    IntegrationConfiguration {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// The owner's declared client identity does not match this workload.
+    SharedClientRegistration {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// The shared issuer has not paired this task authority with its clients.
+    SharedTaskAuthority {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// A configured source cannot satisfy the maintained adapter contract.
+    SourceBindingConfiguration {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// Borrowed local subjects cannot stand in for stable Casework principals.
+    BorrowedPrincipalConfiguration {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     /// A loopback port the session needs is bound by another process.
     PortOccupied { port: u16, source: std::io::Error },
     /// The authored inputs changed while the session retains records or
@@ -3558,6 +3582,29 @@ pub(crate) enum DevFailure {
 const AUDIT_DIRECTORY: &str = ".casework/dev/audit";
 
 impl DevFailure {
+    pub(super) fn integration(reason: &'static str) -> Self {
+        Self::IntegrationConfiguration {
+            source: anyhow::anyhow!(reason).into(),
+        }
+    }
+
+    pub(super) fn registration(source: anyhow::Error) -> Self {
+        Self::SharedClientRegistration {
+            source: source.into(),
+        }
+    }
+
+    pub(crate) fn is_configuration_refusal(&self) -> bool {
+        matches!(
+            self,
+            Self::IntegrationConfiguration { .. }
+                | Self::SharedClientRegistration { .. }
+                | Self::SharedTaskAuthority { .. }
+                | Self::SourceBindingConfiguration { .. }
+                | Self::BorrowedPrincipalConfiguration { .. }
+        )
+    }
+
     /// Classify an audit destination refusal. Invalid data in the retained
     /// stream is the refusal the shared writer gives a file it did not write.
     fn audit(error: impl std::error::Error + Send + Sync + 'static) -> Self {
@@ -3582,6 +3629,36 @@ impl DevFailure {
     /// fixed text and non-secret parameters.
     pub(crate) fn diagnostic(&self) -> (&'static str, String, String, String) {
         match self {
+            Self::IntegrationConfiguration { .. } => (
+                "caseworkctl.dev.integrations-invalid",
+                "dev-clients.yaml:/integrations".to_owned(),
+                "The local source or task integration does not match the authored Casework policy and session.".to_owned(),
+                "Check the declared sources, reader credential references, resources, scopes, issuer endpoint and task templates in dev-clients.yaml against casework.yaml, then retry.".to_owned(),
+            ),
+            Self::SharedClientRegistration { .. } => (
+                "caseworkctl.dev.shared-client-mismatch",
+                "dev-clients.yaml:/clients".to_owned(),
+                "A Casework teaching or service client does not match its shared issuer registration.".to_owned(),
+                "Compare clients and integrations.serviceClients with the BReg issuer owner's dev-clients.yaml: client IDs, scopes, explicit actor and other claims, resource and task-exchange registration must match exactly. Correct the declarations before retrying; do not replace retained keys.".to_owned(),
+            ),
+            Self::SharedTaskAuthority { .. } => (
+                "caseworkctl.dev.shared-task-authority-mismatch",
+                "dev-clients.yaml:/integrations/taskAuthority".to_owned(),
+                "The shared issuer has not registered the exact Casework task authority and client pairing.".to_owned(),
+                "Match the owner's exchangeIssuers entry to integrations.taskAuthority: issuer, public JWKS listener, institutional_grant mapping and exact taskExchange client list, then retry.".to_owned(),
+            ),
+            Self::SourceBindingConfiguration { .. } => (
+                "caseworkctl.dev.source-binding-invalid",
+                "dev-clients.yaml:/integrations/sources".to_owned(),
+                "A declared source binding cannot construct its maintained adapter.".to_owned(),
+                "Check the exact BReg event source, reader profile, imported source description and reader credential references against casework.yaml and the source runtime, then retry.".to_owned(),
+            ),
+            Self::BorrowedPrincipalConfiguration { .. } => (
+                "caseworkctl.dev.borrowed-principal-invalid",
+                "casework.yaml:/accessProfiles/principalClaim".to_owned(),
+                "A borrowed issuer session requires explicit stable Casework principal claims.".to_owned(),
+                "Use a stable principalClaim such as registry_principal in every Casework access profile and explicitly register its matching claim for each client in both projects' dev-clients.yaml. Do not use sub: it identifies the BReg owner's subject, not the Casework local principal.".to_owned(),
+            ),
             Self::PortOccupied { port, .. } => (
                 "caseworkctl.dev.port-occupied",
                 format!("dev:/ports/{port}"),
@@ -3628,6 +3705,11 @@ impl DevFailure {
 impl std::fmt::Display for DevFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::IntegrationConfiguration { .. } => f.write_str("local integration configuration does not match the policy or session"),
+            Self::SharedClientRegistration { .. } => f.write_str("shared issuer registration differs from the Casework client"),
+            Self::SharedTaskAuthority { .. } => f.write_str("shared issuer owner must pre-register the exact Casework task authority connection"),
+            Self::SourceBindingConfiguration { .. } => f.write_str("local source binding does not satisfy the maintained adapter contract"),
+            Self::BorrowedPrincipalConfiguration { .. } => f.write_str("the shared BREG issuer requires explicit stable Casework principal claims"),
             Self::PortOccupied { .. } => f.write_str(
                 "a requested local port is already occupied; stop its owner or choose other ports",
             ),
@@ -3654,6 +3736,11 @@ impl std::fmt::Display for DevFailure {
 impl std::error::Error for DevFailure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::IntegrationConfiguration { source }
+            | Self::SharedClientRegistration { source }
+            | Self::SharedTaskAuthority { source }
+            | Self::SourceBindingConfiguration { source }
+            | Self::BorrowedPrincipalConfiguration { source } => Some(source.as_ref()),
             Self::PortOccupied { source, .. } => Some(source),
             Self::AuditFormatUnsupported { source } | Self::AuditUnavailable { source } => {
                 Some(source.as_ref())
@@ -3773,7 +3860,10 @@ fn inspect_with_termination(
 fn verified_container(state: &State, container: &Value) -> Result<()> {
     if container["Name"] != format!("/{}", state.container_name())
         || container["Config"]["Labels"][LABEL] != state.owner
-        || container["Config"]["Image"] != IMAGE
+        || !matches!(
+            container["Config"]["Image"].as_str(),
+            Some(IMAGE | CANONICAL_IMAGE)
+        )
         || state
             .container_id
             .as_ref()

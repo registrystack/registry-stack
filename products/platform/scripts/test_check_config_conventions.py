@@ -1537,6 +1537,23 @@ class SourceLintTests(ConventionsTestCase):
         self.assertEqual(report.errors, [])
         self.assertEqual(sorted(key for key in keys(report.findings) if key[1] == P), [])
 
+    def test_build_artifact_without_an_envelope_keeps_reader_custody(self) -> None:
+        entry = self.build_artifact()
+        entry["buildArtifact"] = True
+        entry["current"] = {"apiVersion": "none", "kind": "none", "checkedBy": "none"}
+        entry["target"] = "none"
+        self.assertEqual(self.repo.run().errors, [])
+        entry["reader"]["function"] = "missing_reader"
+        self.assertError(self.repo.run(), "does not define fn missing_reader")
+
+    def test_ordinary_author_and_operator_formats_still_require_a_target(self) -> None:
+        entry = self.repo.fmt()
+        entry["target"] = "none"
+        for audience in ("authored", "operator", "generated"):
+            with self.subTest(audience=audience):
+                entry["audience"] = audience
+                self.assertError(self.repo.run(), "target none needs an exceptionClass or generated buildArtifact")
+
     def test_build_artifact_keeps_the_registry_accuracy_checks(self) -> None:
         entry = self.build_artifact()
         entry["buildArtifact"] = True

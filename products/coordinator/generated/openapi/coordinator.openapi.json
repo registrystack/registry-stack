@@ -1,0 +1,1220 @@
+{
+  "components": {
+    "schemas": {
+      "AdmissionHold": {
+        "properties": {
+          "admissionsHold": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "admissionsHold"
+        ],
+        "type": "object"
+      },
+      "AdmissionRelease": {
+        "additionalProperties": false,
+        "properties": {
+          "admissionHistoryComplete": {
+            "type": "boolean"
+          },
+          "priorDeploymentFenced": {
+            "type": "boolean"
+          },
+          "recoveryReference": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "recoveryReference",
+          "admissionHistoryComplete",
+          "priorDeploymentFenced"
+        ],
+        "type": "object"
+      },
+      "Doctor": {
+        "properties": {
+          "activationReady": {
+            "type": "boolean"
+          },
+          "state": {
+            "properties": {
+              "admissionsHold": {
+                "type": "boolean"
+              },
+              "auditReady": {
+                "type": "boolean"
+              },
+              "databaseId": {
+                "type": "string"
+              },
+              "oldestDueAt": {
+                "format": "date-time",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "oldestTerminalPayloadAt": {
+                "format": "date-time",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "restoreHold": {
+                "type": "boolean"
+              },
+              "restoreReviewRequired": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "schemaVersion": {
+                "type": "integer"
+              },
+              "states": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "terminalPayloads": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "uncertain": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "databaseId",
+              "schemaVersion",
+              "restoreHold",
+              "auditReady",
+              "admissionsHold",
+              "restoreReviewRequired",
+              "states",
+              "uncertain",
+              "terminalPayloads",
+              "oldestTerminalPayloadAt"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "activationReady",
+          "state"
+        ],
+        "type": "object"
+      },
+      "Erased": {
+        "properties": {
+          "erased": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "erased"
+        ],
+        "type": "object"
+      },
+      "ExecutionRecovery": {
+        "additionalProperties": false,
+        "properties": {
+          "executionHistoryComplete": {
+            "type": "boolean"
+          },
+          "priorDeploymentFenced": {
+            "type": "boolean"
+          },
+          "recoveryReference": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "recoveryReference",
+          "executionHistoryComplete",
+          "priorDeploymentFenced"
+        ],
+        "type": "object"
+      },
+      "ExecutionReviewed": {
+        "properties": {
+          "executionRecoveryReviewed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "executionRecoveryReviewed"
+        ],
+        "type": "object"
+      },
+      "Hold": {
+        "properties": {
+          "restoreHold": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "restoreHold"
+        ],
+        "type": "object"
+      },
+      "Problem": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "suggestedAction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "Reason": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "Retention": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "before",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "RetryScheduled": {
+        "properties": {
+          "runId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "const": "retry-scheduled"
+          }
+        },
+        "required": [
+          "runId",
+          "status"
+        ],
+        "type": "object"
+      },
+      "RunInspection": {
+        "properties": {
+          "recovery": {
+            "properties": {
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "retryAllowed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "retryAllowed"
+            ],
+            "type": "object"
+          },
+          "run": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/StepStatus"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "run",
+          "steps",
+          "recovery"
+        ],
+        "type": "object"
+      },
+      "RunList": {
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/RunStatus"
+            },
+            "maxItems": 100,
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "type": "object"
+      },
+      "RunStatus": {
+        "properties": {
+          "admittedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "bindingDigest": {
+            "type": "string"
+          },
+          "deadlineAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "definitionDigest": {
+            "type": "string"
+          },
+          "failureCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nextDueAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output": {},
+          "restoreReviewRequired": {
+            "type": "boolean"
+          },
+          "runId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "uncertain": {
+            "type": "boolean"
+          },
+          "workflowId": {
+            "type": "string"
+          },
+          "workflowVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "workflowId",
+          "workflowVersion",
+          "definitionDigest",
+          "bindingDigest",
+          "step",
+          "state",
+          "admittedAt",
+          "deadlineAt",
+          "uncertain",
+          "restoreReviewRequired"
+        ],
+        "type": "object"
+      },
+      "Start": {
+        "additionalProperties": false,
+        "properties": {
+          "flow": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "input": {}
+        },
+        "required": [
+          "flow",
+          "input"
+        ],
+        "type": "object"
+      },
+      "StepStatus": {
+        "properties": {
+          "attempt": {
+            "type": "integer"
+          },
+          "commandPrepared": {
+            "type": "boolean"
+          },
+          "failureCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generation": {
+            "type": "integer"
+          },
+          "leaseExpiresAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nextDueAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "receiptExpired": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "uncertain": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "step",
+          "state",
+          "generation",
+          "attempt",
+          "commandPrepared",
+          "uncertain",
+          "receiptExpired"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "Registry Coordinator",
+    "version": "0.40.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "live",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "live": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "live"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Health result"
+          },
+          "503": {
+            "description": "Deployment unavailable or in recovery hold"
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ready": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ready"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Health result"
+          },
+          "503": {
+            "description": "Deployment unavailable or in recovery hold"
+          }
+        }
+      }
+    },
+    "/v1/complete-execution-recovery": {
+      "post": {
+        "operationId": "completeExecutionRecovery",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecutionRecovery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionReviewed"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "415": {
+            "description": "JSON media type required after caller authorization"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/doctor": {
+      "get": {
+        "operationId": "doctor",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Doctor"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/release-admission-hold": {
+      "post": {
+        "operationId": "releaseAdmissionHold",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdmissionRelease"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionHold"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "415": {
+            "description": "JSON media type required after caller authorization"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/release-restore-hold": {
+      "post": {
+        "operationId": "releaseRestoreHold",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Reason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Hold"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "415": {
+            "description": "JSON media type required after caller authorization"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/restore-hold": {
+      "post": {
+        "operationId": "restoreHold",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Reason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Hold"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "415": {
+            "description": "JSON media type required after caller authorization"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/retention": {
+      "post": {
+        "operationId": "retainTerminal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Retention"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Erased"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "415": {
+            "description": "JSON media type required after caller authorization"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/runs": {
+      "get": {
+        "operationId": "listRuns",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunList"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "startRun",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Start"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "415": {
+            "description": "JSON media type required after caller authorization"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run}": {
+      "get": {
+        "operationId": "runStatus",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run}/cancel": {
+      "post": {
+        "operationId": "cancelRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Reason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "415": {
+            "description": "JSON media type required after caller authorization"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run}/inspect": {
+      "get": {
+        "operationId": "inspectRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunInspection"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run}/reconcile": {
+      "post": {
+        "operationId": "reconcileRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Reason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunInspection"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "415": {
+            "description": "JSON media type required after caller authorization"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run}/retry-same": {
+      "post": {
+        "operationId": "retrySame",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Reason"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetryScheduled"
+                }
+              }
+            },
+            "description": "Authorized result"
+          },
+          "400": {
+            "description": "Invalid bounded request"
+          },
+          "401": {
+            "description": "Verified access token required"
+          },
+          "403": {
+            "description": "Current caller policy refused"
+          },
+          "404": {
+            "description": "Absent or unauthorized run"
+          },
+          "409": {
+            "description": "State or recovery conflict"
+          },
+          "415": {
+            "description": "JSON media type required after caller authorization"
+          },
+          "503": {
+            "description": "Database, audit or verifier unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    }
+  }
+}

@@ -648,3 +648,56 @@ test('a retry ceiling outside zero to two is a configuration error', () => {
     });
   }
 });
+
+test('original receipt observation preserves the caller body, key and current token', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({
+    status: 200, contentType: 'application/json', document: { id: MESSAGE_ID, status: 'queued', links: LINKS },
+  }));
+  const { MessagingClient } = require('../client');
+  const client = new MessagingClient({ baseUrl: `${baseUrl}tenant/` });
+  const original = SUBMISSION;
+  const result = await client.messageReceipt('current-token', 'original-key', original);
+  assert.deepEqual(result, { kind: 'complete', value: { id: MESSAGE_ID, status: 'queued', links: LINKS }, traceId: TRACE_ID });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'POST');
+  assert.equal(requests[0].path, '/tenant/v1/messages/receipt');
+  assert.equal(requests[0].headers.authorization, 'Bearer current-token');
+  assert.equal(requests[0].headers['idempotency-key'], 'original-key');
+  assert.deepEqual(JSON.parse(requests[0].body), SUBMISSION);
+});
+
+for (const [code, status, title, detail] of [
+  ['receipt.unresolved', 409, 'Original receipt unresolved', 'No retained success receipt matches this caller, key, and original request. The original outcome remains unknown; this is not evidence that no effect occurred.'],
+  ['operation.not-authorized', 403, 'Operation not authorized', 'Server-controlled-detail-canary'],
+  ['service.unavailable', 503, 'Service unavailable', 'Server-controlled-detail-canary'],
+]) {
+  test(`receipt observation maps ${code} without retry or exposing caller values`, async (context) => {
+    const { baseUrl, requests } = await serve(context, () => problem(code, status, title, detail));
+    const { MessagingClient, MessagingClientError } = require('../client');
+    const client = new MessagingClient({ baseUrl, maxMutationRetries: 2 });
+    await assert.rejects(client.messageReceipt('token-canary', 'key-canary', SUBMISSION), (error) => {
+      assert.ok(error instanceof MessagingClientError);
+      assert.equal(error.kind, 'problem');
+      assert.equal(error.code, code);
+      assert.equal(error.status, status);
+      assert.equal(error.traceId, TRACE_ID);
+      assert.equal(error.outcomeUnknown, status >= 500);
+      const rendered = inspect(error);
+      for (const canary of ['token-canary', 'key-canary', 'Server-controlled-detail-canary']) {
+        assert.equal(rendered.includes(canary), false);
+      }
+      return true;
+    });
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].path, '/v1/messages/receipt');
+  });
+}
+
+test('receipt observation refuses an invalid key or request before any exchange', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({ status: 500 }));
+  const { MessagingClient } = require('../client');
+  const client = new MessagingClient({ baseUrl });
+  await assert.rejects(client.messageReceipt('token', 'two words', SUBMISSION), (error) => error.kind === 'invalid_request');
+  await assert.rejects(client.messageReceipt('token', 'key', { ...SUBMISSION, extra: true }), (error) => error.kind === 'invalid_request');
+  assert.equal(requests.length, 0);
+});

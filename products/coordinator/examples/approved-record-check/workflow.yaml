@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: approved-record-check
+  version: "1"
+input:
+  type: object
+  additionalProperties: false
+  required: [collection, recordId, notBefore, grant]
+  properties:
+    collection: {type: string, minLength: 1, maxLength: 64}
+    recordId: {type: string, format: uuid}
+    notBefore: {type: string, format: date-time}
+    grant:
+      type: object
+      additionalProperties: false
+      required: [id, expiresAt]
+      properties:
+        id: {type: string, format: uuid}
+        expiresAt: {type: integer, minimum: 1}
+connections:
+  source: breg
+functionsFile: functions.rhai
+# This is a run cutoff. It never extends the shorter Casework approval.
+deadlineSeconds: 86400
+start: due
+steps:
+  due:
+    type: wait-until
+    waitUntil: {function: not_before, arguments: [{type: input}]}
+    next: read
+  read:
+    type: call
+    connection: source
+    operation: read-record
+    input: {function: read_request, arguments: [{type: input}]}
+    next: checked
+  checked:
+    type: finish
+    outcome: record-checked
+    output: {function: minimal_result, arguments: [{type: step, step: read}]}
+outcomes:
+  record-checked:
+    type: object
+    additionalProperties: false
+    required: [recordId]
+    properties:
+      recordId: {type: string, format: uuid}
