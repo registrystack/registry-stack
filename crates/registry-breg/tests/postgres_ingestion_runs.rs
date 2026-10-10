@@ -1919,7 +1919,7 @@ async fn chunk_digests_bind_the_submitted_api_names_not_the_field_ids() {
             concat!(
                 r#"      {"id":"quantity","type":"int64","required":true,"classification":"public"},"#,
                 "\n",
-                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"public"}"#,
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maximumLength":64,"classification":"public"}"#,
                 "\n",
             ),
             1,
@@ -3691,8 +3691,8 @@ async fn a_terminal_run_whose_package_changed_answers_run_not_open() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_pattern_violation_is_a_refused_chunk_not_an_outage() {
     let fixture = format!("{FIXTURE_HEAD}{FIXTURE_TAIL}").replacen(
-        r#"{"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"}"#,
-        r#"{"id":"label","type":"string","maxLength":128,"required":true,"classification":"public","pattern":"^[a-z0-9-]+$"}"#,
+        r#"{"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}"#,
+        r#"{"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public","pattern":"^[a-z0-9-]+$"}"#,
         1,
     );
     let project = parse_project_json(fixture.as_bytes()).expect("the pattern fixture parses");
@@ -4625,16 +4625,16 @@ fn reader_claims() -> VerifiedRequestClaims {
 }
 
 const FIXTURE_HEAD: &str = r#"{
-  "apiVersion":"registry.registrystack.org/v1alpha1",
-  "kind":"RegistryProject",
-  "registry":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind":"BRegProject",
+  "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
   "entities":[{
     "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
-    "constraints":[{"kind":"unique","fields":["label"]}],
+    "constraints":[{"type":"unique","fields":["label"]}],
     "fields":[
-      {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-      {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},
+      {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+      {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},
       {"id":"quantity","type":"int64","required":true,"classification":"public"}
     ],
     "hooks":[
@@ -4642,10 +4642,10 @@ const FIXTURE_HEAD: &str = r#"{
       {"phase":"after","id":"widget-patched","trigger":"patched","projection":["label","quantity"]}
     ]
   },{
-    "id":"ledger","primaryDataset":"test-dataset","route":"ledgers","mutationMode":"create_only","classification":"public",
+    "id":"ledger","primaryDataset":"test-dataset","route":"ledgers","mutationMode":"create-only","classification":"public",
     "fields":[
-      {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-      {"id":"memo","type":"string","maxLength":128,"required":true,"classification":"public"}
+      {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+      {"id":"memo","type":"string","maximumLength":128,"required":true,"classification":"public"}
     ]
   }],"#;
 
@@ -4653,29 +4653,29 @@ const FIXTURE_TAIL: &str = r#"
   "accessProfiles":[{
     "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management","case-review"],
-    "permissions":[{
+    "permissions":{"entities":[{
       "entity":"widget","operations":["create","get","patch","batch"],
       "readableFields":["jurisdiction","label","quantity"],
       "writableFields":["jurisdiction","label","quantity"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-    }]
+    }]}
   },{
     "id":"operator-minimal","principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management"],
-    "permissions":[{
+    "permissions":{"entities":[{
       "entity":"widget","operations":["create","patch","batch"],
       "readableFields":["label"],
       "writableFields":["jurisdiction","label","quantity"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-    }]
+    }]}
   },{
     "id":"reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["public-reading"],
-    "permissions":[{
+    "permissions":{"entities":[{
       "entity":"widget","operations":["get","list"],
       "readableFields":["label"],
       "rowBoundaries":"unrestricted"
-    }]
+    }]}
   }]
 }"#;
 
@@ -4689,7 +4689,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
 fn compiled_registry_with_created_webhook() -> registry_breg::CompiledRegistry {
     let fixture = format!("{FIXTURE_HEAD}{FIXTURE_TAIL}").replacen(
         r#"{"phase":"after","id":"widget-created","trigger":"created","projection":["label"]}"#,
-        r#"{"phase":"after","id":"widget-created","trigger":"created","projection":["label"],"handler":{"kind":"url","destinationId":"widget-events"}}"#,
+        r#"{"phase":"after","id":"widget-created","trigger":"created","projection":["label"],"handler":{"type":"url","destinationId":"widget-events"}}"#,
         1,
     );
     let project = parse_project_json(fixture.as_bytes()).expect("webhook fixture parses");
@@ -4709,7 +4709,7 @@ fn encrypted_widget_registry() -> Arc<registry_breg::CompiledRegistry> {
             concat!(
                 r#"      {"id":"quantity","type":"int64","required":true,"classification":"public"},"#,
                 "\n",
-                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"restricted","encrypted":true}"#,
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maximumLength":64,"classification":"restricted","encrypted":true}"#,
                 "\n",
             ),
             1,
@@ -4736,42 +4736,44 @@ fn encrypted_widget_registry() -> Arc<registry_breg::CompiledRegistry> {
 /// create and batch and the announced patch is unexecutable either way.
 fn patch_only_registry() -> Arc<registry_breg::CompiledRegistry> {
     let project = r#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1",
-      "kind":"RegistryProject",
-      "registry":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
       "entities":[{
         "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
         "batch":{"maximumItems":3,"maximumBytes":8192},
         "fields":[
-          {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-          {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},
+          {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+          {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},
           {"id":"quantity","type":"int64","required":true,"classification":"public"}
         ]
       },{
-        "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"create_only","classification":"public",
+        "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"create-only","classification":"public",
         "batch":{"maximumItems":3,"maximumBytes":8192},
         "fields":[
-          {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-          {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"}
+          {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+          {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}
         ]
       }],
       "accessProfiles":[{
         "id":"patcher","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["case-management"],
-        "permissions":[
-          {
-            "entity":"widget","operations":["patch","batch"],
-            "readableFields":["jurisdiction","label","quantity"],
-            "writableFields":["jurisdiction","label","quantity"],
-            "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-          },
-          {
-            "entity":"asset","operations":["create","batch"],
-            "readableFields":["jurisdiction","label"],
-            "writableFields":["jurisdiction","label"],
-            "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-          }
-        ]
+        "permissions":{
+          "entities":[
+            {
+              "entity":"widget","operations":["patch","batch"],
+              "readableFields":["jurisdiction","label","quantity"],
+              "writableFields":["jurisdiction","label","quantity"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            },
+            {
+              "entity":"asset","operations":["create","batch"],
+              "readableFields":["jurisdiction","label"],
+              "writableFields":["jurisdiction","label"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }
+          ]
+        }
       }]
     }"#;
     let project = parse_project_json(project.as_bytes()).expect("the patch-only fixture parses");

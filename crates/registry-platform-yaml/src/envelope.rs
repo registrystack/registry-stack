@@ -162,17 +162,17 @@ impl<'a> Expect<'a> {
         }
     }
 
+    /// The header a file starts with, one per accepted format, each with the
+    /// exact `apiVersion` and `kind` (CFG-DIAG-5).
     fn start_phrase(&self) -> String {
-        match self.formats {
-            [only] => match only.current_versions().first() {
-                Some(version) => format!("`apiVersion: {version}` and `kind: {}`", only.kind),
-                None => format!("apiVersion and `kind: {}`", only.kind),
-            },
-            _ => format!(
-                "apiVersion and kind for one of {}",
-                messages::list(&self.kinds())
-            ),
-        }
+        self.formats
+            .iter()
+            .map(|format| match format.current_versions().first() {
+                Some(version) => format!("`apiVersion: {version}` and `kind: {}`", format.kind),
+                None => format!("apiVersion and `kind: {}`", format.kind),
+            })
+            .collect::<Vec<_>>()
+            .join(", or ")
     }
 }
 

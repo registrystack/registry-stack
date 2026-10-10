@@ -344,18 +344,18 @@ fn served_schemas_do_not_disclose_hidden_request_types_or_full_authoring_grants(
 fn compiled_registry() -> Arc<CompiledRegistry> {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"change-request-read","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"change-request-read","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
-            "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}]
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
+            "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]
           },{
             "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":64,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":64,"classification":"internal"}
             ]
           },{
             "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
@@ -369,35 +369,35 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
                 "operation":"patch",
                 "set":{"site":{"fromField":"proposed-site"}}
               }],
-              "review":{"authority":"casework","policyId":"placement-correction"},
+              "review":{"type":"required","authority":"casework","policyId":"placement-correction"},
               "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement-correction-request",
-              "operations":["get","submit_request","revise_request","cancel_request"],
+              "operations":["get","submit-request","revise-request","cancel-request"],
               "readableFields":["placement","proposed-site"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"request-submitter","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"request-submitter","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement-correction-request",
-              "operations":["get","create","patch","submit_request"],
+              "operations":["get","create","patch","submit-request"],
               "readableFields":["placement","proposed-site"],
               "writableFields":["placement","proposed-site"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement-correction-request",
-              "operations":["get","apply_request"],
+              "operations":["get","apply-request"],
               "readableFields":["placement"],
               "applyTargets":[{"entity":"placement", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"placement-viewer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"placement-viewer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement",
               "operations":["get"],
               "readableFields":["site"],
@@ -406,7 +406,7 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
                 "rowBoundaries":[{"field":"placement","claim":"placement_claim","operator":"equals"}]
               }],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )

@@ -38,9 +38,9 @@ const PACKAGE_REVISION: &str = "package-unauthenticated-refusal-1";
 const PRINCIPAL_CANARY: &str = "principal-value-must-not-enter-refusal-metrics";
 
 const PROJECT: &str = r#"
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: unauthenticated-refusal-registry
   version: 0.1.0
   defaultLanguage: en
@@ -53,32 +53,34 @@ entities:
     tombstone: true
     classification: public
     fields:
-      - {id: label, type: string, required: true, maxLength: 100, classification: public}
-      - {id: jurisdiction, type: string, required: true, maxLength: 32, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 100, classification: public}
+      - {id: jurisdiction, type: string, required: true, maximumLength: 32, classification: internal}
 accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry.public]
     permissions:
-      - entity: case
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [label]
-        filterableFields: [label]
-        sortableFields: [label]
+      entities:
+        - entity: case
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [label]
+          filterableFields: [label]
+          sortableFields: [label]
   - id: caseworker
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
-      - entity: case
-        operations: [get, list]
-        readableFields: [label, jurisdiction]
-        filterableFields: [label, jurisdiction]
-        sortableFields: [label]
-        rowBoundaries:
-          - {field: jurisdiction, claim: jurisdictions, operator: in}
+      entities:
+        - entity: case
+          operations: [get, list]
+          readableFields: [label, jurisdiction]
+          filterableFields: [label, jurisdiction]
+          sortableFields: [label]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdictions, operator: in}
 "#;
 
 /// An unauthenticated caller must not be able to append to the audit

@@ -722,9 +722,10 @@ authenticates `SHA256SUMS` with its protected-main Sigstore identity, and checks
 each asset against it as `release/VERIFY.md` describes. It writes a
 registry package with records and revisions, a Casework queue with answered
 and in-flight work, and an Evidence audit stream with the old binaries, using a
-disposable loopback PostgreSQL container. It then runs the documented upgrade
-steps with the PR's binaries and fails when any captured view is served
-differently or any retained table holds fewer rows. BReg rebuilds its package
+disposable loopback PostgreSQL container. It then points the PR's binaries at
+that state and the same files, runs the upgrade an operator runs, and fails
+when any captured view is served differently or any retained table holds fewer
+rows. BReg rebuilds its package
 with the current compiler and applies it as a successor when the rebuilt digest
 changes, serves, then applies an additive successor and serves again; its
 package-bound ETags may change, while record data and stored revisions must
@@ -739,25 +740,31 @@ gh workflow run release-upgrade-rehearsal.yml \
 ```
 
 `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
-earliest release this source reads state from, `v0.39.0`, and the script
-refuses to start from any earlier release rather than skipping the check. It
-also refuses to run when the floor is not the newest release manifest recorded
-as `status: released` below the first release of the workspace version's minor
-line.
+earliest release this source reads state from, `v0.40.0`, and the script
+refuses to start from any earlier release rather than skipping the check. The
+forward state path starts at `v0.40.0`: it reads no state `v0.39.0` wrote. The
+script also refuses to run when the floor is older than the newest release
+manifest recorded as `status: released` below the first release of the
+workspace version's minor line, or newer than the workspace version.
+While no release from the floor onward is published there is no predecessor to
+download. A run that names neither `--from-tag` nor `--from-bin-dir` then says
+so and rehearses every leg with the binaries under test on both sides, so the
+legs stay exercised; `--fetch-only` says so and stops. Once the floor's release
+is published the same run downloads it, with no change to the script or the
+workflow.
 Scheduling state is not rehearsed: `PRODUCTS` in the script names no
 Scheduling leg.
 
-For v0.39.0 to v0.40.0, BReg's ingestion-run tables do not carry the verified
-creator identity that v0.40.0 requires. The upgrade intentionally discards
-those runs and cascades the loss to their chunks and chunk-to-record receipt
-links rather than inventing an owner; records committed by those chunks remain.
-The rehearsal starts no predecessor ingestion run, so its row comparison stays
-active for every populated BReg table. The exact predecessor migration is owned
-by
+BReg's ingestion run install discards every run in a run table that carries no
+verified creator identity, and cascades the loss to each run's chunks and
+chunk-to-record receipt links rather than inventing an owner; records committed
+by those chunks remain. Only a database written before `v0.40.0` has that
+shape, and no rehearsal starts from one. The rehearsal starts no ingestion run
+on the starting side, so its row comparison stays active for every populated
+BReg table. That install step is owned by
 `crates/registry-breg/tests/postgres_ingestion_runs.rs::the_upgrade_discards_runs_stored_without_a_verified_creator`.
-This exception applies only to that predecessor shape and release transition.
 
-Messaging joins the rehearsal from `v0.38.0`.
+Messaging joins the rehearsal from `v0.38.0`, which is earlier than the floor.
 `MESSAGING_FIRST_RELEASE` in `release/scripts/release_roster.py` owns that
 boundary. The shared platform activation crate supplies the ledger behind
 `messagingctl plan`, `apply`, and `status`. When the starting release ships
@@ -765,24 +772,22 @@ Messaging, the old
 binaries apply the `messagingctl init` starter package, then submit scheduled
 email and SMS messages whose delivery window starts a day later, so no provider
 is contacted, and cancel one of them. The rehearsal then upgrades the way an
-operator does: it applies the Messaging steps of the upgrade steps file to the
-project and the runtime file, performs the manual step
-`messaging-project-envelope`, builds the package again with the new
-`messagingctl package`, and points `package.root` at it. `messagingctl plan`
-must name the package the previous release activated as active and another
-package on disk, or the rehearsal does not apply. After `messagingctl apply`
-the ledger must name the package on disk as active, with the package the
-previous release activated as its predecessor. The new binaries must serve
+operator does: the new `messagingctl check` and `messagingctl plan` read the
+runtime file and the package the previous release wrote, and `messagingctl
+apply` runs only when that plan has schema versions pending over the package
+the previous release activated. The plan must then name that package both as
+active and as the package on disk, with no change left to apply. The new
+binaries must serve
 every captured message view unchanged
-and accept a new submission and a cancellation. Normally an idempotent
-resubmission must answer with its predecessor receipt. For v0.39.0 to v0.40.0,
-Messaging schema version 3 intentionally discards the pseudonym-scoped
-idempotency records. The first post-upgrade use of an old key must create one
-fresh message and receipt, and the next identical submission must replay that
-new receipt. The exact predecessor migration is owned by
+and accept a new submission and a cancellation. An idempotent
+resubmission must answer with the receipt the starting release stored.
+Messaging schema version 3 discards the pseudonym-scoped idempotency records of
+a database written before it. When a rehearsal applies that version, the first
+use of an earlier key must create one fresh message and receipt, and the next
+identical submission must replay that new receipt; with the floor at `v0.40.0`
+no rehearsal applies it. That migration is owned by
 `crates/registry-messaging/tests/postgres_migrate.rs::version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller`.
-This exception applies only to schema version 3 and this release transition. An
-operator retention erase (`messagingctl retention erase-expired --apply`) run
+An operator retention erase (`messagingctl retention erase-expired --apply`) run
 with the new binaries must add a `messaging.retention.requested` and a
 `messaging.retention.erased` record to the `messagingctl` audit stream, the
 companion file beside the runtime's, and both streams must keep every earlier
@@ -801,13 +806,10 @@ count, not a comparison of the earlier records. Every record in the Evidence
 stream must also be a valid current envelope. The Evidence target is packaged again with the new `evidencectl` and
 its configuration is carried forward unchanged.
 
-Every table remains subject to the row-preservation rule except the
-v0.39.0-to-v0.40.0 predecessor rows in
-`registry_internal.registry_ingestion_runs`,
-`registry_internal.registry_ingestion_run_chunks`,
-`registry_internal.registry_ingestion_run_chunk_records`, and, only when
-Messaging applies schema version 3, `public.messaging_idempotency`. The
-Messaging empty-table allowance must remain keyed to schema version 3. When the
+Every table remains subject to the row-preservation rule. The script keeps one
+empty-table allowance, for `public.messaging_idempotency` when Messaging
+applies schema version 3; with the floor at `v0.40.0` no rehearsal applies that
+version. The allowance must remain keyed to schema version 3. When the
 rehearsal reports any other row loss, fix the migration so that it refuses with
 an error naming what it would lose, or keeps the rows. Do not accept the loss or
 narrow the comparison to make the run pass.
@@ -1195,15 +1197,16 @@ names the next minor version and records that release as published. Naming a
 patch version of the same minor line leaves the floor where it is. The PR that
 completes the two moves it: this one when the publication record below has
 already merged or rides with it, and the publication record's PR when this bump
-merges first. That PR sets `FORWARD_PATH_FLOOR` in
+merges first. A floor that already names that release, because the forward
+state path started there, needs no move. That PR sets `FORWARD_PATH_FLOOR` in
 `release/scripts/rehearse-upgrade.py` to that release, moves the tags
 `release/scripts/test_rehearse_upgrade.py` asserts on either side of it, and
 restates it where this file's rehearsal section and
 `docs/site/src/content/docs/reference/api-stability.mdx` name the release this
-source reads state from. `check_floor_is_current` in the same script holds the
-floor to the newest release manifest recorded as `status: released` below the
-workspace version's minor line, so the release tooling tests fail on the PR
-that leaves the floor behind, and the rehearsal refuses to run with one. A
+source reads state from. `check_floor_is_current` in the same script refuses a
+floor older than the newest release manifest recorded as `status: released`
+below the workspace version's minor line, so the release tooling tests fail on
+the PR that leaves the floor behind, and the rehearsal refuses to run with one. A
 manifest whose release was abandoned never gains that status, so a fix-forward
 release keeps the floor at the last published release.
 The release is closed only once this PR and the
@@ -1296,70 +1299,3 @@ Candidate promotion validity is seven days. The final candidate artifact and
 private candidate images are retained for eight days, leaving one day of
 cleanup margin without adding an operator step. Cleanup cannot target public
 package names.
-
-## Upgrade steps in the release note
-
-A release that changes an authored file or a runtime configuration lists, in
-its release note, each edit an operator makes by hand. These steps are manual
-edits: no released binary rewrites a project or a runtime configuration, and
-the engine reads only the state the immediately preceding release wrote.
-
-The steps have one source of truth,
-`release/notes/config-conventions/upgrade-steps.yaml`, read by
-`release/scripts/upgrade_steps.py`. A step is one of three kinds:
-
-- `edit`: a list of `expand-aliases`, `envelope`, `set`, `delete`, `rename`
-  and `replace-value` operations on the files matching its `file` glob under its
-  `root` (`project`, `target` or `runtime`). Applying it is deterministic.
-  A scalar no edit names keeps its text and quoting (`yes`, `10:30`, `010`,
-  an unquoted timestamp), and comments in an edited file are lost. The engine
-  refuses a YAML file holding a duplicate key, a merge key, an anchor or an
-  alias, naming the file and the line, because the readers of the new release
-  refuse them too.
-  `expand-aliases` takes no members and must be a step's first edit. A step
-  that lists it loads the file with anchors and aliases allowed, then writes
-  every alias out as a full, independent copy of its anchored value with no
-  anchor mark left, before its other edits run. A scalar in a copy keeps its
-  source text and quoting, and comments are lost as for any edit. A merge key
-  and a duplicate key are still refused, and a step without the edit still
-  refuses an anchor or an alias. Only a file the previous release's starter or
-  example wrote with an anchor needs it (the `breg-journeys` step).
-- `manual`: an instruction the engine reports and never applies, for edits
-  that need an operator decision or a recomputed value.
-- `unknown`: a breaking item whose edit is not yet derived. The engine refuses
-  it and names the file and the diagnostic.
-
-Every `BREAKING` heading in `release/notes/config-conventions/*.md` is followed
-by a line `<!-- upgrade: id, id -->` naming the steps that cover it, or the
-reserved word `already-wrong` (the old form was never accepted) or `no-file`
-(there is no file an operator could edit). `release/scripts/test_upgrade_steps.py`
-fails when a breaking item has no marker, when a marker names a missing step,
-when a step is cited by no item, and when a step is cited from another
-product's note. Run it with PyYAML:
-
-```sh
-uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_upgrade_steps.py
-```
-
-The upgrade rehearsal (`release/scripts/rehearse-upgrade.py`) applies the
-`edit` steps listed in `BREG_UPGRADE_STEPS`, `BREG_RUNTIME_UPGRADE_STEPS`,
-`CASEWORK_UPGRADE_STEPS`, `EVIDENCE_UPGRADE_STEPS`, `MESSAGING_UPGRADE_STEPS`
-and `MESSAGING_RUNTIME_UPGRADE_STEPS` to the project on disk
-after the previous release wrote state and before the new binaries run.
-The Messaging project steps change the package digest, so that leg also
-performs the manual step `messaging-project-envelope`, builds the package
-again, and applies it as the successor of the one the previous release
-activated.
-
-Every other `edit` step is listed in `UNIT_TESTED_ONLY_STEPS` in the same file,
-each with a one-line reason (no leg for the product, or the starter does not
-write the file). Such a step is proven only by the unit tests applying it to a
-sample document; no rehearsal has run it. A test in `test_upgrade_steps.py`
-fails when a catalog `edit` step is in neither a leg list nor
-`UNIT_TESTED_ONLY_STEPS`, when that list names a step that is not an `edit`
-step, or when a step is in both.
-
-To add a step, append an entry to the steps file, cite its id from the
-`BREAKING` item's marker, and, if the rehearsal's starter project carries the
-file, add the id to the product's list in `rehearse-upgrade.py`; otherwise add
-it to `UNIT_TESTED_ONLY_STEPS` with the reason.

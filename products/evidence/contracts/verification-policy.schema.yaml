@@ -4,6 +4,8 @@ title: Evidence relying-procedure verification policy Version 1
 type: object
 additionalProperties: false
 required:
+  - apiVersion
+  - kind
   - expectedAssuranceProfile
   - issuedBy
   - providedBy
@@ -18,6 +20,10 @@ required:
   - maximumAssertionLifetimeSeconds
   - revokedKeyIds
 properties:
+  apiVersion:
+    const: id.registrystack.org/formats/evidence/verification-policy/v1
+  kind:
+    const: EvidenceVerificationPolicy
   expectedAssuranceProfile: {enum: [local, production, evidence-grade]}
   issuedBy: {type: string, format: uri, maxLength: 512}
   providedBy: {type: string, format: uri, maxLength: 512}
@@ -86,20 +92,50 @@ $defs:
       form: {$ref: '#/$defs/expected-form'}
   expected-form:
     oneOf:
-      - enum: [boolean, integer, string, date-bucket, time-bucket, entity-reference, structured]
       - type: object
         additionalProperties: false
-        required: [list]
+        required: [type]
         properties:
-          list:
-            type: object
-            additionalProperties: false
-            required: [items, minimumItems, maximumItems, unique]
-            properties:
-              items: {enum: [string, entity-reference]}
-              minimumItems: {type: integer, minimum: 1, maximum: 64}
-              maximumItems: {type: integer, minimum: 1, maximum: 64}
-              unique: {const: true}
+          type: {const: boolean}
+      - type: object
+        additionalProperties: false
+        required: [type]
+        properties:
+          type: {const: integer}
+      - type: object
+        additionalProperties: false
+        required: [type]
+        properties:
+          type: {const: string}
+      - type: object
+        additionalProperties: false
+        required: [type]
+        properties:
+          type: {const: date-bucket}
+      - type: object
+        additionalProperties: false
+        required: [type]
+        properties:
+          type: {const: time-bucket}
+      - type: object
+        additionalProperties: false
+        required: [type]
+        properties:
+          type: {const: entity-reference}
+      - type: object
+        additionalProperties: false
+        required: [type]
+        properties:
+          type: {const: structured}
+      - type: object
+        additionalProperties: false
+        required: [type, items, minimumItems, maximumItems, unique]
+        properties:
+          type: {const: list}
+          items: {enum: [string, entity-reference]}
+          minimumItems: {type: integer, minimum: 1, maximum: 64}
+          maximumItems: {type: integer, minimum: 1, maximum: 64}
+          unique: {const: true}
 ownership:
   document: relying party
   producer: the relying procedure that retained the original request and accepted the original transaction

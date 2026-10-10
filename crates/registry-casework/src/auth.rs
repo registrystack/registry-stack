@@ -188,7 +188,7 @@ mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use chrono::Utc;
     use jsonwebtoken::{Algorithm, EncodingKey, Header};
-    use registry_casework_core::{CaseworkIdentity, InboxPolicy};
+    use registry_casework_core::{InboxPolicy, ProjectIdentity};
     use registry_platform_oidc::{ActorKind, JwksFetcherConfig};
     use serde_json::json;
 
@@ -201,8 +201,8 @@ mod tests {
         CaseworkProject {
             api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
             kind: registry_casework_core::CASEWORK_KIND.to_owned(),
-            casework: CaseworkIdentity {
-                id: "task-grant-fixture".to_owned(),
+            project: ProjectIdentity {
+                id: "task-grant-fixture".parse().unwrap(),
                 version: "1".to_owned(),
             },
             access_profiles: Vec::new(),

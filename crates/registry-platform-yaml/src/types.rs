@@ -187,11 +187,11 @@ impl Digest {
 
 text_newtype!(Digest);
 
-/// An absolute `http` or `https` URL with a host, no user information, and
-/// at most 2048 characters (CFG-VAL-7), kept as written. Whether a position
-/// also refuses `http` is the owning product's decision: it checks
-/// [`Url::is_https`] and says so in the member's schema description. Schema
-/// name `Url`.
+/// An absolute `http` or `https` URL with a host, no user information, no
+/// whitespace or control character, and at most 2048 characters (CFG-VAL-7),
+/// kept as written. Whether a position also refuses `http` is the owning
+/// product's decision: it checks [`Url::is_https`] and says so in the
+/// member's schema description. Schema name `Url`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Url(String);
 
@@ -199,6 +199,16 @@ impl Url {
     pub fn new(text: impl Into<String>) -> Result<Url, Invalid> {
         let text = text.into();
         if text.chars().count() > MAXIMUM_URL_CHARS {
+            return Err(rule(EXPECT_URL));
+        }
+        // The parser trims a space or control character at either end and
+        // drops a tab or line break anywhere, without an error. Refusing
+        // them here keeps the text as written and the URL as parsed the same
+        // URL.
+        if text
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+        {
             return Err(rule(EXPECT_URL));
         }
         let Ok(parsed) = url::Url::parse(&text) else {
@@ -642,6 +652,11 @@ mod schema {
         }
     }
 
+    /// The class in [`URL_PATTERN`] lists every character that
+    /// `char::is_whitespace` or `char::is_control` accepts, by code point, so
+    /// that every regular expression engine reads the same set.
+    const URL_PATTERN: &str = "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$";
+
     impl JsonSchema for Url {
         fn schema_name() -> Cow<'static, str> {
             Cow::Borrowed("Url")
@@ -652,8 +667,8 @@ mod schema {
                 "type": "string",
                 "format": "uri",
                 "maxLength": MAXIMUM_URL_CHARS,
-                "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
-                "description": "An absolute http or https URL with a host and no user information.",
+                "pattern": URL_PATTERN,
+                "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
             })
         }
     }
@@ -780,6 +795,43 @@ mod tests {
         assert!(Url::new(long).is_err());
         assert!(Url::new("https://issuer.example").unwrap().is_https());
         assert!(!Url::new("http://issuer.example").unwrap().is_https());
+    }
+
+    #[test]
+    fn cfg_val_7_url_holds_no_whitespace_and_no_control_character() {
+        // The parser drops each of these without an error, so the text kept
+        // would name a different URL than the one parsed.
+        for (case, bad) in [
+            ("leading space", " https://issuer.example"),
+            ("trailing space", "https://issuer.example "),
+            ("trailing control character", "https://issuer.example\u{1}"),
+            ("leading control character", "\u{1f}https://issuer.example"),
+            ("trailing NUL", "https://issuer.example\0"),
+            ("inner tab", "https://issuer.example/a\tb"),
+            ("tab in the host", "https://issuer\t.example"),
+            ("inner line feed", "https://issuer.example/a\nb"),
+            ("trailing line feed", "https://issuer.example\n"),
+            ("inner carriage return", "https://issuer.example/a\rb"),
+            ("tab in the scheme", "ht\ttps://issuer.example"),
+            // The parser keeps or percent-encodes these; one rule covers
+            // every whitespace and control character.
+            ("inner space", "https://issuer.example/a b"),
+            ("space in the query", "https://issuer.example/?a= b"),
+            ("inner delete", "https://issuer.example/a\u{7f}b"),
+            ("inner C1 control", "https://issuer.example/a\u{85}b"),
+            ("no-break space", "https://issuer.example/a\u{a0}b"),
+            ("line separator", "https://issuer.example/a\u{2028}b"),
+            ("ideographic space", "https://issuer.example/a\u{3000}b"),
+        ] {
+            assert!(Url::new(bad).is_err(), "{case}");
+        }
+        for good in [
+            "https://issuer.example/a%20b",
+            "https://issuer.example/a%09b",
+            "https://issuer.example/caf\u{e9}",
+        ] {
+            assert_eq!(Url::new(good).unwrap().as_str(), good);
+        }
     }
 
     #[test]

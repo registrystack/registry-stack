@@ -315,7 +315,7 @@ impl SqliteExtractSource {
     ) -> Result<Self, SqliteSourceError> {
         let (request, maximum_extract_age_seconds, extract_profile) = statement_source(source)?;
         let artifact = request.statement.as_str();
-        let timeout = Duration::from_millis(request.timeout_milliseconds.get());
+        let timeout = Duration::from_millis(request.attempt_timeout_milliseconds.get());
         let profile = DatabaseProfile::Snapshot(captured);
         let metadata = read_extract_metadata(
             &profile,
@@ -485,8 +485,8 @@ fn platform_contract(
             maximum_response_bytes: usize::try_from(request.maximum_response_bytes.get())
                 .map_err(|_| SqliteSourceError::InvalidPlan)?,
             maximum_statement_steps: request.maximum_statement_steps.get(),
-            timeout: Duration::from_millis(request.timeout_milliseconds.get()),
-            concurrency: usize::try_from(request.concurrency_limit.get())
+            timeout: Duration::from_millis(request.attempt_timeout_milliseconds.get()),
+            concurrency: usize::try_from(request.maximum_concurrency.get())
                 .map_err(|_| SqliteSourceError::InvalidPlan)?,
         },
         schema: None,
@@ -718,7 +718,7 @@ mod tests {
         maximum_rows: u64,
         maximum_cell_bytes: u64,
         maximum_statement_steps: u64,
-        timeout_milliseconds: u64,
+        attempt_timeout_milliseconds: u64,
         maximum_response_bytes: u64,
         maximum_extract_age_seconds: u64,
     }
@@ -731,7 +731,7 @@ mod tests {
                 maximum_rows: 8,
                 maximum_cell_bytes: 4096,
                 maximum_statement_steps: 100_000,
-                timeout_milliseconds: 10_000,
+                attempt_timeout_milliseconds: 10_000,
                 maximum_response_bytes: 65_536,
                 maximum_extract_age_seconds: 86_400,
             }
@@ -764,8 +764,8 @@ mod tests {
             self
         }
 
-        fn timeout(mut self, timeout_milliseconds: u64) -> Self {
-            self.timeout_milliseconds = timeout_milliseconds;
+        fn timeout(mut self, attempt_timeout_milliseconds: u64) -> Self {
+            self.attempt_timeout_milliseconds = attempt_timeout_milliseconds;
             self
         }
 
@@ -781,12 +781,12 @@ mod tests {
                 maximum_rows,
                 maximum_cell_bytes,
                 maximum_statement_steps,
-                timeout_milliseconds,
+                attempt_timeout_milliseconds,
                 maximum_response_bytes,
                 maximum_extract_age_seconds,
             } = self;
             let document = format!(
-                "transport: sqlite-extract
+                "type: sqlite-extract
 posture: field-projected
 extractProfile: residence-register
 request:
@@ -801,9 +801,9 @@ request:
   maximumCellBytes: {maximum_cell_bytes}
   maximumStatementSteps: {maximum_statement_steps}
   projection: [/rows/*/id]
-  timeoutMilliseconds: {timeout_milliseconds}
+  attemptTimeoutMilliseconds: {attempt_timeout_milliseconds}
   maximumResponseBytes: {maximum_response_bytes}
-  concurrencyLimit: 2
+  maximumConcurrency: 2
 maximumExtractAgeSeconds: {maximum_extract_age_seconds}
 responseSchema: schemas/response.schema.yaml
 extractScript: adapters/source-a.rhai
@@ -816,7 +816,7 @@ factSchema: schemas/facts.schema.yaml
 
     fn selector_binding(field: &str) -> String {
         format!(
-            "{{kind: selector, role: subject, profile: person-demographics-v1, field: {field}}}"
+            "{{type: selector, role: subject, profile: person-demographics-v1, field: {field}}}"
         )
     }
 

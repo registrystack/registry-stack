@@ -568,7 +568,7 @@ async fn run_check(request: CheckRequest) -> ExitCode {
                 BurstShortfall::RequestBatch => {
                     format!("{EVIDENCE_REQUEST_BATCH_MAX_ITEMS}, the request batch item ceiling")
                 }
-                BurstShortfall::HolderBoundBatch => "holderBoundBatchMaxSize".to_owned(),
+                BurstShortfall::HolderBoundBatch => "maximumHolderBoundBatchSize".to_owned(),
             };
             check.push_bundle_member(
                 Severity::Warning,
@@ -577,7 +577,7 @@ async fn run_check(request: CheckRequest) -> ExitCode {
                 format!(
                     "the burst is below {ceiling}, the largest request cost this bundle admits: \
                      a request batch or holder-bound release that costs more than the burst is \
-                     always refused as evidence.invalid_request"
+                     always refused as evidence.invalid-request"
                 ),
                 format!(
                     "Raise rateLimits.burstPerPrincipal to at least {ceiling}, unless capping \
@@ -4360,7 +4360,7 @@ fn validate_reference_parameter_mutation(
         .and_then(|requirements| {
             requirements
                 .iter_mut()
-                .find(|candidate| candidate["id"].as_str() == Some(&requirement.id))
+                .find(|candidate| candidate["uri"].as_str() == Some(&requirement.id))
         })
         .ok_or(CliError("reference disposable requirement is unavailable"))?;
     let parameters = target["derivation"]["parameters"]
@@ -4372,9 +4372,7 @@ fn validate_reference_parameter_mutation(
         }
         parameters.insert(name.clone(), value.clone());
     }
-    let mutated = serde_json::to_vec(&config)
-        .map_err(|_| CliError("reference parameter mutation is invalid"))?;
-    disposable.config = registry_evidence::config::EvidenceConfig::parse_yaml(&mutated)
+    disposable.config = registry_evidence::config::EvidenceConfig::parse_projection(&config)
         .map_err(|_| CliError("reference parameter mutation broke configuration"))?;
     let disposable = Arc::new(disposable);
     let kernel = OfflineKernel::compile(Arc::clone(&disposable))
@@ -5664,15 +5662,15 @@ mod tests {
         for (name, document, expected_code, expected_line) in [
             (
                 "unparsable-publication.yaml",
-                "version: 1\nservice: [parcel-owner-lookup\n",
+                "kind: EvidenceBundle\nservice: [parcel-owner-lookup\n",
                 "yaml.unexpected-end",
                 3,
             ),
             (
                 "foreign-publication.yaml",
-                "version: 1\nunknownSetting: parcel-owner-lookup\n",
+                "apiVersion: id.registrystack.org/formats/evidence/bundle/v1\nkind: EvidenceBundle\nunknownSetting: parcel-owner-lookup\n",
                 "config.unknown-key",
-                2,
+                3,
             ),
         ] {
             let path = directory.path().join(name);
@@ -5728,8 +5726,8 @@ mod tests {
         // reads that rule from the same shared profile the projection reads,
         // so the document is refused while its fields are checked.
         let document = ACCEPTANCE.replace(
-            "issuer: {id: urn:example:fixture:issuer:authority}",
-            "issuer: {id: \"urn:example:fixture:issuer\u{a0}authority\"}",
+            "issuer: {uri: urn:example:fixture:issuer:authority}",
+            "issuer: {uri: \"urn:example:fixture:issuer\u{a0}authority\"}",
         );
         assert_ne!(document, ACCEPTANCE, "the fixture issuer must be replaced");
         EvidenceConfig::parse_yaml(ACCEPTANCE.as_bytes())
@@ -5743,7 +5741,7 @@ mod tests {
             report.diagnostics()[0].code,
             "evidence.bundle.invalid-issuer"
         );
-        assert_eq!(report.diagnostics()[0].path, "/issuer/id");
+        assert_eq!(report.diagnostics()[0].path, "/issuer/uri");
 
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("unprojectable-publication.yaml");
@@ -5758,10 +5756,10 @@ mod tests {
         };
         let diagnostic = &report.diagnostics()[0];
         assert_eq!(diagnostic.code, "evidence.bundle.invalid-issuer");
-        assert_eq!(diagnostic.path, "/issuer/id");
+        assert_eq!(diagnostic.path, "/issuer/uri");
         let source = diagnostic.source.as_ref().expect("a position");
         assert_eq!(source.file, path.display().to_string());
-        assert_eq!(source.line, Some(7));
+        assert_eq!(source.line, Some(8));
     }
 
     #[test]
@@ -5882,20 +5880,24 @@ mod tests {
     }
 
     /// Every expected form the published policy schema accepts must parse the
-    /// way that schema writes it. The list form is a mapping under `list`, not
-    /// a YAML tag, and it is the only form a list-valued concept can state.
+    /// way that schema writes it. A form is a mapping named by `type`, not a
+    /// YAML tag; the list form writes its members beside `type`, and it is the
+    /// only form a list-valued concept can state.
     #[test]
     fn policy_documents_parse_every_expected_form_as_the_contract_writes_it() {
         for (written, expected) in [
-            ("boolean", ExpectedValueForm::Boolean),
-            ("integer", ExpectedValueForm::Integer),
-            ("string", ExpectedValueForm::String),
-            ("date-bucket", ExpectedValueForm::DateBucket),
-            ("time-bucket", ExpectedValueForm::TimeBucket),
-            ("entity-reference", ExpectedValueForm::EntityReference),
-            ("structured", ExpectedValueForm::Structured),
+            ("{type: boolean}", ExpectedValueForm::Boolean),
+            ("{type: integer}", ExpectedValueForm::Integer),
+            ("{type: string}", ExpectedValueForm::String),
+            ("{type: date-bucket}", ExpectedValueForm::DateBucket),
+            ("{type: time-bucket}", ExpectedValueForm::TimeBucket),
             (
-                "{list: {items: string, minimumItems: 1, maximumItems: 2, unique: true}}",
+                "{type: entity-reference}",
+                ExpectedValueForm::EntityReference,
+            ),
+            ("{type: structured}", ExpectedValueForm::Structured),
+            (
+                "{type: list, items: string, minimumItems: 1, maximumItems: 2, unique: true}",
                 ExpectedValueForm::List {
                     item_form: ExpectedListItemForm::String,
                     minimum_items: 1,
@@ -5929,6 +5931,15 @@ mod tests {
             "{list: {minimumItems: 1, maximumItems: 2, extra: 3}}",
             "{set: {minimumItems: 1, maximumItems: 2}}",
             "date_bucket",
+            "boolean",
+            "{list: {items: string, minimumItems: 1, maximumItems: 2, unique: true}}",
+            "{type: list}",
+            "{type: list, minimumItems: 1}",
+            "{type: list, minimumItems: 1, maximumItems: 2, extra: 3}",
+            "{type: set, minimumItems: 1, maximumItems: 2}",
+            "{type: date_bucket}",
+            "{type: boolean, unique: true}",
+            "{items: string, minimumItems: 1, maximumItems: 2, unique: true}",
         ] {
             let document = verification_policy_document(&format!("form: {written}"));
             assert!(
@@ -5941,7 +5952,9 @@ mod tests {
     /// One complete policy document whose single expected output states `form`.
     fn verification_policy_document(form: &str) -> String {
         format!(
-            "expectedAssuranceProfile: evidence-grade\n\
+            "apiVersion: id.registrystack.org/formats/evidence/verification-policy/v1\n\
+             kind: EvidenceVerificationPolicy\n\
+             expectedAssuranceProfile: evidence-grade\n\
              issuedBy: urn:example:issuer\n\
              providedBy: urn:example:provider\n\
              requirement: urn:example:requirement:v1\n\
@@ -6348,9 +6361,7 @@ mod tests {
             "type": "https://id.example.invalid/problems/fixture-canary",
             "code": "fixture.canary"
         });
-        bundle.config =
-            EvidenceConfig::parse_yaml(&serde_json::to_vec(&config).expect("JSON serializes"))
-                .expect("declared config parses");
+        bundle.config = EvidenceConfig::parse_projection(&config).expect("declared config parses");
         bundle.config.validate().expect("declared config validates");
 
         let bundle = Arc::new(bundle);
@@ -6599,16 +6610,14 @@ mod tests {
             .as_array_mut()
             .expect("requirements are an array")
             .iter_mut()
-            .find(|requirement| requirement["id"] == REFERENCE_CHAINED_REQUIREMENT)
+            .find(|requirement| requirement["uri"] == REFERENCE_CHAINED_REQUIREMENT)
             .expect("reference requirement is available");
         requirement["acquisition"] = serde_json::json!({
-            "kind": "search-then-fetch",
+            "type": "search-then-fetch",
             "search": REFERENCE_CHAINED_SEARCH,
             "fetch": REFERENCE_CHAINED_FETCH,
         });
-        bundle.config =
-            EvidenceConfig::parse_yaml(&serde_json::to_vec(&config).expect("JSON serializes"))
-                .expect("chained config parses");
+        bundle.config = EvidenceConfig::parse_projection(&config).expect("chained config parses");
         bundle.config.validate().expect("chained config validates");
         set_tree_mode(directory.path(), 0o755, 0o444);
         (Arc::new(bundle), fixture)
@@ -6704,16 +6713,15 @@ mod tests {
             .as_array_mut()
             .expect("requirements are an array")
             .iter_mut()
-            .find(|requirement| requirement["id"] == STATEMENT_REQUIREMENT)
+            .find(|requirement| requirement["uri"] == STATEMENT_REQUIREMENT)
             .expect("the statement requirement is available");
         requirement["acquisition"] = serde_json::json!({
-            "kind": "search-then-fetch",
+            "type": "search-then-fetch",
             "search": STATEMENT_SOURCE,
             "fetch": format!("{STATEMENT_SOURCE}-fetch"),
         });
         bundle.config =
-            EvidenceConfig::parse_yaml(&serde_json::to_vec(&config).expect("JSON serializes"))
-                .expect("the chained config parses");
+            EvidenceConfig::parse_projection(&config).expect("the chained config parses");
         bundle
             .config
             .validate()

@@ -323,7 +323,7 @@ fn consent_dataset_plan(source: &CapturedProjectSource, subject: &str) -> Consen
         return ConsentDataset::Existing(index);
     }
     ConsentDataset::Add(format!(
-        "- id: {CONSENT_DATASET_ID}\n  title: Consent records\n  description: Privacy notices, consent decisions, and consent links.\n  status: under_development\n  classificationCeiling: restricted\n  accessProfile: {subject}-consent-steward\n"
+        "- id: {CONSENT_DATASET_ID}\n  title: Consent records\n  description: Privacy notices, consent decisions, and consent links.\n  status: under-development\n  classificationCeiling: restricted\n  accessProfile: {subject}-consent-steward\n"
     ))
 }
 
@@ -383,8 +383,8 @@ fn principal_claim(source: &CapturedProjectSource) -> String {
         .iter()
         .filter(|profile| profile.default)
         .chain(profiles.iter())
-        .find_map(|profile| profile.principal_claim.clone())
-        .filter(|claim| !claim.is_empty())
+        .map(|profile| profile.principal_claim.clone())
+        .find(|claim| !claim.is_empty())
         .unwrap_or_else(|| FALLBACK_PRINCIPAL_CLAIM.to_owned())
 }
 

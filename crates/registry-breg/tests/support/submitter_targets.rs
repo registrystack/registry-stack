@@ -13,7 +13,7 @@ fn starter_source() -> Value {
         "../../../../products/breg/starters/professional-licences/core/registry.yaml"
     ))
     .expect("starter parses");
-    source["entities"][1]["changeRequest"]["review"] = json!({"mode":"none"});
+    source["entities"][1]["changeRequest"]["review"] = json!({"type":"none"});
     source["entities"][1]["changeRequest"]["onApproved"] = json!({"mode":"manual"});
     let reviewer = source["accessProfiles"]
         .as_array_mut()
@@ -43,15 +43,15 @@ fn create_only_guard_starter() -> registry_breg::CompiledRegistry {
         "../../../../products/breg/starters/professional-licences/core/registry.yaml"
     ))
     .expect("starter source parses");
-    source["entities"][1]["changeRequest"]["review"] = json!({"mode":"none"});
+    source["entities"][1]["changeRequest"]["review"] = json!({"type":"none"});
     source["entities"][1]["changeRequest"]["onApproved"] = json!({"mode":"manual"});
     source["entities"].as_array_mut().unwrap().push(json!({
         "id":"enrolment", "primaryDataset":"directory", "route":"enrolments",
-        "mutationMode":"create_only", "classification":"restricted",
+        "mutationMode":"create-only", "classification":"restricted",
         "changeControl":{"requiredFor":["create"]},
         "fields":[{
             "id":"supporting-reference", "type":"string", "required":true,
-            "classification":"restricted", "minLength":1, "maxLength":500
+            "classification":"restricted", "minimumLength":1, "maximumLength":500
         }]
     }));
     source["entities"][1]["changeRequest"]["effects"] = json!([{
@@ -70,7 +70,7 @@ fn create_only_guard_starter() -> registry_breg::CompiledRegistry {
         .iter_mut()
         .find(|profile| profile["id"] == "reviewer")
         .unwrap();
-    reviewer["permissions"][1]["applyTargets"]
+    reviewer["permissions"]["entities"][1]["applyTargets"]
         .as_array_mut()
         .expect("reviewer apply targets")
         .push(json!({"entity":"enrolment", "rowBoundaries":"unrestricted"}));
@@ -280,13 +280,13 @@ async fn native_reference_submitter_admission_is_live_and_atomic() {
     );
     let current = get_record(&app, &uri, first.clone()).await;
     assert_eq!(current.body["data"]["record"], own.id);
-    let submit = action(&current.body, "submit_request", None);
+    let submit = action(&current.body, "submit-request", None);
     let submitted = send_action(&app, &submit, "own-submit", first.clone(), json!({})).await;
     assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
     let submitted_retry = send_action(&app, &submit, "own-submit", first.clone(), json!({})).await;
     assert_eq!(submitted_retry.body, submitted.body);
     let submitted_owner = get_record(&app, &uri, first.clone()).await;
-    let rebase = action(&submitted_owner.body, "revise_request", None);
+    let rebase = action(&submitted_owner.body, "revise-request", None);
     // A trusted administrative ownership change must stop fresh intake and preparation.
     let entity = &registry.entities()["professional-license"];
     database
@@ -330,7 +330,7 @@ async fn native_reference_submitter_admission_is_live_and_atomic() {
     );
     let draft = create_request(&app, first.clone(), "changed-target", &own.id).await;
     assert_eq!(draft.status, StatusCode::PRECONDITION_FAILED);
-    let cancel = action(&after.body, "cancel_request", None);
+    let cancel = action(&after.body, "cancel-request", None);
     let cancelled = send_action(&app, &cancel, "cancel-after-transfer", first, json!({})).await;
     assert_eq!(
         cancelled.status,
@@ -353,7 +353,7 @@ async fn native_reference_submitter_admission_is_live_and_atomic() {
         draft.body["id"].as_str().unwrap()
     );
     let draft_page = get_record(&app, &draft_uri, holder("holder-a", "person:a")).await;
-    let draft_submit = action(&draft_page.body, "submit_request", None);
+    let draft_submit = action(&draft_page.body, "submit-request", None);
     database.admin.batch_execute("BEGIN").await.unwrap();
     database
         .admin
@@ -431,7 +431,7 @@ async fn submitted_source_context_requires_current_target_authority() {
         .iter_mut()
         .find(|profile| profile["id"] == "reviewer")
         .unwrap();
-    reviewer["permissions"][0]["rowBoundaries"] = json!([{
+    reviewer["permissions"]["entities"][0]["rowBoundaries"] = json!([{
         "field":"person-reference", "claim":"person_reference", "operator":"equals"
     }]);
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
@@ -457,7 +457,7 @@ async fn submitted_source_context_requires_current_target_authority() {
     let id = request.body["id"].as_str().unwrap();
     let owner_uri = format!("/v1/records/scope-corrections/{id}?accessProfile=holder");
     let page = get_record(&app, &owner_uri, holder("holder-a", "person:a")).await;
-    let submit = action(&page.body, "submit_request", None);
+    let submit = action(&page.body, "submit-request", None);
     assert_eq!(
         send_action(
             &app,

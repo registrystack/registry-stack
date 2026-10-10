@@ -90,7 +90,7 @@ pub struct HookDeclaration {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum HookHandlerSource {
     /// A reviewed Rhai script in the project.
     Rhai {
@@ -117,7 +117,7 @@ pub enum HookHandlerSource {
     },
 }
 
-registry_platform_yaml::tagged_union!(HookHandlerSource, tag = "kind");
+registry_platform_yaml::tagged_union!(HookHandlerSource);
 
 impl Serialize for HookHandlerSource {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -128,7 +128,7 @@ impl Serialize for HookHandlerSource {
             Self::Url { destination_id } => ("url", "destinationId", destination_id, None),
         };
         let mut map = serializer.serialize_map(Some(2 + usize::from(abi.is_some())))?;
-        map.serialize_entry("kind", kind)?;
+        map.serialize_entry("type", kind)?;
         map.serialize_entry(key, value)?;
         if let Some(abi) = abi {
             map.serialize_entry("abi", abi)?;
@@ -283,7 +283,7 @@ mod tests {
 
     fn wasm_handler() -> Value {
         json!({
-            "kind": "wasm",
+            "type": "wasm",
             "module": "handlers/birth-followup.wasm",
             "abi": HOOK_HANDLER_ABI_V1,
         })
@@ -306,7 +306,7 @@ mod tests {
                 "id": "birth-registered-followup",
                 "phase": "after",
                 "trigger": "created",
-                "when": {"kind": "fields", "changed": ["familyName"]},
+                "when": {"type": "fields", "changed": ["familyName"]},
                 "projection": ["givenName", "familyName"],
                 "handler": wasm_handler(),
             }],
@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(hook.trigger, "created");
         assert_eq!(
             hook.when,
-            Some(json!({"kind": "fields", "changed": ["familyName"]}))
+            Some(json!({"type": "fields", "changed": ["familyName"]}))
         );
         assert_eq!(
             hook.projection,
@@ -341,7 +341,7 @@ mod tests {
                 "id": "birth-registered-followup",
                 "phase": "after",
                 "trigger": "created",
-                "when": {"kind": "fields", "changed": ["familyName"]},
+                "when": {"type": "fields", "changed": ["familyName"]},
                 // The projection is a set, so serialization order is sorted.
                 "projection": ["familyName", "givenName"],
                 "handler": wasm_handler(),
@@ -363,11 +363,11 @@ mod tests {
     #[test]
     fn rhai_handler_requires_script_and_nothing_else() {
         let missing: Result<HookHandlerSource, _> =
-            serde_json::from_value(json!({"kind": "rhai", "abi": HOOK_HANDLER_ABI_V1}));
+            serde_json::from_value(json!({"type": "rhai", "abi": HOOK_HANDLER_ABI_V1}));
         assert!(missing.is_err(), "missing script refused");
 
         let extra: Result<HookHandlerSource, _> = serde_json::from_value(json!({
-            "kind": "rhai",
+            "type": "rhai",
             "script": "handlers/followup.rhai",
             "abi": HOOK_HANDLER_ABI_V1,
             "module": "handlers/followup.wasm",
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn wasm_handler_requires_module_and_nothing_else() {
         let missing: Result<HookHandlerSource, _> =
-            serde_json::from_value(json!({"kind": "wasm", "abi": HOOK_HANDLER_ABI_V1}));
+            serde_json::from_value(json!({"type": "wasm", "abi": HOOK_HANDLER_ABI_V1}));
         assert!(missing.is_err(), "missing module refused");
 
         for extra_field in ["script", "destinationId", "when"] {
@@ -391,11 +391,11 @@ mod tests {
 
     #[test]
     fn url_handler_requires_destination_id_and_nothing_else() {
-        let missing: Result<HookHandlerSource, _> = serde_json::from_value(json!({"kind": "url"}));
+        let missing: Result<HookHandlerSource, _> = serde_json::from_value(json!({"type": "url"}));
         assert!(missing.is_err(), "missing destinationId refused");
 
         let accepted: HookHandlerSource =
-            serde_json::from_value(json!({"kind": "url", "destinationId": "case-intake"}))
+            serde_json::from_value(json!({"type": "url", "destinationId": "case-intake"}))
                 .expect("parses");
         assert_eq!(
             accepted,
@@ -407,7 +407,7 @@ mod tests {
 
         for extra_field in ["module", "abi"] {
             let extra: Result<HookHandlerSource, _> = serde_json::from_value(json!({
-                "kind": "url",
+                "type": "url",
                 "destinationId": "case-intake",
                 extra_field: "extra",
             }));
@@ -416,9 +416,16 @@ mod tests {
     }
 
     #[test]
+    fn a_handler_tagged_by_kind_is_refused() {
+        let retired: Result<HookHandlerSource, _> =
+            serde_json::from_value(json!({"kind": "url", "destinationId": "case-intake"}));
+        assert!(retired.is_err(), "a handler names its form under `type`");
+    }
+
+    #[test]
     fn unknown_handler_kind_is_refused() {
         let unknown: Result<HookHandlerSource, _> =
-            serde_json::from_value(json!({"kind": "lambda", "function": "followup"}));
+            serde_json::from_value(json!({"type": "lambda", "function": "followup"}));
         assert!(unknown.is_err(), "closed kind set refuses unknown kinds");
     }
 
@@ -493,7 +500,7 @@ mod tests {
 
     #[test]
     fn strict_parse_refuses_duplicate_members_at_every_depth() {
-        let duplicated_handler = r#"{"hooks":[{"id":"a","phase":"after","trigger":"created","projection":[],"handler":{"kind":"url","destinationId":"a","destinationId":"b"}}]}"#;
+        let duplicated_handler = r#"{"hooks":[{"id":"a","phase":"after","trigger":"created","projection":[],"handler":{"type":"url","destinationId":"a","destinationId":"b"}}]}"#;
         for raw in [
             br#"{"hooks":[],"hooks":[]}"#.to_vec(),
             duplicated_handler.as_bytes().to_vec(),
@@ -533,7 +540,7 @@ mod tests {
     #[test]
     fn handler_kind_spelling_is_pinned() {
         let rhai: HookHandlerSource = serde_json::from_value(json!({
-            "kind": "rhai", "script": "handlers/followup.rhai", "abi": HOOK_HANDLER_ABI_V1,
+            "type": "rhai", "script": "handlers/followup.rhai", "abi": HOOK_HANDLER_ABI_V1,
         }))
         .expect("parses");
         assert_eq!(rhai.kind(), HookHandlerKind::Rhai);
@@ -547,7 +554,7 @@ mod tests {
                 {"id": "a-first", "phase": "after", "trigger": "created",
                  "projection": [], "handler": wasm_handler()},
                 {"id": "b-second", "phase": "before", "trigger": "patched",
-                 "projection": [], "handler": {"kind": "url", "destinationId": "case-intake"}},
+                 "projection": [], "handler": {"type": "url", "destinationId": "case-intake"}},
             ],
         });
         let parsed =
@@ -572,7 +579,7 @@ mod tests {
                 {"id": "a-first", "phase": "after", "trigger": "created",
                  "projection": [], "handler": wasm_handler()},
                 {"id": "b-second", "phase": "after", "trigger": "created",
-                 "projection": [], "handler": {"kind": "wasm", "abi": HOOK_HANDLER_ABI_V1}},
+                 "projection": [], "handler": {"type": "wasm", "abi": HOOK_HANDLER_ABI_V1}},
             ],
         });
         let error =

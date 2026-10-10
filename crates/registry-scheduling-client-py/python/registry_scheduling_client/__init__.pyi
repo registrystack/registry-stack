@@ -182,7 +182,7 @@ class Complete(TypedDict, Generic[T]):
     trace_id: str
 
 SchedulingErrorKind: TypeAlias = Literal[
-    "configuration", "invalid_request", "transport", "problem", "protocol",
+    "configuration", "invalid-request", "transport", "problem", "protocol",
 ]
 # The Rust client answers a code outside this catalogue as a protocol
 # failure, so the catalogue is closed.
@@ -221,7 +221,7 @@ SchedulingProblemCode: TypeAlias = Literal[
     "service.unavailable",
 ]
 SchedulingProtocolFailure: TypeAlias = Literal[
-    "header_bounds", "trace_context", "media_type", "body", "problem", "status", "protocol",
+    "header-bounds", "trace-context", "media-type", "body", "problem", "status", "protocol",
 ]
 
 class SchedulingClientError(Exception):

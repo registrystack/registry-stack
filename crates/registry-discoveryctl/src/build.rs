@@ -446,7 +446,7 @@ mod tests {
         fs::write(
             project.path().join("origins.yaml"),
             format!(
-                "schemaVersion: registry-discovery/origins/v1alpha1\norigins:\n  - originId: evidence\n    catalogUrl: http://{address}/catalog.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: true\n"
+                "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - originId: evidence\n    catalogUrl: http://{address}/catalog.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: true\n"
             ),
         )
         .expect("origins");

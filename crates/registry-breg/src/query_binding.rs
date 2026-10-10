@@ -213,8 +213,8 @@ fn read_filter_operator_name(operator: ReadFilterOperator) -> &'static str {
         ReadFilterOperator::Gt => "gt",
         ReadFilterOperator::Ge => "ge",
         ReadFilterOperator::In => "in",
-        ReadFilterOperator::IsNull => "is_null",
-        ReadFilterOperator::IsNotNull => "is_not_null",
+        ReadFilterOperator::IsNull => "is-null",
+        ReadFilterOperator::IsNotNull => "is-not-null",
         ReadFilterOperator::StartsWith => "startswith",
         ReadFilterOperator::Contains => "contains",
     }

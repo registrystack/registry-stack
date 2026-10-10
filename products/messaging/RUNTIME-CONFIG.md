@@ -109,12 +109,14 @@ private CA. `database.testOnlyPlaintext: true` is accepted only by a build
 carrying the `postgres-test` feature.
 
 `authentication.oidc` requires `issuer`, `audience`, and `allowedClients`.
-`allowedClients` is never empty, and every requester client an access
-profile names must be listed; a profile no admitted client could reach is
-refused at load. `scopeClaim` defaults to `registry_scopes`. `jwksSource`
+`allowedClients` lists at least one distinct client, and every requester
+client an access profile names must be listed; a profile no admitted client
+could reach is refused at load. An omitted member, an empty list, and a
+repeated client are refused when the file is read, and so is the
+`unrestricted` keyword the sibling runtimes accept on development loopback. `scopeClaim` defaults to `registry_scopes`. `jwksSource`
 defaults to issuer discovery and can instead select
-`{kind: static, documentRef: secret:...}` or `{kind: uri, uri: HTTPS_URL}`.
-The former `jwksUri` member is refused. `assertionIssuers` maps an allowed client to at most
+`{type: static, documentRef: secret:...}` or `{type: uri, uri: HTTPS_URL}`.
+The former `jwksUri` member is refused. `assertionIssuers` maps an allowed client to at least one and at most
 16 assertion authorities it may exchange a subject token from; a deployment
 that performs no token exchange leaves it empty, and an exchanged token is
 then refused. Tokens must be `at+jwt` access tokens.

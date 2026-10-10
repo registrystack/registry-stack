@@ -4,7 +4,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "principalClaim": {
           "type": "string"
@@ -14,7 +14,8 @@
             "type": "string"
           },
           "minItems": 1,
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         },
         "role": {
           "$ref": "#/$defs/CaseworkRole"
@@ -30,7 +31,7 @@
     },
     "ActivityClockAnchor": {
       "enum": [
-        "stageEnteredAt"
+        "stage-entered-at"
       ],
       "type": "string"
     },
@@ -41,7 +42,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "timezone": {
           "type": "string"
@@ -62,22 +63,6 @@
       ],
       "type": "object"
     },
-    "CaseworkIdentity": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "version": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "version"
-      ],
-      "type": "object"
-    },
     "CaseworkRole": {
       "enum": [
         "staff",
@@ -88,7 +73,7 @@
       "type": "string"
     },
     "ClockPolicy": {
-      "description": "A named clock, chosen by its `scope` member. The shared reader's union\nhelper decodes it so every error inside a variant keeps its position\n(CFG-SCHEMA-8); the wire form is unchanged.",
+      "description": "A named clock, chosen by its `type` member (CFG-ID-7). The shared reader's\nunion helper decodes it so every error inside a variant keeps its position\n(CFG-SCHEMA-8). The authored file, the stored record, the digest input, and\nthe HTTP description all carry this one spelling.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -103,7 +88,7 @@
               "$ref": "#/$defs/SubjectClockCompletion"
             },
             "id": {
-              "type": "string"
+              "$ref": "#/$defs/LocalId"
             },
             "pauseWhile": {
               "items": {
@@ -112,13 +97,13 @@
               "type": "array",
               "uniqueItems": true
             },
-            "scope": {
+            "type": {
               "const": "subject",
               "type": "string"
             }
           },
           "required": [
-            "scope",
+            "type",
             "id",
             "anchor",
             "completeOn",
@@ -146,7 +131,7 @@
               "type": "string"
             },
             "id": {
-              "type": "string"
+              "$ref": "#/$defs/LocalId"
             },
             "reminders": {
               "default": [],
@@ -155,20 +140,20 @@
               },
               "type": "array"
             },
-            "scope": {
-              "const": "activity",
-              "type": "string"
-            },
             "steps": {
               "default": [],
               "items": {
                 "$ref": "#/$defs/ClockStep"
               },
               "type": "array"
+            },
+            "type": {
+              "const": "activity",
+              "type": "string"
             }
           },
           "required": [
-            "scope",
+            "type",
             "id",
             "anchor",
             "calendar",
@@ -195,7 +180,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "workingDaysBefore": {
           "format": "uint32",
@@ -223,7 +208,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
@@ -295,6 +280,13 @@
       ],
       "type": "object"
     },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
     "InboxPolicy": {
       "additionalProperties": false,
       "properties": {
@@ -336,12 +328,17 @@
       },
       "type": "object"
     },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "OccurrenceState": {
       "enum": [
         "open",
         "claimed",
-        "waiting_applicant",
-        "waiting_application",
+        "waiting-applicant",
+        "waiting-application",
         "synchronizing",
         "completed",
         "superseded",
@@ -356,7 +353,7 @@
           "$ref": "#/$defs/ElapsedDuration"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
@@ -365,11 +362,28 @@
       ],
       "type": "object"
     },
+    "ProjectIdentity": {
+      "additionalProperties": false,
+      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\nSchema name `ProjectIdentity`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
     "QueuePolicy": {
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "label": {
           "type": "string"
@@ -420,7 +434,7 @@
           "x-registry-foreign": "json-schema-2020-12"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "outcomes": {
           "items": {
@@ -469,7 +483,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "label": {
           "type": "string"
@@ -495,7 +509,7 @@
     "ReviewOutcomeSettlement": {
       "enum": [
         "rejected",
-        "changes_requested",
+        "changes-requested",
         "answered"
       ],
       "type": "string"
@@ -507,7 +521,7 @@
           "$ref": "#/$defs/ReviewCompletionDestinationPolicy"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "initiatorProfile": {
           "description": "The requester profile a person named as this producer's initiator\nauthenticates with to read the requester-visible history of their own\nrequests. Absent, no initiator reads anything.",
@@ -595,7 +609,7 @@
           "type": "boolean"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "queue": {
           "type": "string"
@@ -631,6 +645,9 @@
         "fields": {
           "additionalProperties": {
             "$ref": "#/$defs/RoutingPredicate"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
           },
           "type": "object"
         },
@@ -677,7 +694,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "queue": {
           "type": "string"
@@ -728,7 +745,7 @@
           "type": "string"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "requests": {
           "items": {
@@ -792,19 +809,19 @@
     },
     "SubjectClockAnchor": {
       "enum": [
-        "firstSubmittedAt"
+        "first-submitted-at"
       ],
       "type": "string"
     },
     "SubjectClockCompletion": {
       "enum": [
-        "reviewCompleted"
+        "review-completed"
       ],
       "type": "string"
     },
     "SubjectClockPause": {
       "enum": [
-        "awaitingApplicant"
+        "awaiting-applicant"
       ],
       "type": "string"
     },
@@ -918,7 +935,7 @@
           "description": "Evidence-only requester context signed into the authority assertion.\nOther products derive neither requester admission nor relying-party\naudience from these fields and therefore forbid the block entirely."
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "itemKinds": {
           "items": {
@@ -969,6 +986,9 @@
             "type": "string"
           },
           "description": "Exact token identity keys mapped to governed source logical fields.\nValues are extracted from the approving caller's disclosed source read.",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
           "type": "object"
         },
         "version": {
@@ -1011,10 +1031,10 @@
       "type": "object"
     },
     "Url": {
-      "description": "An absolute http or https URL with a host and no user information.",
+      "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
       "format": "uri",
       "maxLength": 2048,
-      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
     },
     "WorkingDaysAfter": {
@@ -1071,7 +1091,7 @@
       "type": "array"
     },
     "apiVersion": {
-      "const": "registry.registrystack.org/casework/v1alpha1",
+      "const": "id.registrystack.org/formats/casework/project/v1alpha1",
       "type": "string"
     },
     "calendars": {
@@ -1080,9 +1100,6 @@
         "$ref": "#/$defs/CalendarPolicy"
       },
       "type": "array"
-    },
-    "casework": {
-      "$ref": "#/$defs/CaseworkIdentity"
     },
     "clocks": {
       "default": [],
@@ -1104,6 +1121,9 @@
     "kind": {
       "const": "CaseworkProject",
       "type": "string"
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectIdentity"
     },
     "queues": {
       "items": {
@@ -1143,7 +1163,7 @@
   "required": [
     "apiVersion",
     "kind",
-    "casework",
+    "project",
     "accessProfiles",
     "queues"
   ],

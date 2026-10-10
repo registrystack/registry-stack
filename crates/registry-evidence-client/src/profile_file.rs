@@ -15,8 +15,8 @@ use std::{
 
 use registry_evidence_verifier::AssuranceProfile;
 use registry_platform_yaml::{
-    tagged_union, BoundedU64, Decoded, Diagnostic, Digest, Document, EnvelopeRule, Expect,
-    ExternalId, FormatSpec, Invalid, Reader, Report, Severity, UniqueList, Url,
+    tagged_union, ApiVersion, BoundedU64, Decoded, Diagnostic, Digest, Document, EnvelopeRule,
+    Expect, ExternalId, FormatSpec, Invalid, Reader, RemovedKey, Report, Severity, UniqueList, Url,
 };
 use serde::{Deserialize, Deserializer};
 
@@ -26,17 +26,14 @@ use crate::{
     profile::{
         strict_fetch_refuses_literal_origin, ContractsProfile, ExpectedDefinitionProfile,
         ExpectedServiceProfile, OauthProfile, PrivateKeyReference, TrustProfile,
-        VerificationProfile, DEFAULT_METADATA_CACHE_SECONDS, EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1,
-        EVIDENCE_CLIENT_PROFILE_SCHEMA_V1, MAXIMUM_METADATA_CACHE_SECONDS,
+        VerificationProfile, DEFAULT_METADATA_CACHE_SECONDS, EVIDENCE_CLIENT_CONTRACTS_API_VERSION,
+        EVIDENCE_CLIENT_CONTRACTS_KIND, EVIDENCE_CLIENT_PROFILE_API_VERSION,
+        EVIDENCE_CLIENT_PROFILE_KIND, MAXIMUM_METADATA_CACHE_SECONDS,
     },
     EvidenceClientProfile, EvidenceDefinition, EvidenceDefinitionsDocument, EvidenceResponseFormat,
     ReviewedContracts,
 };
 
-/// The `kind` a client profile reports in its diagnostics.
-pub const EVIDENCE_CLIENT_PROFILE_KIND: &str = "EvidenceClientProfile";
-/// The `kind` a reviewed contracts file reports in its diagnostics.
-pub const EVIDENCE_CLIENT_CONTRACTS_KIND: &str = "EvidenceClientContracts";
 /// The published identifier of the client profile schema.
 pub const EVIDENCE_CLIENT_PROFILE_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/evidence/client-profile/client-profile.v1.schema.json";
@@ -44,23 +41,43 @@ pub const EVIDENCE_CLIENT_PROFILE_SCHEMA_ID: &str =
 pub const EVIDENCE_CLIENT_CONTRACTS_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/evidence/client-contracts/client-contracts.v1.schema.json";
 
-const ENVELOPE_EXEMPTION: &str = "a promised format that names its version in `schema`; the \
-     apiVersion and kind envelope arrives with the move to stable";
-
+/// The client profile format. A file opens with `apiVersion` and `kind`; the
+/// `schema` header and the `source` tag it replaced are refused, each naming
+/// what to write.
 const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: EVIDENCE_CLIENT_PROFILE_KIND,
-    envelope: EnvelopeRule::Exempt {
-        reason: ENVELOPE_EXEMPTION,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(EVIDENCE_CLIENT_PROFILE_API_VERSION)],
+        retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/schema",
+            replacement: "Write `apiVersion: \
+                          id.registrystack.org/formats/evidence/client-profile/v1` and `kind: \
+                          EvidenceClientProfile` in its place.",
+        },
+        RemovedKey {
+            pointer: "/privateKey/source",
+            replacement: "Write `privateKey.type` with the same value.",
+        },
+    ],
 };
 
+/// The reviewed contracts format. A file opens with `apiVersion` and `kind`;
+/// the `schema` header it replaced is refused, naming what to write.
 const CONTRACTS_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: EVIDENCE_CLIENT_CONTRACTS_KIND,
-    envelope: EnvelopeRule::Exempt {
-        reason: ENVELOPE_EXEMPTION,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(EVIDENCE_CLIENT_CONTRACTS_API_VERSION)],
+        retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: &[RemovedKey {
+        pointer: "/schema",
+        replacement: "Write `apiVersion: \
+                      id.registrystack.org/formats/evidence/client-contracts/v1` and `kind: \
+                      EvidenceClientContracts` in its place.",
+    }],
 };
 
 const MAXIMUM_CLIENT_ID_BYTES: usize = 256;
@@ -107,9 +124,8 @@ pub fn read_reviewed_contracts(file: &str, bytes: &[u8]) -> Result<ReviewedContr
     let Decoded { value, document } =
         Reader::new(file).decode::<ContractsDocument>(bytes, &Expect::one(&CONTRACTS_FORMAT))?;
     let mut contracts = ReviewedContracts {
-        schema: match value.schema {
-            ContractsSchema::V1 => EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1.to_owned(),
-        },
+        api_version: EVIDENCE_CLIENT_CONTRACTS_API_VERSION.to_owned(),
+        kind: EVIDENCE_CLIENT_CONTRACTS_KIND.to_owned(),
         assurance_profile: value.assurance_profile,
         audience: value.audience.0,
         issued_by: value.issued_by.0,
@@ -182,7 +198,7 @@ fn definition_is_requestable(
         audience: contracts.audience.clone(),
         issued_by: contracts.issued_by.clone(),
         provided_by: contracts.provided_by.clone(),
-        holder_bound_batch_max_size: 1,
+        maximum_holder_bound_batch_size: 1,
         definitions: vec![definition.clone()],
     }
     .validate_for_request()
@@ -196,8 +212,6 @@ fn definition_is_requestable(
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProfileDocument {
-    /// The profile format and its version.
-    pub(crate) schema: ProfileSchema,
     /// The Evidence service origin: scheme, host, and port, with no path,
     /// query, fragment, or trailing slash, in lowercase. It uses `https`,
     /// except `http://127.0.0.1:<port>` under `local-loopback-discovery`
@@ -292,9 +306,8 @@ impl ProfileDocument {
         let defaults = VerificationProfile::default();
         let expected = self.expected.unwrap_or_default();
         EvidenceClientProfile {
-            schema: match self.schema {
-                ProfileSchema::V1 => EVIDENCE_CLIENT_PROFILE_SCHEMA_V1.to_owned(),
-            },
+            api_version: EVIDENCE_CLIENT_PROFILE_API_VERSION.to_owned(),
+            kind: EVIDENCE_CLIENT_PROFILE_KIND.to_owned(),
             base_url: self.base_url.into_string(),
             client_id: self.client_id.0,
             private_key: match self.private_key {
@@ -356,14 +369,6 @@ impl ProfileDocument {
     }
 }
 
-/// The client profile format version.
-#[derive(Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) enum ProfileSchema {
-    #[serde(rename = "registry.evidence-client-profile/v1")]
-    V1,
-}
-
 /// Where the client's private signing key is read from: a file, or an
 /// environment variable holding the JSON Web Key.
 #[derive(Deserialize)]
@@ -374,7 +379,7 @@ pub(crate) enum ProfileSchema {
     rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "source"))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub(crate) enum PrivateKeyMember {
     /// A file holding the key; a relative path resolves against the
     /// profile's directory.
@@ -382,7 +387,7 @@ pub(crate) enum PrivateKeyMember {
     /// An environment variable holding the key.
     Environment { variable: EnvironmentName },
 }
-tagged_union!(PrivateKeyMember, tag = "source");
+tagged_union!(PrivateKeyMember);
 
 /// How the client learns the keys that sign Evidence responses.
 #[derive(Deserialize)]
@@ -529,14 +534,6 @@ pub(crate) struct OauthMember {
     pub(crate) scopes: Option<Scopes>,
 }
 
-/// The `schema` of a reviewed contracts file.
-#[derive(Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) enum ContractsSchema {
-    #[serde(rename = "registry.evidence-client-contracts/v1")]
-    V1,
-}
-
 /// A reviewed snapshot of the definitions an Evidence service publishes for
 /// one requester, written by `evidencectl client contracts fetch` and
 /// promoted after review. It holds no source plan, script, credential,
@@ -546,8 +543,6 @@ pub(crate) enum ContractsSchema {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ContractsDocument {
-    /// The contracts format and its version.
-    pub(crate) schema: ContractsSchema,
     /// The assurance profile the service states.
     pub(crate) assurance_profile: AssuranceProfile,
     /// The audience the definitions are scoped to.
@@ -908,10 +903,11 @@ mod tests {
 
     fn profile() -> Value {
         json!({
-            "schema": EVIDENCE_CLIENT_PROFILE_SCHEMA_V1,
+            "apiVersion": EVIDENCE_CLIENT_PROFILE_API_VERSION,
+            "kind": EVIDENCE_CLIENT_PROFILE_KIND,
             "baseUrl": "https://evidence.example.org",
             "clientId": "relying-party",
-            "privateKey": {"source": "environment", "variable": "EVIDENCE_CLIENT_KEY"}
+            "privateKey": {"type": "environment", "variable": "EVIDENCE_CLIENT_KEY"}
         })
     }
 
@@ -938,14 +934,15 @@ mod tests {
                 "handle": "adult",
                 "concept": "https://example.org/concepts/adult",
                 "required": true,
-                "form": "boolean"
+                "form": {"type": "boolean"}
             }]
         })
     }
 
     fn contracts(definitions: Vec<Value>) -> Value {
         json!({
-            "schema": EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1,
+            "apiVersion": EVIDENCE_CLIENT_CONTRACTS_API_VERSION,
+            "kind": EVIDENCE_CLIENT_CONTRACTS_KIND,
             "assuranceProfile": "production",
             "audience": "https://relying-party.example.org",
             "issuedBy": "https://evidence.example.org",
@@ -1063,7 +1060,7 @@ mod tests {
             (
                 "/privateKey/variable",
                 "privateKey",
-                json!({"source": "environment", "variable": "1KEY"}),
+                json!({"type": "environment", "variable": "1KEY"}),
             ),
             (
                 "/expected/issuer",
@@ -1114,9 +1111,11 @@ mod tests {
             "/expected/definitions/adult-status/responseFormat"
         );
 
-        let duplicate = br#"{"schema": "registry.evidence-client-profile/v1",
+        let duplicate =
+            br#"{"apiVersion": "id.registrystack.org/formats/evidence/client-profile/v1",
+            "kind": "EvidenceClientProfile",
             "baseUrl": "https://evidence.example.org", "clientId": "a", "clientId": "b",
-            "privateKey": {"source": "environment", "variable": "KEY"}}"#;
+            "privateKey": {"type": "environment", "variable": "KEY"}}"#;
         assert_eq!(
             finding(read_client_profile("profile.json", duplicate)).0,
             "yaml.duplicate-key"
@@ -1128,13 +1127,15 @@ mod tests {
         let compact = serde_json::to_vec(&profile()).unwrap();
         read_client_profile("profile.json", &compact).unwrap();
 
-        let escaped = br#"{"schema":"registry.evidence-client-profile\/v1",
+        let escaped =
+            br#"{"apiVersion":"id.registrystack.org\/formats\/evidence\/client-profile\/v1",
+            "kind":"EvidenceClientProfile",
             "baseUrl":"https:\/\/evidence.example.org","clientId":"rp",
-            "privateKey":{"source":"file","path":"keys\/rp.jwk.json"}}"#;
+            "privateKey":{"type":"file","path":"keys\/rp.jwk.json"}}"#;
         let profile = read_client_profile("profile.json", escaped).unwrap();
         assert_eq!(profile.client_id, "rp");
 
-        let tabbed = b"{\n\t\"schema\": \"registry.evidence-client-profile/v1\",\n\t\"baseUrl\": \"https://evidence.example.org\",\n\t\"clientId\": \"rp\",\n\t\"privateKey\": {\"source\": \"environment\", \"variable\": \"KEY\"}\n}\n";
+        let tabbed = b"{\n\t\"apiVersion\": \"id.registrystack.org/formats/evidence/client-profile/v1\",\n\t\"kind\": \"EvidenceClientProfile\",\n\t\"baseUrl\": \"https://evidence.example.org\",\n\t\"clientId\": \"rp\",\n\t\"privateKey\": {\"type\": \"environment\", \"variable\": \"KEY\"}\n}\n";
         read_client_profile("profile.json", tabbed).unwrap();
 
         let contracts = serde_json::to_vec(&contracts(vec![definition("adult-status")])).unwrap();
@@ -1187,15 +1188,105 @@ mod tests {
         );
 
         let mut header = contracts(Vec::new());
-        header["schema"] = Value::from("registry.evidence-definitions/v1");
+        header["apiVersion"] = Value::from("id.registrystack.org/formats/evidence/definitions/v1");
         assert_eq!(
             finding(read_reviewed_contracts(
                 "evidence.contracts.json",
                 &serde_json::to_vec(&header).unwrap()
             ))
             .1,
-            "/schema"
+            "/apiVersion"
         );
+    }
+
+    /// The removed-key finding at `path`, among the findings of a refused
+    /// document.
+    fn removed_key(result: Result<impl Sized, Report>, path: &str) -> Diagnostic {
+        let Err(report) = result else {
+            panic!("the document was accepted");
+        };
+        report
+            .into_diagnostics()
+            .into_iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key" && diagnostic.path == path)
+            .unwrap_or_else(|| panic!("no config.removed-key at {path}"))
+    }
+
+    #[test]
+    fn the_client_files_open_with_the_envelope_and_refuse_the_schema_header() {
+        let enveloped = json!({
+            "apiVersion": "id.registrystack.org/formats/evidence/client-profile/v1",
+            "kind": "EvidenceClientProfile",
+            "baseUrl": "https://evidence.example.org",
+            "clientId": "relying-party",
+            "privateKey": {"type": "environment", "variable": "EVIDENCE_CLIENT_KEY"}
+        });
+        let read = read_profile(&enveloped).expect("the enveloped profile reads");
+        assert_eq!(
+            read.api_version,
+            "id.registrystack.org/formats/evidence/client-profile/v1"
+        );
+        assert_eq!(read.kind, "EvidenceClientProfile");
+
+        let mut headed = enveloped.clone();
+        let members = headed.as_object_mut().unwrap();
+        members.remove("apiVersion");
+        members.remove("kind");
+        members.insert(
+            "schema".to_owned(),
+            Value::from("registry.evidence-client-profile/v1"),
+        );
+        let refusal = removed_key(read_profile(&headed), "/schema");
+        assert!(refusal.suggested_action.contains("apiVersion"));
+        assert!(refusal.suggested_action.contains("EvidenceClientProfile"));
+        assert!(!refusal.message.contains("registry.evidence-client-profile"));
+
+        let mut tagged = enveloped.clone();
+        tagged["privateKey"] = json!({"source": "environment", "variable": "EVIDENCE_CLIENT_KEY"});
+        let refusal = removed_key(read_profile(&tagged), "/privateKey/source");
+        assert!(refusal.suggested_action.contains("privateKey.type"));
+
+        let mut other_kind = enveloped.clone();
+        other_kind["kind"] = Value::from("EvidenceClientContracts");
+        assert!(read_profile(&other_kind).is_err());
+
+        let contracts = json!({
+            "apiVersion": "id.registrystack.org/formats/evidence/client-contracts/v1",
+            "kind": "EvidenceClientContracts",
+            "assuranceProfile": "production",
+            "audience": "https://relying-party.example.org",
+            "issuedBy": "https://evidence.example.org",
+            "providedBy": "https://registry.example.org",
+            "definitions": [definition("adult-status")]
+        });
+        let read = read_reviewed_contracts(
+            "evidence.contracts.json",
+            &serde_json::to_vec(&contracts).unwrap(),
+        )
+        .expect("the enveloped contracts read");
+        assert_eq!(
+            read.api_version,
+            "id.registrystack.org/formats/evidence/client-contracts/v1"
+        );
+        assert_eq!(read.kind, "EvidenceClientContracts");
+
+        let mut headed = contracts.clone();
+        let members = headed.as_object_mut().unwrap();
+        members.remove("apiVersion");
+        members.remove("kind");
+        members.insert(
+            "schema".to_owned(),
+            Value::from("registry.evidence-client-contracts/v1"),
+        );
+        let refusal = removed_key(
+            read_reviewed_contracts(
+                "evidence.contracts.json",
+                &serde_json::to_vec(&headed).unwrap(),
+            ),
+            "/schema",
+        );
+        assert!(refusal.suggested_action.contains("apiVersion"));
+        assert!(refusal.suggested_action.contains("EvidenceClientContracts"));
     }
 
     #[test]

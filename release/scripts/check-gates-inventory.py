@@ -526,11 +526,11 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Release helper tests",
-        "run: python3 -m unittest release/scripts/test_registry_release.py",
+        "run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_registry_release.py",
     ),
     (
         "Release planning command tests",
-        "run: python3 -m unittest release/scripts/test_registry_release_plans.py",
+        "run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_registry_release_plans.py",
     ),
     (
         "Release candidate manifest and promotion verifier tests",
@@ -566,7 +566,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Release rehearsal workflow tests",
-        "run: python3 -m unittest release/scripts/test_release_rehearsal.py",
+        "run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_release_rehearsal.py",
     ),
     (
         "Linux Node client release build helper tests",
@@ -590,7 +590,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Release workflow structure tests",
-        "run: python3 -m unittest release/scripts/test_release_workflow_structure.py",
+        "run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_release_workflow_structure.py",
     ),
     (
         "Release image OCI label checker tests",
@@ -620,7 +620,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Release source model tests",
-        "run: python3 -m unittest release/scripts/test_check_release_source_model.py",
+        "run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_check_release_source_model.py",
     ),
     (
         "Gate inventory self-check",
@@ -628,7 +628,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Gate inventory tests",
-        "run: python3 -m unittest release/scripts/test_check_gates_inventory.py",
+        "run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_check_gates_inventory.py",
     ),
     (
         "Stable error registry path filter",

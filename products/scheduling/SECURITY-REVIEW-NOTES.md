@@ -228,14 +228,19 @@ there is no configuration key to widen it. *Test:*
 `crates/registry-scheduling/src/config.rs`.
 
 **B. Every deployment names the clients it admits.** *Threat:* an
-absent or empty `allowedClients` admitted every client the issuer
-verifies, so any application in the issuer's realm could reach a
-Scheduling deployment, and a development file copied toward production
-kept doing so. *Enforcement point:* `RuntimeConfig::check` in
-`crates/registry-scheduling/src/config.rs`. *Refusal:*
+`allowedClients` that admits every client the issuer verifies lets any
+application in the issuer's realm reach a Scheduling deployment, and a
+development file copied toward production keeps doing so. *Enforcement
+point:* the shared `OidcClientsConfig` reader in
+`registry-platform-config`, when the file is decoded, then
+`RuntimeConfig::check` in `crates/registry-scheduling/src/config.rs`.
+*Refusal:* an omitted member is `config.missing-key` at
+`/authentication/oidc`, an empty list `config.invalid-value` at
+`/authentication/oidc/allowedClients`, a repeated client
+`config.duplicate-item` at the repeated item, and `unrestricted`
 `scheduling.runtime.allowed-clients-required` at
-`/authentication/oidc/allowedClients`, in every mode, development loopback
-included. *Test:* `every_deployment_must_name_the_clients_it_admits`,
+`/authentication/oidc/allowedClients`, each in every mode, development
+loopback included. *Test:* `every_deployment_must_name_the_clients_it_admits`,
 `crates/registry-scheduling/src/config.rs`.
 
 **C. Exchanged credentials are bound to declared assertion authorities.**

@@ -171,8 +171,8 @@ impl StatusCategory {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Success => "success",
-            Self::ClientError => "client_error",
-            Self::ServerError => "server_error",
+            Self::ClientError => "client-error",
+            Self::ServerError => "server-error",
         }
     }
 }
@@ -635,6 +635,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_status_class_is_kebab_case() {
+        assert_eq!(StatusCategory::of(StatusCode::OK).as_str(), "success");
+        assert_eq!(
+            StatusCategory::of(StatusCode::FORBIDDEN).as_str(),
+            "client-error"
+        );
+        assert_eq!(
+            StatusCategory::of(StatusCode::SERVICE_UNAVAILABLE).as_str(),
+            "server-error"
+        );
+    }
+
+    #[test]
     fn series_labels_stay_bounded_by_the_closed_route_and_method_sets() {
         // An arbitrary verb and an unrouted path must not each create a series.
         let metrics = Metrics::default();
@@ -659,7 +672,7 @@ mod tests {
             "unrecognized methods collapse onto one series"
         );
         assert!(
-            rendered.contains("status=\"client_error\",error=\"evidence.invalid_request\"} 2\n")
+            rendered.contains("status=\"client-error\",error=\"evidence.invalid-request\"} 2\n")
         );
     }
 

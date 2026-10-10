@@ -3,6 +3,8 @@
 # `evidence check-policy --holder-bound-policy holder-bound.policy.yaml`.
 # Every value comes from the relying party's own retained state, including the
 # key-binding challenge it issued, never the presentation being verified.
+apiVersion: id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1
+kind: EvidenceHolderBoundVerificationPolicy
 subjectBinding: holder-bound
 expectedAssuranceProfile: evidence-grade
 issuedBy: https://evidence.example.org
@@ -18,7 +20,8 @@ expectedOutputs:
   - handle: example
     concept: https://registry.example.org/concepts/example
     required: true
-    form: boolean
+    form:
+      type: boolean
 maximumAssertionLifetimeSeconds: 86400
 revokedKeyIds: []
 keyBindingAudience: https://relying-party.example.org

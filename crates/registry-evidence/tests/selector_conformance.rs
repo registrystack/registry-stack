@@ -1721,7 +1721,7 @@ fn rewrite_source_origin(bundle_root: &Path, source_origin: &str) {
 fn write_runtime(runtime_path: &Path, bundle_root: &Path, secret_root: &Path, audit_path: &Path) {
     let runtime = format!(
         concat!(
-            "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\n",
+            "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1\n",
             "kind: EvidenceRuntimeConfig\n",
             "package:\n",
             "  root: {}\n",
@@ -1737,7 +1737,7 @@ fn write_runtime(runtime_path: &Path, bundle_root: &Path, secret_root: &Path, au
             "  file:\n",
             "    root: {}\n",
             "signer:\n",
-            "  kind: local-jwk\n",
+            "  type: local-jwk\n",
             "  privateKeyRef: secret:file/signing-key\n",
             "audit:\n",
             "  path: {}\n",

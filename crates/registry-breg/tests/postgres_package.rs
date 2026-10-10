@@ -1074,7 +1074,7 @@ fn query_shape_rewrite_with_additive_field_requires_reviewed_migration() {
 
     let successor_module_bytes = temporal_policy_module_bytes_with(
         true,
-        r#",{"id":"review-note","type":"string","maxLength":120,"classification":"internal"}"#,
+        r#",{"id":"review-note","type":"string","maximumLength":120,"classification":"internal"}"#,
         r#", "allowCount": true"#,
     );
     let successor_module =
@@ -1235,7 +1235,7 @@ async fn reviewed_metadata_only_query_access_change_applies_without_dummy_sql() 
     let (mut migration, migration_task) = database.connect_migration().await;
 
     let hidden_note_field =
-        r#",{"id":"review-note","type":"string","maxLength":120,"classification":"internal"}"#;
+        r#",{"id":"review-note","type":"string","maximumLength":120,"classification":"internal"}"#;
     let first = publish_temporal_policy_package(
         None,
         fingerprint(1),
@@ -2927,14 +2927,14 @@ impl Drop for TempRoot {
 
 fn project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
 
 fn project_bytes_without_manifest(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -3018,7 +3018,7 @@ fn temporal_policy_module_bytes_with(
         r#""get","list""#
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}},{{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_membership_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":[{operations}],"readableFields":["person","valid-from","valid-to"],"filterableFields":["person","valid-from"]{reader_profile_extra}}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}},{{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"person","type":"string","maximumLength":32,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_membership_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":[{operations}],"readableFields":["person","valid-from","valid-to"],"filterableFields":["person","valid-from"]{reader_profile_extra}}}]}}]}}"#
     )
     .into_bytes()
 }
@@ -3047,19 +3047,19 @@ fn publish_temporal_policy_package(
 
 fn module_bytes(plan: PlanChoice) -> Vec<u8> {
     if matches!(plan, PlanChoice::TemporalSchema) {
-        return br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]},{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{"id":"person","type":"string","maxLength":32,"required":true,"classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}],"temporal":{"startField":"valid-from","endField":"valid-to"},"constraints":[{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["person","valid-from","valid-to"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
+        return br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]},{"id":"membership","primaryDataset":"neutral-registry","route":"memberships","mutationMode":"mutable","fields":[{"id":"person","type":"string","maximumLength":32,"required":true,"classification":"internal"},{"id":"valid-from","type":"date","required":true,"classification":"internal"},{"id":"valid-to","type":"date","classification":"internal"}],"temporal":{"startField":"valid-from","endField":"valid-to"},"constraints":[{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["person"],"startField":"valid-from","endField":"valid-to"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["person","valid-from","valid-to"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
             .to_vec();
     }
     let second = if matches!(
         plan,
         PlanChoice::SecondTable | PlanChoice::ThirdTable | PlanChoice::WebhookSecondTable
     ) {
-        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"writer","principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}"#
+        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":[{"id":"writer","principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}"#
     } else {
         ""
     };
     let third = if matches!(plan, PlanChoice::ThirdTable) {
-        r#",{"id":"third-record","primaryDataset":"neutral-registry","route":"third-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}]}"#
+        r#",{"id":"third-record","primaryDataset":"neutral-registry","route":"third-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}]}"#
     } else {
         ""
     };
@@ -3067,18 +3067,18 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
         plan,
         PlanChoice::WebhookSchema | PlanChoice::WebhookSecondTable
     ) {
-        r#","hooks":[{"phase":"after","id":"neutral-created-v1","trigger":"created","projection":["code"],"handler":{"kind":"url","destinationId":"neutral-events"}}]"#
+        r#","hooks":[{"phase":"after","id":"neutral-created-v1","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"neutral-events"}}]"#
     } else {
         ""
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]{events}}}{second}{third}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]{events}}}{second}{third}]}}"#
     )
     .into_bytes()
 }
 
 fn derived_module_bytes() -> Vec<u8> {
-    br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maxLength":64,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#.to_vec()
+    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}],"derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"summary","type":"string","maximumLength":64,"classification":"internal"}]}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code","summary"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#.to_vec()
 }
 
 fn derived_asset_request(sql: &[u8]) -> PackageBuildRequest {
@@ -3288,8 +3288,8 @@ async fn insert_upgrade_webhook_delivery(
                   exponential_backoff_multiplier, maximum_attempts, retry_delays_ms,
                   maximum_payload_bytes, payload_digest, deployed_attempt_timeout_ms,
                   deployed_maximum_attempts, dead_letter, operator_replay)
-             VALUES ($1, $2, 'url', $3, $4, $5, $6, $7, 'internal', 'hmac_sha256_v1',
-                     'after_commit', 5000, 1000, 8000, 2, 5, $8, 1024, $9,
+             VALUES ($1, $2, 'url', $3, $4, $5, $6, $7, 'internal', 'hmac-sha256-v1',
+                     'after-commit', 5000, 1000, 8000, 2, 5, $8, 1024, $9,
                      4000, 4, 'required', true)",
             &[
                 &event_id,
@@ -3323,7 +3323,7 @@ async fn insert_upgrade_webhook_delivery(
                  delivered_at = transaction_timestamp(), updated_at = transaction_timestamp()"
         }
         UpgradeDeliveryState::DeadLettered => {
-            "SET state = 'dead_lettered', attempt = 1, next_attempt_at = NULL,
+            "SET state = 'dead-lettered', attempt = 1, next_attempt_at = NULL,
                  dead_lettered_at = transaction_timestamp(), updated_at = transaction_timestamp()"
         }
         UpgradeDeliveryState::Expired => {
@@ -3404,7 +3404,7 @@ impl EventDestinationCompatibilityFixture {
             .display()
             .to_string();
         let raw = format!(
-            r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
@@ -3420,7 +3420,7 @@ database:
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 4
+    maximumConnections: 4
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -3439,14 +3439,14 @@ authentication:
     scopeSeparator: " "
     allowedClients: [registry-client]
     deniedKids: [denied-kid]
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
@@ -3456,13 +3456,13 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 eventDestinations:
   neutral-events:
     origin: https://events.example/
     path: {path}
-    networkProfile: productionHttps
-    dnsFamily: dualStackStrict
+    networkProfile: production-https
+    dnsFamily: dual-stack-strict
     allowedPrivateCidrs: []
     hmacSha256KeyRef: secret:file/webhook-key
     classificationCeiling: internal

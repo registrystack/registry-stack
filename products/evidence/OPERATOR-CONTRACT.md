@@ -326,11 +326,11 @@ gateway responsibility.
 
 `POST /v1/evidence/batch` charges the request bucket once with cost equal to
 its complete item count. The debit is atomic: capacity for all items is
-reserved or the whole request returns `evidence.rate_limited` and charges nothing.
+reserved or the whole request returns `evidence.rate-limited` and charges nothing.
 A bucket never holds more than `burstPerPrincipal` tokens, so a batch with more
 items than the burst, or a holder-bound release presenting more holder keys
 than the burst, can never be admitted however long the caller waits. Evidence
-refuses it as `evidence.invalid_request`, with no `Retry-After`, and charges
+refuses it as `evidence.invalid-request`, with no `Retry-After`, and charges
 nothing, rather than returning a rate limit that invites a retry which cannot
 succeed. The caller receives the registered invalid-request body unchanged:
 the frozen problem contract selects its detail by code alone, so the refusal
@@ -340,7 +340,7 @@ The largest cost a bundle admits is the larger of two numbers. A request batch
 may carry up to sixteen items for any audience-scoped requirement, whatever a
 source's own `batch.maximumItems` says, because items above that ceiling run
 sequentially rather than being refused. A holder-bound release may carry up to
-`holderBoundBatchMaxSize` holder keys when the bundle serves a holder-bound
+`maximumHolderBoundBatchSize` holder keys when the bundle serves a holder-bound
 requirement and enables `sd-jwt-vc-batch`. `evidence check` and `evidencectl
 doctor` warn when `burstPerPrincipal` is below that cost, naming the ceiling
 and the key but never the configured value. It is a warning rather than a refusal: a burst below the batch
@@ -439,7 +439,7 @@ participate in the singular response-format intersection. It accepts one to
 sixteen ordered audience-scoped subject sets under one requirement and purpose,
 with a canonical pairwise-distinct nonce per item. Its only available result is
 a flattened signed JWS. Every condition the singular evaluation contract
-exposes as unavailable may appear as `evidence_not_available`; mixed and
+exposes as unavailable may appear as `evidence-not-available`; mixed and
 all-unavailable envelopes are successful `200` responses. Any other failure
 aborts the outer request with the existing safe Problem Details and no partial
 release. The exact envelope is capped at 1 MiB.
@@ -766,7 +766,7 @@ value. Operators should still reach this listener only from their own network,
 since request rates per route are operational information. The series and
 labels it publishes are in [Metrics reference](#metrics-reference).
 
-The operator owns audit shipping, retention beyond `audit.retainDays`, backup,
+The operator owns audit shipping, retention beyond `audit.retentionDays`, backup,
 restore, access control, and key rotation for the selected destination. A
 deployment profile may require more reviewed metadata or retention, but it
 cannot silently weaken the native privacy contract.
@@ -817,7 +817,7 @@ renames it to `<audit.path>.<sequence>`, where `<sequence>` is an ascending,
 zero-padded, eight-digit number, and opens a fresh active file at
 `audit.path`, online and with no operator action. When the writer opens and
 each time it rotates, it deletes sealed files last modified more than
-`audit.retainDays` ago (90 by default); it never deletes the active file.
+`audit.retentionDays` ago (90 by default); it never deletes the active file.
 The next sequence is recorded in `<audit.path>.seq` at every start and before
 every rotation, so numbering continues across restarts even after retention or
 a shipper removed every sealed file. It restarts only when `<audit.path>.seq`
@@ -864,7 +864,7 @@ Tamper evidence belongs to where audit entries end up, not to the file the
 service writes. Ship sealed files, or the `stdout` stream, to storage the
 Evidence host cannot rewrite: object storage with an object lock, a
 write-once archive, or a log pipeline whose retention the Evidence operator
-account cannot change. Ship each sealed file before `audit.retainDays` deletes
+account cannot change. Ship each sealed file before `audit.retentionDays` deletes
 it, and confirm that the entries reached the store as part of backup, restore,
 and incident procedures. Restore audit history into that store, never back
 into the live audit directory.
@@ -941,17 +941,17 @@ fixed by the deployed contract rather than by anything a caller sends:
 |---|---|
 | `route` | A registered route template, otherwise `unmatched` |
 | `method` | `GET`, `POST`, `HEAD`, `OPTIONS`, otherwise `other` |
-| `status` | `success`, `client_error`, `server_error` |
+| `status` | `success`, `client-error`, `server-error` |
 | `error` | A reviewed problem code, otherwise `none` |
 
 The registered route templates are `/v1/evidence`, `/v1/evidence/batch`,
 `/v1/evidence-definitions`, `/catalog.jsonld`, `/health`, `/ready`,
 `/openapi.json`, `/.well-known/evidence/jwks.json`, and
 `/.well-known/jwt-vc-issuer`. The
-reviewed problem codes are the closed public set: `evidence.invalid_request`,
-`request.selector_invalid`, `auth.invalid_credential`, `evidence.denied`,
-`resource.not_found`, `format.unsupported`, `evidence.unavailable`,
-`evidence.rate_limited`, `source.unavailable`, and `service.unavailable`.
+reviewed problem codes are the closed public set: `evidence.invalid-request`,
+`request.selector-invalid`, `auth.invalid-credential`, `evidence.denied`,
+`resource.not-found`, `format.unsupported`, `evidence.unavailable`,
+`evidence.rate-limited`, `source.unavailable`, and `service.unavailable`.
 
 `status` is the outcome class and never the exact status code, because the
 exact status of a denial belongs to the closed public problem contract rather
@@ -971,7 +971,7 @@ An abbreviated exposition:
 # HELP evidence_http_requests_total Requests served by the Evidence boundary.
 # TYPE evidence_http_requests_total counter
 evidence_http_requests_total{route="/health",method="GET",status="success",error="none"} 2
-evidence_http_requests_total{route="/v1/evidence-definitions",method="GET",status="client_error",error="auth.invalid_credential"} 1
+evidence_http_requests_total{route="/v1/evidence-definitions",method="GET",status="client-error",error="auth.invalid-credential"} 1
 # HELP evidence_http_request_duration_seconds Request duration at the Evidence boundary.
 # TYPE evidence_http_request_duration_seconds histogram
 evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.005"} 2
@@ -1021,7 +1021,7 @@ than degrading gracefully.
 
 Evidence publishes no audit series. Audit writer health is reported by
 `/ready`, and disk use in the audit directory is bounded by
-`audit.rotateBytes` and `audit.retainDays` and belongs to host monitoring.
+`audit.rotateBytes` and `audit.retentionDays` and belongs to host monitoring.
 
 One source counter is published, with one series per source the governed
 bundle declares, each present from startup at `0`:
@@ -1217,7 +1217,7 @@ rechecks the subject-binding key, signing provider, pinned audit writer, and eve
 credential. Basic, static Authorization header, and static API-key credentials
 are checked locally. OAuth client-credentials readiness performs its bounded token
 bootstrap against the configured token endpoint.
-An explicit local source with `authentication.kind: none` has no credential
+An explicit local source with `authentication.type: none` has no credential
 check or bootstrap and sends no authentication header. Production and
 evidence-grade bundles reject that source kind at startup.
 Neither startup nor readiness sends an evidence-data request or probes a source
@@ -1298,7 +1298,7 @@ cross-requester catalog is supported.
 A successful `POST /v1/evidence/batch` response uses only
 `application/vnd.registrystack.evidence.request-batch+json`. The closed
 `registry.evidence-request-batch/v1` envelope preserves request order and has
-one `evidence` or `evidence_not_available` result per item. A request must send
+one `evidence` or `evidence-not-available` result per item. A request must send
 that exact `Accept`; missing, wildcard, singular, parameterized, combined, or
 weighted values return the existing `format.unsupported` problem
 before source access.
@@ -1400,7 +1400,7 @@ this measurement does not represent the per-record cost at low concurrency.
 
 The harness raises four defaults only in its temporary fixture bundle: the
 per-principal rate limits, `maximumConcurrentRequests`, each source's outbound
-`concurrencyLimit`, and the audit file's `rotateBytes`. Those values are
+`maximumConcurrency`, and the audit file's `rotateBytes`. Those values are
 measurement scaffolding, not a recommended deployment posture. Keep the
 shipped defaults and tune from observed traffic.
 
@@ -1412,13 +1412,13 @@ first, and for most
 deployments it is not Evidence.
 
 Outbound source concurrency binds first whenever the provider is slower than
-the in-process handler used for measurement. Each source's `concurrencyLimit`
+the in-process handler used for measurement. Each source's `maximumConcurrency`
 is the number of requests Evidence will have outstanding to that source at
-once, so sustained throughput through it is about `concurrencyLimit` divided by
-the source's round-trip latency. A `concurrencyLimit` of 8 against a provider
+once, so sustained throughput through it is about `maximumConcurrency` divided by
+the source's round-trip latency. A `maximumConcurrency` of 8 against a provider
 answering in 20 ms sustains roughly 400 requests/second, and Evidence being
 capable of thousands changes nothing about that. The field accepts 1 to 256. Inline sources state it explicitly.
-A named connection owns one aggregate `concurrencyLimit` across its operations,
+A named connection owns one aggregate `maximumConcurrency` across its operations,
 with a conservative default of 4; a resolved source repeats that exact value.
 Size the connection limit against the provider's tolerance for the whole
 workload, and include every Evidence process when estimating provider load.
@@ -1447,7 +1447,7 @@ never how much arrives.
 
 Throughput below expectations is therefore diagnosed by finding the binding
 ceiling before changing anything, and the `error` label on
-`evidence_http_requests_total` separates the three rejections: `evidence.rate_limited`
+`evidence_http_requests_total` separates the three rejections: `evidence.rate-limited`
 is the per-principal limiter, `service.unavailable` is the request timeout
 budget running out, which under load is normally a request that never got an
 admission slot, and `source.unavailable` is the source failing rather than
@@ -1456,7 +1456,7 @@ none of those. It appears only as `evidence_http_request_duration_seconds`
 rising while the request count stays flat, because Evidence is waiting on the
 provider and reporting success when the answer arrives; confirming that
 diagnosis needs source latency observed at the provider, which is why the
-`concurrencyLimit` arithmetic is worth doing before traffic rather than
+`maximumConcurrency` arithmetic is worth doing before traffic rather than
 after. Because the audit sink commits in groups, a deployment held to few
 requests in flight also pays a higher per-record audit cost than the table in
 the Measured throughput section, which is a consequence of the low concurrency

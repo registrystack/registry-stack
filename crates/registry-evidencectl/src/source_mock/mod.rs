@@ -57,7 +57,7 @@ pub enum MockCommand {
     Serve(ServeArgs),
     /// Materialize or extend editable mock cases from OpenAPI.
     Generate(GenerateArgs),
-    /// Validate edited configuration and response bodies without writing or binding.
+    /// Check edited configuration and response bodies without writing or binding.
     Check(CheckArgs),
 }
 
@@ -169,7 +169,7 @@ pub struct CheckArgs {
     /// sources/ beside evidence-project.yaml.
     #[arg(value_name = "PROJECT", conflicts_with = "config")]
     project: Option<PathBuf>,
-    /// Refuse a plan whose check reports any warning.
+    /// Exit 1 when a warning is reported.
     #[arg(long)]
     deny_warnings: bool,
 }
@@ -1280,12 +1280,9 @@ fn project_source_binding(
             .get("request")
             .and_then(|request| request.get("method"))
             .and_then(serde_json::Value::as_str);
-        let path = value.get("request").and_then(|request| {
-            request
-                .get("pathTemplate")
-                .or_else(|| request.get("path"))
-                .and_then(serde_json::Value::as_str)
-        });
+        let path = value
+            .get("request")
+            .and_then(|request| request.get("path").and_then(serde_json::Value::as_str));
         let Some((method, source_path)) = method.zip(path) else {
             continue;
         };

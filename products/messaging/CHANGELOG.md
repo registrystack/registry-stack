@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- BREAKING: the Node.js and Python clients write five error words in
+  kebab-case (CFG-NAME-2): kind `invalid-request` (was `invalid_request`);
+  the protocol failures `header-bounds`, `trace-context`, and `media-type`
+  (were `header_bounds`, `trace_context`, `media_type`); and the transport
+  kind `response-too-large` (was `response_too_large`). Migration: change
+  what a consumer of a client error compares. No file an adopter writes
+  changes.
+- BREAKING: a client that `authentication.oidc.allowedClients` repeats is
+  refused as `config.duplicate-item` at the repeated item (CFG-ID-6), where
+  the list was accepted. The shared reader now also answers an omitted member
+  with `config.missing-key` at `/authentication/oidc` and `[]` with
+  `config.invalid-value` at `/authentication/oidc/allowedClients`, where the
+  runtime reported `messaging.runtime.allowed-clients-required`; that code now
+  answers `allowedClients: unrestricted`, which Messaging accepts in no mode.
+  The runtime schema requires the member with `minItems: 1` and
+  `uniqueItems: true`. Migration: write a repeated client once; a script that
+  matches the product code for an omitted member or an empty list must match
+  the reader codes. See `release/notes/config-conventions/messaging.md`.
+- BREAKING: `messagingctl plan` writes `databaseId: not-recorded`, where it
+  wrote `notRecorded` (CFG-NAME-2, through the shared `DatabaseIdCheck`).
+  Migration: a script that compares the old value compares the new one.
+- A client that `authentication.oidc.assertionIssuers` lists with an empty
+  issuer list is refused by the shared reader as `config.invalid-value` at
+  `/authentication/oidc/assertionIssuers/<client>`, where the runtime
+  reported `messaging.runtime.empty-assertion-issuers` at the same pointer.
+  The runtime schema declares `minItems: 1` on the list. Migration: no file
+  changes; a script that matches the product code must match
+  `config.invalid-value`.
 - `messaging.package.invalid` names the binary `messagingctl`, and when
   nothing usable exists at `package.root` its next step is to build the
   package with `messagingctl package` and point `package.root` at it, instead
@@ -22,6 +50,31 @@
 - BREAKING: a client listed twice in `authentication.oidc.allowedClients` is
   refused with `config.duplicate-item` at the second item. Migration: list
   each client once.
+- BREAKING: the `artifact` member of a refused `messagingctl --format json`
+  report is spelled in kebab-case: `command-arguments`, `package-output`,
+  `runtime-configuration`, `template-data`, `runtime-dependency`,
+  `database-activation`, `dev-session`, and `messaging-package` replace the
+  same words written with underscores. No alias is read or written.
+  Migration: a script that matches `artifact` matches the new word; the
+  table is in `release/notes/config-conventions/messaging.md`.
+- BREAKING: the dispatch queue's job words are spelled in kebab-case, as the
+  shared dispatch primitive now writes them: the stored job state
+  `dead-lettered` replaces `dead_lettered`, and the audit journal's
+  `retry-pending`, `replay-pending`, and `lease-lapsed` replace
+  `retry_pending`, `replay_pending`, and `lease_lapsed`. The old spellings
+  are not read, and no schema version rewrites a stored job state: v0.40.0
+  does not upgrade v0.39.0 state in place; apply to a new database. The HTTP
+  contract and `messagingctl` output are unchanged. Migration: a query or
+  alert that matches one of these words in the job table or the audit
+  journal must match the new spelling. Details are in
+  `release/notes/config-conventions/messaging.md`.
+- BREAKING: `authentication.oidc.jwksSource` in `runtime.yaml` is tagged by
+  `type`, where it was tagged by `kind`: `jwksSource: {kind: static, ...}`
+  becomes `jwksSource: {type: static, ...}`. The values `discovery`, `uri`,
+  and `static` are unchanged. `kind` is refused as `config.removed-key` at
+  `/authentication/oidc/jwksSource/kind`, naming `type`. Migration: rename the
+  key and keep its value; the step is in
+  `release/notes/config-conventions/messaging.md` under "Stable move".
 - BREAKING: the `messagingctl --format json` reports of `check` and
   `package` name the project the way the `--project` flag does: `project`,
   `projectDigest`, and `projectFiles` replace `package`, `packageDigest`, and
@@ -96,13 +149,14 @@
   `410 idempotency.expired`: only the exact request is `410`, and every
   request is once retention deletes the message record after
   `retention.recordRetentionDays`, since its request hash goes with it. Audit
-  records keep the pseudonym. The upgrade discards existing idempotency
-  records, so every key spent before it can be used again, and a retry the
-  new runtime receives under a discarded key sends its message a second
-  time. Before you run `messagingctl apply` with this release, stop new
-  submissions, let in-flight senders finish retrying the submissions whose
-  answers they lost, then stop every v0.39.0 runtime; start the new runtime
-  only after `apply` succeeds (#1912).
+  records keep the pseudonym. v0.40.0 does not upgrade v0.39.0 state in
+  place: you apply it to a new database, which holds no idempotency record,
+  so every key spent against the v0.39.0 runtime can be used again, and a
+  retry the new runtime receives under such a key sends its message a second
+  time. Before you point senders at the new runtime, stop new submissions,
+  let in-flight senders finish retrying the submissions whose answers they
+  lost, then stop every v0.39.0 runtime; start the new runtime only after
+  `apply` succeeds (#1912).
 - `registry-messaging-client` `submit`, which never retried, now resends a
   submission whose outcome is unknown (a timeout or broken exchange after
   the request was sent, or a 5xx answer) byte for byte under the same

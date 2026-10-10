@@ -1603,7 +1603,7 @@ impl MutationCoordinator {
             &entity.id,
             record_uuid,
             i64::from(next.current_version().get()),
-            "request_lifecycle",
+            "request-lifecycle",
         )
         .await?;
         if let Some(targets) = prepared_targets {

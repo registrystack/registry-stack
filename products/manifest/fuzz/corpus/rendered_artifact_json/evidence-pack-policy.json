@@ -2,7 +2,7 @@
   "pack_id": "registry-fuzz-pack",
   "pack_version": "1",
   "required_gates": ["purpose", "jurisdiction"],
-  "allowed_outputs": ["minimized_json"],
+  "allowed_outputs": ["minimized-json"],
   "policy": {
     "profile": "registry-evidence-gateway-pdp/v1",
     "permissions": [

@@ -36,16 +36,16 @@ impl ProblemCode {
 
     pub const fn code(self) -> &'static str {
         match self {
-            Self::MalformedRequest => "evidence.invalid_request",
-            Self::InvalidSelector => "request.selector_invalid",
-            Self::AuthenticationFailed => "auth.invalid_credential",
+            Self::MalformedRequest => "evidence.invalid-request",
+            Self::InvalidSelector => "request.selector-invalid",
+            Self::AuthenticationFailed => "auth.invalid-credential",
             Self::NotAuthorized => "evidence.denied",
             Self::ResponseFormatNotAcceptable => "format.unsupported",
             Self::EvidenceNotAvailable => "evidence.unavailable",
-            Self::RateLimited => "evidence.rate_limited",
+            Self::RateLimited => "evidence.rate-limited",
             Self::DependencyUnavailable => "source.unavailable",
             Self::ServiceUnavailable => "service.unavailable",
-            Self::ResourceNotFound => "resource.not_found",
+            Self::ResourceNotFound => "resource.not-found",
         }
     }
 
@@ -130,6 +130,53 @@ mod tests {
                 "code": "evidence.unavailable",
                 "traceId": "0123456789abcdef0123456789abcdef"
             })
+        );
+    }
+
+    #[test]
+    fn every_code_segment_is_kebab_case_and_the_type_follows_the_code() {
+        for problem in ProblemCode::ALL {
+            let code = problem.code();
+            for segment in code.split('.') {
+                let mut characters = segment.chars();
+                assert!(
+                    characters
+                        .next()
+                        .is_some_and(|first| first.is_ascii_lowercase())
+                        && !segment.ends_with('-')
+                        && !segment.contains("--")
+                        && segment
+                            .chars()
+                            .all(|character| character.is_ascii_lowercase()
+                                || character.is_ascii_digit()
+                                || character == '-'),
+                    "{code}"
+                );
+            }
+            assert_eq!(
+                problem.type_uri(),
+                format!("{PROBLEM_BASE}{}", code.replace('.', "/"))
+            );
+        }
+        assert_eq!(
+            [
+                ProblemCode::MalformedRequest.code(),
+                ProblemCode::InvalidSelector.code(),
+                ProblemCode::AuthenticationFailed.code(),
+                ProblemCode::RateLimited.code(),
+                ProblemCode::ResourceNotFound.code(),
+            ],
+            [
+                "evidence.invalid-request",
+                "request.selector-invalid",
+                "auth.invalid-credential",
+                "evidence.rate-limited",
+                "resource.not-found",
+            ]
+        );
+        assert_eq!(
+            ProblemCode::AuthenticationFailed.type_uri(),
+            "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
         );
     }
 

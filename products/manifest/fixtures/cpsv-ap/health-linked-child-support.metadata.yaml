@@ -153,10 +153,10 @@ forms:
             max_occurs: 1
             fulfillment:
               modes:
-                - manual_input
-                - registry_lookup
-                - oots_evidence_exchange
-              preferred_mode: registry_lookup
+                - manual-input
+                - registry-lookup
+                - oots-evidence-exchange
+              preferred_mode: registry-lookup
       - id: children
         title:
           en: Children
@@ -191,8 +191,8 @@ forms:
         required: true
         fulfillment:
           modes:
-            - manual_input
-          preferred_mode: manual_input
+            - manual-input
+          preferred_mode: manual-input
       - id: case_note
         name: caseNote
         label:

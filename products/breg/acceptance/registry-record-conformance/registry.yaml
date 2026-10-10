@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: cross-product-conformance
   canonicalBaseIri: https://cross-product.example.invalid
   version: 0.1.0
@@ -61,7 +61,7 @@ manifestProjection:
 modules:
   - id: registry-record-conformance-core
     version: 0.1.0
-    digest: "sha256:d5e21bd9cdbfcf9ac76fbb8278030c1cafac8f8f412d1a49cc9d480007a85d4c"
+    digest: "sha256:dc3e95960a379dba36ffe2d14610240a49a736c014fa16771c7ba1bc443f59d6"
 accessProfiles:
   - id: public-reader
     default: true
@@ -69,33 +69,36 @@ accessProfiles:
     requiredScopes: [records:public:read]
     requiredPurposes: [public-read]
     permissions:
-      - entity: public-unit
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [label]
+      entities:
+        - entity: public-unit
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [label]
   - id: protected-reader
     default: true
     principalClaim: registry_principal
     requiredScopes: [records:protected:read]
     requiredPurposes: [bounded-read]
     permissions:
-      - entity: protected-unit
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [label]
+      entities:
+        - entity: protected-unit
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [label]
   - id: fixture-writer
     default: true
     principalClaim: registry_principal
     requiredScopes: [records:fixture:write]
     requiredPurposes: [fixture-setup]
     permissions:
-      - entity: public-unit
-        rowBoundaries: unrestricted
-        operations: [create]
-        readableFields: [label]
-        writableFields: [label]
-      - entity: protected-unit
-        rowBoundaries: unrestricted
-        operations: [create]
-        readableFields: [label]
-        writableFields: [label]
+      entities:
+        - entity: public-unit
+          rowBoundaries: unrestricted
+          operations: [create]
+          readableFields: [label]
+          writableFields: [label]
+        - entity: protected-unit
+          rowBoundaries: unrestricted
+          operations: [create]
+          readableFields: [label]
+          writableFields: [label]

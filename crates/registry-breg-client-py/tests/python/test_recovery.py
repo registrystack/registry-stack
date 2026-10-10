@@ -198,7 +198,7 @@ class RecoveryTests(unittest.TestCase):
         before_wrong_execution = len(self.requests)
         with self.assertRaises(BaseRegistryClientError) as mismatch:
             self.client.execute_recovered_create(wrong_binding, recovered)
-        self.assertEqual(mismatch.exception.kind, "invalid_request")
+        self.assertEqual(mismatch.exception.kind, "invalid-request")
         self.assertEqual(len(self.requests), before_wrong_execution)
 
         result = self.client.execute_recovered_create(fresh, recovered)
@@ -219,11 +219,11 @@ class RecoveryTests(unittest.TestCase):
         before = len(self.requests)
         with self.assertRaises(BaseRegistryClientError) as invalid:
             BRegPreparedCreate.from_bytes(b"!" + prepared.to_bytes()[1:])
-        self.assertEqual(invalid.exception.kind, "invalid_request")
+        self.assertEqual(invalid.exception.kind, "invalid-request")
         other = BaseRegistryClient("https://other.example.invalid")
         with self.assertRaises(BaseRegistryClientError) as mismatch:
             other.recover_create(binding, prepared)
-        self.assertEqual(mismatch.exception.kind, "invalid_request")
+        self.assertEqual(mismatch.exception.kind, "invalid-request")
         self.assertEqual(len(self.requests), before)
 
 

@@ -122,7 +122,7 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
         before_apply.body["data"]["request"]["bregState"],
         "submitted"
     );
-    let apply = action(&before_apply.body, "apply_request", None);
+    let apply = action(&before_apply.body, "apply-request", None);
     assert_eq!(apply.proposal_version, Some(1));
     assert_eq!(
         apply.effect_digest.as_deref(),
@@ -191,7 +191,7 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
         .await
         .expect("applied request is eligible for operator erasure");
     assert_eq!(dry_run.request_state, "applied");
-    assert_eq!(dry_run.retention_mode, "operator_erase");
+    assert_eq!(dry_run.retention_mode, "operator-erase");
     assert!(dry_run.eligible_for_erasure);
     assert!(!dry_run.detail_erased);
     let erased = retention
@@ -199,7 +199,7 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
         .await
         .expect("applied request detail erases through the verified operator boundary");
     assert_eq!(erased.request_state, "applied");
-    assert_eq!(erased.retention_mode, "operator_erase");
+    assert_eq!(erased.retention_mode, "operator-erase");
 
     let erased_request = get_record(
         &successor_app,
@@ -335,7 +335,7 @@ async fn relevant_package_activation_waits_for_explicit_cancellation_then_starts
         "submitter",
         submitter,
         "relevant-cancel-approved-request",
-        "cancel_request",
+        "cancel-request",
         None,
         |_| json!({}),
     )
@@ -472,7 +472,7 @@ async fn create_approved_correction(
         "submitter",
         submitter,
         &format!("{key_prefix}-submit"),
-        "submit_request",
+        "submit-request",
         None,
         |_| json!({}),
     )
@@ -1004,50 +1004,50 @@ fn project_bytes(registry: &registry_breg::CompiledRegistry) -> Vec<u8> {
 
 fn project_bytes_for_variant(variant: Variant) -> Vec<u8> {
     let site_extra_field = if matches!(variant, Variant::UnrelatedOptionalField) {
-        r#",{"id":"display-code","type":"string","maxLength":32,"classification":"internal"}"#
+        r#",{"id":"display-code","type":"string","maximumLength":32,"classification":"internal"}"#
     } else {
         ""
     };
     let request_extra_field = if matches!(variant, Variant::RelevantOptionalRequestSchema) {
-        r#",{"id":"note","type":"text","maxLength":1000,"classification":"internal"}"#
+        r#",{"id":"note","type":"text","maximumLength":1000,"classification":"internal"}"#
     } else {
         ""
     };
     let request_extra_read_write = "";
     format!(
         r#"{{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{{"id":"{PACKAGE_ID}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "package":{{"sourceRevision":"{SOURCE_REVISION}"}},
           "entities":[
             {{
-              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only","classification":"internal",
               "fields":[
-                {{"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}},
-                {{"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}}{site_extra_field}
+                {{"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}},
+                {{"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}}{site_extra_field}
               ]
             }},
             {{
               "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{{"requiredFor":["patch"]}},
               "fields":[
-                {{"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}},
+                {{"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}},
                 {{"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}}
               ]
             }},
             {{
               "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
-                {{"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}},
+                {{"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}},
                 {{"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"}},
                 {{"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"}},
-                {{"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}}{request_extra_field}
+                {{"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}}{request_extra_field}
               ],
               "changeRequest":{{
-                "retention":{{"mode":"operator_erase"}},
+                "retention":{{"mode":"operator-erase"}},
                 "effects":[{{"target":{{"fromField":"placement"}},"operation":"patch","set":{{"site":{{"fromField":"proposed-site"}}}}}}],
-                "review":{{"mode":"none"}},
+                "review":{{"type":"none"}},
                 "onApproved":{{"mode":"manual"}}
               }}
             }}
@@ -1055,7 +1055,7 @@ fn project_bytes_for_variant(variant: Variant) -> Vec<u8> {
           "accessProfiles":[
             {{
               "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{{
+              "permissions":{{"entities":[{{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
                 "readableFields":["tenant","name"],
@@ -1069,37 +1069,37 @@ fn project_bytes_for_variant(variant: Variant) -> Vec<u8> {
                 "writableFields":["tenant","site"],
                 "rowBoundaries":[{{"field":"tenant","claim":"tenant_claim","operator":"equals"}}],
                 "requestPresence":[{{"requestType":"correction-request","rowBoundaries":[{{"field":"tenant","claim":"tenant_claim","operator":"equals"}}]}}]
-              }}]
+              }}]}}
             }},
             {{
               "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{{
+              "permissions":{{"entities":[{{
                 "entity":"correction-request",
-                "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
+                "operations":["create","get","list","revisions","patch","submit-request","revise-request","cancel-request"],
                 "revisionAccess":true,
                 "readableFields":["tenant","placement","proposed-site","reason"{request_extra_read_write}],
                 "writableFields":["tenant","placement","proposed-site","reason"{request_extra_read_write}],
                 "rowBoundaries":[{{"field":"tenant","claim":"tenant_claim","operator":"equals"}}]
-              }}]
+              }}]}}
             }},
             {{
               "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
-              "permissions":[{{
+              "permissions":{{"entities":[{{
                 "entity":"correction-request",
                 "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"{request_extra_read_write}],
                 "rowBoundaries":[{{"field":"tenant","claim":"tenant_claim","operator":"equals"}}]
-              }}]
+              }}]}}
             }},
             {{
               "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
-              "permissions":[{{
+              "permissions":{{"entities":[{{
                 "entity":"correction-request",
-                "operations":["get","apply_request"],
+                "operations":["get","apply-request"],
                 "readableFields":["tenant","placement","proposed-site","reason"{request_extra_read_write}],
                 "rowBoundaries":[{{"field":"tenant","claim":"tenant_claim","operator":"equals"}}],
                 "applyTargets":[{{"entity":"asset-placement","rowBoundaries":[{{"field":"tenant","claim":"tenant_claim","operator":"equals"}}]}}]
-              }}]
+              }}]}}
             }}
           ]
         }}"#

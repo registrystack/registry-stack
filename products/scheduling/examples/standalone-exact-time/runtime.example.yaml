@@ -80,8 +80,9 @@ authentication:
     # The read scope defaults to `scheduling-read` and the explain scope to
     # `scheduling-explain`; the two must differ. `allowedClients` names the
     # client ids the runtime admits. It is required in every file, development
-    # loopback included: an omitted or empty list is a startup refusal,
-    # because it would admit every client the issuer verifies.
+    # loopback included: an omitted or empty list is refused when the file is
+    # read, and `unrestricted` is a startup refusal, because it would admit
+    # every client the issuer verifies.
     allowedClients: [scheduling-booking-agent]
     # `assertionIssuers` maps a client id to the assertion authorities it may
     # exchange a subject token from. A deployment that performs no token
@@ -96,9 +97,9 @@ authentication:
     # keys are pinned by hand. It does no rotation of its own: rolling a key
     # means replacing the referenced document and restarting Scheduling.
     # jwksSource:
-    #   kind: static
+    #   type: static
     #   documentRef: secret:file/jwks.json
-    # `kind: uri` with `uri: https://...` fetches the key set from a fixed
+    # `type: uri` with `uri: https://...` fetches the key set from a fixed
     # address instead of the one discovery names.
 audit:
   # One single-writer destination. `file`, the default, appends to the

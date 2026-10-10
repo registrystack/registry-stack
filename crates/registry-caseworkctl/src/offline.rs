@@ -1087,15 +1087,12 @@ pub(crate) fn described_request<'a>(
     description: &'a Value,
     entity: &str,
 ) -> Option<(String, &'a Value)> {
-    match description.get("requests").and_then(Value::as_array) {
-        Some(requests) => requests
-            .iter()
-            .enumerate()
-            .find(|(_, described)| described["requestEntity"] == entity)
-            .map(|(index, described)| (format!("/requests/{index}"), described)),
-        None => Some(("/request".to_owned(), &description["request"]))
-            .filter(|(_, described)| described["requestEntity"] == entity),
-    }
+    description["requests"]
+        .as_array()?
+        .iter()
+        .enumerate()
+        .find(|(_, described)| described["requestEntity"] == entity)
+        .map(|(index, described)| (format!("/requests/{index}"), described))
 }
 
 /// Evaluate one fixture `resolve` accepted against the project. Each unmet

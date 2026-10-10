@@ -2093,7 +2093,7 @@ mod tests {
             .iter_mut()
             .find(|profile| profile["id"] == "editor")
             .unwrap();
-        let grant = editor["permissions"]
+        let grant = editor["permissions"]["entities"]
             .as_array_mut()
             .unwrap()
             .iter_mut()
@@ -2111,7 +2111,7 @@ mod tests {
             .unwrap();
         entity["fields"].as_array_mut().unwrap().push(json!({
             "id":"notes", "type":"structured", "required":false,
-            "classification":"restricted", "maxBytes":2048,
+            "classification":"restricted", "maximumBytes":2048,
             "schema":{"type":"object", "additionalProperties":false, "properties":{
                 "related":{"type":"string", "maxLength":64},
                 "items":{"type":"array", "maxItems":4, "items":{"type":"string", "maxLength":64}}
@@ -2123,7 +2123,7 @@ mod tests {
             .iter_mut()
             .find(|profile| profile["id"] == "editor")
             .unwrap();
-        let grant = editor["permissions"]
+        let grant = editor["permissions"]["entities"]
             .as_array_mut()
             .unwrap()
             .iter_mut()
@@ -2173,7 +2173,7 @@ mod tests {
             .unwrap();
         for (id, profile, missing) in [
             ("history", "reader", "revisions"),
-            ("apply", "editor", "apply_request"),
+            ("apply", "editor", "apply-request"),
         ] {
             let mut scenario = review.clone();
             let mut steps = scenario.steps.into_vec();

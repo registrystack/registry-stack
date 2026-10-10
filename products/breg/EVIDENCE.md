@@ -101,7 +101,7 @@ the sources which explicitly reference it within one Evidence process.
 Separate names keep separate resource owners. Existing inline source
 configuration remains available.
 
-The exporter intentionally refuses a `verified_claim` lookup. Such a lookup
+The exporter intentionally refuses a `verified-claim` lookup. Such a lookup
 uses claims of the source workload's token, which do not identify the Evidence
 caller. Select a reviewed `request` lookup when the caller's authorized
 selector values must identify the record.
@@ -129,8 +129,8 @@ must use the representation returned by the provider.
 BReg's unrestricted `int64` selector range exceeds Evidence's exact
 safe-integer selector range, so the exporter refuses it instead of silently
 narrowing its advertised identity contract. A string selector field that
-accepts the empty value, an explicit or defaulted `minLength` of `0`, is
-refused for the same reason: declare a `minLength` of at least 1, or maintain
+accepts the empty value, an explicit or defaulted `minimumLength` of `0`, is
+refused for the same reason: declare a `minimumLength` of at least 1, or maintain
 a reviewed custom adapter. Use a bounded string selector or maintain a
 reviewed custom adapter for unsupported shapes. Bounded scalar facts are
 supported; structured and spatial facts require a custom adapter.

@@ -196,7 +196,7 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
     let submitted = run_action(
         &app,
         &request.id,
-        "submit_request",
+        "submit-request",
         "read-retention-submit",
         operator.clone(),
         |_| json!({}),
@@ -215,7 +215,7 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         operator.clone(),
     )
     .await;
-    let apply_action = action(&before_apply.body, "apply_request");
+    let apply_action = action(&before_apply.body, "apply-request");
     let apply_body = json!({"proposalVersion": 1, "effectDigest": effect_digest});
     let applied = send_action(
         &app,
@@ -228,7 +228,7 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
     assert_eq!(
         applied.status,
         StatusCode::OK,
-        "apply_request failed with {}",
+        "apply-request failed with {}",
         applied.body
     );
 
@@ -555,7 +555,7 @@ async fn snapshot_reads_exclude_soft_erased_request_revisions() {
     let submitted = run_action(
         &app,
         &request.id,
-        "submit_request",
+        "submit-request",
         "snapshot-erasure-submit",
         operator.clone(),
         |_| json!({}),
@@ -574,7 +574,7 @@ async fn snapshot_reads_exclude_soft_erased_request_revisions() {
         operator.clone(),
     )
     .await;
-    let apply_action = action(&before_apply.body, "apply_request");
+    let apply_action = action(&before_apply.body, "apply-request");
     let applied = send_action(
         &app,
         &apply_action,
@@ -586,7 +586,7 @@ async fn snapshot_reads_exclude_soft_erased_request_revisions() {
     assert_eq!(
         applied.status,
         StatusCode::OK,
-        "apply_request failed with {}",
+        "apply-request failed with {}",
         applied.body
     );
 
@@ -1173,7 +1173,7 @@ async fn applied_correction_request(
     let submitted = run_action(
         app,
         &request.id,
-        "submit_request",
+        "submit-request",
         &format!("{label}-submit"),
         operator.clone(),
         |_| json!({}),
@@ -1192,7 +1192,7 @@ async fn applied_correction_request(
         operator.clone(),
     )
     .await;
-    let apply_action = action(&before_apply.body, "apply_request");
+    let apply_action = action(&before_apply.body, "apply-request");
     let applied = send_action(
         app,
         &apply_action,
@@ -1204,7 +1204,7 @@ async fn applied_correction_request(
     assert_eq!(
         applied.status,
         StatusCode::OK,
-        "apply_request failed with {}",
+        "apply-request failed with {}",
         applied.body
     );
     request.id
@@ -1536,41 +1536,41 @@ impl ReadinessProbe for AlwaysReady {
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"request-read-retention","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"request-read-retention","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only","classification":"internal",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-                {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+                {"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
               "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"}
               ]
             },
             {
               "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"public",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"public"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"public"},
                 {"id":"placement","type":"reference","target":"placement","required":true,"classification":"public"},
                 {"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"public"},
-                {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"public"}
+                {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"public"}
               ],
               "changeRequest":{
-                "retention":{"mode":"operator_erase"},
+                "retention":{"mode":"operator-erase"},
                 "effects":[{
                   "target":{"fromField":"placement"},
                   "operation":"patch",
                   "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"mode":"none"},
+                "review":{"type":"none"},
                 "onApproved":{"mode":"manual"}
               }
             }
@@ -1578,7 +1578,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[
             {
               "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"site",
                 "operations":["create","get","list"],
                 "readableFields":["tenant","name"],
@@ -1592,40 +1592,40 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
               },{
                 "entity":"correction-request",
-                "operations":["create","get","list","patch","submit_request","apply_request"],
+                "operations":["create","get","list","patch","submit-request","apply-request"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "writableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "applyTargets":[{"entity":"placement","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-              }]
+              }]}
             },
             {
               "id":"request-only","principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
                 "operations":["get"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-              }]
+              }]}
             },
             {
               "id":"public-request","principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries": "unrestricted"
-              }]
+              }]}
             },
             {
               "id":"snapshot-reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
                 "operations":["snapshot"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "allowCount":true,
                 "rowBoundaries": "unrestricted"
-              }]
+              }]}
             }
           ]
         }"#,

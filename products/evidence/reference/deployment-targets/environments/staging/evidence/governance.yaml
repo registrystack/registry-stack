@@ -2,7 +2,7 @@ apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1
 kind: EvidenceTargetGovernance
 assuranceProfile: production
 service: {providerId: https://evidence.staging.example.org, publicOrigin: https://evidence.staging.example.org, trustDomain: https://trust.staging.example.org}
-issuer: {id: https://authority.example.org}
+issuer: {uri: https://authority.example.org}
 publication: {serviceId: urn:example:staging:evidence-service, title: Staging Evidence service, description: Staging minimum-disclosure Evidence service, endpointUrl: https://evidence.staging.example.org, jurisdictions: [urn:example:jurisdiction:staging]}
 authentication:
   oidc:
@@ -11,11 +11,13 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [ES256]
     jwksSource:
-      kind: uri
+      type: uri
       uri: https://issuer.staging.example.org/.well-known/jwks.json
     principalClaim: sub
     requesterTagsClaim: evidence_tags
     evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
 audit: {hashKeyRef: secret:file/evidence-audit-hmac, hashKeyVersion: 1}

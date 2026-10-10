@@ -128,6 +128,9 @@ CONFORMANCE_CASES = {"requiredText": str, "optionalText": str, "integer": int, "
 # operand another declaration types (CFG-VAL-9).
 CONFORMANCE_SHAPES = ("idList", "set", "reference", "relativePath", "operand")
 LOCAL_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+# The grammar `$defs/DerivedId` must carry: a dot-separated path of two or more
+# local identifiers (CFG-ID-1).
+DERIVED_ID_PATTERN = r"^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63})+$"
 
 CLASSES = ("protocol-constant", "external-format", "exchange-model", "stable-move", "decision", "pending")
 GROWTH_CLASSES = frozenset({"protocol-constant", "external-format", "exchange-model"})
@@ -755,6 +758,19 @@ def ref_names(node: object) -> list[str]:
 
 def refs_to(node: object, name: str) -> bool:
     return any(reference.rsplit("/", 1)[-1] == name for reference in ref_names(node))
+
+
+def typed_as_derived_id(node: object, document: dict) -> bool:
+    """Whether a member references `$defs/DerivedId` and the schema defines it with the derived grammar."""
+
+    definitions = document.get("$defs")
+    definition = definitions.get("DerivedId") if isinstance(definitions, dict) else None
+    return (
+        refs_to(node, "DerivedId")
+        and isinstance(definition, dict)
+        and definition.get("type") == "string"
+        and definition.get("pattern") == DERIVED_ID_PATTERN
+    )
 
 
 def types_of(node: object) -> set[str]:
@@ -1766,8 +1782,13 @@ class Lint:
                 ):
                     find("CFG-QTY-3", visit, f"{key} is a size that is not an integer number of bytes", "Write an integer number of bytes; put Bytes last in the key")
                 if not exempt_value:
-                    if key == "id" and not refs_to(node, "LocalId"):
-                        find("CFG-ID-1", visit, "id is not typed as $defs/LocalId", "Type the member with $ref: #/$defs/LocalId")
+                    if key == "id" and not (refs_to(node, "LocalId") or typed_as_derived_id(node, document)):
+                        find(
+                            "CFG-ID-1",
+                            visit,
+                            "id is not typed as $defs/LocalId or $defs/DerivedId",
+                            "Type the member with $ref: #/$defs/LocalId, or #/$defs/DerivedId for an identifier the product derives",
+                        )
                     if (key == "digest" or key.endswith("Digest")) and not refs_to(node, "Digest"):
                         find("CFG-VAL-6", visit, f"{key} is not typed as $defs/Digest", "Type the member with $ref: #/$defs/Digest")
                     textual = not (types_of(node) and types_of(node) <= {"object", "array", "null"}) and not any(

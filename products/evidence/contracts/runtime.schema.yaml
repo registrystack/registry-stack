@@ -17,7 +17,7 @@ properties:
     description: >-
       Names the grammar this runtime document is written in; the loader refuses any other
       value, so a future incompatible runtime shape is never read as if it were this one.
-    const: registry.registrystack.org/evidence-runtime/v1alpha1
+    const: id.registrystack.org/formats/evidence/runtime/v1alpha1
   kind:
     description: >-
       Names the document type; together with `apiVersion` it tells an Evidence runtime file
@@ -190,10 +190,10 @@ properties:
       - type: object
         additionalProperties: false
         required:
-          - kind
+          - type
           - privateKeyRef
         properties:
-          kind:
+          type:
             description: >-
               Selects the signer transport for this deployment: `local-jwk` resolves a file-provider
               secret directly, `transit` calls a workload-local signing proxy over a Unix
@@ -203,20 +203,20 @@ properties:
           privateKeyRef:
             description: >-
               Names the file-provider secret holding the local signing private key material,
-              read only when `signer.kind` is `local-jwk`; the value is a reference, and configuration
+              read only when `signer.type` is `local-jwk`; the value is a reference, and configuration
               never carries the key bytes themselves.
-            $ref: '#/$defs/secret-ref'
+            $ref: '#/$defs/SecretReference'
       - type: object
         additionalProperties: false
         required:
-          - kind
+          - type
           - unixSocketPath
           - mount
           - keyName
           - keyVersion
-          - timeoutMilliseconds
+          - attemptTimeoutMilliseconds
         properties:
-          kind:
+          type:
             const: transit
           unixSocketPath:
             description: >-
@@ -243,7 +243,7 @@ properties:
             type: integer
             minimum: 1
             maximum: 4294967295
-          timeoutMilliseconds:
+          attemptTimeoutMilliseconds:
             description: >-
               Bounds how long the runtime waits on each call to the Transit signing proxy;
               because a `transit` signer keeps no local fallback key, a call that exceeds
@@ -281,7 +281,7 @@ properties:
         type: integer
         minimum: 1048576
         maximum: 4294967295
-      retainDays:
+      retentionDays:
         description: >-
           Age in days after which a sealed file is deleted when the writer opens or rotates;
           defaults to 90. The active file is never deleted. File destination only.
@@ -302,7 +302,7 @@ properties:
           - required:
               - rotateBytes
           - required:
-              - retainDays
+              - retentionDays
     else:
       required:
         - path
@@ -333,7 +333,7 @@ properties:
         type: object
         maxProperties: 64
         propertyNames:
-          $ref: '#/$defs/local-id'
+          $ref: '#/$defs/LocalId'
         additionalProperties:
           description: >-
             One named private trust profile, binding a logical id a `tlsTrustProfile`
@@ -359,7 +359,7 @@ properties:
     type: object
     maxProperties: 64
     propertyNames:
-      $ref: '#/$defs/local-id'
+      $ref: '#/$defs/LocalId'
     additionalProperties:
       description: >-
         One named extract binding, joining a logical name a source's `extractProfile` reference
@@ -402,12 +402,17 @@ $defs:
     type: string
     pattern: ^sha256:[0-9a-f]{64}$
     description: 'A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.'
+  LocalId:
+    type: string
+    pattern: ^[a-z][a-z0-9_-]{0,63}$
+    description: 'A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.'
   local-id:
     type: string
     pattern: ^[a-z][a-z0-9._-]{0,127}$
-  secret-ref:
+  SecretReference:
     type: string
     pattern: ^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$
+    description: 'An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.'
   socket-address:
     description: >-
       A numeric `host:port` socket address with a non-zero port, the host in brackets when

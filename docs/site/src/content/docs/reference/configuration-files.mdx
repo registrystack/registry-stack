@@ -73,7 +73,7 @@ A file whose format carries a header starts with `apiVersion` and `kind`, two pl
 top level:
 
 ```yaml
-apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1
 kind: DiscoveryRuntimeConfig
 ```
 
@@ -133,7 +133,7 @@ A member keeps the type its format gives it. An integer member refuses `1_000` a
 `maximumResultRecords: "100"` in a Discovery runtime file, the reader reports:
 
 ```text
-error[config.expected-integer] runtime.yaml:10:25 /limits/maximumResultRecords
+error[config.expected-integer] runtime.yaml:11:25 /limits/maximumResultRecords
   expected a whole number from 1 to 10000; quoted values are text
   next: Remove the quotes.
 ```
@@ -223,10 +223,11 @@ A check command, and a runtime that refuses its file at startup, report diagnost
 problem. Take a Discovery runtime file whose last line misspells `logLevel`:
 
 ```yaml
-apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1
 kind: DiscoveryRuntimeConfig
 listener:
   bind: 127.0.0.1:38080
+  requestTimeoutMilliseconds: 10000
 package:
   root: /srv/discovery/current
 limits:
@@ -234,8 +235,7 @@ limits:
   maximumResponseBytes: 1048576
   maximumResultRecords: 100
   maximumResultAlternatives: 100
-  requestTimeoutSeconds: 10
-  shutdownTimeoutSeconds: 10
+  shutdownGraceMilliseconds: 10000
 logLevl: info
 ```
 
@@ -539,7 +539,7 @@ at the release you deploy, into your project, then map it to your files. The
 
 ```yaml
 # yaml-language-server: $schema=./schemas/runtime.schema.json
-apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 ```
 

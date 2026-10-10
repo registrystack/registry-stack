@@ -170,7 +170,7 @@ class MutationRetryTests(unittest.TestCase):
         self.script()
         with self.assertRaises(SchedulingClientError) as raised:
             SchedulingClient(self.base_url).create_hold("one-call-token", "two words", ADMISSION)
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertIs(raised.exception.outcome_unknown, False)
         self.assertEqual(_Scripted.observations, [])
 

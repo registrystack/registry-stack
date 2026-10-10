@@ -4,9 +4,9 @@
 # the reasoning behind these choices. canonicalBaseIri below is a
 # reserved example.org name standing in for your registry's real
 # identity; replace it before you build a production package.
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: agricultural-holdings
   canonicalBaseIri: https://agricultural-holdings.example.org
   version: 0.1.0
@@ -143,19 +143,19 @@ entities:
         required: true
         classification: restricted
         apiName: localIdentifier
-        maxLength: 160
-        minLength: 1
+        maximumLength: 160
+        minimumLength: 1
       - id: name
         type: string
         required: true
         classification: restricted
-        maxLength: 160
-        minLength: 1
+        maximumLength: 160
+        minimumLength: 1
     changeControl:
       requiredFor:
         - patch
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - local-identifier
   - id: person
@@ -169,16 +169,16 @@ entities:
         required: true
         classification: restricted
         apiName: localIdentifier
-        maxLength: 160
-        minLength: 1
+        maximumLength: 160
+        minimumLength: 1
       - id: name
         type: string
         required: true
         classification: restricted
-        maxLength: 160
-        minLength: 1
+        maximumLength: 160
+        minimumLength: 1
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - local-identifier
   - id: organization
@@ -192,16 +192,16 @@ entities:
         required: true
         classification: restricted
         apiName: localIdentifier
-        maxLength: 160
-        minLength: 1
+        maximumLength: 160
+        minimumLength: 1
       - id: name
         type: string
         required: true
         classification: restricted
-        maxLength: 160
-        minLength: 1
+        maximumLength: 160
+        minimumLength: 1
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - local-identifier
   - id: informal-group
@@ -215,16 +215,16 @@ entities:
         required: true
         classification: restricted
         apiName: localIdentifier
-        maxLength: 160
-        minLength: 1
+        maximumLength: 160
+        minimumLength: 1
       - id: name
         type: string
         required: true
         classification: restricted
-        maxLength: 160
-        minLength: 1
+        maximumLength: 160
+        minimumLength: 1
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - local-identifier
   - id: person-agricultural-holder-role
@@ -256,9 +256,9 @@ entities:
         classification: restricted
         apiName: endDate
     constraints:
-      - kind: compare
+      - type: compare
         left: start-date
-        operator: less_than_or_equal
+        operator: less-than-or-equal
         right: end-date
   - id: organization-agricultural-holder-role
     primaryDataset: directory
@@ -289,9 +289,9 @@ entities:
         classification: restricted
         apiName: endDate
     constraints:
-      - kind: compare
+      - type: compare
         left: start-date
-        operator: less_than_or_equal
+        operator: less-than-or-equal
         right: end-date
   - id: group-agricultural-holder-role
     primaryDataset: directory
@@ -322,9 +322,9 @@ entities:
         classification: restricted
         apiName: endDate
     constraints:
-      - kind: compare
+      - type: compare
         left: start-date
-        operator: less_than_or_equal
+        operator: less-than-or-equal
         right: end-date
   - id: name-correction
     primaryDataset: directory
@@ -341,21 +341,21 @@ entities:
         type: string
         required: true
         classification: restricted
-        maxLength: 160
-        minLength: 1
+        maximumLength: 160
+        minimumLength: 1
       - id: reason
         type: string
         required: true
         classification: restricted
-        maxLength: 500
-        minLength: 1
+        maximumLength: 500
+        minimumLength: 1
       - id: supporting-reference
         type: string
         required: true
         classification: restricted
         apiName: supportingReference
-        maxLength: 500
-        minLength: 1
+        maximumLength: 500
+        minimumLength: 1
     changeRequest:
       effects:
         - target:
@@ -365,12 +365,13 @@ entities:
             name:
               fromField: name
       review:
+        type: required
         authority: casework
         policyId: name-correction
       onApproved:
         mode: manual
       retention:
-        mode: operator_erase
+        mode: operator-erase
 accessProfiles:
   - id: reader
     default: false
@@ -380,14 +381,15 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: farm
-        operations:
-          - get
-          - list
-        readableFields:
-          - local-identifier
-          - name
-        rowBoundaries: unrestricted
+      entities:
+        - entity: farm
+          operations:
+            - get
+            - list
+          readableFields:
+            - local-identifier
+            - name
+          rowBoundaries: unrestricted
   - id: editor
     default: true
     principalClaim: registry_principal
@@ -396,145 +398,146 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: farm
-        operations:
-          - get
-          - list
-          - revisions
-          - create
-        readableFields:
-          - local-identifier
-          - name
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        writableFields:
-          - local-identifier
-          - name
-      - entity: person
-        operations:
-          - get
-          - list
-          - revisions
-          - create
-          - patch
-        readableFields:
-          - local-identifier
-          - name
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        writableFields:
-          - local-identifier
-          - name
-      - entity: organization
-        operations:
-          - get
-          - list
-          - revisions
-          - create
-          - patch
-        readableFields:
-          - local-identifier
-          - name
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        writableFields:
-          - local-identifier
-          - name
-      - entity: informal-group
-        operations:
-          - get
-          - list
-          - revisions
-          - create
-          - patch
-        readableFields:
-          - local-identifier
-          - name
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        writableFields:
-          - local-identifier
-          - name
-      - entity: person-agricultural-holder-role
-        operations:
-          - get
-          - list
-          - revisions
-          - create
-          - patch
-        readableFields:
-          - holder-farm
-          - holder-person
-          - start-date
-          - end-date
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        writableFields:
-          - holder-farm
-          - holder-person
-          - start-date
-          - end-date
-      - entity: organization-agricultural-holder-role
-        operations:
-          - get
-          - list
-          - revisions
-          - create
-          - patch
-        readableFields:
-          - holder-farm
-          - holder-organization
-          - start-date
-          - end-date
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        writableFields:
-          - holder-farm
-          - holder-organization
-          - start-date
-          - end-date
-      - entity: group-agricultural-holder-role
-        operations:
-          - get
-          - list
-          - revisions
-          - create
-          - patch
-        readableFields:
-          - holder-farm
-          - holder-group
-          - start-date
-          - end-date
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        writableFields:
-          - holder-farm
-          - holder-group
-          - start-date
-          - end-date
-      - entity: name-correction
-        operations:
-          - create
-          - get
-          - patch
-          - submit_request
-          - revise_request
-          - cancel_request
-        readableFields:
-          - record
-          - name
-          - reason
-          - supporting-reference
-        writableFields:
-          - record
-          - name
-          - reason
-          - supporting-reference
-        requestVisibility: owner
-        rowBoundaries: unrestricted
-        readableRequestFields:
-          - reason
-          - review_state
+      entities:
+        - entity: farm
+          operations:
+            - get
+            - list
+            - revisions
+            - create
+          readableFields:
+            - local-identifier
+            - name
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          writableFields:
+            - local-identifier
+            - name
+        - entity: person
+          operations:
+            - get
+            - list
+            - revisions
+            - create
+            - patch
+          readableFields:
+            - local-identifier
+            - name
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          writableFields:
+            - local-identifier
+            - name
+        - entity: organization
+          operations:
+            - get
+            - list
+            - revisions
+            - create
+            - patch
+          readableFields:
+            - local-identifier
+            - name
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          writableFields:
+            - local-identifier
+            - name
+        - entity: informal-group
+          operations:
+            - get
+            - list
+            - revisions
+            - create
+            - patch
+          readableFields:
+            - local-identifier
+            - name
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          writableFields:
+            - local-identifier
+            - name
+        - entity: person-agricultural-holder-role
+          operations:
+            - get
+            - list
+            - revisions
+            - create
+            - patch
+          readableFields:
+            - holder-farm
+            - holder-person
+            - start-date
+            - end-date
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          writableFields:
+            - holder-farm
+            - holder-person
+            - start-date
+            - end-date
+        - entity: organization-agricultural-holder-role
+          operations:
+            - get
+            - list
+            - revisions
+            - create
+            - patch
+          readableFields:
+            - holder-farm
+            - holder-organization
+            - start-date
+            - end-date
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          writableFields:
+            - holder-farm
+            - holder-organization
+            - start-date
+            - end-date
+        - entity: group-agricultural-holder-role
+          operations:
+            - get
+            - list
+            - revisions
+            - create
+            - patch
+          readableFields:
+            - holder-farm
+            - holder-group
+            - start-date
+            - end-date
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          writableFields:
+            - holder-farm
+            - holder-group
+            - start-date
+            - end-date
+        - entity: name-correction
+          operations:
+            - create
+            - get
+            - patch
+            - submit-request
+            - revise-request
+            - cancel-request
+          readableFields:
+            - record
+            - name
+            - reason
+            - supporting-reference
+          writableFields:
+            - record
+            - name
+            - reason
+            - supporting-reference
+          requestVisibility: owner
+          rowBoundaries: unrestricted
+          readableRequestFields:
+            - reason
+            - review-state
   - id: reviewer
     default: false
     principalClaim: registry_principal
@@ -543,95 +546,96 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: farm
-        operations:
-          - get
-          - list
-          - revisions
-        readableFields:
-          - local-identifier
-          - name
-        rowBoundaries: unrestricted
-        revisionAccess: true
-      - entity: person
-        operations:
-          - get
-          - list
-          - revisions
-        readableFields:
-          - local-identifier
-          - name
-        rowBoundaries: unrestricted
-        revisionAccess: true
-      - entity: organization
-        operations:
-          - get
-          - list
-          - revisions
-        readableFields:
-          - local-identifier
-          - name
-        rowBoundaries: unrestricted
-        revisionAccess: true
-      - entity: informal-group
-        operations:
-          - get
-          - list
-          - revisions
-        readableFields:
-          - local-identifier
-          - name
-        rowBoundaries: unrestricted
-        revisionAccess: true
-      - entity: person-agricultural-holder-role
-        operations:
-          - get
-          - list
-          - revisions
-        readableFields:
-          - holder-farm
-          - holder-person
-          - start-date
-          - end-date
-        rowBoundaries: unrestricted
-        revisionAccess: true
-      - entity: organization-agricultural-holder-role
-        operations:
-          - get
-          - list
-          - revisions
-        readableFields:
-          - holder-farm
-          - holder-organization
-          - start-date
-          - end-date
-        rowBoundaries: unrestricted
-        revisionAccess: true
-      - entity: group-agricultural-holder-role
-        operations:
-          - get
-          - list
-          - revisions
-        readableFields:
-          - holder-farm
-          - holder-group
-          - start-date
-          - end-date
-        rowBoundaries: unrestricted
-        revisionAccess: true
-      - entity: name-correction
-        operations:
-          - get
-          - apply_request
-        readableFields:
-          - record
-          - name
-          - reason
-          - supporting-reference
-        rowBoundaries: unrestricted
-        applyTargets:
-          - entity: farm
-            rowBoundaries: unrestricted
-        readableRequestFields:
-          - reason
-          - review_state
+      entities:
+        - entity: farm
+          operations:
+            - get
+            - list
+            - revisions
+          readableFields:
+            - local-identifier
+            - name
+          rowBoundaries: unrestricted
+          revisionAccess: true
+        - entity: person
+          operations:
+            - get
+            - list
+            - revisions
+          readableFields:
+            - local-identifier
+            - name
+          rowBoundaries: unrestricted
+          revisionAccess: true
+        - entity: organization
+          operations:
+            - get
+            - list
+            - revisions
+          readableFields:
+            - local-identifier
+            - name
+          rowBoundaries: unrestricted
+          revisionAccess: true
+        - entity: informal-group
+          operations:
+            - get
+            - list
+            - revisions
+          readableFields:
+            - local-identifier
+            - name
+          rowBoundaries: unrestricted
+          revisionAccess: true
+        - entity: person-agricultural-holder-role
+          operations:
+            - get
+            - list
+            - revisions
+          readableFields:
+            - holder-farm
+            - holder-person
+            - start-date
+            - end-date
+          rowBoundaries: unrestricted
+          revisionAccess: true
+        - entity: organization-agricultural-holder-role
+          operations:
+            - get
+            - list
+            - revisions
+          readableFields:
+            - holder-farm
+            - holder-organization
+            - start-date
+            - end-date
+          rowBoundaries: unrestricted
+          revisionAccess: true
+        - entity: group-agricultural-holder-role
+          operations:
+            - get
+            - list
+            - revisions
+          readableFields:
+            - holder-farm
+            - holder-group
+            - start-date
+            - end-date
+          rowBoundaries: unrestricted
+          revisionAccess: true
+        - entity: name-correction
+          operations:
+            - get
+            - apply-request
+          readableFields:
+            - record
+            - name
+            - reason
+            - supporting-reference
+          rowBoundaries: unrestricted
+          applyTargets:
+            - entity: farm
+              rowBoundaries: unrestricted
+          readableRequestFields:
+            - reason
+            - review-state

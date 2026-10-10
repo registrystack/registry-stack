@@ -119,7 +119,7 @@ claimed = client.claim_review_task(
     "python-claim-synthetic-batch-0042", None,
 )["value"]
 mine = client.review_tasks(request["token"], request["profile"],
-    {"limit": 25, "ownership": "assigned_to_me"})["value"]["items"]
+    {"limit": 25, "ownership": "assigned-to-me"})["value"]["items"]
 if len(mine) != 1 or mine[0]["taskId"] != task["taskId"]:
     raise AssertionError("the own holding was not in the ownership-filtered inbox")
 try:

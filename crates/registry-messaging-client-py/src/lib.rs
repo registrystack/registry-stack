@@ -100,7 +100,7 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
             ..MappedError::default()
         },
         RustClientError::InvalidRequest { .. } => MappedError {
-            kind: "invalid_request",
+            kind: "invalid-request",
             message: "Messaging client arguments are invalid".to_owned(),
             ..MappedError::default()
         },
@@ -150,9 +150,9 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
 
 fn protocol_failure(failure: MessagingProtocolFailure) -> &'static str {
     match failure {
-        MessagingProtocolFailure::HeaderBounds => "header_bounds",
-        MessagingProtocolFailure::TraceContext => "trace_context",
-        MessagingProtocolFailure::MediaType => "media_type",
+        MessagingProtocolFailure::HeaderBounds => "header-bounds",
+        MessagingProtocolFailure::TraceContext => "trace-context",
+        MessagingProtocolFailure::MediaType => "media-type",
         MessagingProtocolFailure::Body => "body",
         MessagingProtocolFailure::Problem => "problem",
         MessagingProtocolFailure::Status => "status",
@@ -165,14 +165,14 @@ fn input<T: DeserializeOwned>(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyRes
         let _ = error.message();
         binding_error(
             py,
-            "invalid_request",
+            "invalid-request",
             "Messaging client arguments are invalid",
         )
     })?;
     serde_json::from_value(value).map_err(|_| {
         binding_error(
             py,
-            "invalid_request",
+            "invalid-request",
             "Messaging client arguments are invalid",
         )
     })
@@ -180,7 +180,7 @@ fn input<T: DeserializeOwned>(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyRes
 
 fn bearer(py: Python<'_>, value: &str) -> PyResult<BearerToken> {
     BearerToken::new(value.to_owned())
-        .map_err(|_| binding_error(py, "invalid_request", "the bearer token is invalid"))
+        .map_err(|_| binding_error(py, "invalid-request", "the bearer token is invalid"))
 }
 
 /// The retry ceiling as a Python integer. Only an `int` in the `u8` range

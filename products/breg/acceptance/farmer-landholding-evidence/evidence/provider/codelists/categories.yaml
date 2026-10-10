@@ -1,6 +1,9 @@
-id: urn:example:farmer:categories
+apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
+kind: EvidenceCodelist
+uri: urn:example:farmer:categories
 version: '1'
+type: mapping
 entries:
   smallholder: smallholder
-allowed_outputs:
+allowedOutputs:
 - smallholder

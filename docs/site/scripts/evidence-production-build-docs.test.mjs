@@ -75,7 +75,7 @@ test('the maintained Compose adapter keeps Evidence deployment inputs explicit',
   assert.match(compose, /EVIDENCE_SECRET_ROOT/u);
   assert.match(compose, /EVIDENCE_TRANSIT_SOCKET_DIR/u);
   assert.match(compose, /user: "65532:65532"/u);
-  assert.match(runtime, /kind: transit/u);
+  assert.match(runtime, /type: transit/u);
   assert.match(runtime, /unixSocketPath: \/run\/registry-evidence\/transit-proxy\.sock/u);
   assert.doesNotMatch(runtime, /privateKeyRef/u);
 });

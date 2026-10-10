@@ -472,7 +472,7 @@ as the claim on its next apply (BREG-SEC-117).
 
 This change adds no BReg audit prune, export, or retention floor. BReg
 audit retention is the platform audit writer's file rotation and
-`retainDays`, and tamper evidence is shipping the stream to append-only
+`retentionDays`, and tamper evidence is shipping the stream to append-only
 storage, as the operator documentation describes.
 
 ## Review recovery
@@ -1091,7 +1091,7 @@ scrape exhaust the runtime pool or hold locks the workers need.
   request failed and left its job pending for a retry is never a success,
   and neither is an idle pass during that retry wait.
 - `breg_queue_oldest_pending_age_seconds` carries only a closed `queue`
-  label (`webhook_delivery`, `review_submission`, `review_application`) and
+  label (`webhook-delivery`, `review-submission`, `review-application`) and
   an age. Each scrape takes one runtime pool connection, serialized across
   scrapes by a mutex, inside a read-only transaction whose statement timeout
   is 5 seconds, and runs one aggregate statement that reads only
@@ -1508,7 +1508,7 @@ It changes which packages such a build activates, a deployment default.
 ### Enforcement and defaults
 
 - Without the `wasm` feature, every WASM hook handler yields
-  `hook.handler.wasm_build_unsupported` at `entities[].hooks[].handler.kind`
+  `hook.handler.wasm_build_unsupported` at `entities[].hooks[].handler.type`
   before its module is looked up, so the refusal names the build rather than
   the module and no module diagnostic is reported.
 - Package loading rederives the package through the same compiler, so the
@@ -1827,8 +1827,9 @@ and release provenance (the release image and the upgrade rehearsal).
    `real_postgres_internal_schema_reinstall_is_idempotent`.
    `crates/registry-platform-hooks/src/delivery_schema.rs`:
    `a_recorded_answer_belongs_to_a_delivered_row`, and two tests that need
-   PostgreSQL and run only where `HOOKS_TEST_DATABASE_URL` is set, which no
-   CI job does:
+   PostgreSQL and run only where `HOOKS_TEST_DATABASE_URL` is set, which the
+   `scheduling-postgres` job of `.github/workflows/ci.yml` does, failing
+   unless at least one of them passes:
    `installing_over_an_installed_schema_changes_nothing`,
    `installing_over_a_table_without_dead_letter_reasons_adds_them`.
 2. `crates/registry-breg/src/request_workflow.rs`:
@@ -2412,8 +2413,8 @@ tell which value to fix.
 - An empty `authentication.oidc.assertionIssuers` mapping is refused: it
   restricts which authority each client may exchange from, and omitting the
   member is how a file applies no assertion-issuer rule (CFG-EMPTY-2). A
-  client listed with `[]` may exchange from no authority, as a client left
-  out may not; that was already the verifier's behaviour.
+  client listed with `[]` is refused as well; "A listed assertion-issuer
+  client names at least one issuer" below records that refusal.
 - The published schema states the same: each reference is
   `$ref: SecretReference`, each URL `$ref: Url`, and an optional reference,
   path, or retention member publishes no `default: null` and says what
@@ -2427,7 +2428,7 @@ tell which value to fix.
   password), `invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refused`
   (a traversing key reference refused at the member, value-free), and
   `invalid_assertion_issuer_shapes_are_refused` (the empty mapping refused,
-  an empty per-client list accepted as no authority).
+  and a client listed with `[]` refused at the client).
 - `crates/registry-breg/src/attachment_storage.rs` and
   `crates/registry-breg/src/attachment_verification.rs`: an inline
   credential is refused at decode and the error does not carry it.
@@ -2517,3 +2518,166 @@ and `reviewed_successor_refuses_a_receipt_that_carries_retired_proofs`.
 - **The migration ledger keeps its own spelling.** The backup references the
   ledger records (`sha256`, `byteLength`) are internal database state, not a
   document an operator writes, and are unchanged.
+
+## A listed assertion-issuer client names at least one issuer
+
+`authentication.oidc.assertionIssuers` in `runtime.yaml` decides which
+assertion authority each OAuth client may exchange a subject token from. It
+touches authentication configuration and a deployment default: how a file
+writes "this client may exchange from no authority".
+
+### Threat
+
+Two spellings of the same posture read differently to an operator. A client
+left out and a client listed with `[]` both exchange from no authority, but
+`kiosk: []` beside populated clients reads like a placeholder to fill in
+later, or like "no restriction for this client". An operator who believes
+the second reading thinks a client is unrestricted when it is denied, or the
+reverse after a careless edit, and a reviewer comparing two runtime files
+cannot tell a deliberate denial from an unfinished one. The empty mapping `{}` was already refused for the
+same reason.
+
+### Enforcement and defaults
+
+- `ListedIssuers` in `crates/registry-breg/src/runtime_config.rs` reads one
+  client's list and refuses an empty one while the shared reader decodes the
+  file, before any runtime state is built. `breg` does not start, and every
+  `bregctl` command that reads the runtime file reports the same refusal.
+- The refusal is `config.invalid-value` at
+  `/authentication/oidc/assertionIssuers/<client>`. It says to list at least
+  one assertion issuer for the client or to remove the client, and never
+  repeats a value from the file.
+- The published runtime schema states `minItems: 1` on the per-client list,
+  beside the `minProperties: 1` it already states on the mapping.
+- The verifier is unchanged. A client that is not listed still exchanges
+  from no authority once the member is written, so removing the refused
+  client keeps the posture the empty list had. Nothing fails open: the
+  change only removes a second way to write a denial.
+- `bregctl dev` builds each client's list by adding an issuer, so it never
+  writes a client with an empty list.
+
+### Tests
+
+- `crates/registry-breg/tests/runtime_config.rs`:
+  `invalid_assertion_issuer_shapes_are_refused` (negative: a client listed
+  with `[]` beside a populated client is refused at the client's own
+  pointer, and the refusal names the fix).
+- `crates/registry-breg/src/runtime_config.rs`:
+  `schema_refuses_a_client_listed_with_no_assertion_issuer` (the schema
+  states `minItems: 1`).
+- `crates/registry-breg/src/schema.rs`: the schema and parser parity test
+  refuses the same instance under "OIDC assertion issuer client listed with
+  no issuer".
+
+### Accepted residuals
+
+- **Removing the last listed client leaves `{}`.** That is refused too, so
+  the operator must decide between listing another client and deleting the
+  member, which applies no assertion-issuer rule at all. The release notes
+  say so; the reader cannot decide it for them.
+
+## Access profile permissions grouped by what each names
+
+`accessProfiles[].permissions` in `registry.yaml` is the authored statement
+of everything a profile may do. It was one list whose entries were told apart
+by the member each carried (`entity`, `action`, or `dataset`); it is now a
+mapping of three lists, `entities`, `actions`, and `datasets`, each read by
+one strict shape. This changes the grammar of authorization configuration and
+no authorization decision: the compiled access model is the one the list
+compiled to. The reader is `PermissionsSource`, `EntityPermissionSource`,
+`ActionPermissionSource`, and `DatasetPermissionSource` in
+`crates/registry-breg/src/contract.rs`, with the shape refusal in
+`crates/registry-breg/src/contract/sentinel.rs`. No security invariant row
+changes.
+
+### Threat
+
+A change of grammar in the file that grants access can widen or silently drop
+a grant in four ways. A permission is read as another kind, so members that
+bound it (`rowBoundaries`, `readableFields`, `requireConsent`) are ignored. A
+file in the earlier form is read as a profile that grants nothing, or as one
+that grants something else, without telling its author. A member written
+under the wrong group is dropped and the permission is accepted without the
+bound it stated. Or the regrouping reorders or merges grants so that a
+project compiles to different access than before.
+
+### Enforcement and defaults
+
+- **Each group reads one strict shape.** `permissions.entities`,
+  `permissions.actions`, and `permissions.datasets` each deserialize one
+  struct that denies unknown members. A member of another kind of permission
+  is refused with `config.unknown-key` at the member, and an entry that does
+  not name what its group lists is refused with `config.missing-key`. Nothing
+  is inferred from the members present, and no member is dropped.
+- **The earlier list is refused, never converted.** `sentinel::permissions`
+  reads `permissions` through a shape union whose list and scalar variants
+  are refusals: `config.invalid-value` at `/accessProfiles/N/permissions`,
+  with a fix that names the three groups. `permissions: []`, which the
+  earlier reader accepted as a profile that grants nothing, is refused the
+  same way, so no file is read under a meaning its author did not write.
+- **Refusals move earlier, none is removed.** Entity members on an action
+  permission, action members on an entity permission, and `requireConsent`
+  on an action permission were refused by the compiler; the reader now
+  refuses them first. The five compiler diagnostics that refused a
+  permission naming both an entity and an action, or neither, are deleted
+  because no file can state that shape. An entity permission without
+  `rowBoundaries` is still refused with the same fix, and `[]` is still not
+  a way to write unrestricted reach.
+- **An omitted group grants nothing.** `permissions`, and each group in it,
+  defaults to empty. An empty group has the meaning an absent permission of
+  that kind had; there is no implicit grant and no wildcard.
+- **The compiled model is unchanged.** The compiler walks the entity
+  permissions, then the action permissions, then the dataset permissions,
+  each in the order written. For the 36 registry projects in this repository
+  (the 31 under `products/breg` and five single-file fixtures of
+  `crates/registry-breg/tests/fixtures`), `bregctl check`, `check
+  --production`, the eight `explain` subjects, and the six `generate`
+  selectors were captured before and after the reader changed: 576 exit
+  codes are identical, every `explain` report and every generated file is
+  byte-identical, and every registry revision is identical. The 57 files
+  that differ are check reports, and they differ only where a diagnostic
+  names its place: the pointer gains the group, and the line and column
+  follow the regrouped file.
+- **Diagnostics repeat no authored value.** The shape refusal and the
+  unknown-key refusals name members and groups, never an entity, action,
+  dataset, claim, or scope the file wrote.
+
+### Tests
+
+- `crates/registry-breg/tests/permission_groups.rs`:
+  `one_permissions_list_is_refused_with_the_grouping_named` (negative: a
+  list, `[]`, and a scalar are refused at `permissions` with the fix),
+  `a_permission_written_under_another_group_is_refused_where_it_is_written`
+  (negative: each of the six cross placements is refused with
+  `config.unknown-key` at each foreign member and `config.missing-key` at the
+  entry), `an_action_permission_states_no_row_reach` and
+  `an_action_permission_carries_no_entity_member` (negative: every member
+  only an entity permission carries is refused on an action permission),
+  `an_entity_permission_states_its_row_reach` (negative: an omitted or empty
+  `rowBoundaries` is refused), `a_group_lists_only_its_own_operations`,
+  `a_dataset_permission_lists_at_least_one_operation`,
+  `a_permission_lists_each_operation_once`,
+  `permissions_holds_only_the_three_groups`,
+  `a_group_that_is_omitted_or_empty_grants_nothing`,
+  `the_groups_may_be_written_in_any_order`,
+  `a_profile_groups_its_permissions_by_what_each_names`, and
+  `a_profile_writes_its_permissions_back_grouped`.
+- `crates/registry-breg/tests/consent_access.rs`:
+  `gated_permissions_are_read_only` (negative: `requireConsent` on an action
+  permission is refused when the project is read, and a gated profile that
+  invokes an action targeting its gated entity is still refused with
+  `breg.consent.require-read-only`).
+- `crates/registry-breg/src/schema.rs`:
+  `schema_states_permissions_as_one_list_per_kind` (the published project
+  schema holds no untagged permission union).
+
+### Accepted residuals
+
+- **Every project is rewritten once.** No conversion is offered: the earlier
+  list is refused with the fix named. Nobody runs Base Registry Engine in
+  production yet.
+- **`permissions: []` is no longer a way to write "grants nothing".** A
+  profile that grants nothing omits the member or writes `permissions: {}`.
+- **A package is rebuilt.** A package holds the project as written, so its
+  digest changes while its registry revision does not. This release already
+  refuses every package an earlier release built.

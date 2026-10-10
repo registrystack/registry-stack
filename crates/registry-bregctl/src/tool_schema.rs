@@ -27,7 +27,7 @@ struct Tool {
     members: fn() -> schemars::Schema,
 }
 
-fn tools() -> [Tool; 6] {
+fn tools() -> [Tool; 7] {
     [
         Tool {
             format: "journeys",
@@ -64,6 +64,12 @@ fn tools() -> [Tool; 6] {
             title: "Base Registry Engine external backup binding",
             spec: migration_plan::BACKUP_BINDING_FORMAT,
             members: migration_plan::backup_binding_schema,
+        },
+        Tool {
+            format: "migration-descriptor",
+            title: "Base Registry Engine reviewed migration descriptor",
+            spec: migration_plan::MIGRATION_DESCRIPTOR_FORMAT,
+            members: migration_plan::migration_descriptor_schema,
         },
     ]
 }

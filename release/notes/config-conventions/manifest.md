@@ -10,7 +10,6 @@ file moves to `apiVersion` and `kind`. What changes is how the command line read
 them and how it reports what it finds.
 
 ## BREAKING changes
-<!-- upgrade: 1=no-file; 2=no-file; 3=manifest-reader-refusals; 4=manifest-profile-closed-model; 5=no-file -->
 
 1. **Both files are read by the shared reader, and every finding is
    reported in the shared shape.** `registry-manifest` reads a metadata
@@ -51,7 +50,6 @@ them and how it reports what it finds.
    Migration: none.
 
 ## BREAKING: a repeated relationship name or `identifiers` item is `config.duplicate-id`
-<!-- upgrade: manifest-duplicate-id -->
 
 Two relationships with the same `name` in one entity, and an `identifiers`
 item listed twice in one entity, are refused with `config.duplicate-id` at the
@@ -128,3 +126,22 @@ condition.
 | (new) | `manifest.profile.fixture-path-escapes`, `manifest.profile.invalid-range`, `manifest.profile.unlisted-file` (warning), `manifest.metadata.unreadable`, `manifest.metadata.not-canonicalizable` |
 
 `publish` keeps its `metadata.publish.*` codes.
+
+## Protocol words
+
+The values a metadata manifest authors are spelled in kebab-case. The old
+spelling is refused; the refusal names the new word. Member names (keys) keep
+their spelling, including the keys of the opaque `policy` and
+`evidence_envelope` objects. External vocabularies are unaffected: the DCAT,
+ADMS, and EU frequency IRIs are written by the renderer from these values.
+
+| Where | Old | New |
+|---|---|---|
+| `required_gates` item | `legal_basis`, `authority_basis`, `requester_identity`, `subject_identity`, `subject_relationship`, `source_binding`, `source_freshness`, `requested_disclosure`, `credential_format`, `route_scope` | `legal-basis`, `authority-basis`, `requester-identity`, `subject-identity`, `subject-relationship`, `source-binding`, `source-freshness`, `requested-disclosure`, `credential-format`, `route-scope` |
+| `allowed_outputs` item | `minimized_json` | `minimized-json` |
+| dataset `access_rights` | `non_public` | `non-public` |
+| dataset `update_frequency` | `as_needed` | `as-needed` |
+| dataset `status` | `under_development` | `under-development` |
+| fulfillment mode | `manual_input`, `file_upload`, `registry_lookup`, `oots_evidence_exchange`, `self_declaration`, `known_from_context` | `manual-input`, `file-upload`, `registry-lookup`, `oots-evidence-exchange`, `self-declaration`, `known-from-context` |
+
+The compiled catalog and the OGC records carry `non-public` and `as-needed`.

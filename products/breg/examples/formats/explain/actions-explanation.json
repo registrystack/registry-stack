@@ -1,5 +1,5 @@
 {
   "actions": [],
-  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
-  "kind": "ActionsExplanation"
+  "apiVersion": "id.registrystack.org/formats/breg/actions-explanation/v1alpha4",
+  "kind": "BRegActionsExplanation"
 }

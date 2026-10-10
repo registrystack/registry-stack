@@ -681,26 +681,21 @@ fn install_runtime_constraints(schema: &mut Value) {
         set_definition_property(schema, definition, property, "pattern", json!("^/"));
     }
     // Every access profile resolves its caller from the matched client, so
-    // a Messaging deployment always lists the clients it admits.
-    if let Some(oidc) = schema
-        .pointer_mut("/$defs/OidcConfig")
-        .and_then(Value::as_object_mut)
-    {
-        if let Some(required) = oidc.get_mut("required").and_then(Value::as_array_mut) {
-            required.push(json!("allowedClients"));
-        }
+    // a Messaging deployment always lists the clients it admits. The shared
+    // block requires the member and also admits the keyword `unrestricted`,
+    // which this runtime refuses in every mode, so the member is restated
+    // as the list alone and the shared definition is dropped.
+    if let Some(clients) = schema.pointer_mut("/$defs/OidcConfig/properties/allowedClients") {
+        *clients = json!({
+            "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, an empty or repeated client, and\n`unrestricted` are refused.",
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+            "uniqueItems": true,
+        });
     }
-    if let Some(clients) = schema
-        .pointer_mut("/$defs/OidcConfig/properties/allowedClients")
-        .and_then(Value::as_object_mut)
-    {
-        clients.remove("default");
-        clients.insert("minItems".to_owned(), json!(1));
-        clients.insert("uniqueItems".to_owned(), json!(true));
-        clients.insert(
-            "items".to_owned(),
-            json!({"type": "string", "minLength": 1}),
-        );
+    if let Some(definitions) = schema.pointer_mut("/$defs").and_then(Value::as_object_mut) {
+        definitions.remove("OidcAllowedClients");
     }
     if let Some(profiles) = schema
         .pointer_mut("/properties/tlsTrustProfiles")
@@ -819,10 +814,26 @@ mod tests {
             document["$defs"]["RetentionConfig"]["properties"]["payloadRetentionDays"]["maximum"],
             MAXIMUM_PAYLOAD_RETENTION_DAYS
         );
+        // `allowedClients` is decided in every file, and only as a list:
+        // the runtime refuses `unrestricted` in every mode.
+        let oidc = &document["$defs"]["OidcConfig"];
         assert_eq!(
-            document["$defs"]["OidcConfig"]["properties"]["allowedClients"]["minItems"],
+            oidc["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|member| *member == "allowedClients")
+                .count(),
             1
         );
+        let clients = &oidc["properties"]["allowedClients"];
+        assert!(clients.get("default").is_none());
+        assert!(clients.get("$ref").is_none(), "{clients}");
+        assert_eq!(clients["type"], "array");
+        assert_eq!(clients["minItems"], 1);
+        assert_eq!(clients["uniqueItems"], true);
+        assert_eq!(clients["items"]["minLength"], 1);
+        assert!(document["$defs"].get("OidcAllowedClients").is_none());
         assert_eq!(
             document["$defs"]["OidcConfig"]["additionalProperties"], false,
             "unknown keys are refused"

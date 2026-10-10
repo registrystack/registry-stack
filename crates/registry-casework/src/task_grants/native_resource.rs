@@ -31,19 +31,19 @@ const PACKAGE: &str = "task-authority-http";
 const AUDIENCE: &str = "urn:breg:task-test";
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 pub(super) const PROJECT: &str = r#"{
-  "apiVersion":"registry.registrystack.org/v1alpha1",
-  "kind":"RegistryProject",
-  "registry":{"id":"task-authority-http","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind":"BRegProject",
+  "project":{"id":"task-authority-http","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
   "entities":[
     {
       "id":"asset-site",
       "primaryDataset":"test-dataset",
       "route":"sites",
-      "mutationMode":"create_only",
+      "mutationMode":"create-only",
       "classification":"internal",
       "fields":[
-        {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-        {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+        {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+        {"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
       ]
     },
     {
@@ -54,7 +54,7 @@ pub(super) const PROJECT: &str = r#"{
       "classification":"internal",
       "changeControl":{"requiredFor":["patch"]},
       "fields":[
-        {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+        {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
         {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}
       ]
     },
@@ -65,14 +65,14 @@ pub(super) const PROJECT: &str = r#"{
       "mutationMode":"mutable",
       "classification":"internal",
       "fields":[
-        {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+        {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
         {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
         {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
-        {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}
+        {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
       ],
       "changeRequest":{
         "effects":[{"target":{"fromField":"placement"},"operation":"patch","set":{"site":{"fromField":"proposed-site"}}}],
-        "review":{"mode":"none"}
+        "review":{"type":"none"}
       }
     }
   ],
@@ -82,40 +82,44 @@ pub(super) const PROJECT: &str = r#"{
       "default":true,
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
-      "permissions":[
-        {
-          "entity":"asset-site",
-          "operations":["create","get","list"],
-          "readableFields":["tenant","name"],
-          "writableFields":["tenant","name"],
-          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-        },
-        {
-          "entity":"asset-placement",
-          "operations":["create","get","list","revisions"],
-          "revisionAccess":true,
-          "readableFields":["tenant","site"],
-          "writableFields":["tenant","site"],
-          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-          "requestPresence":[{"requestType":"correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-        }
-      ]
+      "permissions":{
+        "entities":[
+          {
+            "entity":"asset-site",
+            "operations":["create","get","list"],
+            "readableFields":["tenant","name"],
+            "writableFields":["tenant","name"],
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+          },
+          {
+            "entity":"asset-placement",
+            "operations":["create","get","list","revisions"],
+            "revisionAccess":true,
+            "readableFields":["tenant","site"],
+            "writableFields":["tenant","site"],
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
+            "requestPresence":[{"requestType":"correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
+          }
+        ]
+      }
     },
     {
       "id":"submitter",
       "default":true,
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
-      "permissions":[
-        {
-          "entity":"correction-request",
-          "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
-          "revisionAccess":true,
-          "readableFields":["tenant","placement","proposed-site","reason"],
-          "writableFields":["tenant","placement","proposed-site","reason"],
-          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-        }
-      ],
+      "permissions":{
+        "entities":[
+          {
+            "entity":"correction-request",
+            "operations":["create","get","list","revisions","patch","submit-request","revise-request","cancel-request"],
+            "revisionAccess":true,
+            "readableFields":["tenant","placement","proposed-site","reason"],
+            "writableFields":["tenant","placement","proposed-site","reason"],
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+          }
+        ]
+      },
       "actorKind":"agent",
       "requesterClients":["task-agent"],
       "requiredPurposes":["review"],
@@ -126,15 +130,17 @@ pub(super) const PROJECT: &str = r#"{
       "principalClaim":"sub",
       "requiredScopes":"unrestricted",
       "requiredPurposes":["apply"],
-      "permissions":[
-        {
-          "entity":"correction-request",
-          "operations":["get","apply_request"],
-          "readableFields":["tenant","placement","proposed-site","reason"],
-          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-          "applyTargets":[{"entity":"asset-placement","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-        }
-      ]
+      "permissions":{
+        "entities":[
+          {
+            "entity":"correction-request",
+            "operations":["get","apply-request"],
+            "readableFields":["tenant","placement","proposed-site","reason"],
+            "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
+            "applyTargets":[{"entity":"asset-placement","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
+          }
+        ]
+      }
     }
   ]
 }"#;

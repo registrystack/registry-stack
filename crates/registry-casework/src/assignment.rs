@@ -26,7 +26,7 @@ use crate::{CaseworkService, PostgresStore, ServiceError, StoreError};
 const MAXIMUM_REASON_BYTES: usize = 2_000;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum AssignmentOrigin {
     Source,
 }
@@ -254,7 +254,7 @@ impl PostgresStore {
         let request_hash = assignment_hash(&(expected_directory_revision, team_id, request))?;
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "team_updated",
+                "team-updated",
                 Some(actor),
                 &actor.profile_id,
                 json!({"teamId": team_id}),
@@ -341,7 +341,7 @@ impl PostgresStore {
             &mut audit,
             actor,
             next,
-            "team_updated",
+            "team-updated",
             json!({
                 "teamId": team_id,
                 "staffCount": request.staff.len(),
@@ -544,9 +544,9 @@ impl PostgresStore {
         let mut audit = self
             .begin_audit(crate::audit::request_record(
                 if absence_id.is_some() {
-                    "absence_updated"
+                    "absence-updated"
                 } else {
-                    "absence_created"
+                    "absence-created"
                 },
                 Some(actor),
                 &actor.profile_id,
@@ -641,9 +641,9 @@ impl PostgresStore {
             actor,
             next,
             if absence_id.is_some() {
-                "absence_updated"
+                "absence-updated"
             } else {
-                "absence_created"
+                "absence-created"
             },
             json!({"absence":record}),
         )
@@ -674,7 +674,7 @@ impl PostgresStore {
         let request_hash = assignment_hash(&expected_directory_revision)?;
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "absence_deleted",
+                "absence-deleted",
                 Some(actor),
                 &actor.profile_id,
                 json!({}),
@@ -735,7 +735,7 @@ impl PostgresStore {
             &mut audit,
             actor,
             next,
-            "absence_deleted",
+            "absence-deleted",
             json!({"absenceId":absence_id,"previous":record}),
         )
         .await?;
@@ -965,7 +965,7 @@ impl PostgresStore {
         };
         let detail = json!({
             "previousHolder": holder,
-            "reason": "directory_membership_changed",
+            "reason": "directory-membership-changed",
             "directoryRevision": directory_revision,
         });
         let updated = transaction
@@ -1051,7 +1051,7 @@ impl PostgresStore {
             Some(from),
             queue,
             Some(reason),
-            "caseload_moved",
+            "caseload-moved",
             idempotency_key,
             false,
         )
@@ -1185,7 +1185,7 @@ impl PostgresStore {
         } else {
             target
         };
-        let diagnostic = (!eligible).then_some("no_cover_available");
+        let diagnostic = (!eligible).then_some("no-cover-available");
         let update=format!("UPDATE {table} SET holder_issuer=$2,holder_subject=$3,assignment_owner_issuer=$4,assignment_owner_subject=$5,assigned_by_issuer=$6,assigned_by_subject=$7,assignment_absence_ids=$8,staffing_diagnostic=$9,state=$10,revision=$11,updated_at=$12 WHERE item_id=$1");
         transaction
             .execute(
@@ -1220,7 +1220,7 @@ impl PostgresStore {
         let history_kind = match kind {
             "assigned" => HistoryKind::Assigned,
             "delegated" => HistoryKind::Delegated,
-            "caseload_moved" => HistoryKind::CaseloadMoved,
+            "caseload-moved" => HistoryKind::CaseloadMoved,
             _ => return Err(StoreError::Corrupt),
         };
         crate::store::append_item_event(

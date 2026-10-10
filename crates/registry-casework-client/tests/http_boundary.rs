@@ -458,7 +458,7 @@ async fn review_task_discovery_forwards_ownership_and_supervision_without_expand
     let observations = observations.lock().expect("observations");
     assert_eq!(
         observations[0].0,
-        "/v1/review-tasks?queue=reviews&ownership=assigned_to_me&cursor=00000000-0000-0000-0000-000000000007&limit=25"
+        "/v1/review-tasks?queue=reviews&ownership=assigned-to-me&cursor=00000000-0000-0000-0000-000000000007&limit=25"
     );
     assert_eq!(
         observations[1].0,
@@ -581,7 +581,7 @@ async fn review_note_refuses_a_response_whose_event_is_not_a_note() {
             "eventId": Uuid::from_u128(8),
             "requestId": requested_id,
             "taskId": Uuid::from_u128(11),
-            "kind": "stage_advanced",
+            "kind": "stage-advanced",
             "detail": {"audience": "reviewers", "note": "Review note"},
             "occurredAt": "2026-09-20T00:00:00Z",
         }));
@@ -859,7 +859,7 @@ async fn review_result_refuses_a_non_object_payload() {
         "subject": accepted.subject,
         "policy": accepted.policy,
         "submissionDigest": accepted.submission_digest,
-        "status": "changes_requested",
+        "status": "changes-requested",
         "outcome": "needs-correction",
         "result": ["not", "an", "object"],
         "completedAt": "2026-09-19T00:00:00Z",
@@ -1528,11 +1528,20 @@ async fn accountability_receipts_must_match_the_retained_action_and_time() {
     wrong_action["decision"] = json!("approve");
     let mut wrong_time = valid.clone();
     wrong_time["decisionReceipt"]["decidedAt"] = json!("2026-10-10T02:00:00Z");
+    // The retained action and the receipt carry one word for a multi-word
+    // decision; the action in another spelling does not match the receipt.
+    let mut changes = valid.clone();
+    changes["decision"] = json!("changes-requested");
+    changes["decisionReceipt"]["decision"] = json!("changes-requested");
+    let mut changes_in_another_spelling = changes.clone();
+    changes_in_another_spelling["decision"] = json!("changes_requested");
     for (body, permitted) in [
         (valid, true),
         (legacy, true),
         (wrong_action, false),
         (wrong_time, false),
+        (changes, true),
+        (changes_in_another_spelling, false),
     ] {
         let app = Router::new()
             .route(
@@ -1903,7 +1912,7 @@ async fn review_task_context_refuses_a_binding_changed_context_that_still_carrie
         json!({
             "strategy": "source",
             "reference": "registry/record-1",
-            "bindingStatus": "binding_changed",
+            "bindingStatus": "binding-changed",
             "projection": {
                 "binding": {
                     "sourceRevision": "source-revision-1",
@@ -2495,7 +2504,7 @@ async fn cancellation_accepts_only_a_result_bound_to_the_full_accepted_binding()
     }
 
     let already_terminal =
-        cancel_response(request_id, "proposal-7", "already_terminal", "approved");
+        cancel_response(request_id, "proposal-7", "already-terminal", "approved");
     let complete = cancel_with_response(request_id, &cancellation, already_terminal)
         .await
         .expect("a correlated valid prior terminal result");
@@ -2960,7 +2969,7 @@ async fn capture_next_query(
         serde_json::json!({
             "items": [],
             "nextCursor": "resume-next",
-            "status": "budget_exhausted",
+            "status": "budget-exhausted",
             "servedQueues": ["review"]
         })
     };
@@ -3018,7 +3027,7 @@ async fn directory_targets_forward_the_exact_context_without_a_source_profile() 
     assert_eq!(observations.len(), 1);
     assert_eq!(
         observations[0].0,
-        "/v1/directory/targets?purpose=absence_cover&personIssuer=https%3A%2F%2Fid.example&personSubject=absent-officer&cursor=opaque-target-cursor&limit=25"
+        "/v1/directory/targets?purpose=absence-cover&personIssuer=https%3A%2F%2Fid.example&personSubject=absent-officer&cursor=opaque-target-cursor&limit=25"
     );
     assert_eq!(observations[0].1["registry-casework-profile"], "supervisor");
     assert!(!observations[0].1.contains_key("registry-source-profile"));
@@ -3587,7 +3596,7 @@ async fn validation_problem_response() -> impl IntoResponse {
             ("content-type", "application/problem+json"),
             ("traceparent", TRACEPARENT),
             ("registry-casework-validation-path", "$.display/summary"),
-            ("registry-casework-validation-reason", "schema_mismatch"),
+            ("registry-casework-validation-reason", "schema-mismatch"),
         ],
         concat!(
             "{\"type\":\"https://id.registrystack.org/problems/registry-casework/",

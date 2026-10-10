@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+- BREAKING: `registry-platform-httputil` writes four error words in
+  kebab-case (CFG-NAME-2): `TransportKind::kind()` returns
+  `response-too-large` (was `response_too_large`), `TokenError::kind()`
+  returns `invalid-credential` and `scope-narrowed` (were
+  `invalid_credential` and `scope_narrowed`), and `OAuthErrorCode::as_str()`
+  returns `unregistered-error-code` for a code outside RFC 6749 section 5.2
+  (was `unregistered_error_code`). The six codes that section registers keep
+  the specification's spelling. Every client binding carries these words.
+  Migration: change what a consumer compares them with. No file an adopter
+  writes changes.
+- `registry-platform-yaml` names each header a read of several formats
+  accepts when a file lacks its envelope (CFG-DIAG-5). The suggested action of
+  `config.missing-envelope`, and of a root that is not a mapping, gives every
+  accepted `apiVersion` with its `kind`, where it gave the kinds alone. A read
+  of one format is unchanged.
+- BREAKING: `registry-platform-hooks` tags `HookHandlerSource` by `type`
+  (CFG-ID-7), where it was tagged by `kind`: `{type: url, destinationId}`,
+  `{type: rhai, script, abi}`, `{type: wasm, module, abi}`. The values and
+  members are unchanged, the type serializes with `type`, and there is no
+  alias: a handler written with `kind` does not deserialize. A product that
+  reads the declaration from an authored file names the old member in its
+  removed-key table. `HookHandlerKind` and the stored `handler_kind` column
+  are unchanged.
+- BREAKING: the shared `OidcClientsConfig` block of `registry-platform-config`
+  requires `allowedClients` (CFG-EMPTY-2), which takes `unrestricted` or a
+  list of at least one client, none repeated (CFG-ID-6). An omitted member is
+  refused as `config.missing-key` at the block, `[]` and any other word as
+  `config.invalid-value` at the member, and a repeated client as
+  `config.duplicate-item` at the repeated item. The block schema requires the
+  member, drops its `[]` default, and states it as `$defs/OidcAllowedClients`.
+  `OidcClientsConfig::allowed_clients` is still a `Vec<String>` in which an
+  empty list admits every client, and an empty list serializes as
+  `unrestricted`. Migration: each runtime file that reads the block lists its
+  clients once each, or writes `allowedClients: unrestricted` where its
+  runtime accepts that.
+- BREAKING: the shared `OidcClientsConfig` block of `registry-platform-config`
+  refuses a client that `assertionIssuers` lists with an empty issuer list
+  (CFG-EMPTY-2). The reader reports `config.invalid-value` at the client's
+  own pointer, and the block schema declares `minItems: 1`. Migration:
+  remove the client, or list its issuers; a client that is not listed may
+  exchange from no authority.
 - `registry-platform-config` `check_offline` without the environment chooses the
   stand-in for a value that holds an expression by its member, and replaces the
   whole value, so `${HOST}:${PORT}` in a listener address and one variable in
@@ -10,6 +51,44 @@
   reported as a repeat. When a member refuses its stand-in, the check reports
   the warning `platform.runtime-config.check-incomplete` (`INCOMPLETE_CODE`) at
   that member, where it returned no diagnostic and no configuration.
+- BREAKING: `registry-platform-activation` writes `DatabaseIdCheck::NotRecorded`
+  as `not-recorded`, the kebab-case spelling the convention gives every
+  value a machine matches, where it wrote `notRecorded`. `matches` and
+  `differs` are unchanged. The value appears in a consumer's plan report as
+  `databaseIdCheck` (the plan reports of Casework and Messaging carry it); it
+  is not stored. There is no alias: a reader that matches `notRecorded` must
+  match `not-recorded`.
+- BREAKING: `registry-platform-dispatch` spells its job words in kebab-case
+  (CFG-NAME-2), with no alias and no reader for the old spelling: the stored
+  job state and the disposition `dead-lettered` (was `dead_lettered`), the
+  dispositions `retry-pending` and `replay-pending` (were `retry_pending` and
+  `replay_pending`), and the transition `lease-lapsed` (was `lease_lapsed`).
+  The two CHECK constraints `JobTable::create_statements` renders name the new
+  state word. The column `dead_lettered_at` is a name, not a word, and is
+  unchanged. Migration: the crate creates no table, so a consumer with stored
+  rows adds a migration of its own that drops the `<table>_state_values` and
+  `<table>_shape` constraints, rewrites `state = 'dead_lettered'` to
+  `'dead-lettered'`, and adds the constraints back as `create_statements`
+  renders them. Audit records already written keep their spelling.
+- BREAKING: `registry-platform-hooks` spells the hook delivery words in
+  kebab-case (CFG-NAME-2), with no alias and no reader for the old spelling:
+  the delivery state and proposal disposition `dead-lettered`, the
+  authentication profile `hmac-sha256-v1` (was `hmac_sha256_v1`), the delivery
+  mode `after-commit` (was `after_commit`), and every dead-letter reason
+  `DeliveryFailureReason::as_str` returns (for example `http-non-success`,
+  `destination-timeout`, `proposal-dead-lettered`), each the old word with its
+  underscores written as hyphens. Column, table, and constraint names are
+  unchanged. A consumer that supplies `authentication_profile` or
+  `delivery_mode` in a `DeliveryCapture` supplies the new word.
+  `delivery_schema::install` creates the tables in the new spelling and
+  respells no stored row: v0.40.0 does not upgrade v0.39.0 state in place;
+  apply to a new database.
+- BREAKING: the audit query redactor reports an undecodable query with the code
+  `invalid-query-encoding` (was `invalid_query_encoding`) in its `_error` object.
+  No product reads the code.
+- BREAKING: the CLI reference data (`registry-cli-reference`) spells constraint
+  kinds in kebab-case (`required-exactly-one`, `required-one-or-more`,
+  `requires-all`, `mutually-exclusive`). Only the docs site generator reads it.
 - A file with a kind no format reads and a retired `apiVersion` reports both
   `config.wrong-kind` and `config.retired-api-version`; `config.wrong-kind` still
   decides the refusal.
@@ -21,6 +100,16 @@
   write the number in decimal digits and to quote it only where the key takes text.
 - A removed key's `next` sentence now opens with a capital letter, whatever case
   the product wrote its replacement in. Render writes its own with code formatting.
+- BREAKING: the shared `JwksSource` block of `registry-platform-config` is
+  tagged by `type`, where it was tagged by `kind` (CFG-ID-7). The values
+  `discovery`, `uri`, and `static` and their members are unchanged, and
+  `JwksSource` serializes with `type`. `REMOVED_OIDC_JWKS_SOURCE_KIND` is the
+  removed-key entry a runtime whose issuer block sits at
+  `authentication.oidc` adds to its table, so the old tag is refused as
+  `config.removed-key` with its replacement; `REMOVED_OIDC_JWKS_URI` names
+  `type: uri`. Migration: rename `kind` to `type` under every `jwksSource`,
+  keeping the value. Details are in
+  `release/notes/config-conventions/platform.md`.
 - `registry-platform-yaml` is the shared configuration reader: one YAML
   subset (no anchors, aliases, merge keys, tags, or several documents), one
   scalar table, the `apiVersion` and `kind` envelope check, and a serde
@@ -61,6 +150,13 @@
   `yaml.control-character`, at the key's position and at the enclosing mapping's
   pointer, so the diagnostic never repeats the key. Migration: remove the
   control character from the key.
+- BREAKING: `registry-platform-yaml` `Url` refuses a URL that holds a
+  whitespace or control character, at either end or inside, with
+  `config.invalid-value`, and its schema pattern refuses the same characters.
+  The URL parser removes a tab or a line break anywhere, and a space or
+  control character at either end, without an error, so `as_str()` and
+  `to_url()` could name different URLs. Migration: remove the character from
+  the URL, and write a space inside a path or query as `%20`.
 - `registry-platform-yaml` `Debug` output for a node shows its kind and
   position and no scalar value, and an entry's key is redacted, where integers,
   floats, booleans, and keys printed.

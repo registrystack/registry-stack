@@ -38,9 +38,9 @@ use registry_casework::{
 };
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActorContext, AuthoritativeObservation, CallerSubjectView,
-    CaseworkIdentity, CaseworkProject, CaseworkRole, DiscoveryCursor, EphemeralCredential,
-    EventRequest, ExecutePreparedRequest, InboxPolicy, IssuerPrincipal, OccurrenceKind,
-    OccurrenceState, PrepareActionRequest, PreparedSourceAttempt, QueuePolicy,
+    CaseworkProject, CaseworkRole, DiscoveryCursor, EphemeralCredential, EventRequest,
+    ExecutePreparedRequest, InboxPolicy, IssuerPrincipal, OccurrenceKind, OccurrenceState,
+    PrepareActionRequest, PreparedSourceAttempt, ProjectIdentity, QueuePolicy,
     ReviewContextStrategy, ReviewCreateRequest, ReviewKindPolicy, ReviewKindPurpose,
     ReviewProducerPolicy, ReviewRequestAccepted, ReviewRetentionPolicy, ReviewStagePolicy,
     ReviewerDecisionKind, SourceAdapter, SourceAdapterError, SourceBinding, SourceReceipt,
@@ -158,7 +158,7 @@ impl SourceAdapter for BregReviewSource {
                 _ if request["actions"].as_array().is_some_and(|actions| {
                     actions
                         .iter()
-                        .any(|action| action["operation"].as_str() == Some("apply_request"))
+                        .any(|action| action["operation"].as_str() == Some("apply-request"))
                 }) =>
                 {
                     OccurrenceState::Open
@@ -308,8 +308,8 @@ fn casework_project(issuer: &str) -> CaseworkProject {
     CaseworkProject {
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
-        casework: CaseworkIdentity {
-            id: "composed-review-authority".to_owned(),
+        project: ProjectIdentity {
+            id: "composed-review-authority".parse().unwrap(),
             version: "1".to_owned(),
         },
         access_profiles: vec![
@@ -481,30 +481,30 @@ async fn casework_fixture_with_source(
 fn breg_project() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"composed-review-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"composed-review-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
           "entities":[
             {"id":"asset","primaryDataset":"main","route":"assets","mutationMode":"mutable","classification":"internal","changeControl":{"requiredFor":["patch"]},"fields":[
-              {"id":"owner","type":"string","required":true,"maxLength":64,"classification":"internal"},
-              {"id":"label","type":"string","required":true,"maxLength":64,"classification":"internal"}
+              {"id":"owner","type":"string","required":true,"maximumLength":64,"classification":"internal"},
+              {"id":"label","type":"string","required":true,"maximumLength":64,"classification":"internal"}
             ]},
             {"id":"correction-request","primaryDataset":"main","route":"correction-requests","mutationMode":"mutable","classification":"internal","fields":[
-              {"id":"owner","type":"string","required":true,"maxLength":64,"classification":"internal"},
+              {"id":"owner","type":"string","required":true,"maximumLength":64,"classification":"internal"},
               {"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"},
-              {"id":"label","type":"string","required":true,"maxLength":64,"classification":"internal"}
+              {"id":"label","type":"string","required":true,"maximumLength":64,"classification":"internal"}
             ],"changeRequest":{
               "effects":[{"target":{"fromField":"asset"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"authority":"casework-a","policyId":"registry-correction"},
+              "review":{"type":"required","authority":"casework-a","policyId":"registry-correction"},
               "onApproved":{"mode":"manual"},
               "application":{"preconditions":{"targets":[{"id":"asset-guard","entity":"asset","fromField":"asset","requires":[{"field":"owner","equalsFromRequestField":"owner"}]}]}}
             }}
           ],
           "accessProfiles":[
-            {"id":"steward","principalClaim":"registry_principal","requiredScopes":["breg:steward"],"permissions":[{"entity":"asset","operations":["create","get"],"readableFields":["owner","label"],"writableFields":["owner","label"],"rowBoundaries":"unrestricted"}]},
-            {"id":"submitter","principalClaim":"registry_principal","requiredScopes":["breg:submit"],"permissions":[{"entity":"correction-request","operations":["create","get","submit_request","cancel_request","revise_request"],"readableFields":["owner","asset","label"],"writableFields":["owner","asset","label"],"rowBoundaries":"unrestricted"}]},
-            {"id":"casework-reviewer","principalClaim":"registry_principal","requiredScopes":["breg:review-read"],"permissions":[{"entity":"correction-request","operations":["get"],"readableFields":["owner","asset","label"],"rowBoundaries":"unrestricted"}]},
-            {"id":"manual-applier","principalClaim":"registry_principal","requiredScopes":["breg:apply"],"permissions":[{"entity":"correction-request","operations":["get","apply_request"],"readableFields":["owner","asset","label"],"applyTargets":[{"entity":"asset","rowBoundaries":"unrestricted"}],"rowBoundaries":"unrestricted"}]}
+            {"id":"steward","principalClaim":"registry_principal","requiredScopes":["breg:steward"],"permissions":{"entities":[{"entity":"asset","operations":["create","get"],"readableFields":["owner","label"],"writableFields":["owner","label"],"rowBoundaries":"unrestricted"}]}},
+            {"id":"submitter","principalClaim":"registry_principal","requiredScopes":["breg:submit"],"permissions":{"entities":[{"entity":"correction-request","operations":["create","get","submit-request","cancel-request","revise-request"],"readableFields":["owner","asset","label"],"writableFields":["owner","asset","label"],"rowBoundaries":"unrestricted"}]}},
+            {"id":"casework-reviewer","principalClaim":"registry_principal","requiredScopes":["breg:review-read"],"permissions":{"entities":[{"entity":"correction-request","operations":["get"],"readableFields":["owner","asset","label"],"rowBoundaries":"unrestricted"}]}},
+            {"id":"manual-applier","principalClaim":"registry_principal","requiredScopes":["breg:apply"],"permissions":{"entities":[{"entity":"correction-request","operations":["get","apply-request"],"readableFields":["owner","asset","label"],"applyTargets":[{"entity":"asset","rowBoundaries":"unrestricted"}],"rowBoundaries":"unrestricted"}]}}
           ]
         }"#,
     )
@@ -654,11 +654,11 @@ fn runtime_config(root: &std::path::Path, casework: &Url) -> Value {
         "listener":{"bind":"127.0.0.1:8080"},
         "identity":{"environment":"local","instanceId":"composed-review","databaseId":Uuid::new_v4().to_string(),"databaseInitializationEnvironment":"local"},
         "secretProviders":{"file":{"root":root}},
-        "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/migration","pool":{"maxSize":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
+        "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/migration","pool":{"maximumConnections":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
         "package":{"root":root},
-        "authentication":{"oidc":{"issuer":"https://issuer.example","audience":BREG_AUDIENCE,"allowedAlgorithm":"EdDSA","accessTokenType":"JWT","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["registry-client"],"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":60000,"jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maxDocumentBytes":65536,"requestTimeoutMilliseconds":5000,"outageToleranceSeconds":900}},"authorityClaims":{"principal":"registry_principal"}},
+        "authentication":{"oidc":{"issuer":"https://issuer.example","audience":BREG_AUDIENCE,"allowedAlgorithm":"EdDSA","accessTokenType":"JWT","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["registry-client"],"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":60000,"jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maximumDocumentBytes":65536,"attemptTimeoutMilliseconds":5000,"outageToleranceSeconds":900}},"authorityClaims":{"principal":"registry_principal"}},
         "audit":{"hashKeyRef":"secret:file/audit","path":root.join("audit.jsonl")},
-        "cursor":{"secretRef":"secret:file/cursor","maxAgeSeconds":300},
+        "cursor":{"secretRef":"secret:file/cursor","maximumAgeSeconds":300},
         "eventDestinations":{},
         "reviewAuthorities":{"casework-a":{"endpoint":casework.as_str(),"profile":"producer","tokenRef":"secret:file/review-token","producerId":"registry-producer","recoveryDays":7}},
         "operationalTimeouts":{"httpRequestMilliseconds":10000,"shutdownGraceMilliseconds":30000,"recordLockMilliseconds":5000,"migrationLockMilliseconds":30000,"migrationStatementMilliseconds":60000}
@@ -931,7 +931,7 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{draft}");
-    let (submit_href, submit_etag) = action(&draft, "submit_request");
+    let (submit_href, submit_etag) = action(&draft, "submit-request");
     let (status, submitted) = request_json(
         &normal_url,
         Method::POST,
@@ -1013,7 +1013,7 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{approved}");
-    let (apply_href, apply_etag) = action(&approved, "apply_request");
+    let (apply_href, apply_etag) = action(&approved, "apply-request");
     let application_body = json!({
         "proposalVersion": proposal_version,
         "effectDigest": effect_digest
@@ -1074,7 +1074,7 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{race_draft}");
-    let (race_submit_href, race_submit_etag) = action(&race_draft, "submit_request");
+    let (race_submit_href, race_submit_etag) = action(&race_draft, "submit-request");
     let (status, race_submitted) = request_json(
         &normal_url,
         Method::POST,
@@ -1131,7 +1131,7 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{race_owner_view}");
-    let (race_cancel_href, race_cancel_etag) = action(&race_owner_view, "cancel_request");
+    let (race_cancel_href, race_cancel_etag) = action(&race_owner_view, "cancel-request");
     let race_applier_path =
         format!("/v1/records/correction-requests/{race_request_id}?accessProfile=manual-applier");
     let (status, race_applier_view) = request_json(
@@ -1145,7 +1145,7 @@ async fn breg_casework_two_stage_review_manual_apply_and_lost_receipt_recovery()
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{race_applier_view}");
-    let (race_apply_href, race_apply_etag) = action(&race_applier_view, "apply_request");
+    let (race_apply_href, race_apply_etag) = action(&race_applier_view, "apply-request");
     let cancel = request_json(
         &normal_url,
         Method::POST,
@@ -1582,7 +1582,7 @@ async fn breg_submitter_cannot_claim_or_decide_their_own_excluded_review() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{draft}");
-    let (submit_href, submit_etag) = action(&draft, "submit_request");
+    let (submit_href, submit_etag) = action(&draft, "submit-request");
     let (status, submitted) = request_json(
         &breg_url,
         Method::POST,
@@ -1772,9 +1772,9 @@ fn starter_registry_with_casework_reader() -> Value {
         .push(json!({
             "id":"casework-reader","default":false,"principalClaim":"registry_principal",
             "requiredScopes":["casework:source-reader"],"requiredPurposes":["casework-sync"],
-            "permissions":[{"entity":"scope-correction","operations":["get","list"],
+            "permissions":{"entities":[{"entity":"scope-correction","operations":["get","list"],
                 "readableFields":["authorization-conditions","licensed-activities","record","supporting-reference"],
-                "readableRequestFields":["review_state"],"rowBoundaries":"unrestricted"}]
+                "readableRequestFields":["review-state"],"rowBoundaries":"unrestricted"}]}
         }));
     project
 }
@@ -1819,13 +1819,13 @@ fn explained_source_description(registry_dir: &std::path::Path, entity: &str) ->
         .unwrap_or_else(|| panic!("explain omitted {entity}: {report}"))
         .clone();
     json!({
-        "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
-        "kind":"BRegCaseworkSourceDescription",
+        "apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1",
+        "kind":"CaseworkBregSourceDescription",
         "sourceId":STARTER_SOURCE_ID,
         "authority":"none",
         "origin":"bregctl explain change-requests",
         "sourceRevision":report["revision"],
-        "request":request
+        "requests":[request]
     })
 }
 
@@ -1956,9 +1956,9 @@ async fn professional_review_template_sends_back_revises_approves_and_applies() 
         .iter_mut()
         .find(|entity| entity["id"] == "scope-correction")
         .expect("scope-correction entity")["hooks"] = json!([{
-        "phase":"after","id":"request-returned-to-draft","trigger":"request_lifecycle",
+        "phase":"after","id":"request-returned-to-draft","trigger":"request-lifecycle",
         "projection":["reason"],
-        "when":{"kind":"request_lifecycle","transitions":["revise","rebase"],"toStates":["draft"]}
+        "when":{"type":"request-lifecycle","transitions":["revise","rebase"],"toStates":["draft"]}
     }]);
     std::fs::write(
         registry_dir.path().join("registry.yaml"),
@@ -2246,7 +2246,7 @@ async fn professional_review_template_sends_back_revises_approves_and_applies() 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{draft}");
-    let (submit_href, submit_etag) = action(&draft, "submit_request");
+    let (submit_href, submit_etag) = action(&draft, "submit-request");
     let (status, submitted) = request_json(
         &breg_url,
         Method::POST,
@@ -2314,7 +2314,7 @@ async fn professional_review_template_sends_back_revises_approves_and_applies() 
         &reviewer,
         &format!("/v1/review-tasks/{first_task}/decisions"),
         Some(json!({"decision":{
-            "type":"changes_requested",
+            "type":"changes-requested",
             "outcome":"changes-requested",
             "reason":"Attach the board minute that records the advisory scope."
         }})),
@@ -2347,12 +2347,12 @@ async fn professional_review_template_sends_back_revises_approves_and_applies() 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{sent_back_view}");
-    let (revise_href, revise_etag) = action(&sent_back_view, "revise_request");
+    let (revise_href, revise_etag) = action(&sent_back_view, "revise-request");
     let advertised_rebase = sent_back_view["data"]["request"]["actions"]
         .as_array()
         .expect("request actions")
         .iter()
-        .find(|candidate| candidate["operation"] == "revise_request")
+        .find(|candidate| candidate["operation"] == "revise-request")
         .map(|candidate| candidate["rebase"].clone())
         .expect("revise action");
     assert_eq!(
@@ -2437,7 +2437,7 @@ async fn professional_review_template_sends_back_revises_approves_and_applies() 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{revised_draft}");
-    let (submit_href, submit_etag) = action(&revised_draft, "submit_request");
+    let (submit_href, submit_etag) = action(&revised_draft, "submit-request");
     let (status, resubmitted) = request_json(
         &breg_url,
         Method::POST,
@@ -2530,7 +2530,7 @@ async fn professional_review_template_sends_back_revises_approves_and_applies() 
     .await;
 
     // 9. onApproved is manual: the reviewer applies the approved request.
-    let (apply_href, apply_etag) = action(&approved, "apply_request");
+    let (apply_href, apply_etag) = action(&approved, "apply-request");
     let (status, applied) = request_json(
         &breg_url,
         Method::POST,

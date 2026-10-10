@@ -106,9 +106,9 @@ impl ReviewCompletionDispatcher {
                 Arc::new(ReviewCompletionTarget {
                     url: target.url.clone(),
                     credential,
-                    timeout: Duration::from_millis(target.timeout_milliseconds),
+                    timeout: Duration::from_millis(target.attempt_timeout_milliseconds),
                     maximum_attempts: target.maximum_attempts,
-                    retry: Duration::from_secs(target.retry_seconds),
+                    retry: Duration::from_secs(target.retry_delay_seconds),
                 }),
             );
         }
@@ -281,9 +281,9 @@ pub async fn validate_retained_completion_destinations_for_test(
                     url: "http://127.0.0.1/completion".to_owned(),
                     bearer_token_ref: Some("secret:env/TEST".to_owned()),
                     auth: None,
-                    timeout_milliseconds: 1_000,
+                    attempt_timeout_milliseconds: 1_000,
                     maximum_attempts: 1,
-                    retry_seconds: 1,
+                    retry_delay_seconds: 1,
                 },
             )
         })
@@ -1387,7 +1387,7 @@ mod tests {
             webhook_secret_ref: "secret:file/webhook".into(),
             event_source: "urn:registrystack:registry:professional:instance:pilot".into(),
             trusted_root_certificates_ref: None,
-            request_timeout_milliseconds: 30_000,
+            attempt_timeout_milliseconds: 30_000,
             connect_timeout_milliseconds: 10_000,
             reconciliation_interval_milliseconds,
         }

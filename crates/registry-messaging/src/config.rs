@@ -19,7 +19,7 @@ use registry_platform_audit::{
 use registry_platform_config::{
     AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind, RemovedKey, RuntimeConfigLoader,
     RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver, DEFAULT_STAND_IN,
-    REMOVED_OIDC_JWKS_URI,
+    REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -36,9 +36,7 @@ use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
     OidcDiscoveryConfig, TokenVerifierConfig,
 };
-use registry_platform_yaml::{
-    escape_pointer_segment, Diagnostic, Related, Report, RetiredApiVersion,
-};
+use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report, RetiredApiVersion};
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
@@ -93,6 +91,7 @@ pub const MESSAGING_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
 /// it (CFG-CHANGE-2).
 pub const MESSAGING_REMOVED_KEYS: &[RemovedKey] = &[
     REMOVED_OIDC_JWKS_URI,
+    REMOVED_OIDC_JWKS_SOURCE_KIND,
     RemovedKey {
         path: "providers.*.attemptTimeoutSeconds",
         replacement: "Write attemptTimeoutMilliseconds in milliseconds: \
@@ -657,31 +656,13 @@ impl RuntimeConfig {
             findings.push(RuntimeConfigError::EmptyScopeClaim);
         }
         // Every access profile resolves its caller from the matched client,
-        // so an empty list would admit every client the issuer verifies
-        // while reaching no profile. Development keeps no exception.
+        // so `allowedClients: unrestricted` would admit every client the
+        // issuer verifies while reaching no profile. Development keeps no
+        // exception.
         if oidc.clients.allowed_clients.is_empty()
             || oidc.clients.allowed_clients.iter().any(String::is_empty)
         {
             findings.push(RuntimeConfigError::AllowedClientsRequired);
-        }
-        // The shared client list keeps what it reads, so the set rule
-        // (CFG-ID-6) is checked here, at the repetition.
-        let mut seen = BTreeMap::new();
-        for (index, client) in oidc.clients.allowed_clients.iter().enumerate() {
-            let at = |index: usize| {
-                pointer_to(&[
-                    "authentication",
-                    "oidc",
-                    "allowedClients",
-                    &index.to_string(),
-                ])
-            };
-            if let Some(first) = seen.insert(client.as_str(), index) {
-                findings.push(RuntimeConfigError::DuplicateAllowedClient {
-                    pointer: at(index),
-                    first: at(first),
-                });
-            }
         }
         for (client, issuers) in &oidc.clients.assertion_issuers {
             let pointer = pointer_to(&["authentication", "oidc", "assertionIssuers", client]);
@@ -1150,20 +1131,6 @@ fn positioned(check: &RuntimeFileCheck<RuntimeConfig>, finding: &RuntimeConfigEr
         finding.to_string(),
         finding.suggested_action(),
     );
-    if let RuntimeConfigError::DuplicateAllowedClient { first, .. } = finding {
-        let source = check
-            .error_at(MESSAGING_RUNTIME_KIND, "", first, "", "")
-            .source;
-        if let Some(source) = source {
-            diagnostic.related.push(Related {
-                file: source.file,
-                line: source.line,
-                column: source.column,
-                path: first.clone(),
-                message: "the first listing of this client".to_owned(),
-            });
-        }
-    }
     let mut located = pointer.as_str();
     while diagnostic
         .source
@@ -1195,7 +1162,6 @@ fn reads_deferred_value(
         RuntimeConfigError::RelativeOperatedPath(_)
         | RuntimeConfigError::InvalidAuditDestination(_) => vec!["/audit".to_owned()],
         RuntimeConfigError::AssertionIssuerClientNotAllowed { .. }
-        | RuntimeConfigError::DuplicateAllowedClient { .. }
         | RuntimeConfigError::ProfileClientNotAllowed { .. } => {
             vec!["/authentication/oidc/allowedClients".to_owned()]
         }
@@ -1272,11 +1238,9 @@ pub enum RuntimeConfigError {
     #[error("authentication.oidc.scopeClaim must not be empty")]
     EmptyScopeClaim,
     #[error(
-        "authentication.oidc.allowedClients must list at least one non-empty client identifier"
+        "authentication.oidc.allowedClients must list at least one non-empty client identifier; unrestricted reaches no access profile"
     )]
     AllowedClientsRequired,
-    #[error("{} repeats a client listed earlier in authentication.oidc.allowedClients", dotted(.pointer))]
-    DuplicateAllowedClient { pointer: String, first: String },
     #[error("{} must list at least one issuer", dotted(.pointer))]
     EmptyAssertionIssuers { pointer: String },
     #[error("{} names a client authentication.oidc.allowedClients does not admit", dotted(.pointer))]
@@ -1348,7 +1312,6 @@ impl RuntimeConfigError {
             Self::BindingSecret { pointer, .. }
             | Self::EmptyAssertionIssuers { pointer }
             | Self::AssertionIssuerClientNotAllowed { pointer }
-            | Self::DuplicateAllowedClient { pointer, .. }
             | Self::Connection { pointer, .. } => pointer.clone(),
             Self::Block(error) => pointer_to(&error.field().split('.').collect::<Vec<_>>()),
             Self::MissingIdentity => "/identity".to_owned(),
@@ -1402,7 +1365,6 @@ impl RuntimeConfigError {
             Self::InvalidMetricsListener => "messaging.runtime.invalid-metrics-listener",
             Self::EmptyScopeClaim => "messaging.runtime.empty-scope-claim",
             Self::AllowedClientsRequired => "messaging.runtime.allowed-clients-required",
-            Self::DuplicateAllowedClient { .. } => "config.duplicate-item",
             Self::EmptyAssertionIssuers { .. } => "messaging.runtime.empty-assertion-issuers",
             Self::AssertionIssuerClientNotAllowed { .. } => {
                 "messaging.runtime.assertion-issuer-client-not-allowed"
@@ -1461,9 +1423,6 @@ impl RuntimeConfigError {
             }
             Self::AllowedClientsRequired => {
                 "List every client identifier this deployment admits in authentication.oidc.allowedClients."
-            }
-            Self::DuplicateAllowedClient { .. } => {
-                "List each client once in authentication.oidc.allowedClients."
             }
             Self::EmptyAssertionIssuers { .. } => {
                 "List the issuers this client may exchange a subject token from, or remove the client from assertionIssuers."
@@ -1816,7 +1775,7 @@ pub(crate) mod tests {
 
         let mut value = base();
         value["authentication"]["oidc"]["jwksSource"] =
-            json!({"kind": "static", "documentRef": "${JWKS}"});
+            json!({"type": "static", "documentRef": "${JWKS}"});
         let error = load(value).unwrap_err();
         assert_eq!(
             error.pointer(),
@@ -1906,6 +1865,26 @@ pub(crate) mod tests {
         assert_eq!(error.pointer(), "/authentication/oidc/jwksUri");
         assert_eq!(error.code(), "config.removed-key");
         assert!(error.suggested_action().contains("jwksSource"), "{error}");
+    }
+
+    #[test]
+    fn a_jwks_source_tagged_by_kind_names_type() {
+        let mut value = base();
+        value["authentication"]["oidc"]["jwksSource"] =
+            json!({"kind": "uri", "uri": "https://identity.example.test/jwks.json"});
+        let error = load(value).unwrap_err();
+        assert_eq!(error.pointer(), "/authentication/oidc/jwksSource/kind");
+        assert_eq!(error.code(), "config.removed-key");
+        assert!(
+            error
+                .suggested_action()
+                .contains("authentication.oidc.jwksSource.type"),
+            "{error}"
+        );
+        assert!(
+            !error.to_string().contains("identity.example.test"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -2213,7 +2192,7 @@ pub(crate) mod tests {
     #[test]
     fn allowed_clients_are_required_and_must_cover_every_profile() {
         let mut value = base();
-        value["authentication"]["oidc"]["allowedClients"] = json!([]);
+        value["authentication"]["oidc"]["allowedClients"] = json!("unrestricted");
         let error = load(value).unwrap_err();
         assert!(
             matches!(error, RuntimeConfigError::AllowedClientsRequired),
@@ -2222,15 +2201,29 @@ pub(crate) mod tests {
         assert_eq!(error.pointer(), "/authentication/oidc/allowedClients");
         assert!(error.suggested_action().contains("allowedClients"));
 
+        // The reader refuses the shapes that decide nothing: an empty list,
+        // an omitted member, and a repeated client.
+        let mut value = base();
+        value["authentication"]["oidc"]["allowedClients"] = json!([]);
+        let error = load(value).unwrap_err();
+        assert_eq!(error.code(), "config.invalid-value", "{error}");
+        assert_eq!(error.pointer(), "/authentication/oidc/allowedClients");
+
         let mut value = base();
         value["authentication"]["oidc"]
             .as_object_mut()
             .unwrap()
             .remove("allowedClients");
-        assert!(matches!(
-            load(value).unwrap_err(),
-            RuntimeConfigError::AllowedClientsRequired
-        ));
+        let error = load(value).unwrap_err();
+        assert_eq!(error.code(), "config.missing-key", "{error}");
+        assert!(error.to_string().contains("allowedClients"), "{error}");
+
+        let mut value = base();
+        value["authentication"]["oidc"]["allowedClients"] =
+            json!(["case-system", "operations-console", "case-system"]);
+        let error = load(value).unwrap_err();
+        assert_eq!(error.code(), "config.duplicate-item", "{error}");
+        assert_eq!(error.pointer(), "/authentication/oidc/allowedClients/2");
 
         let mut value = base();
         value["authentication"]["oidc"]["allowedClients"] = json!(["case-system"]);
@@ -2251,16 +2244,20 @@ pub(crate) mod tests {
         clients.push(first);
         let last = clients.len() - 1;
         let error = load(value).unwrap_err();
-        assert!(
-            matches!(error, RuntimeConfigError::DuplicateAllowedClient { .. }),
-            "{error}"
-        );
+        // The shared client list is a set (CFG-ID-6), so the reader refuses
+        // the repetition and names the first listing.
+        assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
         assert_eq!(error.code(), "config.duplicate-item");
         assert_eq!(
             error.pointer(),
             format!("/authentication/oidc/allowedClients/{last}")
         );
-        assert!(error.suggested_action().contains("allowedClients"));
+        let report = error.to_string();
+        assert!(report.contains("the list is a set"), "{report}");
+        assert!(
+            report.contains("/authentication/oidc/allowedClients/0 the first occurrence"),
+            "{report}"
+        );
     }
 
     #[test]
@@ -2381,6 +2378,18 @@ pub(crate) mod tests {
         value["authentication"]["oidc"]["assertionIssuers"] = json!({});
         let error = load(value).unwrap_err();
         assert_eq!(error.pointer(), "/authentication/oidc/assertionIssuers");
+    }
+
+    #[test]
+    fn a_listed_client_with_no_assertion_issuers_is_refused_at_that_client() {
+        let mut value = base();
+        value["authentication"]["oidc"]["assertionIssuers"] = json!({"case-system": []});
+        let error = load(value).unwrap_err();
+        assert_eq!(error.code(), "config.invalid-value", "{error}");
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/assertionIssuers/case-system"
+        );
     }
 
     #[test]

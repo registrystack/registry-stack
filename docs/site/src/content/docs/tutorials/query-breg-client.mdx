@@ -361,7 +361,7 @@ inspect a refused write through one error type.
 | `problem` with status `401` and code `authentication.refused` | The token is older than five minutes, or the request carried no bearer | Check the token file is not empty, renew it with the `bregctl dev token` command in [Before you start](#before-you-start), and rerun |
 | `transport` with a `connect` transport kind | The registry is not running | Start it again with the first tutorial's `bregctl dev` command and renew the token |
 | `problem` with status `400` and code `query.invalid` | A filter names a field the profile does not allow | Filter on `code` or `status` only |
-| `metadata_selection` with code `not_found` or `profile_mismatch` | The operation identifier or the profile does not match the project | Use `records.record.create` with the `operator` profile |
+| `metadata-selection` with code `not-found` or `profile-mismatch` | The operation identifier or the profile does not match the project | Use `records.record.create` with the `operator` profile |
 | `configuration` while constructing the client | The base URL is not HTTPS or loopback HTTP, or carries credentials, a query, or a fragment | Use the loopback `breg url` the first tutorial's report shows |
 | `problem` with status `404` and code `resource.not_found` | The identifier names no record | Read the identifier from a list result |
 

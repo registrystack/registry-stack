@@ -209,6 +209,8 @@ pub struct DevArgs {
 
 #[derive(Debug, Subcommand)]
 enum DevAction {
+    /// Check a task connection or local issuer session state file offline.
+    Check(CheckArgs),
     /// Start or restart the retained local issuer and Evidence pair.
     Start(StartArgs),
     /// Stop the active local issuer and Evidence Gateway pair.
@@ -219,8 +221,6 @@ enum DevAction {
     Token(TokenArgs),
     /// Exchange an existing Casework approval using an explicit configured issuer connection.
     Grant(GrantArgs),
-    /// Check a task connection or local issuer session state file offline.
-    Check(CheckArgs),
 }
 
 #[derive(Debug, Args)]
@@ -229,7 +229,7 @@ struct CheckArgs {
     /// envelope says which. No secret reference is resolved.
     #[arg(value_name = "FILE")]
     file: PathBuf,
-    /// Exit 1 when the check reports a warning.
+    /// Exit 1 when a warning is reported.
     #[arg(long)]
     deny_warnings: bool,
 }
@@ -923,7 +923,7 @@ fn verify_borrowed_registrations(
             Some((binding, source_issuers)) => {
                 let (sources, mapping) = match binding.kind {
                     access::ActiveClientExchangeKind::InstitutionalGrant => {
-                        (source_issuers.clone(), "institutional_grant")
+                        (source_issuers.clone(), "institutional-grant")
                     }
                     access::ActiveClientExchangeKind::FirstParty => (
                         binding
@@ -931,7 +931,7 @@ fn verify_borrowed_registrations(
                             .iter()
                             .map(|issuer| issuer.as_str().to_owned())
                             .collect(),
-                        "first_party",
+                        "first-party",
                     ),
                 };
                 let paired = assertion_issuers.get(&client.client_id);
@@ -1601,7 +1601,8 @@ fn state_matches_sealed_bundle(
         .ok_or_else(|| anyhow!("the sealed local bundle has no selector profiles"))?;
     for question in questions {
         let Some(requirement) = requirements.iter().find(|requirement| {
-            requirement.get("id").and_then(Value::as_str) == Some(question.requirement_uri.as_str())
+            requirement.get("uri").and_then(Value::as_str)
+                == Some(question.requirement_uri.as_str())
         }) else {
             return Ok(false);
         };
@@ -1619,8 +1620,8 @@ fn state_matches_sealed_bundle(
         if concepts.len() != question.concepts.len()
             || question.concepts.iter().any(|concept| {
                 !concepts.iter().any(|configured| {
-                    configured.get("id").and_then(Value::as_str) == Some(concept.uri.as_str())
-                        && configured.get("form").and_then(Value::as_str)
+                    configured.get("uri").and_then(Value::as_str) == Some(concept.uri.as_str())
+                        && configured.get("type").and_then(Value::as_str)
                             == Some(concept.form.as_str())
                 })
             })
@@ -1682,7 +1683,9 @@ fn state_matches_sealed_bundle(
         return Ok(false);
     }
     for policy in access_policies {
-        let Some(profile) = authority_profiles.get(&policy.requester_tag) else {
+        let Some(profile) = authority_profiles.get(
+            &crate::authoring::access_policy_authority_profile_id(&policy.requester_tag),
+        ) else {
             return Ok(false);
         };
         let governed_questions = policy
@@ -1994,7 +1997,7 @@ fn refuse_unservable_project(project: &Path) -> Result<()> {
     Err(DevRefusal {
         operational: false,
         code: "evidence.dev.local-transport-refused",
-        path: format!("sources/{source_id}.yaml:/transport"),
+        path: format!("sources/{source_id}.yaml:/type"),
         message: "Local serving does not bind SQLite extracts.".to_owned(),
         suggested_action: "Prove this editable project offline with `evidencectl test <dir>`, or re-author the source over an HTTP transport before `evidencectl dev start`."
             .to_owned(),
@@ -2033,7 +2036,7 @@ fn source_local_serving_cannot_bind(project: &Path) -> Option<String> {
         else {
             continue;
         };
-        if source.get("transport").and_then(Value::as_str) == Some("sqlite-extract") {
+        if source.get("type").and_then(Value::as_str) == Some("sqlite-extract") {
             refused.insert(source_id.to_owned());
         }
     }
@@ -3757,13 +3760,13 @@ mod tests {
         let project = root.path();
         let sources = project.join(SOURCES_DIRECTORY);
         fs::create_dir(&sources).expect("sources directory");
-        fs::write(sources.join("records.yaml"), "transport: sqlite-extract\n").expect("source");
+        fs::write(sources.join("records.yaml"), "type: sqlite-extract\n").expect("source");
 
         let error = refuse_unservable_project(project).expect_err("unservable project");
 
         let refusal = error.downcast_ref::<DevRefusal>().expect("typed refusal");
         assert_eq!(refusal.code, "evidence.dev.local-transport-refused");
-        assert_eq!(refusal.path, "sources/records.yaml:/transport");
+        assert_eq!(refusal.path, "sources/records.yaml:/type");
         assert!(refusal.message.contains("does not bind SQLite extracts"));
         assert!(!refusal.operational);
     }
@@ -3776,18 +3779,15 @@ mod tests {
 
         let sources = project.join(SOURCES_DIRECTORY);
         fs::create_dir(&sources).expect("sources directory");
-        fs::write(sources.join("people.yaml"), "transport: http-json\n").expect("source");
-        fs::write(sources.join("notes.txt"), "transport: sqlite-extract\n").expect("other file");
+        fs::write(sources.join("people.yaml"), "type: http-json\n").expect("source");
+        fs::write(sources.join("notes.txt"), "type: sqlite-extract\n").expect("other file");
         refuse_unservable_project(project).expect("an HTTP source is not refused here");
 
         // Two extracts name the first by id, as the compiler's own reading of
         // the same directory does.
         for id in ["records", "holders"] {
-            fs::write(
-                sources.join(format!("{id}.yaml")),
-                "transport: sqlite-extract\n",
-            )
-            .expect("source");
+            fs::write(sources.join(format!("{id}.yaml")), "type: sqlite-extract\n")
+                .expect("source");
         }
         assert_eq!(
             source_local_serving_cannot_bind(project).as_deref(),
@@ -4060,14 +4060,14 @@ authorityProfiles:
             selectorProfile: local-subject-adult-status-v1
             valueOrigin: request
 requirements:
-  - id: urn:registrystack:evidence:local:requirement:adult-status
+  - uri: urn:registrystack:evidence:local:requirement:adult-status
     purposes: [age-check]
     subjectRoles:
       - role: person
         selectorProfiles: [local-subject-adult-status-v1]
     concepts:
-      - id: urn:registrystack:evidence:local:concept:adult-status:is_adult
-        form: boolean
+      - uri: urn:registrystack:evidence:local:concept:adult-status:is_adult
+        type: boolean
 "#,
         )
         .expect("bundle config");
@@ -4145,7 +4145,7 @@ requirements:
             serde_norway::from_slice(&fs::read(&bundle_path).expect("read implicit bundle"))
                 .expect("parse implicit bundle");
         explicit_bundle["authorityProfiles"] = Value::Object(serde_json::Map::from_iter([(
-            policy_tag.clone(),
+            crate::authoring::access_policy_authority_profile_id(&policy_tag),
             json!({
                 "kind": "explicit-request",
                 "requesterTags": [policy_tag],
@@ -4525,7 +4525,7 @@ requirements:
         inventory["issuer"]["exchangeClients"] = json!(["evidence-client"]);
         inventory["issuer"]["exchangeIssuers"] = json!([{
             "id":"casework", "issuer":"https://casework.invalid",
-            "mapping":"institutional_grant", "clients":["evidence-client"],
+            "mapping":"institutional-grant", "clients":["evidence-client"],
         }]);
         fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
         let binding = access::ActiveClientExchange {
@@ -4603,7 +4603,7 @@ requirements:
             json!({"evidence-client":LOCAL_ACCESS_TOKEN_AUDIENCE});
         inventory["issuer"]["exchangeClients"] = json!(["evidence-client"]);
         inventory["issuer"]["exchangeIssuers"] = json!([{
-            "id":"portal", "issuer":"http://127.0.0.1:4494", "mapping":"first_party",
+            "id":"portal", "issuer":"http://127.0.0.1:4494", "mapping":"first-party",
             "clients":["evidence-client"],
         }]);
         fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
@@ -4630,17 +4630,24 @@ requirements:
             &exchanges,
         )
         .expect("registered first-party context client borrows the owner");
-        inventory["issuer"]["exchangeIssuers"][0]["mapping"] = json!("institutional_grant");
-        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
-        assert!(verify_borrowed_registrations(
-            &owner,
-            LOCAL_ACCESS_TOKEN_AUDIENCE,
-            std::slice::from_ref(&portal_client),
-            &admitted,
-            &portal_paired,
-            &exchanges,
-        )
-        .is_err());
+        // The owner's other mapping, and the underscore spelling the owner
+        // no longer writes, each leave the first-party binding unregistered.
+        for mapping in ["institutional-grant", "first_party"] {
+            inventory["issuer"]["exchangeIssuers"][0]["mapping"] = json!(mapping);
+            fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+            assert!(
+                verify_borrowed_registrations(
+                    &owner,
+                    LOCAL_ACCESS_TOKEN_AUDIENCE,
+                    std::slice::from_ref(&portal_client),
+                    &admitted,
+                    &portal_paired,
+                    &exchanges,
+                )
+                .is_err(),
+                "mapping {mapping} admitted a first-party binding"
+            );
+        }
     }
 
     #[test]

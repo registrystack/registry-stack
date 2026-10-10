@@ -4,7 +4,8 @@ title: Evidence governed package configuration Version 1
 type: object
 additionalProperties: false
 required:
-  - version
+  - apiVersion
+  - kind
   - assuranceProfile
   - service
   - issuer
@@ -18,11 +19,17 @@ required:
   - authorityProfiles
   - requirements
 properties:
-  version:
+  apiVersion:
     description: >-
-      Selects the package configuration grammar the rest of this document is read against, and a version
-      the runtime does not implement is rejected at startup.
-    const: 1
+      Names the package configuration grammar the rest of this document is read against; the
+      runtime refuses any other value at startup, so a future incompatible grammar is never read
+      as if it were this one.
+    const: id.registrystack.org/formats/evidence/bundle/v1
+  kind:
+    description: >-
+      Names the document type; together with `apiVersion` it tells a governed package
+      configuration apart from every other Registry Stack file.
+    const: EvidenceBundle
   assuranceProfile:
     description: >-
       Declares the governed assurance boundary of the whole package, and the value is visible
@@ -78,15 +85,13 @@ properties:
     type: object
     additionalProperties: false
     required:
-      - id
+      - uri
     properties:
-      id:
+      uri:
         description: >-
           Legal issuer URI placed in every assertion as `issuedBy`, and governance must authorize
           the provider named in `service.providerId` to act for that issuer.
-        type: string
-        format: uri
-        maxLength: 512
+        $ref: '#/$defs/uri'
   publication:
     description: >-
       Optional provider-authored public facts that cannot be derived from the governed service,
@@ -232,7 +237,7 @@ properties:
     minProperties: 1
     maxProperties: 128
     propertyNames:
-      $ref: '#/$defs/local-id'
+      $ref: '#/$defs/LocalId'
     additionalProperties:
       description: >-
         One named, closed profile of deployment-defined fields and their combined byte bound;
@@ -248,7 +253,7 @@ properties:
     type: object
     maxProperties: 128
     propertyNames:
-      $ref: '#/$defs/local-id'
+      $ref: '#/$defs/LocalId'
     additionalProperties:
       $ref: '#/$defs/source-connection'
   sources:
@@ -259,7 +264,7 @@ properties:
     minProperties: 1
     maxProperties: 128
     propertyNames:
-      $ref: '#/$defs/local-id'
+      $ref: '#/$defs/LocalId'
     additionalProperties:
       description: >-
         One fixed source referenced by this map key from a requirement's `acquisition` field,
@@ -276,7 +281,7 @@ properties:
     minProperties: 1
     maxProperties: 128
     propertyNames:
-      $ref: '#/$defs/local-id'
+      $ref: '#/$defs/LocalId'
     additionalProperties:
       description: >-
         Everything one requester class may ask for. Access is per requester class rather than
@@ -298,7 +303,7 @@ properties:
       enum:
         - search-then-fetch-set
         - source-batch
-  holderBoundBatchMaxSize:
+  maximumHolderBoundBatchSize:
     description: >-
       Ceiling on how many assertions one holder-bound release may carry. Omission means one,
       so a bundle written before batch release cannot serve a batch; declaring a ceiling this
@@ -370,9 +375,9 @@ allOf:
                 not:
                   type: object
                   required:
-                    - kind
+                    - type
                   properties:
-                    kind:
+                    type:
                       const: none
         sourceConnections:
           additionalProperties:
@@ -381,9 +386,9 @@ allOf:
                 not:
                   type: object
                   required:
-                    - kind
+                    - type
                   properties:
-                    kind:
+                    type:
                       const: none
   - if:
       properties:
@@ -415,9 +420,9 @@ allOf:
             properties:
               acquisition:
                 required:
-                  - kind
+                  - type
                 properties:
-                  kind:
+                  type:
                     const: search-then-fetch-set
       required:
         - requirements
@@ -433,8 +438,18 @@ $defs:
     type: string
     format: uri
     maxLength: 2048
-    pattern: '^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$'
-    description: An absolute http or https URL with a host and no user information.
+    pattern: '^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\u0000-\u0020\u007F-\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]+([/?#][^\u0000-\u0020\u007F-\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]*)?$'
+    description: An absolute http or https URL with a host, no user information, and no whitespace or control character.
+  ExternalId:
+    type: string
+    minLength: 1
+    maxLength: 512
+    pattern: "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"
+    description: An identifier another system issues, written exactly as its issuer gives it.
+  LocalId:
+    type: string
+    pattern: ^[a-z][a-z0-9_-]{0,63}$
+    description: 'A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.'
   local-id:
     type: string
     pattern: ^[a-z][a-z0-9._-]{0,127}$
@@ -471,9 +486,10 @@ $defs:
     enum:
       - audience-scoped
       - holder-bound
-  secret-ref:
+  SecretReference:
     type: string
     pattern: ^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$
+    description: 'An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.'
   relative-path:
     type: string
     pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$
@@ -524,6 +540,8 @@ $defs:
       - evidenceAudienceClaim
       - maximumTokenLifetimeSeconds
       - revokedKeyIds
+      - allowedClients
+      - requiredScopes
     properties:
       issuer:
         description: >-
@@ -570,16 +588,16 @@ $defs:
             - RS256
       jwksSource:
         description: >-
-          Where the verifier fetches issuer signing keys. Evidence accepts only `kind: uri`, a
+          Where the verifier fetches issuer signing keys. Evidence accepts only `type: uri`, a
           fixed endpoint named in the governed bundle; discovery and static key sets are
           refused.
         type: object
         additionalProperties: false
         required:
-          - kind
+          - type
           - uri
         properties:
-          kind:
+          type:
             description: >-
               Selects the fixed-endpoint key source, the only one Evidence accepts.
             const: uri
@@ -650,20 +668,25 @@ $defs:
         $ref: '#/$defs/claim-name'
       allowedClients:
         description: >-
-          Explicit machine-client admission, matched against the verified token's
-          `client_id`/`azp`; never `sub`. Omitting the key keeps the issuer-vouched-client
-          behavior. Audience plus static issuer-governed attributes alone cannot establish
-          that a client was granted this resource's permission, which is what
-          `requiredScopes` closes.
-        type: array
-        minItems: 1
-        maxItems: 32
-        uniqueItems: true
-        items:
-          description: One client identifier admitted to call this deployment.
-          type: string
-          minLength: 1
-          maxLength: 128
+          Machine-client admission every bundle decides, matched against the verified token's
+          `client_id`/`azp`; never `sub`. The keyword `unrestricted` admits every client the
+          issuer vouched for; a list admits exactly the clients it names. An omitted key and
+          an empty list are refused. Audience plus static issuer-governed attributes alone
+          cannot establish that a client was granted this resource's permission, which is
+          what `requiredScopes` closes.
+        oneOf:
+          - description: Admit every client the issuer vouched for.
+            const: unrestricted
+          - description: Admit exactly the listed clients.
+            type: array
+            minItems: 1
+            maxItems: 32
+            uniqueItems: true
+            items:
+              description: One client identifier admitted to call this deployment.
+              type: string
+              minLength: 1
+              maxLength: 128
       assertionIssuers:
         description: >-
           Per-client assertion-authority admission for a token that carries the
@@ -677,7 +700,7 @@ $defs:
         minProperties: 1
         maxProperties: 32
         propertyNames:
-          minLength: 1
+          $ref: '#/$defs/ExternalId'
           maxLength: 128
         additionalProperties:
           description: >-
@@ -694,20 +717,25 @@ $defs:
             maxLength: 512
       requiredScopes:
         description: >-
-          Scopes every inbound token must carry, read from the verified token's scope set
-          after signature verification and before any authority claim is read. Omitting
-          the key keeps the no-scope-gate behavior; a missing scope is never inferred from
-          tags, principal, roles, `sub`, or request fields.
-        type: array
-        minItems: 1
-        maxItems: 32
-        uniqueItems: true
-        items:
-          description: One RFC 6749 scope-token every inbound token must carry.
-          type: string
-          minLength: 1
-          maxLength: 256
-          pattern: ^[\x21\x23-\x5B\x5D-\x7E]+$
+          Scope gate every bundle decides, read from the verified token's scope set after
+          signature verification and before any authority claim is read. The keyword
+          `unrestricted` applies no scope gate; a list names the scopes every inbound token
+          must carry. An omitted key and an empty list are refused; a missing scope is never
+          inferred from tags, principal, roles, `sub`, or request fields.
+        oneOf:
+          - description: Apply no scope gate.
+            const: unrestricted
+          - description: Require every listed scope.
+            type: array
+            minItems: 1
+            maxItems: 32
+            uniqueItems: true
+            items:
+              description: One RFC 6749 scope-token every inbound token must carry.
+              type: string
+              minLength: 1
+              maxLength: 256
+              pattern: ^[\x21\x23-\x5B\x5D-\x7E]+$
     if:
       required:
         - jwksSource
@@ -734,7 +762,7 @@ $defs:
           closed whatever this section says, so an authorization refusal, access attempt, or
           disclosure release whose entry cannot be written stops the response instead of being
           served unaudited.
-        $ref: '#/$defs/secret-ref'
+        $ref: '#/$defs/SecretReference'
       hashKeyVersion:
         description: >-
           Stamped into every audit pseudonym as its version prefix, so pseudonyms produced
@@ -753,7 +781,7 @@ $defs:
         description: >-
           Points at the secret keying every subject binding; that reference and its resolved
           bytes must both differ from the audit master, and a match fails startup.
-        $ref: '#/$defs/secret-ref'
+        $ref: '#/$defs/SecretReference'
       keyVersion:
         description: >-
           Scopes each derived binding and appears in the binding value, so a new version changes
@@ -832,8 +860,7 @@ $defs:
         minProperties: 1
         maxProperties: 16
         propertyNames:
-          type: string
-          pattern: ^[a-z][a-z0-9._-]{0,63}$
+          $ref: '#/$defs/LocalId'
         additionalProperties:
           description: >-
             One field's exact declaration: Rust matches a supplied value against it verbatim,
@@ -944,7 +971,7 @@ $defs:
         description: >-
           Fixed source origin the runtime constrains exactly as it constrains an inline HTTP
           source: a canonical host, no user information, path, query or fragment, and a port
-          inside the range a port can hold. When `authentication.kind` is `none` the origin
+          inside the range a port can hold. When `authentication.type` is `none` the origin
           narrows further, to one exact numeric-loopback HTTP spelling carrying an explicit
           in-range port.
         $ref: '#/$defs/Url'
@@ -961,9 +988,9 @@ $defs:
       tlsTrustProfile:
         description: >-
           Logical additive private-CA profile bound by the runtime document. It is rejected
-          outright when `authentication.kind` is `none`.
+          outright when `authentication.type` is `none`.
         $ref: '#/$defs/local-id'
-      concurrencyLimit:
+      maximumConcurrency:
         description: Aggregate occupied source calls for this explicit connection in one process.
         type: integer
         minimum: 1
@@ -989,9 +1016,9 @@ $defs:
             authentication:
               type: object
               required:
-                - kind
+                - type
               properties:
-                kind:
+                type:
                   const: none
         then:
           properties:
@@ -1006,7 +1033,7 @@ $defs:
     type: object
     additionalProperties: false
     required:
-      - transport
+      - type
       - baseUrl
       - posture
       - authentication
@@ -1015,7 +1042,7 @@ $defs:
       - extractScript
       - factSchema
     properties:
-      transport:
+      type:
         description: >-
           Selects the HTTP-plus-JSON transport, which reaches a fixed HTTPS origin over the
           network under one request and response contract for method, media type, and body
@@ -1025,7 +1052,7 @@ $defs:
       connection:
         description: >-
           Optional explicit sourceConnections owner. Startup rejects differing resolved
-          baseUrl, authentication, tlsTrustProfile or request.concurrencyLimit values.
+          baseUrl, authentication, tlsTrustProfile or request.maximumConcurrency values.
         $ref: '#/$defs/local-id'
       behaviorRevision:
         description: >-
@@ -1054,7 +1081,7 @@ $defs:
         description: >-
           Fixed HTTPS origin the source's evidence-data requests target, with no path, query,
           fragment, user information, or runtime substitution. An HTTP numeric-loopback origin
-          is accepted only when `sources.*.authentication.kind` is `none`.
+          is accepted only when `sources.*.authentication.type` is `none`.
         $ref: '#/$defs/Url'
         oneOf:
           - type: string
@@ -1099,7 +1126,7 @@ $defs:
         description: >-
           Logical name resolved to an exact private certificate authority file bound in `runtime.yaml`.
           Omission trusts only configured system roots, and the profile is rejected outright
-          when `sources.*.authentication.kind` is `none`.
+          when `sources.*.authentication.type` is `none`.
         $ref: '#/$defs/local-id'
       authentication:
         description: >-
@@ -1153,9 +1180,9 @@ $defs:
             authentication:
               type: object
               required:
-                - kind
+                - type
               properties:
-                kind:
+                type:
                   const: none
         then:
           properties:
@@ -1175,14 +1202,9 @@ $defs:
               - unresolvedProblem
           properties:
             request:
-              required:
-                - path
               not:
-                anyOf:
-                  - required:
-                      - pathTemplate
-                  - required:
-                      - pathBindings
+                required:
+                  - pathBindings
       - if:
           required: [evidence]
         then:
@@ -1194,7 +1216,7 @@ $defs:
             forwardAccessAttribution: {const: false}
             authentication:
               properties:
-                kind: {not: {const: none}}
+                type: {not: {const: none}}
             request:
               required: [path]
               properties:
@@ -1230,7 +1252,7 @@ $defs:
           audience: {type: string, format: uri, maxLength: 512}
           issuedBy: {type: string, format: uri, maxLength: 512}
           providedBy: {type: string, format: uri, maxLength: 512}
-          holderBoundBatchMaxSize: {type: integer, minimum: 1, maximum: 16}
+          maximumHolderBoundBatchSize: {type: integer, minimum: 1, maximum: 16}
           definitions:
             type: array
             minItems: 1
@@ -1397,25 +1419,55 @@ $defs:
       required: {type: boolean}
       form:
         oneOf:
-          - enum: [boolean, integer, string, date-bucket, time-bucket, entity-reference, structured]
           - type: object
             additionalProperties: false
-            required: [list]
+            required: [type]
             properties:
-              list:
-                type: object
-                additionalProperties: false
-                required: [items, minimumItems, maximumItems, unique]
-                properties:
-                  items: {enum: [string, entity-reference]}
-                  minimumItems: {type: integer, minimum: 1, maximum: 64}
-                  maximumItems: {type: integer, minimum: 1, maximum: 64}
-                  unique: {const: true}
+              type: {const: boolean}
+          - type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {const: integer}
+          - type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {const: string}
+          - type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {const: date-bucket}
+          - type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {const: time-bucket}
+          - type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {const: entity-reference}
+          - type: object
+            additionalProperties: false
+            required: [type]
+            properties:
+              type: {const: structured}
+          - type: object
+            additionalProperties: false
+            required: [type, items, minimumItems, maximumItems, unique]
+            properties:
+              type: {const: list}
+              items: {enum: [string, entity-reference]}
+              minimumItems: {type: integer, minimum: 1, maximum: 64}
+              maximumItems: {type: integer, minimum: 1, maximum: 64}
+              unique: {const: true}
   sqlite-extract-source:
     type: object
     additionalProperties: false
     required:
-      - transport
+      - type
       - posture
       - extractProfile
       - request
@@ -1424,7 +1476,7 @@ $defs:
       - extractScript
       - factSchema
     properties:
-      transport:
+      type:
         description: >-
           Selects the statement transport, which runs one reviewed SQL statement against a
           read-only SQLite extract file mounted beside the process. There is no origin, no
@@ -1489,9 +1541,9 @@ $defs:
       - type: object
         additionalProperties: false
         required:
-          - kind
+          - type
         properties:
-          kind:
+          type:
             description: >-
               Selects which credential the runtime presents to this source and closes the
               member set to that profile. `none` sends no credential and is admitted only
@@ -1501,35 +1553,35 @@ $defs:
       - type: object
         additionalProperties: false
         required:
-          - kind
+          - type
           - usernameRef
           - passwordRef
         properties:
-          kind:
+          type:
             const: basic
           usernameRef:
             description: >-
               Logical file-secret reference for the user name half of the HTTP Basic credential
               the runtime presents to this source.
-            $ref: '#/$defs/secret-ref'
+            $ref: '#/$defs/SecretReference'
           passwordRef:
             description: >-
               Logical file-secret reference for the password half of the HTTP Basic credential
               the runtime encodes into the Authorization header of every request to this source.
-            $ref: '#/$defs/secret-ref'
+            $ref: '#/$defs/SecretReference'
       - type: object
         additionalProperties: false
         required:
-          - kind
+          - type
           - tokenRef
         properties:
-          kind:
+          type:
             const: static-authorization
           tokenRef:
             description: >-
               Logical file-secret reference for the static token the runtime places in the
               Authorization header of every request to this source.
-            $ref: '#/$defs/secret-ref'
+            $ref: '#/$defs/SecretReference'
           scheme:
             description: >-
               Authentication scheme the token is presented under; absent, the runtime sends
@@ -1543,11 +1595,11 @@ $defs:
       - type: object
         additionalProperties: false
         required:
-          - kind
+          - type
           - headerName
           - valueRef
         properties:
-          kind:
+          type:
             const: static-api-key
           headerName:
             description: >-
@@ -1559,43 +1611,23 @@ $defs:
             description: >-
               Logical file-secret reference for the API-key value the runtime places in `headerName`;
               the resolved value is bounded and rejects control characters, CR, and LF.
-            $ref: '#/$defs/secret-ref'
+            $ref: '#/$defs/SecretReference'
       - type: object
+        description: >-
+          Client-credentials grant with shared-secret client authentication. The secret
+          names the credential and `credentialPlacement` names the channel it travels in,
+          so both are required. There is no assertion, so there is no assertion audience
+          to name.
         additionalProperties: false
         required:
-          - kind
+          - type
           - tokenEndpoint
           - clientIdRef
+          - clientSecretRef
+          - credentialPlacement
           - maximumCacheSeconds
-        oneOf:
-          - description: >-
-              Shared-secret client authentication. The secret names the credential and
-              `credentialPlacement` names the channel it travels in, so neither is meaningful
-              without the other. There is no assertion, so there is no audience to name.
-            required:
-              - clientSecretRef
-              - credentialPlacement
-            allOf:
-              - not:
-                  required:
-                    - clientAssertionKeyRef
-              - not:
-                  required:
-                    - clientAssertionAudience
-          - description: >-
-              Assertion client authentication. The signing key is the whole credential, so
-              a shared secret and a placement for one have nothing to describe.
-            required:
-              - clientAssertionKeyRef
-            allOf:
-              - not:
-                  required:
-                    - clientSecretRef
-              - not:
-                  required:
-                    - credentialPlacement
         properties:
-          kind:
+          type:
             const: oauth2-client-credentials
           tokenEndpoint:
             description: >-
@@ -1611,28 +1643,117 @@ $defs:
             description: >-
               Logical file-secret reference for the client identifier the runtime presents
               in the client-credentials exchange at `tokenEndpoint`.
-            $ref: '#/$defs/secret-ref'
+            $ref: '#/$defs/SecretReference'
           clientSecretRef:
             description: >-
               Logical file-secret reference for the client secret the runtime presents at
               `tokenEndpoint`; the token URL, body, response, and debug output stay redacted,
-              so the resolved value reaches no log. Declared with `credentialPlacement` and
-              never beside `clientAssertionKeyRef`.
-            $ref: '#/$defs/secret-ref'
+              so the resolved value reaches no log. `credentialPlacement` names the channel
+              it travels in.
+            $ref: '#/$defs/SecretReference'
+          scope:
+            description: >-
+              Fixed scope requested in the client-credentials exchange; a token response reporting
+              a scope other than this one is a credential failure.
+            type: string
+            minLength: 1
+            maxLength: 512
+          audience:
+            description: >-
+              Fixed `audience` form parameter sent with the token request, for an authorization
+              server that keys the issued token to an audience the scope cannot express and
+              returns an unusable token without it. Sent as it stands with no fallback, so a
+              blank value is refused here rather than by the authorization server at readiness.
+            type: string
+            minLength: 1
+            maxLength: 512
+            pattern: \S
+          resource:
+            description: >-
+              Optional RFC 8707 resource indicator sent as a token-request form parameter.
+              It is one governed absolute URI without a fragment or user information and
+              is transmitted exactly as configured. It names the intended resource server;
+              it does not retarget the token endpoint or replace the separate audience
+              parameter or signed client assertion audience.
+            type: string
+            format: uri
+            minLength: 3
+            maxLength: 512
+            pattern: '^[A-Za-z][A-Za-z0-9+.-]*:[A-Za-z0-9._~:/?\[\]@!$&''()*+,;=%-]+$'
+            not:
+              anyOf:
+                - pattern: '^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@'
+                - pattern: '%($|[^0-9A-Fa-f]|[0-9A-Fa-f]($|[^0-9A-Fa-f]))'
+          credentialPlacement:
+            description: >-
+              Selects whether the client identifier and secret travel in the Authorization
+              header or the form body of the token request; Version 1 offers no query-string
+              placement, so neither value can reach an authorization-server, proxy, or ingress
+              URL log.
+            enum:
+              - basic-header
+              - form-body
+          maximumCacheSeconds:
+            description: >-
+              Bounds how long one acquired token is reused across evidence requests for this
+              source; the cache lifetime is the smaller of this bound and the provider's reported
+              expiry.
+            type: integer
+            minimum: 0
+            maximum: 86400
+          assumedLifetimeSeconds:
+            description: >-
+              Lifetime credited to an acquired token whose response omits `expires_in`, rather
+              than inferring one from the token. Without this key such a response is a credential
+              failure, and the cached lifetime is still clamped to `maximumCacheSeconds`.
+            type: integer
+            minimum: 1
+            maximum: 86400
+      - type: object
+        description: >-
+          Client-credentials grant with assertion client authentication. The signing key
+          is the whole credential, so a shared secret and a placement for one have
+          nothing to describe.
+        additionalProperties: false
+        required:
+          - type
+          - tokenEndpoint
+          - clientIdRef
+          - clientAssertionKeyRef
+          - maximumCacheSeconds
+        properties:
+          type:
+            const: oauth2-private-key-jwt
+          tokenEndpoint:
+            description: >-
+              Fixed endpoint the runtime exchanges client credentials at before calling this
+              source; the exchange is credential bootstrap, never an evidence-data request
+              or a fact source.
+            oneOf:
+              - type: string
+                pattern: ^https://[^?#]+$
+              - type: string
+                pattern: ^http://(127(\.[0-9]{1,3}){3}|\[::1\])(:[0-9]{1,5})?/[^?#]*$
+          clientIdRef:
+            description: >-
+              Logical file-secret reference for the client identifier the runtime presents
+              in the client-credentials exchange at `tokenEndpoint`.
+            $ref: '#/$defs/SecretReference'
           clientAssertionKeyRef:
             description: >-
               Logical file-secret reference for the private JWK the runtime signs an RFC 7523
               section 2.2 client assertion with, which is the client authentication SMART on
               FHIR Backend Services requires. The assertion is audienced to
               `clientAssertionAudience`, or to `tokenEndpoint` when the bundle names none,
-              and lives 60 seconds; no private key leaves the process.
-            $ref: '#/$defs/secret-ref'
+              and lives 60 seconds and always travels in the form body; no private key
+              leaves the process.
+            $ref: '#/$defs/SecretReference'
           clientAssertionAudience:
             description: >-
               Fixed `aud` claim of the signed client assertion, for an authorization server
               that expects an identifier it is not reached at, such as its issuer or a host
-              in front of a proxy. Declared only beside `clientAssertionKeyRef`, and defaulting
-              to `tokenEndpoint`. RFC 7523 section 3 has the server compare this by Simple
+              in front of a proxy. Defaults to `tokenEndpoint`. RFC 7523 section 3 has the
+              server compare this by Simple
               String Comparison, so it is an opaque identifier rather than a URL and is signed
               byte for byte. It names who may accept the assertion, never where it is sent.
               A blank value is refused here rather than at the first token request, where
@@ -1674,16 +1795,6 @@ $defs:
               anyOf:
                 - pattern: '^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@'
                 - pattern: '%($|[^0-9A-Fa-f]|[0-9A-Fa-f]($|[^0-9A-Fa-f]))'
-          credentialPlacement:
-            description: >-
-              Selects whether the client identifier and secret travel in the Authorization
-              header or the form body of the token request; Version 1 offers no query-string
-              placement, so neither value can reach an authorization-server, proxy, or ingress
-              URL log. Declared with `clientSecretRef` and never beside `clientAssertionKeyRef`,
-              whose assertion always travels in the form body.
-            enum:
-              - basic-header
-              - form-body
           maximumCacheSeconds:
             description: >-
               Bounds how long one acquired token is reused across evidence requests for this
@@ -1754,6 +1865,7 @@ $defs:
     additionalProperties: false
     required:
       - method
+      - path
       - selectorInputs
       - prepareScript
       - adapterParameters
@@ -1761,9 +1873,9 @@ $defs:
       - preparationLimits
       - projection
       - redirects
-      - timeoutMilliseconds
+      - attemptTimeoutMilliseconds
       - maximumResponseBytes
-      - concurrencyLimit
+      - maximumConcurrency
     properties:
       method:
         description: >-
@@ -1774,29 +1886,24 @@ $defs:
           - POST
       path:
         description: >-
-          Fixed normalized absolute path used for every request to this source; a source declares
-          this or `pathTemplate` and never both.
-        type: string
-        pattern: ^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$
-      pathTemplate:
-        description: >-
-          Fixed absolute path whose placeholders each occupy one complete segment and are
-          expanded by Rust; a template carrying a scheme, authority, query, fragment, empty
-          segment, or dot segment fails startup.
+          Fixed normalized absolute path used for every request to this source: a literal, or
+          a template whose placeholders each occupy one complete segment and are expanded by
+          Rust. A path carrying a scheme, authority, query, fragment, empty segment, or dot
+          segment fails startup.
         type: string
         minLength: 2
         maxLength: 2048
         pattern: ^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/{\}-]*$
       pathBindings:
         description: >-
-          Supplies each `pathTemplate` placeholder with a Rust-resolved value, and a script
-          chooses neither a binding origin nor a path value.
+          Supplies each `path` placeholder with a Rust-resolved value, and a script chooses
+          neither a binding origin nor a path value. Required exactly when `path` names a
+          placeholder.
         type: object
         minProperties: 1
         maxProperties: 16
         propertyNames:
-          type: string
-          pattern: ^[a-z][a-z0-9._-]{0,63}$
+          $ref: '#/$defs/LocalId'
         additionalProperties:
           description: >-
             One placeholder's tagged binding, filling exactly one complete path segment from
@@ -1856,7 +1963,9 @@ $defs:
         type: object
         maxProperties: 64
         propertyNames:
-          $ref: '#/$defs/parameter-key'
+          allOf:
+            - $ref: '#/$defs/ExternalId'
+            - $ref: '#/$defs/parameter-key'
         additionalProperties:
           description: >-
             One constant read by both the preparation and the extraction script, which may
@@ -1895,7 +2004,7 @@ $defs:
           Refuses to follow a redirect, so a source response cannot move the request to a
           different origin; a redirect is classed as a transport failure.
         const: deny
-      timeoutMilliseconds:
+      attemptTimeoutMilliseconds:
         description: >-
           Bounds each phase of one attempt at this source separately, carrying its whole value
           into every one: concurrency admission, any wait on the token single-flight boundary,
@@ -1912,29 +2021,27 @@ $defs:
         type: integer
         minimum: 1
         maximum: 1048576
-      concurrencyLimit:
+      maximumConcurrency:
         description: >-
           Bounds how many evaluations may hold an outbound request to this source at once,
-          and waiting for that admission is bounded by `timeoutMilliseconds`.
+          and waiting for that admission is bounded by `attemptTimeoutMilliseconds`.
         type: integer
         minimum: 1
         maximum: 256
-    oneOf:
-      - required:
-          - path
-        not:
-          anyOf:
-            - required:
-                - pathTemplate
-            - required:
-                - pathBindings
-      - required:
-          - pathTemplate
-          - pathBindings
-        not:
+    allOf:
+      - if:
           required:
             - path
-    allOf:
+          properties:
+            path:
+              pattern: '[{}]'
+        then:
+          required:
+            - pathBindings
+        else:
+          not:
+            required:
+              - pathBindings
       - if:
           required:
             - method
@@ -1958,9 +2065,9 @@ $defs:
       - maximumRows
       - maximumCellBytes
       - maximumStatementSteps
-      - timeoutMilliseconds
+      - attemptTimeoutMilliseconds
       - maximumResponseBytes
-      - concurrencyLimit
+      - maximumConcurrency
     properties:
       statement:
         description: >-
@@ -2007,7 +2114,9 @@ $defs:
         type: object
         maxProperties: 64
         propertyNames:
-          $ref: '#/$defs/parameter-key'
+          allOf:
+            - $ref: '#/$defs/ExternalId'
+            - $ref: '#/$defs/parameter-key'
         additionalProperties:
           description: >-
             One parameter's tagged binding, filling exactly one named statement parameter from
@@ -2028,7 +2137,9 @@ $defs:
         type: object
         maxProperties: 64
         propertyNames:
-          $ref: '#/$defs/parameter-key'
+          allOf:
+            - $ref: '#/$defs/ExternalId'
+            - $ref: '#/$defs/parameter-key'
         additionalProperties:
           description: >-
             One constant read by the scripts, which may itself nest further parameter values.
@@ -2086,7 +2197,7 @@ $defs:
         type: integer
         minimum: 1
         maximum: 1000000
-      timeoutMilliseconds:
+      attemptTimeoutMilliseconds:
         description: >-
           One absolute deadline for an attempt at this source, covering concurrency admission,
           blocking-worker queueing, and statement execution. Time spent in an earlier phase
@@ -2101,10 +2212,10 @@ $defs:
         type: integer
         minimum: 1
         maximum: 1048576
-      concurrencyLimit:
+      maximumConcurrency:
         description: >-
           Bounds how many evaluations may hold a statement against this extract at once, and
-          waiting for that admission is bounded by `timeoutMilliseconds`.
+          waiting for that admission is bounded by `attemptTimeoutMilliseconds`.
         type: integer
         minimum: 1
         maximum: 256
@@ -2196,12 +2307,12 @@ $defs:
     type: object
     additionalProperties: false
     required:
-      - kind
+      - type
       - role
       - profile
       - field
     properties:
-      kind:
+      type:
         description: >-
           Selects the binding origin. This parameter is filled from the authorized selector
           field named below and from nothing else, so the preparation script cannot stand in
@@ -2226,9 +2337,9 @@ $defs:
     type: object
     additionalProperties: false
     required:
-      - kind
+      - type
     properties:
-      kind:
+      type:
         description: >-
           Selects the binding origin. This parameter is filled by the preparation script and by
           nothing else, which is how a value no selector holds, such as a normalized reference
@@ -2309,12 +2420,12 @@ $defs:
       - type: object
         additionalProperties: false
         required:
-          - from
+          - type
           - role
           - profile
           - field
         properties:
-          from:
+          type:
             description: >-
               Chooses whether Rust reads the placeholder value from an already authorized
               selector or from a scalar prior fact, and a prior-fact binding is accepted only
@@ -2341,10 +2452,10 @@ $defs:
       - type: object
         additionalProperties: false
         required:
-          - from
+          - type
           - field
         properties:
-          from:
+          type:
             const: prior-fact
           field:
             type: string
@@ -2375,7 +2486,9 @@ $defs:
       - type: object
         maxProperties: 256
         propertyNames:
-          $ref: '#/$defs/parameter-key'
+          allOf:
+            - $ref: '#/$defs/ExternalId'
+            - $ref: '#/$defs/parameter-key'
         additionalProperties:
           description: >-
             One member of a parameter object, which is a parameter value in turn, so the parameter
@@ -2623,8 +2736,7 @@ $defs:
                     minProperties: 1
                     maxProperties: 16
                     propertyNames:
-                      type: string
-                      pattern: ^[a-z][a-z0-9._-]{0,63}$
+                      $ref: '#/$defs/LocalId'
                     additionalProperties:
                       description: >-
                         Claim path resolved only from the strictly verified access token,
@@ -2658,10 +2770,10 @@ $defs:
       - type: object
         additionalProperties: false
         required:
-          - kind
+          - type
           - source
         properties:
-          kind:
+          type:
             description: >-
               Selects this requirement's closed acquisition shape, and therefore how many
               fixed source calls the runtime issues; a gated kind serves only where the bundle
@@ -2669,39 +2781,39 @@ $defs:
             const: single
           source:
             description: >-
-              Read only when `acquisition.kind` is `single`; the one configured source this
+              Read only when `acquisition.type` is `single`; the one configured source this
               requirement queries in its single fixed call.
             $ref: '#/$defs/local-id'
       - type: object
         additionalProperties: false
         required:
-          - kind
+          - type
           - search
           - fetch
         properties:
-          kind:
+          type:
             const: search-then-fetch
           search:
             description: >-
-              Read when `acquisition.kind` is `search-then-fetch` or `search-then-fetch-set`;
+              Read when `acquisition.type` is `search-then-fetch` or `search-then-fetch-set`;
               names the first-stage source, and the runtime aborts before the fetch stage
               unless this call resolves to exactly one match.
             $ref: '#/$defs/local-id'
           fetch:
             description: >-
-              Read when `acquisition.kind` is `search-then-fetch` or `search-then-fetch-set`;
+              Read when `acquisition.type` is `search-then-fetch` or `search-then-fetch-set`;
               the fixed second-stage source, or the ordered array of member sources, invoked
               after the search resolves and never chosen from response content.
             $ref: '#/$defs/local-id'
       - type: object
         additionalProperties: false
         required:
-          - kind
+          - type
           - search
           - fetch
           - maximumAcquisitionMilliseconds
         properties:
-          kind:
+          type:
             const: search-then-fetch-set
           search:
             $ref: '#/$defs/local-id'
@@ -2754,7 +2866,7 @@ $defs:
     additionalProperties: false
     required:
       - handle
-      - id
+      - uri
       - kind
       - acquisition
       - purposes
@@ -2773,7 +2885,7 @@ $defs:
           complete published definition. It is governed explicitly and is never
           inferred from the requirement URI.
         $ref: '#/$defs/local-id'
-      id:
+      uri:
         description: >-
           Stable requirement URI a public request names to select this requirement; the runtime
           looks up requirements by this exact value and no other.
@@ -2930,6 +3042,8 @@ $defs:
               derivation; the map cannot carry secrets or runtime authority.
             type: object
             maxProperties: 32
+            propertyNames:
+              $ref: '#/$defs/LocalId'
             additionalProperties:
               description: >-
                 One named parameter's value, closed to a bounded string, a safe integer, a
@@ -2953,8 +3067,8 @@ $defs:
           additionalProperties: false
           required:
             - handle
-            - id
-            - form
+            - uri
+            - type
             - required
           properties:
             handle:
@@ -2963,13 +3077,13 @@ $defs:
                 result maps. It is governed explicitly and is never inferred
                 from the concept URI.
               $ref: '#/$defs/local-id'
-            id:
+            uri:
               description: >-
                 Stable identifier that names this concept as `providesValueFor` in the assertion
                 and, unless an `sdJwtVc.claim` override is declared, is also the concept's
                 claim name in the SD-JWT VC serialization.
               $ref: '#/$defs/uri'
-            form:
+            type:
               enum:
                 - boolean
                 - controlled-code
@@ -2992,7 +3106,7 @@ $defs:
             constraints:
               description: >-
                 Closed bounds a derived value must satisfy before it is accepted into evidence;
-                the `allOf` branch below that matches the concept's `form` fixes their exact shape.
+                the `allOf` branch below that matches the concept's `type` fixes their exact shape.
             sdJwtVc:
               description: >-
                 Optional per-concept projection that the concept declaration may set only
@@ -3002,7 +3116,7 @@ $defs:
           allOf:
             - oneOf:
                 - properties:
-                    form:
+                    type:
                       description: >-
                         Selects the concept's closed value shape, which fixes the exact set
                         of keys `constraints` must declare and no others.
@@ -3011,82 +3125,82 @@ $defs:
                       description: >-
                         Closed, form-specific bounds a derived value must satisfy before it
                         is accepted into evidence; which keys apply is fixed entirely by the
-                        concept's `form`.
+                        concept's `type`.
                       $ref: '#/$defs/boolean-constraints'
                 - required:
                     - constraints
                   properties:
-                    form:
+                    type:
                       const: controlled-code
                     constraints:
                       $ref: '#/$defs/controlled-code-constraints'
                 - required:
                     - constraints
                   properties:
-                    form:
+                    type:
                       const: controlled-category
                     constraints:
                       $ref: '#/$defs/controlled-category-constraints'
                 - required:
                     - constraints
                   properties:
-                    form:
+                    type:
                       const: bounded-identifier
                     constraints:
                       $ref: '#/$defs/bounded-identifier-constraints'
                 - required:
                     - constraints
                   properties:
-                    form:
+                    type:
                       const: bounded-integer
                     constraints:
                       $ref: '#/$defs/bounded-integer-constraints'
                 - required:
                     - constraints
                   properties:
-                    form:
+                    type:
                       const: bounded-decimal
                     constraints:
                       $ref: '#/$defs/bounded-decimal-constraints'
                 - required:
                     - constraints
                   properties:
-                    form:
+                    type:
                       const: date-bucket
                     constraints:
                       $ref: '#/$defs/bucket-constraints'
                 - required:
                     - constraints
                   properties:
-                    form:
+                    type:
                       const: time-bucket
                     constraints:
                       $ref: '#/$defs/bucket-constraints'
                 - required:
                     - constraints
                   properties:
-                    form:
+                    type:
                       const: audience-scoped-entity-reference
                     constraints:
                       $ref: '#/$defs/entity-reference-constraints'
                 - required:
                     - constraints
                   properties:
-                    form:
+                    type:
                       const: controlled-code-list
                     constraints:
                       $ref: '#/$defs/controlled-code-list-constraints'
                 - required:
                     - constraints
                   properties:
-                    form:
+                    type:
                       const: entity-reference-list
                     constraints:
                       $ref: '#/$defs/entity-reference-list-constraints'
                 - required:
                     - constraints
                   properties:
-                    form:
+                    type:
                       const: reviewed-structured-value
                     constraints:
                       $ref: '#/$defs/reviewed-structured-value-constraints'
@@ -3095,7 +3209,7 @@ $defs:
                   - sdJwtVc
               then:
                 properties:
-                  form:
+                  type:
                     const: reviewed-structured-value
       fixtures:
         description: >-

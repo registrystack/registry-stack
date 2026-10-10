@@ -263,11 +263,38 @@ fn cfg_env_1_a_reader_of_several_formats_dispatches_on_kind() {
         "kind is not one this command reads; it reads one of `ExampleRuntimeConfig`, `ExampleProject`"
     );
     assert_eq!(diagnostic.artifact, None);
+}
 
-    let report = Reader::new(FILE).read(b"name: a\n", &BOTH).unwrap_err();
+#[test]
+fn cfg_diag_5_a_reader_of_several_formats_names_each_header_it_accepts() {
+    const OTHER: FormatSpec = FormatSpec {
+        kind: "ExampleProject",
+        envelope: EnvelopeRule::ApiVersionKind {
+            api_versions: &[ApiVersion::current(
+                "id.registrystack.org/formats/example/project/v1alpha1",
+            )],
+            retired_api_versions: &[],
+        },
+        removed_keys: &[],
+    };
+    const BOTH: Expect<'static> = Expect::new(&[FORMAT, OTHER]);
+    const HEADERS: &str = "`apiVersion: id.registrystack.org/formats/example/runtime/v1alpha1` and `kind: ExampleRuntimeConfig`, or `apiVersion: id.registrystack.org/formats/example/project/v1alpha1` and `kind: ExampleProject`";
+
+    for text in ["name: a\n", "kind: ExampleProject\n", ""] {
+        let report = Reader::new(FILE).read(text.as_bytes(), &BOTH).unwrap_err();
+        let diagnostic = only(&report);
+        assert_eq!(diagnostic.code, "config.missing-envelope", "{text:?}");
+        assert_eq!(
+            diagnostic.suggested_action,
+            format!("Start the file with {HEADERS}."),
+            "{text:?}"
+        );
+    }
+
+    let report = Reader::new(FILE).read(b"- a\n", &BOTH).unwrap_err();
     assert_eq!(
         only(&report).suggested_action,
-        "Start the file with apiVersion and kind for one of `ExampleRuntimeConfig`, `ExampleProject`."
+        format!("Write the document as a mapping that starts with {HEADERS}.")
     );
 }
 

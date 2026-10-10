@@ -265,7 +265,7 @@ fn runtime_config_with_roles(
     runtime_role: &str,
 ) -> RuntimeConfig {
     parse_runtime_config(&format!(
-        r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+        r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
@@ -280,7 +280,7 @@ database:
   runtimeUrlRef: secret:env/BREG_REHEARSAL_RUNTIME_URL
   migrationUrlRef: secret:env/BREG_REHEARSAL_MIGRATION_URL
   pool:
-    maxSize: 2
+    maximumConnections: 2
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -298,15 +298,14 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [registry-client]
-    deniedKids: []
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
@@ -316,7 +315,7 @@ audit:
   path: /tmp/breg-rehearsal-audit/audit.jsonl
 cursor:
   secretRef: secret:env/BREG_REHEARSAL_CURSOR_KEY
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 eventDestinations: {{}}
 operationalTimeouts:
   httpRequestMilliseconds: 10000
@@ -361,9 +360,9 @@ fn compiled_registry(source_revision: &str) -> CompiledRegistry {
 fn project_bytes(source_revision: &str) -> Vec<u8> {
     let project = format!(
         r#"{{
-  "apiVersion": "registry.registrystack.org/v1alpha1",
-  "kind": "RegistryProject",
-  "registry": {{"id": "rehearsal-registry", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"}},
+  "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind": "BRegProject",
+  "project": {{"id": "rehearsal-registry", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"}},
   "package": {{
     "sourceRevision": "{source_revision}"
   }},
@@ -391,11 +390,11 @@ fn project_bytes(source_revision: &str) -> Vec<u8> {
     "id": "case",
     "primaryDataset": "test-dataset",
     "route": "cases",
-    "mutationMode": "create_only",
+    "mutationMode": "create-only",
     "fields": [{{
       "id": "code",
       "type": "string",
-      "maxLength": 32,
+      "maximumLength": 32,
       "classification": "internal"
     }}]
   }}],
@@ -403,11 +402,11 @@ fn project_bytes(source_revision: &str) -> Vec<u8> {
     "id": "reader",
     "principalClaim": "principal",
     "requiredScopes": "unrestricted",
-    "permissions": [{{
+    "permissions": {{"entities": [{{
       "rowBoundaries": "unrestricted", "entity": "case",
       "operations": ["get", "list"],
       "readableFields": ["code"]
-    }}]
+    }}]}}
   }}]
 }}"#
     );

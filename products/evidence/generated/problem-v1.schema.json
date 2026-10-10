@@ -7,7 +7,7 @@
     {
       "properties": {
         "code": {
-          "const": "evidence.invalid_request"
+          "const": "evidence.invalid-request"
         },
         "detail": {
           "const": "the Evidence request is invalid"
@@ -19,14 +19,14 @@
           "const": "Evidence request is invalid"
         },
         "type": {
-          "const": "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request"
+          "const": "https://id.registrystack.org/problems/registry-evidence/evidence/invalid-request"
         }
       }
     },
     {
       "properties": {
         "code": {
-          "const": "request.selector_invalid"
+          "const": "request.selector-invalid"
         },
         "detail": {
           "const": "selector does not match an available request profile"
@@ -38,14 +38,14 @@
           "const": "Selector is invalid"
         },
         "type": {
-          "const": "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid"
+          "const": "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid"
         }
       }
     },
     {
       "properties": {
         "code": {
-          "const": "auth.invalid_credential"
+          "const": "auth.invalid-credential"
         },
         "detail": {
           "const": "bearer access token validation failed"
@@ -57,7 +57,7 @@
           "const": "Bearer access token is invalid"
         },
         "type": {
-          "const": "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential"
+          "const": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
         }
       }
     },
@@ -121,7 +121,7 @@
     {
       "properties": {
         "code": {
-          "const": "evidence.rate_limited"
+          "const": "evidence.rate-limited"
         },
         "detail": {
           "const": "the Evidence request rate is exhausted"
@@ -133,7 +133,7 @@
           "const": "Evidence request rate is exhausted"
         },
         "type": {
-          "const": "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited"
+          "const": "https://id.registrystack.org/problems/registry-evidence/evidence/rate-limited"
         }
       }
     },
@@ -178,7 +178,7 @@
     {
       "properties": {
         "code": {
-          "const": "resource.not_found"
+          "const": "resource.not-found"
         },
         "detail": {
           "const": "the requested resource was not found"
@@ -190,7 +190,7 @@
           "const": "Requested resource was not found"
         },
         "type": {
-          "const": "https://id.registrystack.org/problems/registry-evidence/resource/not_found"
+          "const": "https://id.registrystack.org/problems/registry-evidence/resource/not-found"
         }
       }
     }
@@ -198,16 +198,16 @@
   "properties": {
     "code": {
       "enum": [
-        "evidence.invalid_request",
-        "request.selector_invalid",
-        "auth.invalid_credential",
+        "evidence.invalid-request",
+        "request.selector-invalid",
+        "auth.invalid-credential",
         "evidence.denied",
         "format.unsupported",
         "evidence.unavailable",
-        "evidence.rate_limited",
+        "evidence.rate-limited",
         "source.unavailable",
         "service.unavailable",
-        "resource.not_found"
+        "resource.not-found"
       ],
       "type": "string"
     },
@@ -260,16 +260,16 @@
     },
     "type": {
       "enum": [
-        "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request",
-        "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid",
-        "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential",
+        "https://id.registrystack.org/problems/registry-evidence/evidence/invalid-request",
+        "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid",
+        "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential",
         "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
         "https://id.registrystack.org/problems/registry-evidence/format/unsupported",
         "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable",
-        "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited",
+        "https://id.registrystack.org/problems/registry-evidence/evidence/rate-limited",
         "https://id.registrystack.org/problems/registry-evidence/source/unavailable",
         "https://id.registrystack.org/problems/registry-evidence/service/unavailable",
-        "https://id.registrystack.org/problems/registry-evidence/resource/not_found"
+        "https://id.registrystack.org/problems/registry-evidence/resource/not-found"
       ],
       "type": "string"
     }

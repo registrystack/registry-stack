@@ -7,8 +7,9 @@ use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_config::contains_environment_expression;
 pub use registry_platform_hooks::{HookHandlerSource, HookPhase};
 use registry_platform_yaml::{
-    ApiVersion, BoundedU32, BoundedU64, DataLiteral, Digest, EnvelopeRule, Expect, FormatSpec,
-    Invalid, LocalId, Reader, Refusal, RemovedKey, ScalarHook, ScalarSite, Severity, Url,
+    ApiVersion, BoundedU32, BoundedU64, Digest, EnvelopeRule, Expect, ExternalId, FormatSpec,
+    Invalid, LocalId, Reader, Refusal, RemovedKey, RetiredApiVersion, ScalarHook, ScalarSite,
+    Severity, Url,
 };
 pub use registry_platform_yaml::{Decoded, Report};
 use serde::{
@@ -74,14 +75,14 @@ pub struct RegistryProject {
     pub evidence_providers: Vec<crate::action_evidence_contracts::EvidenceProviderSource>,
     pub api_version: String,
     pub kind: String,
-    pub registry: RegistryIdentitySource,
+    pub project: RegistryIdentitySource,
     #[serde(default)]
     pub package: Option<PackageIdentitySource>,
     #[serde(default)]
     pub manifest_projection: Option<ManifestProjectionSource>,
     #[serde(default)]
     pub modules: Vec<ModuleLockSource>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "unique_ids")]
     pub entities: Vec<EntitySource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<ActionSource>,
@@ -119,7 +120,7 @@ pub struct StatisticalDatasetSource {
 #[serde(
     remote = "Self",
     deny_unknown_fields,
-    rename_all = "snake_case",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
@@ -140,7 +141,7 @@ serialize_tagged_union!(StatisticalPeriodSource, tag = "type");
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum StatisticalPeriodGranularitySource {
     Day,
     Month,
@@ -172,7 +173,7 @@ impl Serialize for StatisticalValiditySource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum StatisticalTemporalValiditySource {
     Temporal,
 }
@@ -226,6 +227,8 @@ pub struct RecipientsSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RecipientOrganizationSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub name: String,
     pub contact: String,
@@ -237,6 +240,8 @@ pub struct RecipientOrganizationSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RecipientGroupSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub name: String,
     pub members: Vec<String>,
@@ -246,6 +251,8 @@ pub struct RecipientGroupSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RegistryIdentitySource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub version: String,
     pub default_language: String,
@@ -288,7 +295,11 @@ pub struct ManifestProjectionSource {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ManifestProjectionTextSource {
     Plain(String),
-    Localized(BTreeMap<String, String>),
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "external_id_map_schema::<String>")
+    )]
+    Localized(BTreeMap<ExternalId, String>),
 }
 registry_platform_yaml::shape_union!(ManifestProjectionTextSource {
     scalar => Plain,
@@ -341,6 +352,8 @@ pub struct ManifestProjectionStandardsSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionApplicationProfileSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub version: String,
 }
@@ -349,6 +362,8 @@ pub struct ManifestProjectionApplicationProfileSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionPublisherSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -361,6 +376,8 @@ pub struct ManifestProjectionPublisherSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionDatasetSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iri: Option<String>,
@@ -389,6 +406,8 @@ pub struct ManifestProjectionDatasetSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionPublicServiceSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub title: ManifestProjectionTextSource,
 }
@@ -397,6 +416,8 @@ pub struct ManifestProjectionPublicServiceSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionDataServiceSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iri: Option<String>,
@@ -417,6 +438,8 @@ pub struct ManifestProjectionDataServiceSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionDistributionSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub dataset: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -451,6 +474,8 @@ pub struct ManifestProjectionDistributionSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionEntitySource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<ManifestProjectionTextSource>,
@@ -476,6 +501,8 @@ pub struct ManifestProjectionIdentifierSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionFieldSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     #[serde(default)]
     pub concepts: Vec<String>,
@@ -493,12 +520,14 @@ pub struct ManifestProjectionFieldSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionVocabularySource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub scheme_iri: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external_ref: Option<String>,
+    pub external_reference: Option<String>,
     #[serde(default)]
     pub concepts: Vec<ManifestProjectionVocabularyConceptSource>,
 }
@@ -516,7 +545,7 @@ pub struct ManifestProjectionVocabularyConceptSource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ManifestProjectionDatasetStatus {
     UnderDevelopment,
     Active,
@@ -529,6 +558,8 @@ pub enum ManifestProjectionDatasetStatus {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ModuleLockSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub version: String,
     #[serde(default, deserialize_with = "optional_digest_text")]
@@ -541,6 +572,8 @@ pub struct ModuleLockSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RegistryModule {
     /// Stable module identifier, referenced by the project's module lock.
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     /// Module version recorded alongside its content digest in the project.
     pub version: String,
@@ -548,7 +581,7 @@ pub struct RegistryModule {
     #[serde(default)]
     pub dependencies: Vec<String>,
     /// Entities introduced by this module.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "unique_ids")]
     pub entities: Vec<EntitySource>,
     /// Additive contributions to entities already declared by the project or another module.
     #[serde(default)]
@@ -565,10 +598,42 @@ pub struct ModuleAssetSource {
     pub bytes: Vec<u8>,
 }
 
+/// Named items read as the shared reader's `UniqueIdList`: an id one list
+/// writes twice is refused with `config.duplicate-id` at the second item's
+/// `id` (CFG-ID-5).
+fn unique_ids<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + registry_platform_yaml::Identified,
+{
+    registry_platform_yaml::UniqueIdList::<T>::deserialize(deserializer)
+        .map(registry_platform_yaml::UniqueIdList::into_vec)
+}
+
+/// A set written as a list, read as the shared reader's `UniqueList` and kept
+/// in the order written: a repeated item is refused with
+/// `config.duplicate-item` at the repeat (CFG-ID-6).
+fn unique_items<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Eq + std::hash::Hash,
+{
+    registry_platform_yaml::UniqueList::<T>::deserialize(deserializer)
+        .map(|items| items.into_iter().collect())
+}
+
+impl registry_platform_yaml::Identified for EntitySource {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EntitySource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     // See RegistryIdentitySource::canonical_base_iri. New authoring schemas
     // require this member; serde's empty compatibility value only exists so
@@ -679,16 +744,12 @@ pub struct AccessLogSource {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[cfg_attr(
         feature = "schema",
-        schemars(extend(
-            "maxProperties" = MAX_ACCESS_LOG_EXEMPTIONS,
-            "propertyNames" = {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 64,
-                "pattern": "^[a-z][a-z0-9_-]*$"
-            }
-        ))
+        schemars(
+            schema_with = "local_id_map_schema::<AccessLogExemptionSource>",
+            extend("maxProperties" = MAX_ACCESS_LOG_EXEMPTIONS)
+        )
     )]
+    #[serde(deserialize_with = "local_id_map")]
     pub exemptions: BTreeMap<String, AccessLogExemptionSource>,
 }
 
@@ -745,19 +806,30 @@ pub struct ConsentDecisionSource {
     pub refusals: Vec<String>,
 }
 
-/// Validity of a consent decision. Every give expires within `maxDuration`.
+/// Validity of a consent decision. Every give expires within
+/// `maximumDurationDays`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ConsentValiditySource {
     /// A required timestamp field; a give is active only from this time.
     pub from: String,
-    /// An optional timestamp field ending the give earlier than `maxDuration`.
+    /// An optional timestamp field ending the give earlier than
+    /// `maximumDurationDays`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<String>,
-    /// An ISO 8601 duration such as `P365D`, at most ten years.
-    pub max_duration: String,
+    /// The longest a give lasts, in whole days of 24 hours: at most 3652,
+    /// ten years.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, MAX_CONSENT_DURATION_DAYS>")
+    )]
+    pub maximum_duration_days: u32,
 }
+
+/// The longest a consent give may last: the whole days in ten years of
+/// 365.25 days.
+pub const MAX_CONSENT_DURATION_DAYS: u32 = 3652;
 
 /// A consent check ANDed into one read permission.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -774,7 +846,7 @@ pub struct ConsentRequirementSource {
 /// Who an action creates consent rows for.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ConsentIssuerSource {
     /// The subject, bound through a principal link entity.
     #[serde(rename = "self")]
@@ -793,6 +865,8 @@ pub const MAX_ATTACHMENT_CONTENT_TYPES: usize = 16;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AttachmentSlotSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub required: bool,
     #[serde(deserialize_with = "bounded_u32::<_, 1, MAX_ATTACHMENT_BYTES>")]
@@ -882,7 +956,7 @@ pub struct GeoJsonSource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum MutationMode {
     Mutable,
     CreateOnly,
@@ -936,7 +1010,7 @@ pub struct ChangeRequestPlannerSource {
 /// diagnostic.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ActionHandlerKindSource {
     Rhai,
     Wasm,
@@ -948,7 +1022,7 @@ pub enum ActionHandlerKindSource {
 /// the reviewed change-request authoring contract.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ChangeRequestPlannerKindSource {
     Rhai,
     Wasm,
@@ -1010,6 +1084,8 @@ impl ChangeRequestPreconditionsSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ChangeRequestGuardTargetSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub entity: String,
     pub from_field: String,
@@ -1024,11 +1100,19 @@ pub struct ChangeRequestPredicateSource {
     pub field: String,
     #[serde(
         default,
-        deserialize_with = "present_data_literal",
+        deserialize_with = "present_scalar_literal",
         skip_serializing_if = "Option::is_none"
     )]
-    #[cfg_attr(feature = "schema", schemars(with = "DataLiteral"))]
+    #[cfg_attr(feature = "schema", schemars(with = "EventScalarValue"))]
     pub equals: Option<Value>,
+    /// Requires the stored value to be unset. Only `true` is read.
+    #[serde(
+        default,
+        deserialize_with = "only_true",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "only_true_schema"))]
+    pub is_null: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_from_request_field: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1043,7 +1127,7 @@ pub struct ChangeRequestPredicateSource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ChangeRequestCurrentDatePredicateSource {
     OnOrAfter,
     OnOrBefore,
@@ -1053,9 +1137,16 @@ pub enum ChangeRequestCurrentDatePredicateSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ChangeRequestEvidenceSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub provider: String,
     pub requirement: String,
+    #[serde(deserialize_with = "external_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "external_id_map_schema::<ChangeRequestEvidenceSubjectSource>")
+    )]
     pub subjects: BTreeMap<String, ChangeRequestEvidenceSubjectSource>,
     #[serde(default)]
     pub requires: Vec<ChangeRequestEvidenceRequirementSource>,
@@ -1078,19 +1169,24 @@ pub struct ChangeRequestEvidenceSubjectSource {
     pub profile: String,
     /// Exact governed selector-profile field map. Every profile field must be
     /// present exactly once and no undeclared field is admitted.
+    #[serde(deserialize_with = "external_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "external_id_map_schema::<ChangeRequestSelectorSource>")
+    )]
     pub selectors: BTreeMap<String, ChangeRequestSelectorSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(remote = "Self", deny_unknown_fields, rename_all = "snake_case")]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "source"))]
+#[serde(remote = "Self", deny_unknown_fields, rename_all = "kebab-case")]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum ChangeRequestSelectorSource {
     RequestField { field: String },
     TargetField { target: String, field: String },
 }
-registry_platform_yaml::tagged_union!(ChangeRequestSelectorSource, tag = "source");
-serialize_tagged_union!(ChangeRequestSelectorSource, tag = "source");
+registry_platform_yaml::tagged_union!(ChangeRequestSelectorSource);
+serialize_tagged_union!(ChangeRequestSelectorSource, tag = "type");
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1115,7 +1211,7 @@ pub struct ChangeRequestEvidenceRequirementSource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub enum ChangeRequestRetentionModeSource {
     #[default]
     Retain,
@@ -1135,10 +1231,20 @@ pub struct ChangeRequestRetentionSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ChangeRequestEffectSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "optional_local_id")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
     pub id: Option<String>,
     pub target: ChangeRequestTargetSource,
     pub operation: Operation,
     #[serde(default)]
+    #[serde(deserialize_with = "local_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "local_id_map_schema::<ChangeRequestValueSource>")
+    )]
     pub set: BTreeMap<String, ChangeRequestValueSource>,
     #[serde(default)]
     pub clear: UniqueSet<String>,
@@ -1170,6 +1276,8 @@ pub struct ChangeRequestValueSource {
 pub struct ActionSource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<crate::action_evidence_contracts::ActionEvidenceSource>,
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handler: Option<ActionHandlerSource>,
@@ -1194,7 +1302,7 @@ pub const ACTION_HANDLER_ABI_V1: &str = "registry.action-handler/v1";
 ///
 /// `handler` is [`HookHandlerSource`], the same declaration an entity hook
 /// carries, so this product spells a handler one way. It is flattened, so the
-/// authored member set stays `kind`, the source reference the kind names,
+/// authored member set stays `type`, the source reference the type names,
 /// `abi`, `writes`, and `refusals`. `writes` and `refusals` are this
 /// product's own: they bound what the handler may write and the refusals it
 /// may return, and no hook declares them.
@@ -1202,7 +1310,7 @@ pub const ACTION_HANDLER_ABI_V1: &str = "registry.action-handler/v1";
 /// Two rules narrow the shared declaration to what this path runs. `abi` is
 /// optional there and required here, refused at deserialization, because
 /// every backend an action may declare speaks one. The `url` kind is refused
-/// by the compiler at `actions[].handler.kind`, because an action handler
+/// by the compiler at `actions[].handler.type`, because an action handler
 /// runs inside the triggering transaction and cannot be remote.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1280,7 +1388,7 @@ impl<'de> Deserialize<'de> for ActionHandlerSource {
         #[derive(Deserialize)]
         #[serde(field_identifier, rename_all = "camelCase")]
         enum Field {
-            Kind,
+            Type,
             Script,
             Module,
             Abi,
@@ -1308,7 +1416,7 @@ impl<'de> Deserialize<'de> for ActionHandlerSource {
                 let mut refusals: Option<Vec<ActionHandlerRefusalSource>> = None;
                 while let Some(field) = map.next_key::<Field>()? {
                     let member = match field {
-                        Field::Kind => "kind",
+                        Field::Type => "type",
                         Field::Script => "script",
                         Field::Module => "module",
                         Field::Abi => "abi",
@@ -1367,7 +1475,7 @@ fn action_handler_half_schema(generator: &mut schemars::SchemaGenerator) -> sche
     schemars::json_schema!({
         "type": "object",
         "properties": {
-            "kind": kind,
+            "type": kind,
             "script": {
                 "description": "The Rhai handler script path. Declared for rhai handlers only; the\ncompiler enforces the pairing with the declared backend.",
                 "type": ["string", "null"],
@@ -1378,7 +1486,7 @@ fn action_handler_half_schema(generator: &mut schemars::SchemaGenerator) -> sche
             },
             "abi": {"type": "string", "enum": [ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2]},
         },
-        "required": ["kind", "abi"],
+        "required": ["type", "abi"],
     })
 }
 
@@ -1386,10 +1494,24 @@ fn action_handler_half_schema(generator: &mut schemars::SchemaGenerator) -> sche
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionHandlerWriteSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub target: ActionTargetSource,
     pub operation: Operation,
     pub fields: Vec<String>,
+}
+
+impl ChangeRequestPredicateSource {
+    /// The literal the stored value is compared with: `null` when `isNull`
+    /// is written, else the `equals` literal.
+    pub(crate) fn literal(&self) -> Option<Value> {
+        if self.is_null {
+            Some(Value::Null)
+        } else {
+            self.equals.clone()
+        }
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1408,19 +1530,40 @@ pub struct ActionRequirementSource {
     pub field: String,
     #[serde(
         default,
-        deserialize_with = "present_data_literal",
+        deserialize_with = "present_scalar_literal",
         skip_serializing_if = "Option::is_none"
     )]
-    #[cfg_attr(feature = "schema", schemars(with = "DataLiteral"))]
+    #[cfg_attr(feature = "schema", schemars(with = "EventScalarValue"))]
     pub equals: Option<Value>,
+    /// Requires the stored value to be unset. Only `true` is read.
+    #[serde(
+        default,
+        deserialize_with = "only_true",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "only_true_schema"))]
+    pub is_null: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_input: Option<String>,
+}
+
+impl ActionRequirementSource {
+    /// The literal the stored value is compared with: `null` when `isNull`
+    /// is written, else the `equals` literal.
+    pub(crate) fn literal(&self) -> Option<Value> {
+        if self.is_null {
+            Some(Value::Null)
+        } else {
+            self.equals.clone()
+        }
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionInputSource {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_name: Option<String>,
@@ -1464,10 +1607,20 @@ impl<'de> Deserialize<'de> for ActionInputSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionEffectSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "optional_local_id")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
     pub id: Option<String>,
     pub target: ActionTargetSource,
     pub operation: Operation,
     #[serde(default)]
+    #[serde(deserialize_with = "local_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "local_id_map_schema::<ActionValueSource>")
+    )]
     pub set: BTreeMap<String, ActionValueSource>,
     #[serde(default)]
     pub clear: UniqueSet<String>,
@@ -1493,85 +1646,26 @@ pub struct ActionValueSource {
     pub from_effect: Option<String>,
 }
 
-/// Either a required review, naming `authority` and `policyId`, or
-/// `mode: none`. The members present select the form; a review mixing the two
-/// forms is refused.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "schema", schemars(untagged))]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ChangeRequestReviewSource {
-    Required(ChangeRequestReviewRequirementSource),
-    None(ChangeRequestNoReviewSource),
-}
-
-/// Every member either review form may carry, read before the form is chosen.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct ChangeRequestReviewMembers {
-    #[serde(default)]
-    authority: Option<String>,
-    #[serde(default)]
-    policy_id: Option<String>,
-    #[serde(default)]
-    mode: Option<ChangeRequestNoReviewModeSource>,
-}
-
-impl<'de> Deserialize<'de> for ChangeRequestReviewSource {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let members = ChangeRequestReviewMembers::deserialize(deserializer)?;
-        match members {
-            ChangeRequestReviewMembers {
-                authority: None,
-                policy_id: None,
-                mode: Some(mode),
-            } => Ok(Self::None(ChangeRequestNoReviewSource { mode })),
-            ChangeRequestReviewMembers {
-                authority,
-                policy_id,
-                mode: None,
-            } => Ok(Self::Required(ChangeRequestReviewRequirementSource {
-                authority: authority.ok_or_else(|| D::Error::missing_field("authority"))?,
-                policy_id: policy_id.ok_or_else(|| D::Error::missing_field("policyId"))?,
-            })),
-            ChangeRequestReviewMembers { mode: Some(_), .. } => Err(Invalid::expected(
-                "a review with either mode, or authority and policyId",
-                "Remove mode to require a review, or remove authority and policyId.",
-            )
-            .into_error()),
-        }
-    }
-}
-
-impl Serialize for ChangeRequestReviewSource {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Required(required) => required.serialize(serializer),
-            Self::None(none) => none.serialize(serializer),
-        }
-    }
-}
-
+/// Either a required review, `type: required` naming `authority` and
+/// `policyId`, or `type: none`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestReviewRequirementSource {
-    pub authority: String,
-    pub policy_id: String,
+#[serde(
+    remote = "Self",
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub enum ChangeRequestReviewSource {
+    Required {
+        authority: String,
+        policy_id: String,
+    },
+    None {},
 }
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ChangeRequestNoReviewSource {
-    pub mode: ChangeRequestNoReviewModeSource,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChangeRequestNoReviewModeSource {
-    None,
-}
+registry_platform_yaml::tagged_union!(ChangeRequestReviewSource);
+serialize_tagged_union!(ChangeRequestReviewSource, tag = "type");
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -1585,7 +1679,7 @@ pub struct ChangeRequestOnApprovedSource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ChangeRequestOnApprovedModeSource {
     #[default]
     Manual,
@@ -1594,7 +1688,7 @@ pub enum ChangeRequestOnApprovedModeSource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum Classification {
     Public,
     Internal,
@@ -1719,6 +1813,7 @@ enum FieldSourceSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct BooleanFieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -1736,6 +1831,7 @@ struct BooleanFieldSourceSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct StringFieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -1746,9 +1842,10 @@ struct StringFieldSourceSchema {
     classification: Classification,
     #[serde(default)]
     valid_time_role: Option<ValidTimeRole>,
-    #[serde(default)]
+    #[serde(default, rename = "minimumLength")]
     #[schemars(with = "BoundedU32<0, MAX_STRING_FIELD_LENGTH>")]
     min_length: u32,
+    #[serde(rename = "maximumLength")]
     #[schemars(with = "BoundedU32<1, MAX_STRING_FIELD_LENGTH>")]
     max_length: u32,
     #[serde(default)]
@@ -1764,6 +1861,7 @@ struct StringFieldSourceSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct TextFieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -1774,6 +1872,7 @@ struct TextFieldSourceSchema {
     classification: Classification,
     #[serde(default)]
     valid_time_role: Option<ValidTimeRole>,
+    #[serde(rename = "maximumLength")]
     #[schemars(with = "BoundedU32<1, MAX_TEXT_FIELD_LENGTH>")]
     max_length: u32,
     #[serde(default)]
@@ -1789,6 +1888,7 @@ struct TextFieldSourceSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Int64FieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -1806,6 +1906,7 @@ struct Int64FieldSourceSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct DecimalFieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -1835,6 +1936,7 @@ struct DecimalFieldSourceSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct DateFieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -1856,6 +1958,7 @@ struct DateFieldSourceSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct TimestampFieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -1873,6 +1976,7 @@ struct TimestampFieldSourceSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct UuidFieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -1890,6 +1994,7 @@ struct UuidFieldSourceSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct VocabularyCodeFieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -1910,6 +2015,7 @@ struct VocabularyCodeFieldSourceSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ReferenceFieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -1930,6 +2036,7 @@ struct ReferenceFieldSourceSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Crs84PointFieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -1951,6 +2058,7 @@ struct Crs84PointFieldSourceSchema {
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct StructuredFieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -1961,6 +2069,7 @@ struct StructuredFieldSourceSchema {
     classification: Classification,
     #[serde(default)]
     valid_time_role: Option<ValidTimeRole>,
+    #[serde(rename = "maximumBytes")]
     #[schemars(with = "BoundedU32<1, MAX_STRUCTURED_VALUE_BYTES>")]
     max_bytes: u32,
     #[schemars(extend("x-registry-foreign" = "json-schema-2020-12"))]
@@ -1974,7 +2083,8 @@ struct StructuredFieldSourceSchema {
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(inline)]
 enum BooleanFieldKindSchema {
     Boolean,
 }
@@ -1982,7 +2092,8 @@ enum BooleanFieldKindSchema {
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(inline)]
 enum StringFieldKindSchema {
     String,
 }
@@ -1990,7 +2101,8 @@ enum StringFieldKindSchema {
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(inline)]
 enum TextFieldKindSchema {
     Text,
 }
@@ -1998,7 +2110,8 @@ enum TextFieldKindSchema {
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(inline)]
 enum Int64FieldKindSchema {
     Int64,
 }
@@ -2006,7 +2119,8 @@ enum Int64FieldKindSchema {
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(inline)]
 enum DecimalFieldKindSchema {
     Decimal,
 }
@@ -2014,7 +2128,8 @@ enum DecimalFieldKindSchema {
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(inline)]
 enum DateFieldKindSchema {
     Date,
 }
@@ -2022,7 +2137,8 @@ enum DateFieldKindSchema {
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(inline)]
 enum TimestampFieldKindSchema {
     Timestamp,
 }
@@ -2030,7 +2146,8 @@ enum TimestampFieldKindSchema {
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(inline)]
 enum UuidFieldKindSchema {
     Uuid,
 }
@@ -2038,6 +2155,7 @@ enum UuidFieldKindSchema {
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
+#[schemars(inline)]
 enum VocabularyCodeFieldKindSchema {
     #[serde(rename = "vocabulary-code")]
     VocabularyCode,
@@ -2046,7 +2164,8 @@ enum VocabularyCodeFieldKindSchema {
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(inline)]
 enum ReferenceFieldKindSchema {
     Reference,
 }
@@ -2054,6 +2173,7 @@ enum ReferenceFieldKindSchema {
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
+#[schemars(inline)]
 enum Crs84PointFieldKindSchema {
     #[serde(rename = "crs84-point")]
     Crs84Point,
@@ -2062,7 +2182,8 @@ enum Crs84PointFieldKindSchema {
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
+#[schemars(inline)]
 enum StructuredFieldKindSchema {
     Structured,
 }
@@ -2130,6 +2251,7 @@ impl<'de> Deserialize<'de> for FieldSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DerivedFieldSource {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_name: Option<String>,
@@ -2177,15 +2299,15 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
             reject_type_options::<E>(raw, TypeOptionAllowances::STRING)?;
             let max_length = raw.max_length.ok_or_else(|| {
                 Invalid::expected(
-                    "a string field with maxLength",
-                    "Declare maxLength on the string field.",
+                    "a string field with maximumLength",
+                    "Declare maximumLength on the string field.",
                 )
                 .into_error()
             })?;
             if max_length > MAX_STRING_FIELD_LENGTH {
                 return Err(Invalid::expected(
-                    "a string field with maxLength from 1 to 1000000",
-                    "Lower maxLength to at most 1000000, or declare the field as text.",
+                    "a string field with maximumLength from 1 to 1000000",
+                    "Lower maximumLength to at most 1000000, or declare the field as text.",
                 )
                 .into_error());
             }
@@ -2199,8 +2321,8 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
             FieldTypeSource::Text {
                 max_length: raw.max_length.ok_or_else(|| {
                     Invalid::expected(
-                        "a text field with maxLength",
-                        "Declare maxLength on the text field.",
+                        "a text field with maximumLength",
+                        "Declare maximumLength on the text field.",
                     )
                     .into_error()
                 })?,
@@ -2303,8 +2425,8 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
             FieldTypeSource::Structured {
                 max_bytes: raw.max_bytes.ok_or_else(|| {
                     Invalid::expected(
-                        "a structured field with maxBytes",
-                        "Declare maxBytes on the structured field.",
+                        "a structured field with maximumBytes",
+                        "Declare maximumBytes on the structured field.",
                     )
                     .into_error()
                 })?,
@@ -2324,6 +2446,7 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct RawFieldSource {
+    #[serde(deserialize_with = "local_id")]
     id: String,
     #[serde(default)]
     api_name: Option<String>,
@@ -2336,6 +2459,7 @@ struct RawFieldSource {
     valid_time_role: Option<ValidTimeRole>,
     #[serde(
         default,
+        rename = "minimumLength",
         deserialize_with = "optional_bounded_u32::<_, 0, MAX_STRING_FIELD_LENGTH>"
     )]
     min_length: Option<u32>,
@@ -2343,6 +2467,7 @@ struct RawFieldSource {
     // holds a string to its own.
     #[serde(
         default,
+        rename = "maximumLength",
         deserialize_with = "optional_bounded_u32::<_, 1, MAX_TEXT_FIELD_LENGTH>"
     )]
     max_length: Option<u32>,
@@ -2366,6 +2491,7 @@ struct RawFieldSource {
     bbox: Option<Crs84BboxSource>,
     #[serde(
         default,
+        rename = "maximumBytes",
         deserialize_with = "optional_bounded_u32::<_, 1, MAX_STRUCTURED_VALUE_BYTES>"
     )]
     max_bytes: Option<u32>,
@@ -2391,6 +2517,8 @@ struct RawFieldSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DerivedSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub sql: String,
     pub key: String,
@@ -2402,7 +2530,7 @@ pub struct DerivedSource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum DerivedExecutionSource {
     #[default]
     Live,
@@ -2412,6 +2540,8 @@ pub enum DerivedExecutionSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SelectorProfileSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub fields: Vec<String>,
 }
@@ -2420,6 +2550,8 @@ pub struct SelectorProfileSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ReadPathSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub through: String,
     pub to: String,
@@ -2427,7 +2559,7 @@ pub struct ReadPathSource {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 enum RawFieldKind {
     Boolean,
     String,
@@ -2524,10 +2656,10 @@ fn reject_type_options<E: serde::de::Error>(
     {
         return Err(Invalid::expected(
             "only the options the field's type accepts",
-            "Remove the options the type does not take: string takes minLength and maxLength, \
-             text maxLength, decimal precision, scale, minimum, and maximum, vocabulary-code \
-             vocabulary and values, reference target and onDelete, crs84-point precision and \
-             bbox, and structured maxBytes and schema.",
+            "Remove the options the type does not take: string takes minimumLength and \
+             maximumLength, text maximumLength, decimal precision, scale, minimum, and maximum, \
+             vocabulary-code vocabulary and values, reference target and onDelete, crs84-point \
+             precision and bbox, and structured maximumBytes and schema.",
         )
         .into_error());
     }
@@ -2539,18 +2671,19 @@ fn reject_type_options<E: serde::de::Error>(
 #[serde(
     deny_unknown_fields,
     tag = "type",
-    rename_all = "snake_case",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
 pub enum FieldTypeSource {
     Boolean,
     String {
-        #[serde(default)]
+        #[serde(default, rename = "minimumLength")]
         #[cfg_attr(
             feature = "schema",
             schemars(with = "BoundedU32<0, MAX_STRING_FIELD_LENGTH>")
         )]
         min_length: u32,
+        #[serde(rename = "maximumLength")]
         #[cfg_attr(
             feature = "schema",
             schemars(with = "BoundedU32<1, MAX_STRING_FIELD_LENGTH>")
@@ -2558,6 +2691,7 @@ pub enum FieldTypeSource {
         max_length: u32,
     },
     Text {
+        #[serde(rename = "maximumLength")]
         #[cfg_attr(
             feature = "schema",
             schemars(with = "BoundedU32<1, MAX_TEXT_FIELD_LENGTH>")
@@ -2606,6 +2740,7 @@ pub enum FieldTypeSource {
         bbox: Option<Crs84BboxSource>,
     },
     Structured {
+        #[serde(rename = "maximumBytes")]
         #[cfg_attr(
             feature = "schema",
             schemars(with = "BoundedU32<1, MAX_STRUCTURED_VALUE_BYTES>")
@@ -2628,14 +2763,14 @@ impl FieldTypeSource {
     }
 
     /// Whether this type only relaxes a length bound `previous` enforced with
-    /// a column check: a `text` `maxLength` rose, or a `string` `minLength`
-    /// fell under the same `maxLength`.
+    /// a column check: a `text` `maximumLength` rose, or a `string`
+    /// `minimumLength` fell under the same `maximumLength`.
     pub fn widens_length_limits_of(&self, previous: &FieldTypeSource) -> bool {
         self.widens_text_length_of(previous) || self.lowers_string_min_length_of(previous)
     }
 
-    /// Whether this is a `string` type with the same `maxLength` as
-    /// `previous` and a lower `minLength`. The minimum is a column check, so
+    /// Whether this is a `string` type with the same `maximumLength` as
+    /// `previous` and a lower `minimumLength`. The minimum is a column check, so
     /// the stored `varchar` column type is unchanged.
     pub fn lowers_string_min_length_of(&self, previous: &FieldTypeSource) -> bool {
         matches!(
@@ -2653,9 +2788,9 @@ impl FieldTypeSource {
         )
     }
 
-    /// Whether this is a `text` type whose `maxLength` is higher than
+    /// Whether this is a `text` type whose `maximumLength` is higher than
     /// `previous`'s. A `text` column bounds its length with a check, so the
-    /// stored column type stays `text`. A `string` field's `maxLength` is its
+    /// stored column type stays `text`. A `string` field's `maximumLength` is its
     /// `varchar` column type, so raising it is a type change and not covered.
     pub fn widens_text_length_of(&self, previous: &FieldTypeSource) -> bool {
         matches!(
@@ -2701,9 +2836,9 @@ pub struct Crs84BboxSource {
 
 pub(crate) const MAX_STRUCTURED_SCHEMA_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_STRUCTURED_VALUE_BYTES: u32 = 1024 * 1024;
-/// The longest `maxLength` a string field or action input declares.
+/// The longest `maximumLength` a string field or action input declares.
 pub const MAX_STRING_FIELD_LENGTH: u32 = 1_000_000;
-/// The longest `maxLength` a text field or action input declares.
+/// The longest `maximumLength` a text field or action input declares.
 pub const MAX_TEXT_FIELD_LENGTH: u32 = 10_000_000;
 /// The largest decimal `precision` and `scale`.
 pub const MAX_DECIMAL_PRECISION: u32 = 38;
@@ -2957,7 +3092,7 @@ fn object_schemas_are_closed(value: &Value) -> bool {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReferenceDelete {
     #[default]
     Restrict,
@@ -2965,7 +3100,7 @@ pub enum ReferenceDelete {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ValidTimeRole {
     ValidFrom,
     ValidTo,
@@ -2976,13 +3111,18 @@ pub enum ValidTimeRole {
 #[serde(
     remote = "Self",
     deny_unknown_fields,
-    rename_all = "snake_case",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum ConstraintSource {
     Unique {
         #[serde(default)]
+        #[serde(deserialize_with = "optional_local_id")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "Option<registry_platform_yaml::LocalId>")
+        )]
         id: Option<String>,
         fields: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2990,6 +3130,11 @@ pub enum ConstraintSource {
     },
     Compare {
         #[serde(default)]
+        #[serde(deserialize_with = "optional_local_id")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "Option<registry_platform_yaml::LocalId>")
+        )]
         id: Option<String>,
         left: String,
         operator: ComparisonOperator,
@@ -2997,6 +3142,11 @@ pub enum ConstraintSource {
     },
     IntRange {
         #[serde(default)]
+        #[serde(deserialize_with = "optional_local_id")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "Option<registry_platform_yaml::LocalId>")
+        )]
         id: Option<String>,
         field: String,
         #[serde(default)]
@@ -3008,6 +3158,11 @@ pub enum ConstraintSource {
     },
     Vocabulary {
         #[serde(default)]
+        #[serde(deserialize_with = "optional_local_id")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "Option<registry_platform_yaml::LocalId>")
+        )]
         id: Option<String>,
         field: String,
         values: Vec<String>,
@@ -3015,6 +3170,11 @@ pub enum ConstraintSource {
     #[serde(rename = "temporal-non-overlap")]
     TemporalNonOverlap {
         #[serde(default)]
+        #[serde(deserialize_with = "optional_local_id")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "Option<registry_platform_yaml::LocalId>")
+        )]
         id: Option<String>,
         scope_fields: Vec<String>,
         #[serde(default)]
@@ -3023,26 +3183,26 @@ pub enum ConstraintSource {
         end_field: Option<String>,
     },
 }
-registry_platform_yaml::tagged_union!(ConstraintSource, tag = "kind");
-serialize_tagged_union!(ConstraintSource, tag = "kind");
+registry_platform_yaml::tagged_union!(ConstraintSource);
+serialize_tagged_union!(ConstraintSource, tag = "type");
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(
     remote = "Self",
     deny_unknown_fields,
-    rename_all = "snake_case",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum UniqueWhenPredicate {
     FieldEquals { field: String, value: Value },
     FieldIsNull { field: String },
     FieldIsNotNull { field: String },
     ActiveLifecycle {},
 }
-registry_platform_yaml::tagged_union!(UniqueWhenPredicate, tag = "kind");
-serialize_tagged_union!(UniqueWhenPredicate, tag = "kind");
+registry_platform_yaml::tagged_union!(UniqueWhenPredicate);
+serialize_tagged_union!(UniqueWhenPredicate, tag = "type");
 
 impl ConstraintSource {
     pub fn explicit_id(&self) -> Option<&str> {
@@ -3070,7 +3230,7 @@ pub struct TemporalSource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ComparisonOperator {
     LessThan,
     LessThanOrEqual,
@@ -3082,6 +3242,8 @@ pub enum ComparisonOperator {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct IndexSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub fields: Vec<String>,
 }
@@ -3090,6 +3252,8 @@ pub struct IndexSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccessProfileSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     #[serde(default)]
     pub default: bool,
@@ -3099,8 +3263,9 @@ pub struct AccessProfileSource {
     pub requester_clients: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_grant: Option<CompiledTaskGrantSource>,
-    #[serde(default)]
-    pub principal_claim: Option<String>,
+    /// The token claim that names the caller. Every profile serves
+    /// authenticated callers, so every profile names one.
+    pub principal_claim: String,
     #[serde(default)]
     /// All listed scopes must be present in the verified token.
     pub required_scopes: UniqueSet<String>,
@@ -3150,7 +3315,15 @@ pub struct AccessProfileSource {
     pub allow_count: bool,
     #[serde(default)]
     pub revision_access: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "unique_items",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "UniqueSet<ProvenanceFieldSource>")
+    )]
     pub provenance_fields: Vec<ProvenanceFieldSource>,
     #[serde(default)]
     pub allow_data_export: bool,
@@ -3159,7 +3332,7 @@ pub struct AccessProfileSource {
 /// Fields of request decision metadata governed separately from stored record fields.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum RequestMetadataFieldSource {
     ActorReference,
     Reason,
@@ -3178,7 +3351,7 @@ pub(crate) fn is_default_readable_request_fields(
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum Operation {
     Create,
     Get,
@@ -3203,15 +3376,21 @@ pub enum Operation {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ActorKindSource {
     Human,
     Agent,
     Service,
 }
 
+/// A member of a revision's `changeContext` a profile may read. Each value
+/// is spelled as the member it names is (CFG-NAME-2).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "schema",
+    schemars(extend("x-registry-member-names" = true))
+)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProvenanceFieldSource {
     Kind,
@@ -3265,7 +3444,7 @@ pub struct AccessRequirementsSource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum BoundaryOperator {
     Equals,
     In,
@@ -3285,6 +3464,8 @@ pub enum BoundaryOperator {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HookSource {
     /// Stable hook contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change.
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     /// When the hook runs relative to the triggering transaction.
     pub phase: HookPhase,
@@ -3314,17 +3495,17 @@ pub struct HookSource {
 /// A tagged shape leaves room for a later, separately governed rule ABI
 /// without turning fields into an ad hoc expression language. The shared
 /// reader's union helper decodes it, so an error inside a variant keeps its
-/// position and a `null` comparison literal is read as a value (CFG-SCHEMA-8,
-/// CFG-EMPTY-1).
+/// position (CFG-SCHEMA-8). An unset value is named in `beforeIsNull` or
+/// `afterIsNull`; `null` is never a comparison literal (CFG-EMPTY-1).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 #[serde(
     remote = "Self",
     deny_unknown_fields,
-    rename_all = "snake_case",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum EventConditionSource {
     Fields {
         /// Fields whose values must change. Only valid with the patched trigger.
@@ -3332,10 +3513,26 @@ pub enum EventConditionSource {
         changed: UniqueSet<String>,
         /// Required values before the change. Valid with patched and tombstoned triggers.
         #[serde(default)]
+        #[serde(deserialize_with = "local_id_map")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(schema_with = "local_id_map_schema::<EventScalarValue>")
+        )]
         before_equals: BTreeMap<String, EventScalarValue>,
         /// Required values after the change. Valid with created and patched triggers.
         #[serde(default)]
+        #[serde(deserialize_with = "local_id_map")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(schema_with = "local_id_map_schema::<EventScalarValue>")
+        )]
         after_equals: BTreeMap<String, EventScalarValue>,
+        /// Fields that must be unset before the change. Valid with patched and tombstoned triggers.
+        #[serde(default)]
+        before_is_null: UniqueSet<String>,
+        /// Fields that must be unset after the change. Valid with created and patched triggers.
+        #[serde(default)]
+        after_is_null: UniqueSet<String>,
     },
     RequestLifecycle {
         #[serde(default)]
@@ -3344,14 +3541,14 @@ pub enum EventConditionSource {
         to_states: UniqueSet<String>,
     },
 }
-registry_platform_yaml::tagged_union!(EventConditionSource, tag = "kind");
+registry_platform_yaml::tagged_union!(EventConditionSource);
 
 /// The serialized form of [`EventConditionSource`], kept byte-identical to
 /// the shape module digests are computed over.
 #[derive(Serialize)]
 #[serde(
-    tag = "kind",
-    rename_all = "snake_case",
+    tag = "type",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
 enum EventConditionWire<'a> {
@@ -3359,6 +3556,10 @@ enum EventConditionWire<'a> {
         changed: &'a BTreeSet<String>,
         before_equals: &'a BTreeMap<String, EventScalarValue>,
         after_equals: &'a BTreeMap<String, EventScalarValue>,
+        #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+        before_is_null: &'a BTreeSet<String>,
+        #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+        after_is_null: &'a BTreeSet<String>,
     },
     RequestLifecycle {
         transitions: &'a BTreeSet<String>,
@@ -3373,10 +3574,14 @@ impl Serialize for EventConditionSource {
                 changed,
                 before_equals,
                 after_equals,
+                before_is_null,
+                after_is_null,
             } => EventConditionWire::Fields {
                 changed,
                 before_equals,
                 after_equals,
+                before_is_null,
+                after_is_null,
             },
             Self::RequestLifecycle {
                 transitions,
@@ -3390,27 +3595,27 @@ impl Serialize for EventConditionSource {
     }
 }
 
-/// A comparison literal in the closed field-condition language.
+/// A comparison literal: a boolean, a number, or text.
 ///
-/// It is read as the shared reader's [`DataLiteral`], the one position where
-/// `null` is a value (CFG-EMPTY-1). Objects and arrays are refused during
+/// `null` is never one (CFG-EMPTY-1): an unset value is stated with `isNull`,
+/// `beforeIsNull`, or `afterIsNull`. Objects and arrays are refused during
 /// source parsing. The compiler then validates each scalar against the
-/// declared Registry field type.
+/// declared Registry field type. Schema name `ScalarLiteral`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EventScalarValue {
-    Null,
     Boolean(bool),
     Number(serde_json::Number),
     String(String),
 }
 
-impl From<DataLiteral> for EventScalarValue {
-    fn from(literal: DataLiteral) -> Self {
+const EXPECT_SCALAR_LITERAL: &str = "a boolean, a number, or text";
+
+impl From<EventScalarValue> for Value {
+    fn from(literal: EventScalarValue) -> Self {
         match literal {
-            DataLiteral::Null => EventScalarValue::Null,
-            DataLiteral::Boolean(value) => EventScalarValue::Boolean(value),
-            DataLiteral::Number(value) => EventScalarValue::Number(value),
-            DataLiteral::String(value) => EventScalarValue::String(value),
+            EventScalarValue::Boolean(value) => Value::Bool(value),
+            EventScalarValue::Number(value) => Value::Number(value),
+            EventScalarValue::String(value) => Value::String(value),
         }
     }
 }
@@ -3418,7 +3623,6 @@ impl From<DataLiteral> for EventScalarValue {
 impl Serialize for EventScalarValue {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            EventScalarValue::Null => serializer.serialize_unit(),
             EventScalarValue::Boolean(value) => serializer.serialize_bool(*value),
             EventScalarValue::Number(value) => value.serialize(serializer),
             EventScalarValue::String(value) => serializer.serialize_str(value),
@@ -3428,91 +3632,84 @@ impl Serialize for EventScalarValue {
 
 impl<'de> Deserialize<'de> for EventScalarValue {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        DataLiteral::deserialize(deserializer).map(EventScalarValue::from)
+        struct Literal;
+
+        impl serde::de::Visitor<'_> for Literal {
+            type Value = EventScalarValue;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(EXPECT_SCALAR_LITERAL)
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<EventScalarValue, E> {
+                Ok(EventScalarValue::Boolean(value))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<EventScalarValue, E> {
+                Ok(EventScalarValue::Number(value.into()))
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<EventScalarValue, E> {
+                Ok(EventScalarValue::Number(value.into()))
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<EventScalarValue, E> {
+                serde_json::Number::from_f64(value)
+                    .map(EventScalarValue::Number)
+                    .ok_or_else(|| Invalid::expected(EXPECT_SCALAR_LITERAL, "").into_error())
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<EventScalarValue, E> {
+                Ok(EventScalarValue::String(value.to_owned()))
+            }
+        }
+
+        deserializer.deserialize_any(Literal)
     }
 }
 
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for EventScalarValue {
-    fn inline_schema() -> bool {
-        true
-    }
-
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        DataLiteral::schema_name()
+        "ScalarLiteral".into()
     }
 
-    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        generator.subschema_for::<DataLiteral>()
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "A comparison literal: a boolean, a number, or text.",
+            "type": ["boolean", "number", "string"]
+        })
     }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum WebhookAuthenticationProfile {
     HmacSha256V1,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum WebhookDeadLetterMode {
     Required,
 }
 
-/// One access profile as the compiler reads it. A project writes one
-/// `permissions` list; the permissions that name a statistical dataset are
-/// held apart from the ones that name an entity or an action.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(
-    from = "WrittenAccessProfileSource",
-    into = "WrittenAccessProfileSource"
-)]
-pub struct ProjectAccessProfileSource {
-    pub id: String,
-    pub default: bool,
-    pub actor_kind: Option<ActorKindSource>,
-    /// The OAuth clients whose tokens may select this profile. Empty accepts every client.
-    pub requester_clients: UniqueSet<String>,
-    pub task_grant: Option<TaskGrantSource>,
-    pub principal_claim: Option<String>,
-    /// The scopes the verified token must carry. Empty requires none.
-    pub required_scopes: UniqueSet<String>,
-    /// The verified token's purpose must match one listed value. Empty accepts every purpose.
-    pub required_purposes: UniqueSet<String>,
-    /// The permissions that name an entity or an action.
-    pub permissions: Vec<AccessPermissionSource>,
-    /// The permissions that name a statistical dataset.
-    pub dataset_permissions: Vec<DatasetPermissionSource>,
-}
-
-#[cfg(feature = "schema")]
-impl schemars::JsonSchema for ProjectAccessProfileSource {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("ProjectAccessProfileSource")
-    }
-
-    fn schema_id() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed(concat!(module_path!(), "::ProjectAccessProfileSource"))
-    }
-
-    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        WrittenAccessProfileSource::json_schema(generator)
-    }
-}
-
 /// One access profile as a project writes it.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct WrittenAccessProfileSource {
-    id: String,
+pub struct ProjectAccessProfileSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub id: String,
     #[serde(default)]
-    default: bool,
+    pub default: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    actor_kind: Option<ActorKindSource>,
+    pub actor_kind: Option<ActorKindSource>,
     /// The OAuth clients whose tokens may select this profile. Omit to accept every client.
+    // Held as the listed clients, so the empty set accepts every client.
     #[serde(
         default,
         deserialize_with = "sentinel::profile_clients",
@@ -3522,11 +3719,11 @@ struct WrittenAccessProfileSource {
         feature = "schema",
         schemars(with = "sentinel::Listed<UniqueSet<String>, sentinel::ProfileClients>")
     )]
-    requester_clients: UniqueSet<String>,
+    pub requester_clients: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    task_grant: Option<TaskGrantSource>,
-    #[serde(default)]
-    principal_claim: Option<String>,
+    pub task_grant: Option<TaskGrantSource>,
+    /// The token claim that names the caller. Every profile serves authenticated callers, so every profile names one.
+    pub principal_claim: String,
     /// The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present.
     // Held as the listed scopes, so `unrestricted` is the empty set.
     #[serde(
@@ -3534,8 +3731,9 @@ struct WrittenAccessProfileSource {
         serialize_with = "sentinel::serialize_required_scopes"
     )]
     #[cfg_attr(feature = "schema", schemars(with = "sentinel::RequiredScopes"))]
-    required_scopes: UniqueSet<String>,
+    pub required_scopes: UniqueSet<String>,
     /// The verified token's purpose must match one listed value. Omit to accept every purpose.
+    // Held as the listed purposes, so the empty set accepts every purpose.
     #[serde(
         default,
         deserialize_with = "sentinel::profile_purposes",
@@ -3545,127 +3743,59 @@ struct WrittenAccessProfileSource {
         feature = "schema",
         schemars(with = "sentinel::Listed<UniqueSet<String>, sentinel::ProfilePurposes>")
     )]
-    required_purposes: UniqueSet<String>,
-    /// What the profile may do: each permission names one entity, one action, or one statistical dataset.
+    pub required_purposes: UniqueSet<String>,
+    /// What the profile may do, grouped by what each permission names. Omit when the profile grants nothing.
+    #[serde(default, deserialize_with = "sentinel::permissions")]
+    #[cfg_attr(feature = "schema", schemars(with = "PermissionsSource"))]
+    pub permissions: PermissionsSource,
+}
+
+/// What an access profile may do. Each member lists the permissions that name
+/// one kind of subject, and a member that is omitted or empty grants nothing.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PermissionsSource {
+    /// What the profile may do with entities: one permission for each entity it names.
     #[serde(default)]
-    permissions: Vec<WrittenPermission>,
-}
-
-impl From<WrittenAccessProfileSource> for ProjectAccessProfileSource {
-    fn from(written: WrittenAccessProfileSource) -> Self {
-        let mut permissions = Vec::new();
-        let mut dataset_permissions = Vec::new();
-        for permission in written.permissions {
-            match permission {
-                WrittenPermission::Record(permission) => permissions.push(*permission),
-                WrittenPermission::Dataset(permission) => dataset_permissions.push(permission),
-            }
-        }
-        Self {
-            id: written.id,
-            default: written.default,
-            actor_kind: written.actor_kind,
-            requester_clients: written.requester_clients,
-            task_grant: written.task_grant,
-            principal_claim: written.principal_claim,
-            required_scopes: written.required_scopes,
-            required_purposes: written.required_purposes,
-            permissions,
-            dataset_permissions,
-        }
-    }
-}
-
-impl From<ProjectAccessProfileSource> for WrittenAccessProfileSource {
-    fn from(profile: ProjectAccessProfileSource) -> Self {
-        Self {
-            id: profile.id,
-            default: profile.default,
-            actor_kind: profile.actor_kind,
-            requester_clients: profile.requester_clients,
-            task_grant: profile.task_grant,
-            principal_claim: profile.principal_claim,
-            required_scopes: profile.required_scopes,
-            required_purposes: profile.required_purposes,
-            permissions: profile
-                .permissions
-                .into_iter()
-                .map(|permission| WrittenPermission::Record(Box::new(permission)))
-                .chain(
-                    profile
-                        .dataset_permissions
-                        .into_iter()
-                        .map(WrittenPermission::Dataset),
-                )
-                .collect(),
-        }
-    }
-}
-
-/// One entry of a profile's `permissions` list.
-enum WrittenPermission {
-    /// Names an entity or an action.
-    Record(Box<AccessPermissionSource>),
-    /// Names a statistical dataset.
-    Dataset(DatasetPermissionSource),
-}
-
-impl Serialize for WrittenPermission {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            // An action has no rows, so its permission is written without the
-            // row reach every entity permission states.
-            Self::Record(permission) if permission.entity.is_empty() => {
-                let mut written =
-                    serde_json::to_value(permission).map_err(serde::ser::Error::custom)?;
-                if let Some(members) = written.as_object_mut() {
-                    members.remove("rowBoundaries");
-                }
-                written.serialize(serializer)
-            }
-            Self::Record(permission) => permission.serialize(serializer),
-            Self::Dataset(permission) => permission.serialize(serializer),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for WrittenPermission {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = RawAccessPermissionSource::deserialize(deserializer)?;
-        if raw.dataset.is_some() {
-            raw.into_dataset_permission().map(Self::Dataset)
-        } else {
-            raw.into_record_permission()
-                .map(|permission| Self::Record(Box::new(permission)))
-        }
-    }
-}
-
-#[cfg(feature = "schema")]
-impl schemars::JsonSchema for WrittenPermission {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        AccessPermissionSource::schema_name()
-    }
-
-    fn schema_id() -> std::borrow::Cow<'static, str> {
-        AccessPermissionSource::schema_id()
-    }
-
-    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        AccessPermissionSource::json_schema(generator)
-    }
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Vec<sentinel::AuthoredEntityPermission>")
+    )]
+    pub entities: Vec<EntityPermissionSource>,
+    /// The actions the profile may invoke: one permission for each action it names.
+    #[serde(default)]
+    pub actions: Vec<ActionPermissionSource>,
+    /// What the profile may do with statistical datasets: one permission for each dataset it names.
+    #[serde(default)]
+    pub datasets: Vec<DatasetPermissionSource>,
 }
 
 /// What a profile may do with one statistical dataset.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DatasetPermissionSource {
     /// The statistical dataset the permission names.
     pub dataset: LocalId,
     /// What the profile may do with the dataset. A profile that holds `read-live` or `publish` on a dataset with a publisher also holds `read-releases`.
+    #[serde(deserialize_with = "dataset_operations")]
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
-    pub operations: BTreeSet<DatasetOperation>,
+    pub operations: UniqueSet<DatasetOperation>,
+}
+
+fn dataset_operations<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<UniqueSet<DatasetOperation>, D::Error> {
+    let operations = UniqueSet::<DatasetOperation>::deserialize(deserializer)?;
+    if operations.is_empty() {
+        return Err(Invalid::expected(
+            "at least one of read-live, publish, or read-releases",
+            "List read-live, publish, or read-releases, or remove the dataset permission.",
+        )
+        .into_error());
+    }
+    Ok(operations)
 }
 
 /// One thing a profile may do with a statistical dataset.
@@ -3694,6 +3824,8 @@ pub struct TaskGrantSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledTaskGrantSource {
+    #[serde(deserialize_with = "url_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Url"))]
     pub source_issuer: String,
     pub permissions: Vec<CompiledTaskGrantPermissionSource>,
 }
@@ -3706,441 +3838,75 @@ pub struct CompiledTaskGrantPermissionSource {
     pub operations: UniqueSet<Operation>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct AccessPermissionSource {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+/// What a profile may do with one entity.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    try_from = "sentinel::AuthoredEntityPermission",
+    rename_all = "camelCase"
+)]
+pub struct EntityPermissionSource {
     pub entity: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub action: Option<String>,
-    pub operations: BTreeSet<Operation>,
-    #[serde(default)]
-    pub readable_fields: BTreeSet<String>,
+    pub operations: UniqueSet<Operation>,
+    pub readable_fields: UniqueSet<String>,
     /// Readable change-request decision detail.
-    #[serde(
-        default = "default_readable_request_fields",
-        skip_serializing_if = "is_default_readable_request_fields"
-    )]
-    pub readable_request_fields: BTreeSet<RequestMetadataFieldSource>,
-    #[serde(default)]
-    pub writable_fields: BTreeSet<String>,
-    #[serde(default)]
-    pub filterable_fields: BTreeSet<String>,
-    #[serde(default)]
-    pub sortable_fields: BTreeSet<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "is_default_readable_request_fields")]
+    pub readable_request_fields: UniqueSet<RequestMetadataFieldSource>,
+    pub writable_fields: UniqueSet<String>,
+    pub filterable_fields: UniqueSet<String>,
+    pub sortable_fields: UniqueSet<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub spatial_queries: Option<SpatialQueryPermissionSource>,
     /// Row reach, written as `unrestricted` when it holds no boundary.
     #[serde(serialize_with = "sentinel::serialize_row_boundaries")]
     pub row_boundaries: Vec<RowBoundarySource>,
     /// Current active membership required for each stored reference key.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub membership_boundaries: Vec<MembershipBoundarySource>,
     /// Current subject-issued consent required for each row, ANDed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub require_consent: Vec<ConsentRequirementSource>,
     /// Restricts change-request reads to rows owned by the authenticated principal.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request_visibility: Option<RequestVisibilitySource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub lookups: Vec<LookupPermissionSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathPermissionSource>,
     #[serde(
-        default,
         serialize_with = "sentinel::serialize_apply_targets",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub apply_targets: Vec<ApplyTargetPermissionSource>,
     /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub submitter_targets: BTreeSet<String>,
+    #[serde(skip_serializing_if = "UniqueSet::is_empty")]
+    pub submitter_targets: UniqueSet<String>,
     #[serde(
-        default,
         serialize_with = "sentinel::serialize_request_presence",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub request_presence: Vec<RequestPresencePermissionSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub targets: Vec<ActionTargetPermissionSource>,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub results: BTreeSet<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(skip_serializing_if = "is_false")]
     pub allow_count: bool,
-    #[serde(default)]
     pub revision_access: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub provenance_fields: Vec<ProvenanceFieldSource>,
-    #[serde(default)]
     pub allow_data_export: bool,
 }
 
-#[derive(Deserialize)]
+/// What a profile may do with one action. An action has no rows of its own:
+/// the row reach of what it touches is written on each target.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct RawAccessPermissionSource {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    entity: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    action: Option<String>,
-    #[serde(default)]
-    dataset: Option<LocalId>,
-    operations: UniqueSet<PermissionOperation>,
-    #[serde(default)]
-    readable_fields: UniqueSet<String>,
-    /// Readable change-request decision detail.
-    #[serde(
-        default = "default_readable_request_fields",
-        skip_serializing_if = "is_default_readable_request_fields"
-    )]
-    readable_request_fields: UniqueSet<RequestMetadataFieldSource>,
-    #[serde(default)]
-    writable_fields: UniqueSet<String>,
-    #[serde(default)]
-    filterable_fields: UniqueSet<String>,
-    #[serde(default)]
-    sortable_fields: UniqueSet<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    spatial_queries: Option<SpatialQueryPermissionSource>,
-    #[serde(default, deserialize_with = "sentinel::written_row_boundaries")]
-    row_boundaries: Option<Vec<RowBoundarySource>>,
-    #[serde(default)]
-    membership_boundaries: Vec<MembershipBoundarySource>,
-    #[serde(default)]
-    require_consent: Vec<ConsentRequirementSource>,
-    /// Restricts change-request reads to rows owned by the authenticated principal.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    request_visibility: Option<RequestVisibilitySource>,
+pub struct ActionPermissionSource {
+    pub action: String,
+    pub operations: UniqueSet<Operation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    lookups: Vec<LookupPermissionSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    read_paths: Vec<ReadPathPermissionSource>,
-    #[serde(default, deserialize_with = "sentinel::apply_targets")]
-    apply_targets: Vec<ApplyTargetPermissionSource>,
+    #[cfg_attr(feature = "schema", schemars(extend("default" = [])))]
+    pub targets: Vec<ActionTargetPermissionSource>,
     #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
-    submitter_targets: UniqueSet<String>,
-    #[serde(default, deserialize_with = "sentinel::request_presence")]
-    request_presence: Vec<RequestPresencePermissionSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    targets: Vec<ActionTargetPermissionSource>,
-    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
-    results: UniqueSet<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    allow_count: bool,
-    #[serde(default)]
-    revision_access: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    provenance_fields: Vec<ProvenanceFieldSource>,
-    #[serde(default)]
-    allow_data_export: bool,
-}
-
-/// Every operation a permission may list, whatever the permission names, so
-/// that an unknown word is answered with the whole vocabulary.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum PermissionOperation {
-    Create,
-    Get,
-    Lookup,
-    List,
-    Patch,
-    Tombstone,
-    Batch,
-    Revisions,
-    Snapshot,
-    SubmitRequest,
-    ReviseRequest,
-    CancelRequest,
-    ApplyRequest,
-    Invoke,
-    Import,
-    #[serde(rename = "read-live")]
-    ReadLive,
-    Publish,
-    #[serde(rename = "read-releases")]
-    ReadReleases,
-}
-
-/// What a written operation is an operation on.
-enum OperationSubject {
-    Record(Operation),
-    Dataset(DatasetOperation),
-}
-
-impl PermissionOperation {
-    fn subject(self) -> OperationSubject {
-        use OperationSubject::{Dataset, Record};
-        match self {
-            Self::Create => Record(Operation::Create),
-            Self::Get => Record(Operation::Get),
-            Self::Lookup => Record(Operation::Lookup),
-            Self::List => Record(Operation::List),
-            Self::Patch => Record(Operation::Patch),
-            Self::Tombstone => Record(Operation::Tombstone),
-            Self::Batch => Record(Operation::Batch),
-            Self::Revisions => Record(Operation::Revisions),
-            Self::Snapshot => Record(Operation::Snapshot),
-            Self::SubmitRequest => Record(Operation::SubmitRequest),
-            Self::ReviseRequest => Record(Operation::ReviseRequest),
-            Self::CancelRequest => Record(Operation::CancelRequest),
-            Self::ApplyRequest => Record(Operation::ApplyRequest),
-            Self::Invoke => Record(Operation::Invoke),
-            Self::Import => Record(Operation::Import),
-            Self::ReadLive => Dataset(DatasetOperation::ReadLive),
-            Self::Publish => Dataset(DatasetOperation::Publish),
-            Self::ReadReleases => Dataset(DatasetOperation::ReadReleases),
-        }
-    }
-}
-
-// Keeps the written vocabulary in step with `Operation`: a new operation does
-// not compile until the written vocabulary names it.
-impl From<Operation> for PermissionOperation {
-    fn from(operation: Operation) -> Self {
-        match operation {
-            Operation::Create => Self::Create,
-            Operation::Get => Self::Get,
-            Operation::Lookup => Self::Lookup,
-            Operation::List => Self::List,
-            Operation::Patch => Self::Patch,
-            Operation::Tombstone => Self::Tombstone,
-            Operation::Batch => Self::Batch,
-            Operation::Revisions => Self::Revisions,
-            Operation::Snapshot => Self::Snapshot,
-            Operation::SubmitRequest => Self::SubmitRequest,
-            Operation::ReviseRequest => Self::ReviseRequest,
-            Operation::CancelRequest => Self::CancelRequest,
-            Operation::ApplyRequest => Self::ApplyRequest,
-            Operation::Invoke => Self::Invoke,
-            Operation::Import => Self::Import,
-        }
-    }
-}
-
-impl RawAccessPermissionSource {
-    // Entity grants must state their row reach. Action invocation itself has no
-    // rows; its target permissions carry the independently required declarations.
-    fn into_record_permission<E: serde::de::Error>(self) -> Result<AccessPermissionSource, E> {
-        let mut operations = BTreeSet::new();
-        for operation in self.operations {
-            match operation.subject() {
-                OperationSubject::Record(operation) => operations.insert(operation),
-                OperationSubject::Dataset(_) => {
-                    return Err(Invalid::expected(
-                        "an entity or action operation",
-                        "Move read-live, publish, and read-releases to a permission that names a dataset; a permission that names an entity or an action lists only entity and action operations.",
-                    )
-                    .into_error())
-                }
-            };
-        }
-        if self.dataset.is_some() {
-            return Err(Invalid::expected(
-                "a permission that names one entity or one action",
-                "Remove dataset here; a statistical dataset permission is written in an access profile's permissions list.",
-            )
-            .into_error());
-        }
-        if self.entity.is_empty() && self.row_boundaries.is_some() {
-            return Err(Invalid::expected(
-                "an action permission without rowBoundaries",
-                "Remove rowBoundaries here; an action has no rows, and the row reach of its targets is written on each target.",
-            )
-            .into_error());
-        }
-        if !self.entity.is_empty() && self.row_boundaries.is_none() {
-            return Err(Invalid::expected(
-                "an entity permission with rowBoundaries",
-                "Declare rowBoundaries on the permission: list the row boundaries that bind rows to the caller's claims, or write unrestricted to reach every row.",
-            )
-            .into_error());
-        }
-        Ok(AccessPermissionSource {
-            entity: self.entity,
-            action: self.action,
-            operations,
-            readable_fields: self.readable_fields.into_set(),
-            readable_request_fields: self.readable_request_fields.into_set(),
-            writable_fields: self.writable_fields.into_set(),
-            filterable_fields: self.filterable_fields.into_set(),
-            sortable_fields: self.sortable_fields.into_set(),
-            spatial_queries: self.spatial_queries,
-            row_boundaries: self.row_boundaries.unwrap_or_default(),
-            membership_boundaries: self.membership_boundaries,
-            require_consent: self.require_consent,
-            request_visibility: self.request_visibility,
-            lookups: self.lookups,
-            read_paths: self.read_paths,
-            apply_targets: self.apply_targets,
-            submitter_targets: self.submitter_targets.into_set(),
-            request_presence: self.request_presence,
-            targets: self.targets,
-            results: self.results.into_set(),
-            allow_count: self.allow_count,
-            revision_access: self.revision_access,
-            provenance_fields: self.provenance_fields,
-            allow_data_export: self.allow_data_export,
-        })
-    }
-
-    /// A dataset permission is `dataset` and `operations` and nothing else.
-    fn into_dataset_permission<E: serde::de::Error>(self) -> Result<DatasetPermissionSource, E> {
-        let names_only_a_dataset = self.entity.is_empty()
-            && self.action.is_none()
-            && self.readable_fields.is_empty()
-            && is_default_readable_request_fields(&self.readable_request_fields)
-            && self.writable_fields.is_empty()
-            && self.filterable_fields.is_empty()
-            && self.sortable_fields.is_empty()
-            && self.spatial_queries.is_none()
-            && self.row_boundaries.is_none()
-            && self.membership_boundaries.is_empty()
-            && self.require_consent.is_empty()
-            && self.request_visibility.is_none()
-            && self.lookups.is_empty()
-            && self.read_paths.is_empty()
-            && self.apply_targets.is_empty()
-            && self.submitter_targets.is_empty()
-            && self.request_presence.is_empty()
-            && self.targets.is_empty()
-            && self.results.is_empty()
-            && !self.allow_count
-            && !self.revision_access
-            && self.provenance_fields.is_empty()
-            && !self.allow_data_export;
-        if !names_only_a_dataset {
-            return Err(Invalid::expected(
-                "a dataset permission with only dataset and operations",
-                "Write only dataset and operations on a permission that names a dataset; entity and action members go on a permission of their own.",
-            )
-            .into_error());
-        }
-        let mut operations = BTreeSet::new();
-        for operation in self.operations {
-            if let OperationSubject::Dataset(operation) = operation.subject() {
-                operations.insert(operation);
-            } else {
-                operations.clear();
-                break;
-            }
-        }
-        if operations.is_empty() {
-            return Err(Invalid::expected(
-                "at least one of read-live, publish, or read-releases",
-                "List read-live, publish, or read-releases on a permission that names a dataset; entity and action operations go on a permission of their own.",
-            )
-            .into_error());
-        }
-        let Some(dataset) = self.dataset else {
-            return Err(Invalid::expected(
-                "a permission that names a dataset",
-                "Name the statistical dataset in dataset.",
-            )
-            .into_error());
-        };
-        Ok(DatasetPermissionSource {
-            dataset,
-            operations,
-        })
-    }
-}
-
-impl<'de> Deserialize<'de> for AccessPermissionSource {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        RawAccessPermissionSource::deserialize(deserializer)?.into_record_permission()
-    }
-}
-
-#[cfg(feature = "schema")]
-impl schemars::JsonSchema for AccessPermissionSource {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("AccessPermissionSource")
-    }
-
-    fn schema_id() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed(concat!(module_path!(), "::AccessPermissionSource"))
-    }
-
-    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        AccessPermissionSourceSchema::json_schema(generator)
-    }
-}
-
-#[cfg(feature = "schema")]
-#[allow(dead_code)]
-#[derive(schemars::JsonSchema)]
-#[serde(untagged)]
-enum AccessPermissionSourceSchema {
-    Entity(Box<EntityAccessPermissionSourceSchema>),
-    Action(ActionAccessPermissionSourceSchema),
-    Dataset(DatasetPermissionSource),
-}
-
-#[cfg(feature = "schema")]
-#[allow(dead_code)]
-#[derive(schemars::JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct EntityAccessPermissionSourceSchema {
-    entity: String,
-    operations: UniqueSet<Operation>,
-    #[serde(default)]
-    readable_fields: UniqueSet<String>,
-    /// Readable change-request decision detail.
-    #[serde(
-        default = "default_readable_request_fields",
-        skip_serializing_if = "is_default_readable_request_fields"
-    )]
-    readable_request_fields: UniqueSet<RequestMetadataFieldSource>,
-    #[serde(default)]
-    writable_fields: UniqueSet<String>,
-    #[serde(default)]
-    filterable_fields: UniqueSet<String>,
-    #[serde(default)]
-    sortable_fields: UniqueSet<String>,
-    #[serde(default)]
-    spatial_queries: Option<SpatialQueryPermissionSource>,
-    /// Row reach: `unrestricted`, or a list of at least one row boundary.
-    row_boundaries: sentinel::RowBoundaries,
-    /// Current active membership required for each stored reference key.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    membership_boundaries: Vec<MembershipBoundarySource>,
-    /// Current subject-issued consent required for each row, ANDed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    require_consent: Vec<ConsentRequirementSource>,
-    #[serde(default)]
-    request_visibility: Option<RequestVisibilitySource>,
-    #[serde(default)]
-    lookups: Vec<LookupPermissionSource>,
-    #[serde(default)]
-    read_paths: Vec<ReadPathPermissionSource>,
-    #[serde(default)]
-    apply_targets: Vec<sentinel::AuthoredApplyTarget>,
-    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
-    submitter_targets: UniqueSet<String>,
-    #[serde(default)]
-    request_presence: Vec<sentinel::AuthoredRequestPresence>,
-    #[serde(default)]
-    allow_count: bool,
-    #[serde(default)]
-    revision_access: bool,
-    #[serde(default)]
-    allow_data_export: bool,
-}
-
-#[cfg(feature = "schema")]
-#[allow(dead_code)]
-#[derive(schemars::JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct ActionAccessPermissionSourceSchema {
-    action: String,
-    operations: UniqueSet<Operation>,
-    #[serde(default)]
-    targets: Vec<ActionTargetPermissionSource>,
-    #[serde(default)]
-    results: UniqueSet<String>,
+    #[cfg_attr(feature = "schema", schemars(extend("default" = [])))]
+    pub results: UniqueSet<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -4166,12 +3932,17 @@ pub struct LookupPermissionSource {
     pub selector: String,
     pub value_origin: LookupValueOrigin,
     #[serde(default)]
+    #[serde(deserialize_with = "local_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "local_id_map_schema::<String>")
+    )]
     pub claim_mapping: BTreeMap<String, String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum LookupValueOrigin {
     Request,
     VerifiedClaim,
@@ -4212,7 +3983,7 @@ pub struct RequestPresencePermissionSource {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum RequestVisibilitySource {
     /// Expose only requests created by the current authenticated principal.
     Owner,
@@ -4236,13 +4007,15 @@ pub struct ActionTargetPermissionSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct VocabularySource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub values: Vec<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum EventTrigger {
     Created,
     Patched,
@@ -4255,7 +4028,52 @@ pub fn parse_project_json(bytes: &[u8]) -> Result<RegistryProject, CompileFailur
 }
 
 pub fn parse_module_json(bytes: &[u8]) -> Result<RegistryModule, CompileFailure> {
-    parse_json(bytes, "module")
+    let mut value = parse_json_value(bytes, "module")?;
+    check_module_header(&mut value)?;
+    deserialize_value(value, "module")
+}
+
+/// Take the header out of a module read as JSON and refuse one that is
+/// missing or names another format. What is left is the module the compiler
+/// reads. The shared reader makes the same check on `module.yaml`.
+fn check_module_header(value: &mut serde_json::Value) -> Result<(), CompileFailure> {
+    let Some(object) = value.as_object_mut() else {
+        return Ok(());
+    };
+    let mut errors = Vec::new();
+    for (member, expected, path, code, message) in [
+        (
+            "apiVersion",
+            MODULE_API_VERSION,
+            "module.apiVersion",
+            "breg.module.api-version-unsupported",
+            "the module uses an unsupported API version",
+        ),
+        (
+            "kind",
+            MODULE_KIND,
+            "module.kind",
+            "breg.module.kind-unsupported",
+            "the module uses an unsupported document kind",
+        ),
+    ] {
+        match object.remove(member) {
+            Some(serde_json::Value::String(found)) if found == expected => {}
+            Some(serde_json::Value::String(_)) => {
+                errors.push(Diagnostic::error(code, path, message));
+            }
+            _ => errors.push(Diagnostic::error(
+                "breg.source.shape-invalid",
+                path,
+                "the module header member is missing or is not a string",
+            )),
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CompileFailure::from_errors(errors))
+    }
 }
 
 /// The file name a project read from bytes alone is reported under.
@@ -4264,33 +4082,60 @@ pub const PROJECT_FILE: &str = "registry.yaml";
 /// The file name a module read from bytes alone is reported under.
 pub const MODULE_FILE: &str = "module.yaml";
 
+/// The `apiVersion` every `module.yaml` opens with.
+pub const MODULE_API_VERSION: &str = "id.registrystack.org/formats/breg/module/v1alpha1";
+
+/// The `kind` every `module.yaml` opens with.
+pub const MODULE_KIND: &str = "BRegModule";
+
+const MODULE_API_VERSIONS: [ApiVersion<'static>; 1] = [ApiVersion::current(MODULE_API_VERSION)];
+
 const PROJECT_API_VERSIONS: [ApiVersion<'static>; 1] =
     [ApiVersion::current(crate::compiler::AUTHORING_API_VERSION)];
 
 /// `registry.yaml`, the authored project file.
 pub const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
-    kind: "RegistryProject",
+    kind: crate::compiler::AUTHORING_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &PROJECT_API_VERSIONS,
-        retired_api_versions: &[],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: "registry.registrystack.org/v1alpha1",
+            replacement: "Write apiVersion id.registrystack.org/formats/breg/project/v1alpha1 and kind BRegProject, and rename the top-level registry block to project.",
+        }],
     },
-    removed_keys: &PROJECT_REMOVED_KEYS,
+    removed_keys: PROJECT_REMOVED_KEYS,
 };
+
+/// What replaces the `kind` member a hook or action handler was tagged by.
+const HANDLER_TYPE_REPLACEMENT: &str =
+    "Rename `kind` to `type`, keeping its value: `type: rhai`, `type: wasm`, or `type: url`.";
 
 /// Members `registry.yaml` no longer accepts, each with the member that
 /// replaced it.
-const PROJECT_REMOVED_KEYS: [RemovedKey<'static>; 5] = [
+const PROJECT_REMOVED_KEYS: &[RemovedKey<'static>] = &[
+    RemovedKey {
+        pointer: "/registry",
+        replacement: "Rename the top-level `registry` block to `project`, keeping its members.",
+    },
+    RemovedKey {
+        pointer: "/entities/*/hooks/*/handler/kind",
+        replacement: HANDLER_TYPE_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/handler/kind",
+        replacement: HANDLER_TYPE_REPLACEMENT,
+    },
     RemovedKey {
         pointer: "/statisticalDatasets/*/period/kind",
         replacement: "Rename `kind` to `type`, keeping its value: `type: flow` or `type: stock`.",
     },
     RemovedKey {
         pointer: "/statisticalDatasets/*/live",
-        replacement: "Grant live counts in each profile instead: add `{dataset: <id>, operations: [read-live]}` to the profile's `permissions`, with `read-releases` beside it when a profile publishes the dataset.",
+        replacement: "Grant live counts in each profile instead: add `{dataset: <id>, operations: [read-live]}` to the profile's `permissions.datasets`, with `read-releases` beside it when a profile publishes the dataset.",
     },
     RemovedKey {
         pointer: "/statisticalDatasets/*/releases",
-        replacement: "Grant releases in each profile instead: add `{dataset: <id>, operations: [publish, read-releases]}` to the publisher profile's `permissions` and `{dataset: <id>, operations: [read-releases]}` to each reader profile's.",
+        replacement: "Grant releases in each profile instead: add `{dataset: <id>, operations: [publish, read-releases]}` to the publisher profile's `permissions.datasets` and `{dataset: <id>, operations: [read-releases]}` to each reader profile's.",
     },
     RemovedKey {
         pointer: "/accessProfiles/*/anonymous",
@@ -4300,10 +4145,66 @@ const PROJECT_REMOVED_KEYS: [RemovedKey<'static>; 5] = [
         pointer: "/entities/*/accessProfiles/*/anonymous",
         replacement: ANONYMOUS_REPLACEMENT,
     },
+    RemovedKey {
+        pointer: "/manifestProjection/vocabularies/*/externalRef",
+        replacement: "Rename `externalRef` to `externalReference`, keeping its value.",
+    },
+    RemovedKey {
+        pointer: "/entities/*/consentRecord/validity/maxDuration",
+        replacement: MAXIMUM_DURATION_DAYS_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/fields/*/minLength",
+        replacement: MINIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/fields/*/maxLength",
+        replacement: MAXIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/fields/*/maxBytes",
+        replacement: MAXIMUM_BYTES_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/derived/*/fields/*/minLength",
+        replacement: MINIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/derived/*/fields/*/maxLength",
+        replacement: MAXIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/derived/*/fields/*/maxBytes",
+        replacement: MAXIMUM_BYTES_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/inputs/*/minLength",
+        replacement: MINIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/inputs/*/maxLength",
+        replacement: MAXIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/inputs/*/maxBytes",
+        replacement: MAXIMUM_BYTES_REPLACEMENT,
+    },
 ];
 
 /// Members a module no longer accepts, each with the member that replaced it.
-const MODULE_REMOVED_KEYS: [RemovedKey<'static>; 2] = [
+const MODULE_REMOVED_KEYS: &[RemovedKey<'static>] = &[
+    RemovedKey {
+        pointer: "/entities/*/hooks/*/handler/kind",
+        replacement: HANDLER_TYPE_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/extendEntities/*/hooks/*/handler/kind",
+        replacement: HANDLER_TYPE_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/handler/kind",
+        replacement: HANDLER_TYPE_REPLACEMENT,
+    },
     RemovedKey {
         pointer: "/entities/*/accessProfiles/*/anonymous",
         replacement: ANONYMOUS_REPLACEMENT,
@@ -4312,7 +4213,85 @@ const MODULE_REMOVED_KEYS: [RemovedKey<'static>; 2] = [
         pointer: "/extendEntities/*/accessProfiles/*/anonymous",
         replacement: ANONYMOUS_REPLACEMENT,
     },
+    RemovedKey {
+        pointer: "/entities/*/consentRecord/validity/maxDuration",
+        replacement: MAXIMUM_DURATION_DAYS_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/fields/*/minLength",
+        replacement: MINIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/fields/*/maxLength",
+        replacement: MAXIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/fields/*/maxBytes",
+        replacement: MAXIMUM_BYTES_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/derived/*/fields/*/minLength",
+        replacement: MINIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/derived/*/fields/*/maxLength",
+        replacement: MAXIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/entities/*/derived/*/fields/*/maxBytes",
+        replacement: MAXIMUM_BYTES_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/extendEntities/*/fields/*/minLength",
+        replacement: MINIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/extendEntities/*/fields/*/maxLength",
+        replacement: MAXIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/extendEntities/*/fields/*/maxBytes",
+        replacement: MAXIMUM_BYTES_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/extendEntities/*/derived/*/fields/*/minLength",
+        replacement: MINIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/extendEntities/*/derived/*/fields/*/maxLength",
+        replacement: MAXIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/extendEntities/*/derived/*/fields/*/maxBytes",
+        replacement: MAXIMUM_BYTES_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/inputs/*/minLength",
+        replacement: MINIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/inputs/*/maxLength",
+        replacement: MAXIMUM_LENGTH_REPLACEMENT,
+    },
+    RemovedKey {
+        pointer: "/actions/*/inputs/*/maxBytes",
+        replacement: MAXIMUM_BYTES_REPLACEMENT,
+    },
 ];
+
+/// A field or action input spells the name of each bound in full.
+const MINIMUM_LENGTH_REPLACEMENT: &str =
+    "Rename `minLength` to `minimumLength`, keeping its value.";
+const MAXIMUM_LENGTH_REPLACEMENT: &str =
+    "Rename `maxLength` to `maximumLength`, keeping its value.";
+const MAXIMUM_BYTES_REPLACEMENT: &str = "Rename `maxBytes` to `maximumBytes`, keeping its value.";
+
+/// A consent record states the longest a give lasts as an integer with its
+/// unit in the key.
+const MAXIMUM_DURATION_DAYS_REPLACEMENT: &str = "Replace `maxDuration` with \
+     `maximumDurationDays`, a whole number of days from 1 to 3652: `P365D` becomes \
+     `maximumDurationDays: 365`. Write a duration in years, months, or weeks as the days it \
+     stands for.";
 
 /// The registry serves authenticated callers only: no profile admits a
 /// caller without a verified token.
@@ -4320,16 +4299,17 @@ const ANONYMOUS_REPLACEMENT: &str = "Delete `anonymous`: the registry serves aut
      callers only. Give the profile the principalClaim and requiredScopes its callers' tokens \
      carry.";
 
-/// A module's `module.yaml`. A module carries no envelope: its project's
-/// module lock names it by identifier, version, and digest. Its diagnostics
-/// name the format's registered kind as their `artifact`.
+/// A module's `module.yaml`. A module opens with its `apiVersion` and `kind`
+/// like every authored file. The header is not part of the module its
+/// project's module lock names by identifier, version, and digest. Its
+/// diagnostics name the format's kind as their `artifact`.
 pub const MODULE_FORMAT: FormatSpec<'static> = FormatSpec {
-    kind: "BRegModule",
-    envelope: EnvelopeRule::Exempt {
-        reason: "a module is named by its project's module lock, which records its \
-                 identifier, version, and digest",
+    kind: MODULE_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &MODULE_API_VERSIONS,
+        retired_api_versions: &[],
     },
-    removed_keys: &MODULE_REMOVED_KEYS,
+    removed_keys: MODULE_REMOVED_KEYS,
 };
 
 /// Read an authored project through the shared reader. `file` is the name
@@ -4370,7 +4350,11 @@ pub fn parse_module_yaml(bytes: &[u8]) -> Result<RegistryModule, CompileFailure>
 }
 
 fn parse_json<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, CompileFailure> {
-    let value = parse_json_strict(bytes).map_err(|error| {
+    deserialize_value(parse_json_value(bytes, root)?, root)
+}
+
+fn parse_json_value(bytes: &[u8], root: &str) -> Result<serde_json::Value, CompileFailure> {
+    parse_json_strict(bytes).map_err(|error| {
         CompileFailure::from_one(Diagnostic::error(
             "breg.source.json-invalid",
             root,
@@ -4379,8 +4363,7 @@ fn parse_json<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, Compil
                 redact_authored_values(&error.to_string())
             ),
         ))
-    })?;
-    deserialize_value(value, root)
+    })
 }
 
 fn deserialize_value<T: DeserializeOwned>(
@@ -4609,6 +4592,77 @@ pub(crate) fn bounded_u16<'de, D: Deserializer<'de>, const MIN: u32, const MAX: 
     bounded_u32::<D, MIN, MAX>(deserializer).map(|value| value as u16)
 }
 
+/// A local identifier the file defines (CFG-ID-1), refused at its own
+/// position unless it is a `LocalId` and kept as text in the model.
+pub(crate) fn local_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    LocalId::deserialize(deserializer).map(LocalId::into_string)
+}
+
+/// A [`local_id`] the file may leave out.
+pub(crate) fn optional_local_id<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    Ok(Option::<LocalId>::deserialize(deserializer)?.map(LocalId::into_string))
+}
+
+/// A mapping keyed by local identifiers the file defines (CFG-ID-1): each
+/// key is refused at its own position unless it is a `LocalId`, and the model
+/// keeps the keys as text.
+pub(crate) fn local_id_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    let map = BTreeMap::<registry_platform_yaml::LocalId, V>::deserialize(deserializer)?;
+    Ok(map
+        .into_iter()
+        .map(|(key, value)| (key.into_string(), value))
+        .collect())
+}
+
+/// A mapping keyed by identifiers another system issues (CFG-ID-2): each key
+/// is refused at its own position unless it is an `ExternalId`, and the model
+/// keeps the keys exactly as written.
+pub(crate) fn external_id_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    let map = BTreeMap::<registry_platform_yaml::ExternalId, V>::deserialize(deserializer)?;
+    Ok(map
+        .into_iter()
+        .map(|(key, value)| (key.into_string(), value))
+        .collect())
+}
+
+/// The schema of a [`local_id_map`] member: an object whose property names
+/// are `LocalId` and whose values are `V`.
+#[cfg(feature = "schema")]
+pub(crate) fn local_id_map_schema<V: schemars::JsonSchema>(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    let names = generator.subschema_for::<registry_platform_yaml::LocalId>();
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": names,
+        "additionalProperties": generator.subschema_for::<V>(),
+    })
+}
+
+/// The schema of an [`external_id_map`] member: an object whose property
+/// names are `ExternalId` and whose values are `V`.
+#[cfg(feature = "schema")]
+pub(crate) fn external_id_map_schema<V: schemars::JsonSchema>(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    let names = generator.subschema_for::<registry_platform_yaml::ExternalId>();
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": names,
+        "additionalProperties": generator.subschema_for::<V>(),
+    })
+}
+
 #[cfg(feature = "runtime")]
 pub(crate) fn bounded_u8<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
     deserializer: D,
@@ -4651,18 +4705,65 @@ pub(crate) fn present_json_value<'de, D: serde::Deserializer<'de>>(
     Value::deserialize(deserializer).map(Some)
 }
 
-// An omitted equality differs from an explicit `null` one: the literal is read
-// as a `DataLiteral`, the one position where `null` is a value (CFG-EMPTY-1),
-// and a list or a mapping is refused.
-pub(crate) fn present_data_literal<'de, D: serde::Deserializer<'de>>(
+// An equality literal is a boolean, a number, or text. `null` is refused
+// (CFG-EMPTY-1): an unset value is stated with `isNull`.
+pub(crate) fn present_scalar_literal<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Value>, D::Error> {
-    DataLiteral::deserialize(deserializer).map(|literal| {
-        Some(match literal {
-            DataLiteral::Null => Value::Null,
-            DataLiteral::Boolean(value) => Value::Bool(value),
-            DataLiteral::Number(value) => Value::Number(value),
-            DataLiteral::String(value) => Value::String(value),
-        })
-    })
+    EventScalarValue::deserialize(deserializer).map(|literal| Some(literal.into()))
+}
+
+// A member that states a fact by being written reads only `true`: leaving the
+// key out is how a file states nothing about the field.
+pub(crate) fn only_true<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<bool, D::Error> {
+    if bool::deserialize(deserializer)? {
+        Ok(true)
+    } else {
+        Err(Invalid::expected(
+            "true",
+            "Write true, or remove the key to state nothing about the field.",
+        )
+        .into_error())
+    }
+}
+
+#[cfg(feature = "schema")]
+fn only_true_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": "boolean", "const": true})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_field_type_writes_each_bound_under_its_one_name() {
+        let string = FieldTypeSource::String {
+            min_length: 1,
+            max_length: 64,
+        };
+        assert_eq!(
+            json!(string),
+            json!({"type": "string", "minimumLength": 1, "maximumLength": 64})
+        );
+
+        // The schema of a structured field is a JSON Schema: a member of it is
+        // never a bound of the field type, whatever it is called.
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"fieldType": {"type": "string", "maximumLength": 8, "maxLength": 16}}
+        });
+        let structured = FieldTypeSource::Structured {
+            max_bytes: 512,
+            schema: schema.clone(),
+        };
+        assert_eq!(
+            json!(structured),
+            json!({"type": "structured", "maximumBytes": 512, "schema": schema})
+        );
+    }
 }

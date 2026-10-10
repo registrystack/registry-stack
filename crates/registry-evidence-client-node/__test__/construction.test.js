@@ -103,10 +103,11 @@ test('fromProfile returns the public wrapper and preserves consumer subclasses',
     fs.writeFileSync(
       profilePath,
       JSON.stringify({
-        schema: 'registry.evidence-client-profile/v1',
+        apiVersion: 'id.registrystack.org/formats/evidence/client-profile/v1',
+        kind: 'EvidenceClientProfile',
         baseUrl: 'https://evidence.example.org',
         clientId: 'node-profile-test',
-        privateKey: { source: 'environment', variable: 'UNUSED_PRIVATE_JWK' },
+        privateKey: { type: 'environment', variable: 'UNUSED_PRIVATE_JWK' },
         trust: { type: 'https-discovery' },
         contracts: { type: 'published' },
         verification: {

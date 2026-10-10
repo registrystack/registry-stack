@@ -113,7 +113,7 @@ assert.throws(
     ...current,
     legalIssuerId: 'urn:example:legal-issuer:other',
   }),
-  (error) => error instanceof DiscoveryClientError && error.kind === 'selection_changed',
+  (error) => error instanceof DiscoveryClientError && error.kind === 'selection-changed',
   'trust-relevant changes must require explicit new acceptance',
 );
 

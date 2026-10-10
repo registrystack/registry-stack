@@ -214,7 +214,7 @@ render_runtime_config() {
   local migration_ref=$5
   local listener=$6
   cat >"$output" <<EOF
-apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: $listener
@@ -230,7 +230,7 @@ database:
   runtimeUrlRef: $runtime_ref
   migrationUrlRef: $migration_ref
   pool:
-    maxSize: 4
+    maximumConnections: 4
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -248,18 +248,17 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [registry-adopter-client]
-    deniedKids: []
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 0
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/oidc-jwks
   authorityClaims:
     principal: registry_principal
@@ -269,7 +268,7 @@ audit:
   path: $temporary_root/audit/audit.jsonl
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 eventDestinations: {}
 operationalTimeouts:
   httpRequestMilliseconds: 10000
@@ -734,7 +733,7 @@ needle = """      - id: asset-class
 replacement = needle + """      - id: placement-review-note
         type: string
         required: false
-        maxLength: 120
+        maximumLength: 120
         classification: restricted
 """
 if needle not in source:
@@ -754,9 +753,9 @@ changes = report.get("changes", [])
 change = changes[0].get("change", {}) if len(changes) == 1 else {}
 if (
     len(changes) != 1
-    or changes[0].get("classification") != "compatible_additive"
-    or change.get("code") != "field_added_optional"
-    or change.get("class") != "compatible_additive"
+    or changes[0].get("classification") != "compatible-additive"
+    or change.get("code") != "field-added-optional"
+    or change.get("class") != "compatible-additive"
 ):
     raise SystemExit(f"successor was not the expected additive field change: {changes}")
 PY
@@ -1011,27 +1010,27 @@ source = path.read_text(encoding="utf-8")
 needle = """      - id: placement-review-note
         type: string
         required: false
-        maxLength: 120
+        maximumLength: 120
         classification: restricted
 """
-grant = """        readableFields:
-          - asset-code
-          - label
-          - asset-class
-        writableFields:
-          - asset-code
-          - label
-          - asset-class
+grant = """          readableFields:
+            - asset-code
+            - label
+            - asset-class
+          writableFields:
+            - asset-code
+            - label
+            - asset-class
 """
 if needle not in source or grant not in source:
     raise SystemExit("reviewed successor insertion points were not found")
 source = source.replace(needle, needle + """      - id: maintenance-note
         type: string
         required: false
-        maxLength: 120
+        maximumLength: 120
         classification: internal
 """, 1)
-source = source.replace(grant, grant.replace("          - asset-class\n", "          - asset-class\n          - maintenance-note\n"), 1)
+source = source.replace(grant, grant.replace("            - asset-class\n", "            - asset-class\n            - maintenance-note\n"), 1)
 path.write_text(source, encoding="utf-8")
 PY
 render_runtime_config "$temporary_root/runtime-test-v3.yaml" "$temporary_root/empty-package-root" 60000 \
@@ -1070,15 +1069,15 @@ changes = json.loads((root / "diff-v3.json").read_text())["changes"]
 if any(change["classification"] == "unsupported" for change in changes):
     raise SystemExit("reviewed successor was incorrectly classified as unsupported")
 covers = [{"code": item["change"]["code"], "target": item["change"]["target"]}
-          for item in changes if item["change"]["class"] != "compatible_additive"]
-if {cover["code"] for cover in covers} != {"access_profile_changed", "query_inventory_changed"}:
+          for item in changes if item["change"]["class"] != "compatible-additive"]
+if {cover["code"] for cover in covers} != {"access-profile-changed", "query-inventory-changed"}:
     raise SystemExit("reviewed successor did not have the expected permission changes")
 base = "modules/asset-site-placement-core/migrations/read-maintenance-note"
 descriptor = {
     "apiVersion": "id.registrystack.org/formats/breg/migration-descriptor/v1alpha1",
     "kind": "BRegMigrationDescriptor",
-    "id": "read-maintenance-note", "changeClass": "access_or_disclosure_change",
-    "covers": covers, "recovery": "exact_target_resume", "lockTimeoutMilliseconds": 1000,
+    "id": "read-maintenance-note", "changeClass": "access-or-disclosure-change",
+    "covers": covers, "recovery": "exact-target-resume", "lockTimeoutMilliseconds": 1000,
     "statementTimeoutMilliseconds": 60000, "steps": [], "preAssertions": [], "postAssertions": [],
     "rehearsalReceiptPath": f"{base}/rehearsal.json",
 }

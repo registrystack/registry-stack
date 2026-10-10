@@ -1507,10 +1507,10 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Tombstone => "tombstone",
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
-        Operation::SubmitRequest => "submit_request",
-        Operation::ReviseRequest => "revise_request",
-        Operation::CancelRequest => "cancel_request",
-        Operation::ApplyRequest => "apply_request",
+        Operation::SubmitRequest => "submit-request",
+        Operation::ReviseRequest => "revise-request",
+        Operation::CancelRequest => "cancel-request",
+        Operation::ApplyRequest => "apply-request",
         Operation::Invoke => "invoke",
         Operation::Snapshot => "snapshot",
         Operation::Import => "import",
@@ -1643,10 +1643,7 @@ mod tests {
     use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::{parse_project_json, parse_project_yaml, Operation};
     use crate::correlation::RequestCorrelation;
-    use crate::model::{
-        CompiledChangeRequestNoReview, CompiledChangeRequestNoReviewMode,
-        CompiledChangeRequestReview, HttpMethod,
-    };
+    use crate::model::{CompiledChangeRequestReview, HttpMethod};
     use crate::mutation::request_actor_reference;
     use crate::request_retention::{RetainedRequestProposal, RetainedRequestResultLink};
     use crate::request_workflow::{
@@ -1809,28 +1806,28 @@ mod tests {
     fn editable_requires_selected_profile_patch_authority() {
         let project = parse_project_json(
             br#"{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{"id":"editable-profile","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{"id":"editable-profile","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[{
                 "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
-                "fields":[{"id":"label","type":"string","maxLength":64,"classification":"internal"}]
+                "fields":[{"id":"label","type":"string","maximumLength":64,"classification":"internal"}]
               }],
               "accessProfiles":[{
-                "id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+                "id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
                   "entity":"request","operations":["get"],"readableFields":["label"],
                   "rowBoundaries": "unrestricted"
-                }]
+                }]}
               },{
-                "id":"empty-editor","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+                "id":"empty-editor","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
                   "entity":"request","operations":["get","patch"],"readableFields":["label"],
                   "rowBoundaries": "unrestricted"
-                }]
+                }]}
               },{
-                "id":"editor","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+                "id":"editor","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
                   "entity":"request","operations":["get","patch"],"readableFields":["label"],"writableFields":["label"],
                   "rowBoundaries": "unrestricted"
-                }]
+                }]}
               }]
             }"#,
         )
@@ -2210,9 +2207,7 @@ mod tests {
             RecordRevision::new(1).expect("record revision"),
             ContractFingerprint::new("sha256:contract").expect("contract fingerprint"),
             PackageFingerprint::new("sha256:package").expect("package fingerprint"),
-            CompiledChangeRequestReview::None(CompiledChangeRequestNoReview {
-                mode: CompiledChangeRequestNoReviewMode::None,
-            }),
+            CompiledChangeRequestReview::None,
             FrozenPlanningBinding::new(
                 FrozenPlannerKind::Declarative,
                 "registry.change-request-plan/v1",

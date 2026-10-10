@@ -126,7 +126,7 @@ fn review_requirement_is_closed_and_typed() {
     assert_eq!(requirement.policy_id(), "address-review");
 
     let mut none = request_metadata(Vec::new());
-    none["proposal"] = json!({"review":{"mode":"none"}});
+    none["proposal"] = json!({"review":{"type":"none"}});
     let none = BRegRequestMetadata::from_value(none, false).unwrap();
     assert_eq!(
         none.proposal().unwrap().review(),
@@ -134,9 +134,11 @@ fn review_requirement_is_closed_and_typed() {
     );
 
     for invalid in [
-        json!({"review":{"mode":"external","authority":"casework","policyId":"p"}}),
-        json!({"review":{"authority":"casework"}}),
-        json!({"review":{"mode":"none","policyId":"p"}}),
+        json!({"review":{"type":"external","authority":"casework","policyId":"p"}}),
+        json!({"review":{"authority":"casework","policyId":"p"}}),
+        json!({"review":{"mode":"none"}}),
+        json!({"review":{"type":"required","authority":"casework"}}),
+        json!({"review":{"type":"none","policyId":"p"}}),
     ] {
         let mut value = request_metadata(Vec::new());
         value["proposal"] = invalid;
@@ -422,7 +424,7 @@ fn request_metadata(actions: Vec<Value>) -> Value {
         "bregState": "submitted",
         "proposalVersion": 7,
         "effectDigest": DIGEST,
-        "proposal": {"review": {"authority": "casework", "policyId": "address-review"}},
+        "proposal": {"review": {"type": "required", "authority": "casework", "policyId": "address-review"}},
         "editable": false,
         "actions": actions,
     })

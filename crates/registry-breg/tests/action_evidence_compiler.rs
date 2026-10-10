@@ -11,27 +11,27 @@ use registry_breg::{
 use serde_json::{json, Value};
 fn project() -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"action-handler-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"action-handler-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "entities":[{"id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","fields":[
-            {"id":"name","type":"string","maxLength":160,"required":true,"classification":"restricted"},
+            {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
         ]}],
         "actions":[{"id":"register-person","inputs":[
-            {"id":"given-name","apiName":"givenName","type":"string","maxLength":80,"required":true,"classification":"restricted"},
-            {"id":"family-name","type":"string","maxLength":80,"classification":"restricted"},
+            {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
+            {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
-        ],"handler":{"kind":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
+        ],"handler":{"type":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
             {"id":"person","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"friend","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromField":"person"},"operation":"patch","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}]
     })
 }
 
 fn contracts() -> Value {
-    serde_json::from_str(r#"{"schema": "registry.evidence-client-contracts/v1", "assuranceProfile": "local", "audience": "urn:example:client:audience:relying-party", "issuedBy": "urn:example:client:issuer", "providedBy": "urn:example:client:provider", "definitions": [{"handle": "status-holds", "requirement": "urn:example:client:requirement:status:v1", "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "kind": "criterion", "evidenceType": "urn:example:client:evidence-type:status:v1", "purpose": "example-decision", "responseFormats": ["signed-jws", "sd-jwt-vc"], "referenceFrameworks": ["urn:example:client:framework:status:v1"], "subjects": [{"role": "subject", "cardinality": "one", "selector": {"profile": "record-lookup-v1", "valueOrigin": "request", "fields": [{"type": "string", "name": "record_reference", "minimumBytes": 1, "maximumBytes": 200}, {"type": "date", "name": "recorded_on"}, {"type": "integer", "name": "sequence", "minimum": 0, "maximum": 10}, {"type": "boolean", "name": "confirmed"}, {"type": "controlled-code", "name": "office", "scheme": "urn:example:client:scheme:office", "version": "1", "maximumBytes": 32}]}}], "concepts": [{"handle": "status-holds", "concept": "urn:example:client:concept:status-holds", "required": true, "form": "boolean"}]}]}"#).unwrap()
+    serde_json::from_str(r#"{"apiVersion": "id.registrystack.org/formats/evidence/client-contracts/v1", "kind": "EvidenceClientContracts", "assuranceProfile": "local", "audience": "urn:example:client:audience:relying-party", "issuedBy": "urn:example:client:issuer", "providedBy": "urn:example:client:provider", "definitions": [{"handle": "status-holds", "requirement": "urn:example:client:requirement:status:v1", "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "kind": "criterion", "evidenceType": "urn:example:client:evidence-type:status:v1", "purpose": "example-decision", "responseFormats": ["signed-jws", "sd-jwt-vc"], "referenceFrameworks": ["urn:example:client:framework:status:v1"], "subjects": [{"role": "subject", "cardinality": "one", "selector": {"profile": "record-lookup-v1", "valueOrigin": "request", "fields": [{"type": "string", "name": "record_reference", "minimumBytes": 1, "maximumBytes": 200}, {"type": "date", "name": "recorded_on"}, {"type": "integer", "name": "sequence", "minimum": 0, "maximum": 10}, {"type": "boolean", "name": "confirmed"}, {"type": "controlled-code", "name": "office", "scheme": "urn:example:client:scheme:office", "version": "1", "maximumBytes": 32}]}}], "concepts": [{"handle": "status-holds", "concept": "urn:example:client:concept:status-holds", "required": true, "form": {"type": "boolean"}}]}]}"#).unwrap()
 }
 fn configured() -> Value {
     let mut source = project();
@@ -239,6 +239,18 @@ fn invalid_evidence_helper_dispatch_is_refused_offline_even_inside_catch() {
     }
 }
 
+/// The reader refuses an identifier outside the local grammar at its own
+/// position, and never repeats the refused value.
+fn assert_refused_where_read(source: &Value, member: &str) {
+    let error = parse_project_json(&serde_json::to_vec(source).unwrap())
+        .expect_err("an identifier outside the grammar is refused where it is read");
+    let error = format!("{error:?}");
+    assert!(
+        error.contains("a local identifier matching"),
+        "{member}: {error}"
+    );
+}
+
 #[test]
 fn evidence_identifiers_use_the_governed_action_grammar() {
     for id in [
@@ -250,11 +262,11 @@ fn evidence_identifiers_use_the_governed_action_grammar() {
     ] {
         let mut source = configured();
         source["actions"][0]["evidence"][0]["id"] = json!(id);
-        assert!(compile(source, Some(contracts())).is_err(), "alias {id}");
+        assert_refused_where_read(&source, "alias");
         let mut source = configured();
         source["evidenceProviders"][0]["id"] = json!(id);
         source["actions"][0]["evidence"][0]["provider"] = json!(id);
-        assert!(compile(source, Some(contracts())).is_err(), "provider {id}");
+        assert_refused_where_read(&source, "provider");
     }
 }
 

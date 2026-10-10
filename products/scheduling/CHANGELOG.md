@@ -2,6 +2,75 @@
 
 ## Unreleased
 
+- BREAKING: the Node.js and Python clients write five error words in
+  kebab-case (CFG-NAME-2): kind `invalid-request` (was `invalid_request`);
+  the protocol failures `header-bounds`, `trace-context`, and `media-type`
+  (were `header_bounds`, `trace_context`, `media_type`); and the transport
+  kind `response-too-large` (was `response_too_large`). Migration: change
+  what a consumer of a client error compares. No file an adopter writes
+  changes.
+- BREAKING: `schedulingctl test` writes `proofBoundary: offline-synthetic`
+  (was `offline_synthetic`) in its JSON report and its human output
+  (CFG-NAME-2), the spelling `caseworkctl test` writes. Migration: a script
+  that compares the value reads the new spelling. No file an adopter writes
+  changes.
+- BREAKING: `authentication.oidc.allowedClients` in the runtime file is
+  required (CFG-EMPTY-2) and is a list of at least one client, none repeated
+  (CFG-ID-6). On development loopback an omitted member or `[]` admitted
+  every client; both are now refused in every mode when the file is read, as
+  `config.missing-key` at `/authentication/oidc` and `config.invalid-value`
+  at `/authentication/oidc/allowedClients`, and a repeated client is refused
+  as `config.duplicate-item` at the repeated item.
+  `scheduling.runtime.allowed-clients-required` now answers the shared
+  keyword `unrestricted`, which Scheduling accepts in no mode. The maintained
+  examples write `allowedClients: [scheduling-booking-agent]`. Migration:
+  list the clients that call the deployment, and write a repeated client
+  once. See `release/notes/config-conventions/scheduling.md`.
+- BREAKING: `authentication.oidc.assertionIssuers` in the runtime file
+  refuses a client written with an empty issuer list (CFG-EMPTY-2), as
+  `config.invalid-value` at `/authentication/oidc/assertionIssuers/<client>`;
+  the runtime schema declares `minItems: 1` on the list. Migration: remove
+  the client from `assertionIssuers`, or list its issuers. A client that is
+  not listed may exchange from no authority, which is what the empty list
+  meant.
+- BREAKING: the hook delivery words Scheduling shares with the hook delivery
+  crate are written and stored in kebab-case. In a `scheduling.hook-delivery`
+  audit record, the `outcome` words `http_non_success`, `destination_timeout`,
+  `destination_policy_refused`, `destination_binding_refused`,
+  `handler_binding_refused`, `handler_deadline`, `handler_resource`,
+  `handler_execution`, `handler_source`, `handler_unavailable`,
+  `payload_refused`, and `worker_interrupted`, and the `disposition` words
+  `retry_pending`, `dead_lettered`, and `replay_pending`, are now spelled with
+  hyphens; records already written keep their spelling. A captured delivery
+  stores the authentication profile `hmac-sha256-v1` and the delivery mode
+  `after-commit`, where it stored `hmac_sha256_v1` and `after_commit`; an
+  exhausted delivery is `dead-lettered`, and each stored dead-letter reason
+  replaces its underscores with hyphens. No schema version rewrites a stored
+  word: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
+  database.
+  The tables are in `release/notes/config-conventions/scheduling.md`, under
+  "Protocol words".
+- BREAKING: `schedulingctl` reports write their own words in kebab-case. A
+  diagnostic's `artifact` is `scheduling-project`, `runtime-configuration`,
+  or `command-arguments`, where it was `scheduling_project`,
+  `runtime_configuration`, or `command_arguments`; `database`, `audit`, and
+  `filesystem` are unchanged. The `proofBoundary` of `schedulingctl test` is
+  `offline-synthetic`, where it was `offline_synthetic`, in the JSON report
+  and in the text line. Migration: a script that compares one of these
+  values compares the new spelling.
+- BREAKING: the hook delivery audit words Scheduling defines are written in
+  kebab-case. In a `scheduling.hook-delivery` record, the `outcome` words
+  `attempt_started`, `destination_resolution_refused`,
+  `destination_transport_unavailable`, `payload_expired`, `replay_requested`,
+  `replay_committed`, `replay_refused`, `replay_unfinished`,
+  `discard_requested`, `discard_committed`, `discard_refused`, and
+  `discard_unfinished`, and the `disposition` word `discard_pending`, are now
+  spelled with hyphens (`attempt-started`, `discard-pending`). The proposal
+  refusal code retained with a delivery is
+  `scheduling.hook.proposal-unsupported`, where it was
+  `scheduling.hook.proposal_unsupported`. Records and rows already written
+  keep their spelling. The old to new table is in
+  `release/notes/config-conventions/scheduling.md`, under "Protocol words".
 - `schedulingctl check --runtime-config` is package-free by design (the
   runtime file is checked against the project, as the other products' offline
   checks are); its help and `RUNTIME-CONFIG.md` now say that `package.root` is
@@ -21,6 +90,13 @@
   `scheduling.records.duplicate-identifier`, or
   `scheduling.fixture.duplicate-identifier`. Migration steps are in
   `release/notes/config-conventions/scheduling.md`.
+- BREAKING: `authentication.oidc.jwksSource` in `runtime.yaml` is tagged by
+  `type`, where it was tagged by `kind`: `jwksSource: {kind: static, ...}`
+  becomes `jwksSource: {type: static, ...}`. The values `discovery`, `uri`,
+  and `static` are unchanged. `kind` is refused as `config.removed-key` at
+  `/authentication/oidc/jwksSource/kind`, naming `type`. Migration: rename the
+  key and keep its value; the step is in
+  `release/notes/config-conventions/scheduling.md` under "Stable move".
 - BREAKING: `authentication.oidc.assertionIssuers: {}` is refused: delete the
   member to apply no assertion-issuer rule. The generated runtime schema types
   the client keys as `ExternalId` and requires at least one client.

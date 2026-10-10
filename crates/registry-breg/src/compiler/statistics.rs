@@ -468,13 +468,13 @@ fn authentication_profile(
     let task_grant = profile.task_grant.as_ref().map(|task_grant| {
         let permissions = profile
             .permissions
+            .entities
             .iter()
-            .filter(|permission| !permission.entity.is_empty())
             .filter_map(|permission| {
                 entities.get(&permission.entity).map(|entity| {
                     crate::contract::CompiledTaskGrantPermissionSource {
                         collection: entity.route.clone(),
-                        operations: permission.operations.clone().into(),
+                        operations: permission.operations.clone(),
                     }
                 })
             })
@@ -1057,6 +1057,9 @@ fn definition_digest(
     super::sha256_hex(&bytes)
 }
 
+/// One referenced field as the definition digest hashes it. A published
+/// release is stored under that digest and read back by it, so the field type
+/// is hashed with each bound under the name it was first hashed with.
 fn compiled_field_definition(entity: &CompiledEntity, field_id: &str) -> Option<serde_json::Value> {
     entity
         .stored_fields
@@ -1130,7 +1133,7 @@ impl DatasetGrants {
         let mut grants = Self::default();
         for profile in &project.access_profiles {
             let mut named = false;
-            for permission in &profile.dataset_permissions {
+            for permission in &profile.permissions.datasets {
                 if permission.dataset.as_str() != dataset {
                     continue;
                 }
@@ -1138,7 +1141,7 @@ impl DatasetGrants {
                     grants.repeated.insert(profile.id.clone());
                 }
                 named = true;
-                for operation in &permission.operations {
+                for operation in permission.operations.iter() {
                     match operation {
                         DatasetOperation::ReadLive => &mut grants.read_live,
                         DatasetOperation::Publish => &mut grants.publish,
@@ -1172,7 +1175,7 @@ fn quoted(profiles: &BTreeSet<String>) -> String {
 /// A dataset permission names a dataset the project declares.
 fn validate_permission_datasets(project: &RegistryProject, errors: &mut Vec<Diagnostic>) {
     for profile in &project.access_profiles {
-        for permission in &profile.dataset_permissions {
+        for permission in &profile.permissions.datasets {
             if !project
                 .statistical_datasets
                 .iter()
@@ -1181,7 +1184,7 @@ fn validate_permission_datasets(project: &RegistryProject, errors: &mut Vec<Diag
                 errors.push(Diagnostic::error(
                     "breg.access-profile.permission-dataset-unknown",
                     format!(
-                        "project.accessProfiles[id={}].permissions[dataset={}].dataset",
+                        "project.accessProfiles[id={}].permissions.datasets[dataset={}].dataset",
                         profile.id, permission.dataset
                     ),
                     &format!(

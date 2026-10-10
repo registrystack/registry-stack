@@ -3,11 +3,11 @@ classification: compatibility-shaped-local-mock
 synthetic_only: true
 server: {base_url: 'http://[::1]:18083', bind: '[::1]:18083'}
 validated_source_definition:
-  transport: http-json
+  type: http-json
   baseUrl: http://[::1]:18083
   posture: record-transformed
   authentication:
-    kind: oauth2-client-credentials
+    type: oauth2-client-credentials
     tokenEndpoint: http://[::1]:18083/oauth/token
     clientIdRef: secret:file/fixture-event-search-client-id
     clientSecretRef: secret:file/fixture-event-search-client-secret
@@ -40,9 +40,9 @@ validated_source_definition:
       - /total
       - /results/*/dateOfEvent
     redirects: deny
-    timeoutMilliseconds: 3000
+    attemptTimeoutMilliseconds: 3000
     maximumResponseBytes: 65536
-    concurrencyLimit: 4
+    maximumConcurrency: 4
   responseSchema: schemas/response.schema.yaml
   extractScript: adapters/event-search-json.rhai
   factSchema: schemas/facts.schema.yaml

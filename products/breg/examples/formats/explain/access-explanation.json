@@ -4,13 +4,13 @@
     "actions": [],
     "routes": []
   },
-  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
+  "apiVersion": "id.registrystack.org/formats/breg/access-explanation/v1alpha4",
   "claimContract": {
     "directClaims": {
       "assigned_districts": {
         "fieldType": {
-          "maxLength": 32,
-          "minLength": 0,
+          "maximumLength": 32,
+          "minimumLength": 0,
           "type": "string"
         },
         "multiValue": true,
@@ -90,7 +90,7 @@
     }
   ],
   "evaluation": "configuration inspection only; credentials and record access are not evaluated",
-  "kind": "AccessExplanation",
+  "kind": "BRegAccessExplanation",
   "missingClaims": "missing required direct claims cannot satisfy their row boundary or verified-claim lookup; types and scalar/set shape are listed in claimContract",
   "profileSelection": "one profile per request; selecting its name never grants authority and profiles are not merged",
   "purposeMatching": "one allowed purpose must match; a profile that names none accepts every purpose",

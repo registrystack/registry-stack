@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: facility
   canonicalBaseIri: "https://facility-registry.example.gov"
   version: 0.1.0
@@ -57,12 +57,12 @@ entities:
       - id: facility-code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: restricted
       - id: display-name
         type: string
         required: true
-        maxLength: 160
+        maximumLength: 160
         classification: restricted
       - id: administrative-boundary
         type: vocabulary-code
@@ -70,7 +70,7 @@ entities:
         required: true
         classification: internal
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - facility-code
     indexes:
@@ -85,7 +85,7 @@ entities:
       - id: permit-number
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: internal
       - id: facility
         type: reference
@@ -113,12 +113,12 @@ entities:
       - id: import-source
         type: string
         required: true
-        maxLength: 80
+        maximumLength: 80
         classification: internal
       - id: source-record-id
         type: string
         required: true
-        maxLength: 120
+        maximumLength: 120
         classification: internal
     temporal:
       startField: valid-from
@@ -126,15 +126,15 @@ entities:
       scopeFields:
         - permit-number
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - permit-number
           - valid-from
-      - kind: unique
+      - type: unique
         fields:
           - import-source
           - source-record-id
-      - kind: temporal-non-overlap
+      - type: temporal-non-overlap
         scopeFields:
           - permit-number
         startField: valid-from
@@ -157,7 +157,7 @@ entities:
       - id: installation-code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: internal
       - id: permit
         type: reference
@@ -194,18 +194,18 @@ entities:
       - id: import-source
         type: string
         required: true
-        maxLength: 80
+        maximumLength: 80
         classification: internal
       - id: source-record-id
         type: string
         required: true
-        maxLength: 120
+        maximumLength: 120
         classification: internal
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - installation-code
-      - kind: unique
+      - type: unique
         fields:
           - import-source
           - source-record-id
@@ -260,7 +260,7 @@ entities:
         - installation
         - substance-code
     constraints:
-      - kind: temporal-non-overlap
+      - type: temporal-non-overlap
         scopeFields:
           - installation
           - substance-code
@@ -283,208 +283,213 @@ accessProfiles:
     requiredPurposes:
       - facility-registry
     permissions:
-      - entity: facility
-        operations:
-          - create
-          - get
-          - list
-          - patch
-        readableFields:
-          - facility-code
-          - display-name
-          - administrative-boundary
-        writableFields:
-          - facility-code
-          - display-name
-          - administrative-boundary
-        filterableFields:
-          - facility-code
-          - administrative-boundary
-        rowBoundaries:
-          - field: administrative-boundary
-            claim: administrative_boundaries
-            operator: in
-      - entity: permit
-        operations:
-          - create
-          - get
-          - list
-          - patch
-        readableFields:
-          - permit-number
-          - facility
-          - permit-type
-          - valid-from
-          - valid-to
-          - administrative-boundary
-          - import-source
-          - source-record-id
-          - expiring-soon
-        writableFields:
-          - permit-number
-          - facility
-          - permit-type
-          - valid-from
-          - valid-to
-          - administrative-boundary
-          - import-source
-          - source-record-id
-        filterableFields:
-          - facility
-          - administrative-boundary
-          - import-source
-          - valid-from
-          - valid-to
-          - permit-type
-          - expiring-soon
-        allowCount: true
-        rowBoundaries:
-          - field: administrative-boundary
-            claim: administrative_boundaries
-            operator: in
-      - entity: installation
-        operations:
-          - create
-          - get
-          - list
-          - patch
-          - batch
-        readableFields:
-          - installation-code
-          - permit
-          - administrative-boundary
-          - centroid
-          - area-value
-          - area-unit
-          - import-source
-          - source-record-id
-        writableFields:
-          - installation-code
-          - permit
-          - administrative-boundary
-          - centroid
-          - area-value
-          - area-unit
-          - import-source
-          - source-record-id
-        filterableFields:
-          - permit
-          - administrative-boundary
-          - import-source
-        rowBoundaries:
-          - field: administrative-boundary
-            claim: administrative_boundaries
-            operator: in
-      - entity: discharge-report
-        operations:
-          - create
-          - get
-          - list
-          - patch
-        readableFields:
-          - installation
-          - administrative-boundary
-          - substance-code
-          - period-start
-          - period-end
-          - quantity-value
-          - quantity-unit
-          - has-measured-quantity
-        writableFields:
-          - installation
-          - administrative-boundary
-          - substance-code
-          - period-start
-          - period-end
-          - quantity-value
-          - quantity-unit
-        filterableFields:
-          - installation
-          - administrative-boundary
-          - substance-code
-          - period-start
-          - has-measured-quantity
-        allowCount: true
-        rowBoundaries:
-          - field: administrative-boundary
-            claim: administrative_boundaries
-            operator: in
-      - dataset: monthly-discharge-reports
-        operations:
-          - read-live
-          - read-releases
-      - dataset: monthly-valid-permits-temporal
-        operations:
-          - read-live
-          - read-releases
-      - dataset: monthly-valid-permits-fields
-        operations:
-          - read-live
-          - read-releases
+      entities:
+        - entity: facility
+          operations:
+            - create
+            - get
+            - list
+            - patch
+          readableFields:
+            - facility-code
+            - display-name
+            - administrative-boundary
+          writableFields:
+            - facility-code
+            - display-name
+            - administrative-boundary
+          filterableFields:
+            - facility-code
+            - administrative-boundary
+          rowBoundaries:
+            - field: administrative-boundary
+              claim: administrative_boundaries
+              operator: in
+        - entity: permit
+          operations:
+            - create
+            - get
+            - list
+            - patch
+          readableFields:
+            - permit-number
+            - facility
+            - permit-type
+            - valid-from
+            - valid-to
+            - administrative-boundary
+            - import-source
+            - source-record-id
+            - expiring-soon
+          writableFields:
+            - permit-number
+            - facility
+            - permit-type
+            - valid-from
+            - valid-to
+            - administrative-boundary
+            - import-source
+            - source-record-id
+          filterableFields:
+            - facility
+            - administrative-boundary
+            - import-source
+            - valid-from
+            - valid-to
+            - permit-type
+            - expiring-soon
+          allowCount: true
+          rowBoundaries:
+            - field: administrative-boundary
+              claim: administrative_boundaries
+              operator: in
+        - entity: installation
+          operations:
+            - create
+            - get
+            - list
+            - patch
+            - batch
+          readableFields:
+            - installation-code
+            - permit
+            - administrative-boundary
+            - centroid
+            - area-value
+            - area-unit
+            - import-source
+            - source-record-id
+          writableFields:
+            - installation-code
+            - permit
+            - administrative-boundary
+            - centroid
+            - area-value
+            - area-unit
+            - import-source
+            - source-record-id
+          filterableFields:
+            - permit
+            - administrative-boundary
+            - import-source
+          rowBoundaries:
+            - field: administrative-boundary
+              claim: administrative_boundaries
+              operator: in
+        - entity: discharge-report
+          operations:
+            - create
+            - get
+            - list
+            - patch
+          readableFields:
+            - installation
+            - administrative-boundary
+            - substance-code
+            - period-start
+            - period-end
+            - quantity-value
+            - quantity-unit
+            - has-measured-quantity
+          writableFields:
+            - installation
+            - administrative-boundary
+            - substance-code
+            - period-start
+            - period-end
+            - quantity-value
+            - quantity-unit
+          filterableFields:
+            - installation
+            - administrative-boundary
+            - substance-code
+            - period-start
+            - has-measured-quantity
+          allowCount: true
+          rowBoundaries:
+            - field: administrative-boundary
+              claim: administrative_boundaries
+              operator: in
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations:
+            - read-live
+            - read-releases
+        - dataset: monthly-valid-permits-temporal
+          operations:
+            - read-live
+            - read-releases
+        - dataset: monthly-valid-permits-fields
+          operations:
+            - read-live
+            - read-releases
   - id: statistics-publisher
     principalClaim: registry_principal
     requiredScopes:
       - registry:facility:statistics:publish
     permissions:
-      - entity: permit
-        operations:
-          - list
-        readableFields:
-          - permit-type
-          - valid-from
-          - valid-to
-          - administrative-boundary
-          - expiring-soon
-        filterableFields:
-          - permit-type
-          - valid-from
-          - valid-to
-          - administrative-boundary
-          - expiring-soon
-        allowCount: true
-        rowBoundaries: unrestricted
-      - entity: discharge-report
-        operations:
-          - list
-        readableFields:
-          - substance-code
-          - period-start
-          - period-end
-          - administrative-boundary
-          - has-measured-quantity
-        filterableFields:
-          - substance-code
-          - period-start
-          - administrative-boundary
-          - has-measured-quantity
-        allowCount: true
-        rowBoundaries: unrestricted
-      - dataset: monthly-discharge-reports
-        operations:
-          - publish
-          - read-releases
-      - dataset: monthly-valid-permits-temporal
-        operations:
-          - publish
-          - read-releases
-      - dataset: monthly-valid-permits-fields
-        operations:
-          - publish
-          - read-releases
+      entities:
+        - entity: permit
+          operations:
+            - list
+          readableFields:
+            - permit-type
+            - valid-from
+            - valid-to
+            - administrative-boundary
+            - expiring-soon
+          filterableFields:
+            - permit-type
+            - valid-from
+            - valid-to
+            - administrative-boundary
+            - expiring-soon
+          allowCount: true
+          rowBoundaries: unrestricted
+        - entity: discharge-report
+          operations:
+            - list
+          readableFields:
+            - substance-code
+            - period-start
+            - period-end
+            - administrative-boundary
+            - has-measured-quantity
+          filterableFields:
+            - substance-code
+            - period-start
+            - administrative-boundary
+            - has-measured-quantity
+          allowCount: true
+          rowBoundaries: unrestricted
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations:
+            - publish
+            - read-releases
+        - dataset: monthly-valid-permits-temporal
+          operations:
+            - publish
+            - read-releases
+        - dataset: monthly-valid-permits-fields
+          operations:
+            - publish
+            - read-releases
   - id: statistics-reader
     principalClaim: registry_principal
     requiredScopes:
       - registry:facility:statistics:read
     permissions:
-      - dataset: monthly-discharge-reports
-        operations:
-          - read-releases
-      - dataset: monthly-valid-permits-temporal
-        operations:
-          - read-releases
-      - dataset: monthly-valid-permits-fields
-        operations:
-          - read-releases
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations:
+            - read-releases
+        - dataset: monthly-valid-permits-temporal
+          operations:
+            - read-releases
+        - dataset: monthly-valid-permits-fields
+          operations:
+            - read-releases
 statisticalDatasets:
   - id: monthly-discharge-reports
     unit: discharge-report

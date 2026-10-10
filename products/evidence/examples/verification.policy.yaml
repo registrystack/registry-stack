@@ -3,6 +3,8 @@
 # `evidence check-policy --verification-policy verification.policy.yaml`.
 # Every value comes from the relying party's own retained state: the original
 # request and the transaction it accepted, never the response being verified.
+apiVersion: id.registrystack.org/formats/evidence/verification-policy/v1
+kind: EvidenceVerificationPolicy
 expectedAssuranceProfile: evidence-grade
 issuedBy: https://evidence.example.org
 providedBy: https://registry.example.org
@@ -19,6 +21,7 @@ expectedOutputs:
   - handle: example
     concept: https://registry.example.org/concepts/example
     required: true
-    form: boolean
+    form:
+      type: boolean
 maximumAssertionLifetimeSeconds: 86400
 revokedKeyIds: []

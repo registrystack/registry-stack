@@ -82,7 +82,7 @@ impl PostgresStore {
         let revision = i64::try_from(document.revision).map_err(|_| StoreError::Invalid)?;
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "holiday_revision_created",
+                "holiday-revision-created",
                 Some(actor),
                 &actor.profile_id,
                 json!({}),
@@ -138,7 +138,7 @@ impl PostgresStore {
         append_clock_audit(
             &mut audit,
             actor,
-            "holiday_revision_created",
+            "holiday-revision-created",
             json!({"holidaySet":document.holiday_set,"revision":document.revision,"digest":digest}),
         )
         .await?;
@@ -253,7 +253,7 @@ impl PostgresStore {
             .ok_or(StoreError::NotFound)?;
         let holiday_value = serde_json::to_value(&holiday)?;
         let rows=transaction.query(
-            "SELECT o.clock_occurrence_id,o.item_id,o.current_calculation_generation,o.source_revision,o.source_etag,c.policy_digest,c.policy,c.calendar,c.anchor_at,c.started_at,c.source_timing,c.completed_at FROM casework_clock_occurrences o JOIN casework_items i ON i.item_id=o.item_id AND i.erased_at IS NULL JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.clock_id=$1 AND o.scope='activity' AND o.state IN ('running','paused','verification_pending') AND c.calendar->>'holidaySet'=$2 AND c.holiday_document IS DISTINCT FROM $3::jsonb ORDER BY o.clock_occurrence_id FOR UPDATE OF o LIMIT 100",
+            "SELECT o.clock_occurrence_id,o.item_id,o.current_calculation_generation,o.source_revision,o.source_etag,c.policy_digest,c.policy,c.calendar,c.anchor_at,c.started_at,c.source_timing,c.completed_at FROM casework_clock_occurrences o JOIN casework_items i ON i.item_id=o.item_id AND i.erased_at IS NULL JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation WHERE o.clock_id=$1 AND o.scope='activity' AND o.state IN ('running','paused','verification-pending') AND c.calendar->>'holidaySet'=$2 AND c.holiday_document IS DISTINCT FROM $3::jsonb ORDER BY o.clock_occurrence_id FOR UPDATE OF o LIMIT 100",
             &[&request.clock_id, &request.holiday_set, &holiday_value],
         ).await?;
         if rows.is_empty() {
@@ -316,7 +316,7 @@ impl PostgresStore {
         }
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "clock_recomputed",
+                "clock-recomputed",
                 Some(actor),
                 &actor.profile_id,
                 json!({}),
@@ -384,7 +384,7 @@ impl PostgresStore {
                 || row.get::<_, String>(3) != row.get::<_, String>(21)
                 || !matches!(
                     row.get::<_, String>(22).as_str(),
-                    "running" | "paused" | "verification_pending"
+                    "running" | "paused" | "verification-pending"
                 )
                 || row.get::<_, String>(23) != row.get::<_, String>(24)
                 || row.get::<_, i64>(25) > row.get::<_, i64>(2)
@@ -445,7 +445,7 @@ impl PostgresStore {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let rows = transaction.query(
-            "SELECT o.clock_occurrence_id,o.source_id,o.subject_kind,o.subject_id FROM casework_clock_occurrences o LEFT JOIN casework_items i ON i.item_id=o.item_id JOIN casework_subjects s ON s.source_id=o.source_id AND s.subject_kind=o.subject_kind AND s.subject_id=o.subject_id AND s.erased_at IS NULL WHERE (o.item_id IS NULL OR i.erased_at IS NULL) AND o.state IN ('running','verification_pending') AND o.next_action_at<=now() AND (o.lease_until IS NULL OR o.lease_until<now()) ORDER BY o.next_action_at,o.clock_occurrence_id FOR UPDATE OF o SKIP LOCKED LIMIT $1",
+            "SELECT o.clock_occurrence_id,o.source_id,o.subject_kind,o.subject_id FROM casework_clock_occurrences o LEFT JOIN casework_items i ON i.item_id=o.item_id JOIN casework_subjects s ON s.source_id=o.source_id AND s.subject_kind=o.subject_kind AND s.subject_id=o.subject_id AND s.erased_at IS NULL WHERE (o.item_id IS NULL OR i.erased_at IS NULL) AND o.state IN ('running','verification-pending') AND o.next_action_at<=now() AND (o.lease_until IS NULL OR o.lease_until<now()) ORDER BY o.next_action_at,o.clock_occurrence_id FOR UPDATE OF o SKIP LOCKED LIMIT $1",
             &[&limit],
         ).await?;
         let mut claims = Vec::with_capacity(rows.len());
@@ -453,7 +453,7 @@ impl PostgresStore {
             let id: Uuid = row.get(0);
             let token = Uuid::new_v4();
             transaction.execute(
-                "UPDATE casework_clock_occurrences SET state='verification_pending',lease_token=$2,lease_until=now()+make_interval(secs=>$3::int),updated_at=now() WHERE clock_occurrence_id=$1",
+                "UPDATE casework_clock_occurrences SET state='verification-pending',lease_token=$2,lease_until=now()+make_interval(secs=>$3::int),updated_at=now() WHERE clock_occurrence_id=$1",
                 &[&id,&token,&i32::try_from(CLOCK_LEASE_SECONDS).map_err(|_| StoreError::Invalid)?],
             ).await?;
             claims.push(ClockTimerClaim {
@@ -485,7 +485,7 @@ impl PostgresStore {
     ) -> Result<(), StoreError> {
         let client = self.client().await?;
         client.execute(
-            "UPDATE casework_clock_occurrences SET state='verification_pending',next_action_at=now()+make_interval(secs=>$3::int),lease_token=NULL,lease_until=NULL,updated_at=now() WHERE clock_occurrence_id=$1 AND lease_token=$2",
+            "UPDATE casework_clock_occurrences SET state='verification-pending',next_action_at=now()+make_interval(secs=>$3::int),lease_token=NULL,lease_until=NULL,updated_at=now() WHERE clock_occurrence_id=$1 AND lease_token=$2",
             &[&claim.clock_occurrence_id,&claim.lease_token,&i32::try_from(VERIFICATION_RETRY_SECONDS).map_err(|_| StoreError::Invalid)?],
         ).await?;
         Ok(())
@@ -545,7 +545,7 @@ impl PostgresStore {
             return Err(StoreError::Conflict);
         };
         let state: String = occurrence.get(0);
-        if !matches!(state.as_str(), "running" | "verification_pending") {
+        if !matches!(state.as_str(), "running" | "verification-pending") {
             audit.commit(transaction).await?;
             return Ok(0);
         }
@@ -568,7 +568,7 @@ impl PostgresStore {
                 && observation.state.is_active());
         if !source_current || !occurrence_current {
             transaction.execute(
-                "UPDATE casework_clock_occurrences SET state=CASE WHEN $3 THEN 'cancelled' ELSE 'verification_pending' END,next_action_at=CASE WHEN $3 THEN NULL ELSE now()+make_interval(secs=>$4::int) END,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE clock_occurrence_id=$1 AND lease_token=$2",
+                "UPDATE casework_clock_occurrences SET state=CASE WHEN $3 THEN 'cancelled' ELSE 'verification-pending' END,next_action_at=CASE WHEN $3 THEN NULL ELSE now()+make_interval(secs=>$4::int) END,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE clock_occurrence_id=$1 AND lease_token=$2",
                 &[&claim.clock_occurrence_id,&claim.lease_token,&(!occurrence_current),&i32::try_from(VERIFICATION_RETRY_SECONDS).map_err(|_|StoreError::Invalid)?],
             ).await?;
             audit.commit(transaction).await?;
@@ -630,7 +630,7 @@ impl PostgresStore {
                 .get(0);
             if !served {
                 transaction.execute(
-                    "UPDATE casework_clock_occurrences SET state='verification_pending',next_action_at=now()+make_interval(secs=>$3::int),lease_token=NULL,lease_until=NULL,updated_at=now() WHERE clock_occurrence_id=$1 AND lease_token=$2",
+                    "UPDATE casework_clock_occurrences SET state='verification-pending',next_action_at=now()+make_interval(secs=>$3::int),lease_token=NULL,lease_until=NULL,updated_at=now() WHERE clock_occurrence_id=$1 AND lease_token=$2",
                     &[&claim.clock_occurrence_id,&claim.lease_token,&i32::try_from(VERIFICATION_RETRY_SECONDS).map_err(|_|StoreError::Invalid)?],
                 ).await?;
                 audit.commit(transaction).await?;
@@ -873,12 +873,12 @@ pub(crate) async fn reconcile_clock_observation(
     let Some(calculation) = calculation else {
         if !existed {
             transaction.execute(
-                "INSERT INTO casework_clock_occurrences(clock_occurrence_id,source_id,subject_kind,subject_id,clock_id,scope,scope_key,item_id,state,policy_digest,current_calculation_generation,recompute_generation,source_binding_generation,source_revision,source_etag,next_action_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'source_facts_missing',$9,0,0,$10,$11,$12,NULL,$13,$13) ON CONFLICT(source_id,subject_kind,subject_id,clock_id,scope,scope_key) DO NOTHING",
+                "INSERT INTO casework_clock_occurrences(clock_occurrence_id,source_id,subject_kind,subject_id,clock_id,scope,scope_key,item_id,state,policy_digest,current_calculation_generation,recompute_generation,source_binding_generation,source_revision,source_etag,next_action_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'source-facts-missing',$9,0,0,$10,$11,$12,NULL,$13,$13) ON CONFLICT(source_id,subject_kind,subject_id,clock_id,scope,scope_key) DO NOTHING",
                 &[&id,&observation.subject.source_id,&observation.subject.kind,&observation.subject.id,&binding.clock.id(),&scope,&scope_key,&item_id,&policy_digest,&observation.binding.generation,&observation.ordered_revision,&observation.representation_etag,&now],
             ).await?;
         } else {
             transaction.execute(
-                "UPDATE casework_clock_occurrences SET item_id=$2,state='source_facts_missing',source_binding_generation=$3,source_revision=$4,source_etag=$5,next_action_at=NULL,lease_token=NULL,lease_until=NULL,updated_at=$6 WHERE clock_occurrence_id=$1",
+                "UPDATE casework_clock_occurrences SET item_id=$2,state='source-facts-missing',source_binding_generation=$3,source_revision=$4,source_etag=$5,next_action_at=NULL,lease_token=NULL,lease_until=NULL,updated_at=$6 WHERE clock_occurrence_id=$1",
                 &[&id,&item_id,&observation.binding.generation,&observation.ordered_revision,&observation.representation_etag,&now],
             ).await?;
         }
@@ -1225,8 +1225,8 @@ fn clock_state_name(value: ClockRuntimeState) -> &'static str {
         ClockRuntimeState::Paused => "paused",
         ClockRuntimeState::Completed => "completed",
         ClockRuntimeState::Cancelled => "cancelled",
-        ClockRuntimeState::VerificationPending => "verification_pending",
-        ClockRuntimeState::SourceFactsMissing => "source_facts_missing",
+        ClockRuntimeState::VerificationPending => "verification-pending",
+        ClockRuntimeState::SourceFactsMissing => "source-facts-missing",
     }
 }
 fn parse_clock_state(value: &str) -> Result<ClockRuntimeState, StoreError> {
@@ -1235,8 +1235,8 @@ fn parse_clock_state(value: &str) -> Result<ClockRuntimeState, StoreError> {
         "paused" => Ok(ClockRuntimeState::Paused),
         "completed" => Ok(ClockRuntimeState::Completed),
         "cancelled" => Ok(ClockRuntimeState::Cancelled),
-        "verification_pending" => Ok(ClockRuntimeState::VerificationPending),
-        "source_facts_missing" => Ok(ClockRuntimeState::SourceFactsMissing),
+        "verification-pending" => Ok(ClockRuntimeState::VerificationPending),
+        "source-facts-missing" => Ok(ClockRuntimeState::SourceFactsMissing),
         _ => Err(StoreError::Corrupt),
     }
 }
@@ -1244,8 +1244,8 @@ fn state_name(value: OccurrenceState) -> &'static str {
     match value {
         OccurrenceState::Open => "open",
         OccurrenceState::Claimed => "claimed",
-        OccurrenceState::WaitingApplicant => "waiting_applicant",
-        OccurrenceState::WaitingApplication => "waiting_application",
+        OccurrenceState::WaitingApplicant => "waiting-applicant",
+        OccurrenceState::WaitingApplication => "waiting-application",
         OccurrenceState::Synchronizing => "synchronizing",
         OccurrenceState::Completed => "completed",
         OccurrenceState::Superseded => "superseded",

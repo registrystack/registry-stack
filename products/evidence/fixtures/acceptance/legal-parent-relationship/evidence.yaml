@@ -1,10 +1,11 @@
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+kind: EvidenceBundle
 assuranceProfile: evidence-grade
 service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance}
-issuer: {id: urn:example:fixture:issuer:authority}
+issuer: {uri: urn:example:fixture:issuer:authority}
 publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
 authentication:
-  oidc: {issuer: https://identity.invalid, audience: evidence-fixture, allowedClients: [evidence-task-agent], tokenTypes: [at+jwt], algorithms: [ES256], jwksSource: {kind: uri, uri: https://identity.invalid/.well-known/jwks.json}, principalClaim: sub, requesterTagsClaim: evidence_tags, evidenceAudienceClaim: evidence_audience, maximumTokenLifetimeSeconds: 300, revokedKeyIds: []}
+  oidc: {issuer: https://identity.invalid, audience: evidence-fixture, allowedClients: [evidence-task-agent], tokenTypes: [at+jwt], algorithms: [ES256], jwksSource: {type: uri, uri: https://identity.invalid/.well-known/jwks.json}, principalClaim: sub, requesterTagsClaim: evidence_tags, evidenceAudienceClaim: evidence_audience, requiredScopes: unrestricted, maximumTokenLifetimeSeconds: 300, revokedKeyIds: []}
 audit: {hashKeyRef: secret:file/audit-hash-key, hashKeyVersion: 1}
 subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
@@ -20,10 +21,10 @@ selectorProfiles:
     fields: {person_reference: {type: string, minimumBytes: 1, maximumBytes: 128}}
 sources:
   source-d:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-d-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-d-token}
     request:
       method: POST
       path: /v1/child-relationships
@@ -48,9 +49,9 @@ sources:
         - /records/*/relationship_set_contract
         - /records/*/relationship_set_complete
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/response.schema.yaml
     extractScript: adapters/source-d.rhai
     factSchema: schemas/facts.schema.yaml
@@ -73,10 +74,10 @@ authorityProfiles:
             valueClaims: {person_reference: grant.candidate_parent.person_reference}
 requirements:
   - handle: legal-parent-relationship
-    id: urn:example:fixture:requirement:legal-parent-relationship:v1
+    uri: urn:example:fixture:requirement:legal-parent-relationship:v1
     kind: criterion
     acquisition:
-      kind: single
+      type: single
       source: source-d
     purposes: [fixture-enrolment]
     subjectRoles:
@@ -97,7 +98,7 @@ requirements:
         candidate_reference_namespace: urn:example:fixture:person-reference
         relationship_set_contract: urn:example:fixture:legal-parent-set:v1
         legal_authority_attestation: urn:example:fixture:governance:legal-parent-register:v1
-    concepts: [{handle: relationship-confirmed, id: urn:example:fixture:concept:legal-parent-relationship-confirmed, form: boolean, required: true, constraints: {}}]
+    concepts: [{handle: relationship-confirmed, uri: urn:example:fixture:concept:legal-parent-relationship-confirmed, type: boolean, required: true, constraints: {}}]
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:legal-parent-relationship]}
     existenceDisclosure: collapse-unresolved

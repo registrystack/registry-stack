@@ -168,7 +168,7 @@ def main():
     config = yaml.safe_load((bundle / "evidence.yaml").read_text())
     config["service"]["publicOrigin"] = origin
     config["authentication"]["oidc"]["issuer"] = issuer
-    config["authentication"]["oidc"]["jwksSource"] = {"kind": "uri", "uri": issuer + "/.well-known/jwks.json"}
+    config["authentication"]["oidc"]["jwksSource"] = {"type": "uri", "uri": issuer + "/.well-known/jwks.json"}
     for source_config in config["sources"].values():
         source_config["baseUrl"] = issuer
     for path in (bundle / "public-keys").iterdir():
@@ -179,11 +179,11 @@ def main():
     (bundle / "evidence.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     # Publish the dynamically authored package through the maintained checksum renderer.
     (bundle / "SHA256SUMS").write_bytes(PACKAGE_SUMS.rendered_sum(bundle))
-    runtime = {"apiVersion": "registry.registrystack.org/evidence-runtime/v1alpha1", "kind": "EvidenceRuntimeConfig",
+    runtime = {"apiVersion": "id.registrystack.org/formats/evidence/runtime/v1alpha1", "kind": "EvidenceRuntimeConfig",
         "package": {"root": str(bundle)}, "listener": {
         "bind": "127.0.0.1:" + str(port), "tlsTermination": "operator-controlled-upstream", "trustProxyIdentityHeaders": False,
         "maximumRequestBytes": 65536, "maximumConcurrentRequests": 16, "requestTimeoutMilliseconds": 10000, "shutdownGraceMilliseconds": 1000},
-        "secretProviders": {"file": {"root": str(secrets)}}, "signer": {"kind": "local-jwk", "privateKeyRef": "secret:file/signing-key"},
+        "secretProviders": {"file": {"root": str(secrets)}}, "signer": {"type": "local-jwk", "privateKeyRef": "secret:file/signing-key"},
         "audit": {"path": str(output / "audit.jsonl")}, "outboundTls": {"systemRoots": True, "trustProfiles": {}}}
     runtime_path = output / "runtime.yaml"
     runtime_path.write_text(yaml.safe_dump(runtime, sort_keys=False))
@@ -232,8 +232,8 @@ def main():
             request = Request(origin + "/v1/evidence-definitions", headers={"Authorization": "Bearer " + token, "Accept": "application/json"})
             with urlopen(request, timeout=5) as response:
                 definitions = json.load(response)
-            contracts = {key: definitions[key] for key in ("assuranceProfile", "audience", "issuedBy", "providedBy", "definitions")}
-            contracts["schema"] = "registry.evidence-client-contracts/v1"
+            contracts = {"apiVersion": "id.registrystack.org/formats/evidence/client-contracts/v1", "kind": "EvidenceClientContracts"}
+            contracts.update({key: definitions[key] for key in ("assuranceProfile", "audience", "issuedBy", "providedBy", "definitions")})
             contracts_path = output / "contracts.json"
             write_json(contracts_path, contracts)
             write_json(output / "ready.json", {"baseUrl": origin, "contractsFile": str(contracts_path), "tokenFile": str(token_path),

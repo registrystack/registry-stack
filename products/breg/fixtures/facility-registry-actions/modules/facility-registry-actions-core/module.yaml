@@ -1,3 +1,5 @@
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: facility-registry-actions-core
 version: 0.1.0
 entities:
@@ -6,55 +8,55 @@ entities:
     route: operators
     mutationMode: mutable
     fields:
-      - {id: operator-code, apiName: operatorCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: operator-code, apiName: operatorCode, type: string, required: true, maximumLength: 64, classification: internal}
       - {id: status, type: vocabulary-code, vocabulary: operator-status, required: true, classification: internal}
     constraints:
-      - {kind: unique, fields: [operator-code]}
+      - {type: unique, fields: [operator-code]}
   - id: facility
     primaryDataset: facility-registry-actions
     route: facilities
     mutationMode: mutable
     fields:
-      - {id: facility-code, apiName: facilityCode, type: string, required: true, maxLength: 64, classification: internal}
-      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
-      - {id: owner, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: facility-code, apiName: facilityCode, type: string, required: true, maximumLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 200, classification: internal}
+      - {id: owner, type: string, required: true, maximumLength: 80, classification: internal}
     constraints:
-      - {kind: unique, fields: [facility-code]}
+      - {type: unique, fields: [facility-code]}
     hooks:
       - id: facility-registered-v1
         phase: after
         trigger: created
         projection: [facility-code]
-        handler: {kind: url, destinationId: facility-events}
+        handler: {type: url, destinationId: facility-events}
       - id: facility-owner-changed-v1
         phase: after
         trigger: patched
         projection: [facility-code]
-        when: {kind: fields, changed: [owner]}
-        handler: {kind: url, destinationId: facility-events}
+        when: {type: fields, changed: [owner]}
+        handler: {type: url, destinationId: facility-events}
   - id: initial-operator-assignment
     primaryDataset: facility-registry-actions
     route: initial-operator-assignments
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - {id: facility, type: reference, target: facility, required: true, classification: internal}
       - {id: operator, type: reference, target: operator, required: true, classification: internal}
     constraints:
-      - {kind: unique, fields: [facility]}
+      - {type: unique, fields: [facility]}
     hooks:
       - id: initial-operator-assigned-v1
         phase: after
         trigger: created
         projection: [facility, operator]
-        handler: {kind: url, destinationId: facility-events}
+        handler: {type: url, destinationId: facility-events}
 actions:
   - id: register-facility
     requires:
       - {input: operator, field: status, equals: active}
     inputs:
-      - {id: facility-code, apiName: facilityCode, type: string, required: true, maxLength: 64, classification: internal}
-      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
-      - {id: owner, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: facility-code, apiName: facilityCode, type: string, required: true, maximumLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 200, classification: internal}
+      - {id: owner, type: string, required: true, maximumLength: 80, classification: internal}
       - {id: operator, apiName: operatorId, type: reference, target: operator, required: true, classification: internal}
     effects:
       - id: facility
@@ -73,7 +75,7 @@ actions:
   - id: transfer-facility
     inputs:
       - {id: facility, apiName: facilityId, type: reference, target: facility, required: true, classification: internal}
-      - {id: owner, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: owner, type: string, required: true, maximumLength: 80, classification: internal}
     effects:
       - id: facility
         target: {fromField: facility}

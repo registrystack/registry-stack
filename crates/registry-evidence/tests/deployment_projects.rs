@@ -1202,7 +1202,7 @@ fn execute_parameter_mutation(
         .unwrap_or_else(|| panic!("{label}: requirement list is unavailable"));
     let target = requirements
         .iter_mut()
-        .find(|candidate| candidate["id"].as_str() == Some(requirement.id.as_str()))
+        .find(|candidate| candidate["uri"].as_str() == Some(requirement.id.as_str()))
         .unwrap_or_else(|| panic!("{label}: disposable requirement is absent"));
     let parameters = target["derivation"]["parameters"]
         .as_object_mut()
@@ -1214,9 +1214,7 @@ fn execute_parameter_mutation(
         );
         parameters.insert(name.clone(), value.clone());
     }
-    let mutated = serde_json::to_vec(&config)
-        .unwrap_or_else(|_| panic!("{label}: parameter mutation is not representable"));
-    disposable.config = registry_evidence::config::EvidenceConfig::parse_yaml(&mutated)
+    disposable.config = registry_evidence::config::EvidenceConfig::parse_projection(&config)
         .unwrap_or_else(|_| panic!("{label}: parameter mutation broke startup validation"));
     let disposable = Arc::new(disposable);
     let kernel = OfflineKernel::compile(Arc::clone(&disposable))
@@ -1461,8 +1459,8 @@ fn assert_transport(
     });
     if let Some(path) = &expected.path {
         assert_eq!(
-            request.path.as_deref(),
-            Some(path.as_str()),
+            request.path.as_str(),
+            path.as_str(),
             "{label}: fixed transport path mismatch"
         );
     }

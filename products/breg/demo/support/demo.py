@@ -109,10 +109,10 @@ WEBHOOK_MODULE_SOURCE = """    hooks:
         trigger: created
         projection: [person-code, residency-status]
         when:
-          kind: fields
+          type: fields
           afterEquals: {residency-status: usual-resident}
         handler:
-          kind: url
+          type: url
           destinationId: household-event-receiver
 """
 WEBHOOK_SIGNATURE_DOMAIN = b"breg-webhook-signature-v1"
@@ -162,11 +162,11 @@ FIXTURE_CONFIGS: dict[str, dict[str, Any]] = {
         trigger: created
         projection: [establishment-code, operating-status]
         when:
-          kind: fields
+          type: fields
           afterEquals:
             operating-status: operating
         handler:
-          kind: url
+          type: url
           destinationId: business-event-receiver
 """,
             "entity": "establishment",
@@ -558,7 +558,7 @@ def _local_project(
             "facility fixture no longer has the expected operator access profile",
         )
         entity_row_boundary = "          claim: administrative_boundaries\n          operator: in"
-        grant_row_boundary = "            claim: administrative_boundaries\n            operator: in"
+        grant_row_boundary = "              claim: administrative_boundaries\n              operator: in"
         if source.count(entity_row_boundary) != 1 or source.count(grant_row_boundary) != 4:
             raise DemoError("facility fixture no longer has the expected row-boundary operators")
         source = source.replace(
@@ -567,7 +567,7 @@ def _local_project(
         )
         source = source.replace(
             grant_row_boundary,
-            "            claim: administrative_boundaries\n            operator: equals",
+            "              claim: administrative_boundaries\n              operator: equals",
         )
         journeys_path = target / "tests/journeys.yaml"
         journeys = journeys_path.read_text(encoding="utf-8")
@@ -628,14 +628,14 @@ def prepare_dev(root: Path, fixture: Path, fixture_kind: str, webhook: bool = Fa
     source = registry.read_text(encoding="utf-8")
     if fixture_kind == "business-establishments":
         source = source.replace(
-            "          - field: id\n            claim: business_id",
-            "          - field: business-code\n            claim: business_code",
+            "            - field: id\n              claim: business_id",
+            "            - field: business-code\n              claim: business_code",
             1,
         )
     elif fixture_kind == "household":
         source = source.replace(
-            "          - {field: id, claim: household_id, operator: equals}",
-            "          - {field: household-code, claim: household_code, operator: equals}",
+            "            - {field: id, claim: household_id, operator: equals}",
+            "            - {field: household-code, claim: household_code, operator: equals}",
             1,
         )
     registry.write_text(source, encoding="utf-8")
@@ -1120,7 +1120,7 @@ def select_dead_letter(report_path: Path) -> tuple[str, str, int]:
         delivery
         for delivery in deliveries
         if isinstance(delivery, dict)
-        and delivery.get("state") == "dead_lettered"
+        and delivery.get("state") == "dead-lettered"
         and delivery.get("replayEligible") is True
     ]
     if len(matching) != 1:
@@ -1563,7 +1563,7 @@ def seed_asset_change_request(root: Path) -> None:
         or request.get("bregState") != "draft"
         or not isinstance(actions, list)
         or not any(
-            isinstance(action, dict) and action.get("operation") == "submit_request"
+            isinstance(action, dict) and action.get("operation") == "submit-request"
             for action in actions
         )
     ):

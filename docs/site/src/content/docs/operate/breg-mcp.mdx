@@ -172,10 +172,10 @@ authenticate with a private JWK. To rotate one, register the new public key with
 server beside the old one, replace the secret file, restart the service, and then remove the old
 public key.
 
-**Issuer signing keys.** With `jwksSource.kind: discovery` or `uri`, the gateway refetches the
+**Issuer signing keys.** With `jwksSource.type: discovery` or `uri`, the gateway refetches the
 discovered or configured key set when a token names
 a key it does not hold, so the authorization server can publish a new key and sign with it without
-a gateway restart. With `jwksSource.kind: static`, add the new public key to the key set secret and
+a gateway restart. With `jwksSource.type: static`, add the new public key to the key set secret and
 restart before the authorization server signs with it. The review page always fetches the key set
 named by the issuer's discovery document.
 

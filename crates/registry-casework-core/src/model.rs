@@ -76,7 +76,7 @@ mod directory_member_tests {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum CaseworkRole {
     Staff,
     Supervisor,
@@ -133,7 +133,7 @@ pub struct SourceBinding {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum OccurrenceKind {
     Review,
     Application,
@@ -141,7 +141,7 @@ pub enum OccurrenceKind {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum OccurrenceState {
     Open,
     Claimed,
@@ -254,7 +254,7 @@ pub struct AssignmentContext {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum StaffingDiagnostic {
     NoCoverAvailable,
 }
@@ -285,15 +285,15 @@ pub struct OperationName(String);
 impl OperationName {
     pub const MAX_LENGTH: usize = 64;
 
+    /// The source action that sends a subject back for correction. When an
+    /// action of this name completes, Casework retains the reason and the
+    /// flagged fields the officer gave as the correction context of the work
+    /// item. A source adapter that offers that action offers it under this
+    /// name; no other name carries that meaning.
+    pub const REQUEST_CORRECTION: &'static str = "request-correction";
+
     pub fn parse(value: &str) -> Result<Self, InvalidOperationName> {
-        let input = value.as_bytes();
-        if input.is_empty()
-            || input.len() > Self::MAX_LENGTH
-            || !input[0].is_ascii_lowercase()
-            || input[1..]
-                .iter()
-                .any(|byte| !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_'))
-        {
+        if !crate::typed::valid_local_identifier(value) {
             return Err(InvalidOperationName);
         }
         Ok(Self(value.to_owned()))
@@ -360,7 +360,7 @@ pub struct InvalidOperationName;
 
 impl fmt::Display for InvalidOperationName {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("operation name must match [a-z][a-z0-9_]{0,63}")
+        formatter.write_str("operation name must match [a-z][a-z0-9_-]{0,63}")
     }
 }
 
@@ -385,17 +385,64 @@ mod operation_name_tests {
     }
 
     #[test]
+    fn the_correction_action_is_named_in_kebab_case() {
+        assert_eq!(OperationName::REQUEST_CORRECTION, "request-correction");
+        assert_eq!(
+            OperationName::parse(OperationName::REQUEST_CORRECTION)
+                .expect("the correction action is an operation name")
+                .as_str(),
+            "request-correction"
+        );
+    }
+
+    #[test]
+    fn cfg_id_1_an_operation_name_is_a_local_identifier() {
+        for valid in [
+            "approve",
+            "approve-request",
+            "request-correction",
+            "request_correction",
+            "verify-documents-2",
+            "a",
+        ] {
+            let name = OperationName::parse(valid).unwrap_or_else(|_| panic!("{valid}"));
+            assert_eq!(name.as_str(), valid);
+            assert_eq!(
+                serde_json::from_value::<OperationName>(serde_json::json!(valid)).ok(),
+                Some(name),
+                "{valid}"
+            );
+        }
+        assert!(OperationName::parse(&"a".repeat(OperationName::MAX_LENGTH)).is_ok());
+    }
+
+    #[test]
     fn operation_names_refuse_unbounded_or_ambiguous_values() {
         for invalid in [
             "",
             "Approve",
-            "approve-request",
+            "approve-Request",
             "_approve",
+            "-approve",
+            "2approve",
             "apply request",
+            "apply.request",
+            "apply:request",
+            "apply/request",
+            "apply-*",
+            "appl\u{e9}",
         ] {
             assert!(OperationName::parse(invalid).is_err(), "{invalid}");
+            assert!(
+                serde_json::from_value::<OperationName>(serde_json::json!(invalid)).is_err(),
+                "{invalid}"
+            );
         }
-        assert!(OperationName::parse(&"a".repeat(65)).is_err());
+        assert!(OperationName::parse(&"a".repeat(OperationName::MAX_LENGTH + 1)).is_err());
+        assert_eq!(
+            InvalidOperationName.to_string(),
+            "operation name must match [a-z][a-z0-9_-]{0,63}"
+        );
     }
 }
 
@@ -415,7 +462,7 @@ pub struct CallerSubjectView {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum HistoryKind {
     Observed,
     Opened,
@@ -472,7 +519,7 @@ pub struct Draft {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum AttemptState {
     Pending,
     Uncertain,
@@ -494,7 +541,7 @@ pub struct AttemptStatus {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum PageStatus {
     Complete,
     BudgetExhausted,
@@ -546,4 +593,49 @@ pub struct SourceReceipt {
     pub actor_reference: Option<String>,
     #[serde(default)]
     pub metadata: BTreeMap<String, String>,
+}
+
+#[cfg(test)]
+mod history_kind_tests {
+    use super::*;
+
+    #[test]
+    fn every_history_kind_is_kebab_case() {
+        let expected = [
+            (HistoryKind::Observed, "observed"),
+            (HistoryKind::Opened, "opened"),
+            (HistoryKind::Claimed, "claimed"),
+            (HistoryKind::Assigned, "assigned"),
+            (HistoryKind::Delegated, "delegated"),
+            (HistoryKind::CaseloadMoved, "caseload-moved"),
+            (HistoryKind::Released, "released"),
+            (HistoryKind::DraftSaved, "draft-saved"),
+            (HistoryKind::TaskApproved, "task-approved"),
+            (HistoryKind::TaskRevoked, "task-revoked"),
+            (HistoryKind::TaskInvalidated, "task-invalidated"),
+            (HistoryKind::AttemptReserved, "attempt-reserved"),
+            (HistoryKind::AttemptUncertain, "attempt-uncertain"),
+            (HistoryKind::ActionCompleted, "action-completed"),
+            (HistoryKind::AttemptSettled, "attempt-settled"),
+            (HistoryKind::ClockReminder, "clock-reminder"),
+            (HistoryKind::ClockStepApplied, "clock-step-applied"),
+            (HistoryKind::ClockRecomputed, "clock-recomputed"),
+            (HistoryKind::Superseded, "superseded"),
+            (HistoryKind::Completed, "completed"),
+        ];
+        for (kind, word) in expected {
+            assert_eq!(serde_json::to_value(kind).unwrap(), word);
+            assert_eq!(
+                serde_json::from_value::<HistoryKind>(serde_json::json!(word)).unwrap(),
+                kind
+            );
+            if word.contains('-') {
+                let previous = word.replace('-', "_");
+                assert!(
+                    serde_json::from_value::<HistoryKind>(serde_json::json!(previous)).is_err(),
+                    "{previous} is not read"
+                );
+            }
+        }
+    }
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://id.registrystack.org/schemas/casework/init-report/init-report.v1alpha3.schema.json",
-  "title": "InitReport",
+  "title": "CaseworkInitReport",
   "description": "Versioned JSON report emitted by caseworkctl for init.",
   "type": "object",
   "required": [
@@ -10,10 +10,10 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+      "const": "id.registrystack.org/formats/casework/init-report/v1alpha3"
     },
     "kind": {
-      "const": "InitReport"
+      "const": "CaseworkInitReport"
     }
   },
   "unevaluatedProperties": false,
@@ -43,10 +43,10 @@
           "const": "complete"
         },
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+          "const": "id.registrystack.org/formats/casework/init-report/v1alpha3"
         },
         "kind": {
-          "const": "InitReport"
+          "const": "CaseworkInitReport"
         },
         "template": {
           "enum": [
@@ -96,10 +96,10 @@
           ]
         },
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+          "const": "id.registrystack.org/formats/casework/init-report/v1alpha3"
         },
         "kind": {
-          "const": "InitReport"
+          "const": "CaseworkInitReport"
         },
         "diagnostics": {
           "$ref": "#/$defs/diagnostics"

@@ -257,7 +257,7 @@ mod tests {
             lock_of: "state, other",
         };
         assert_eq!(expiry.validate(), Ok(()));
-        assert_eq!(expiry.state_list(), "'pending', 'dead_lettered'");
+        assert_eq!(expiry.state_list(), "'pending', 'dead-lettered'");
         for states in [&[][..], &[JobState::Leased][..], &[JobState::Delivered][..]] {
             assert_eq!(
                 ExpirySql { states, ..expiry }.validate(),

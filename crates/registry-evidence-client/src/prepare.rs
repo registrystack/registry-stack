@@ -1124,7 +1124,7 @@ mod tests {
                     "handle": "status-holds",
                     "concept": "urn:example:client:concept:status-holds",
                     "required": true,
-                    "form": "boolean",
+                    "form": {"type": "boolean"},
                 }],
                 "revokedKeyIds": [],
                 "maximumAssertionLifetimeSeconds": 300,

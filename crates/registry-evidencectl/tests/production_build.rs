@@ -341,8 +341,8 @@ fn package_refuses_a_local_target_without_publishing_or_exposing_values() {
                     "baseUrl: http://127.0.0.1:8088",
                 )
                 .replace(
-                    "authentication: {kind: static-authorization, tokenRef: 'secret:file/source-token'}",
-                    "authentication: {kind: none}",
+                    "authentication: {type: static-authorization, tokenRef: 'secret:file/source-token'}",
+                    "authentication: {type: none}",
                 ),
         )
         .expect("local source");
@@ -633,7 +633,7 @@ fn disposable_local_identifiers_fail_before_runtime_delegation() {
 fn plain_http_and_unauthenticated_sources_fail_before_runtime_delegation() {
     for (from, to) in [
         ("https://registry.invalid", "http://127.0.0.1:8088"),
-        ("kind: static-authorization", "kind: none"),
+        ("type: static-authorization", "type: none"),
     ] {
         let fixture = Fixture::new();
         fixture.replace_in_source(from, to);
@@ -1383,10 +1383,10 @@ fn workspace_root() -> PathBuf {
 
 const SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: http-json
+type: http-json
 baseUrl: https://registry.invalid
 posture: field-projected
-authentication: {kind: static-authorization, tokenRef: 'secret:file/source-token'}
+authentication: {type: static-authorization, tokenRef: 'secret:file/source-token'}
 request:
   method: POST
   path: /v1/facts
@@ -1401,9 +1401,9 @@ request:
   preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 4, maximumCollectionItems: 8, maximumStringBytes: 128, maximumNormalizedBytes: 1024}
   projection: [/allowed]
   redirects: deny
-  timeoutMilliseconds: 1000
+  attemptTimeoutMilliseconds: 1000
   maximumResponseBytes: 4096
-  concurrencyLimit: 1
+  maximumConcurrency: 1
 responseSchema: schemas/response.schema.yaml
 extractScript: adapters/source-extract.rhai
 factSchema: schemas/facts.schema.yaml
@@ -1411,7 +1411,7 @@ factSchema: schemas/facts.schema.yaml
 
 const SQLITE_SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: sqlite-extract
+type: sqlite-extract
 posture: source-derived
 extractProfile: registry-snapshot
 maximumExtractAgeSeconds: 86400
@@ -1423,14 +1423,14 @@ request:
       alternatives:
         - {profile: subject-reference-v1, fields: [reference]}
   parameterBindings:
-    reference: {kind: selector, role: subject, profile: subject-reference-v1, field: reference}
+    reference: {type: selector, role: subject, profile: subject-reference-v1, field: reference}
   projection: [/rows/*/allowed]
   maximumRows: 1
   maximumCellBytes: 8
   maximumStatementSteps: 10000
-  timeoutMilliseconds: 1000
+  attemptTimeoutMilliseconds: 1000
   maximumResponseBytes: 4096
-  concurrencyLimit: 1
+  maximumConcurrency: 1
 responseSchema: schemas/response.schema.yaml
 extractScript: adapters/source-extract.rhai
 factSchema: schemas/facts.schema.yaml
@@ -1440,17 +1440,19 @@ const GOVERNANCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/ta
 kind: EvidenceTargetGovernance
 assuranceProfile: production
 service: {providerId: urn:example:providers:evidence, trustDomain: urn:example:trust-domains:evidence}
-issuer: {id: urn:example:issuers:evidence}
+issuer: {uri: urn:example:issuers:evidence}
 authentication:
   oidc:
     issuer: https://issuer.invalid
     audience: evidence
-    jwksSource: {kind: uri, uri: https://issuer.invalid/.well-known/jwks.json}
+    jwksSource: {type: uri, uri: https://issuer.invalid/.well-known/jwks.json}
     tokenTypes: [at+jwt]
     algorithms: [ES256]
     principalClaim: sub
     requesterTagsClaim: evidence_tags
     evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
 audit: {hashKeyRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1}
@@ -1486,7 +1488,7 @@ const PUBLICATION: &str = r#"publication:
   jurisdictions: [urn:example:jurisdictions:governed]
 "#;
 
-const TARGET_RUNTIME: &str = r#"apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+const TARGET_RUNTIME: &str = r#"apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: /srv/evidence/candidate/bundle
@@ -1501,12 +1503,12 @@ listener:
 secretProviders:
   file: {root: /run/secrets/evidence}
 signer:
-  kind: transit
+  type: transit
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: 7
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
 audit: {path: /var/lib/evidence/audit.jsonl}
 outboundTls: {systemRoots: true, trustProfiles: {}}
 "#;

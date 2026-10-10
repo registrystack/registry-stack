@@ -8,7 +8,7 @@
 # writable audit state under /var/lib/registry-evidence. The explicit
 # container-private mode permits the wildcard bind inside the isolated Compose
 # network; it does not authorize public or direct-TLS exposure.
-apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 
 package:
@@ -34,12 +34,12 @@ secretProviders:
 # /run/registry-evidence directory. Replace the key name and version with the
 # exact values that match the governed active public JWK.
 signer:
-  kind: transit
+  type: transit
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: 1
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
 
 audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl

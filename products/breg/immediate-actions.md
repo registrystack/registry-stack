@@ -36,10 +36,10 @@ initial inspection, and links the inspection with the reserved asset identity:
 actions:
   - id: register-asset-with-inspection
     inputs:
-      - {id: asset-code, apiName: assetCode, type: string, required: true, maxLength: 64, classification: internal}
-      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - {id: asset-code, apiName: assetCode, type: string, required: true, maximumLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 200, classification: internal}
       - {id: asset-type, apiName: assetType, type: vocabulary-code, vocabulary: asset-type, required: true, classification: internal}
-      - {id: jurisdiction, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: jurisdiction, type: string, required: true, maximumLength: 80, classification: internal}
       - {id: observed-at, apiName: observedAt, type: timestamp, required: true, classification: internal}
       - {id: inspection-result, apiName: initialResult, type: vocabulary-code, vocabulary: inspection-result, required: true, classification: internal}
     effects:
@@ -96,22 +96,23 @@ effect graph creates, patches, or references:
 
 ```yaml
 permissions:
-  - action: register-household-contact
-    operations: [invoke]
-    targets:
-      - entity: household
-        rowBoundaries:
-          - {field: district, claim: district, operator: equals}
-      - entity: person
-        rowBoundaries:
-          - {field: district, claim: district, operator: equals}
-      - entity: group-membership
-        rowBoundaries:
-          - {field: district, claim: district, operator: equals}
-      - entity: service-center
-        rowBoundaries:
-          - {field: district, claim: district, operator: equals}
-    results: [person, membership, household]
+  actions:
+    - action: register-household-contact
+      operations: [invoke]
+      targets:
+        - entity: household
+          rowBoundaries:
+            - {field: district, claim: district, operator: equals}
+        - entity: person
+          rowBoundaries:
+            - {field: district, claim: district, operator: equals}
+        - entity: group-membership
+          rowBoundaries:
+            - {field: district, claim: district, operator: equals}
+        - entity: service-center
+          rowBoundaries:
+            - {field: district, claim: district, operator: equals}
+      results: [person, membership, household]
 ```
 
 The authored permission declares one target lock and row-boundary set per
@@ -147,7 +148,7 @@ executable PostgreSQL journey.
 
 ```yaml
 handler:
-  kind: rhai
+  type: rhai
   script: scripts/register-person.rhai
   abi: registry.action-handler/v1
   refusals:
@@ -165,12 +166,12 @@ The compiler rejects `crs84-point` and `structured` inputs for this ABI; use fix
 effects when an action needs those types. The input object has only declared
 fields, with no arbitrary JSON objects or arrays as input values.
 
-String and text inputs must declare `maxLength` of at most 4,096 Unicode scalar
+String and text inputs must declare `maximumLength` of at most 4,096 Unicode scalar
 values. That bound guarantees each value fits Rhai's existing 16,384-byte UTF-8
 string budget. Other scalar types retain their own format and value bounds.
 Admission also rejects any input string above 16,384 bytes before evaluation,
 including timestamps with excessive fractional-second digits. Reduce an
-overlarge declared `maxLength` to repair the project; an oversized request value
+overlarge declared `maximumLength` to repair the project; an oversized request value
 returns HTTP `400 request.invalid` without running the handler.
 
 `fn handle(ctx)` receives admitted input values in `ctx.inputs`, keyed by logical
@@ -274,12 +275,14 @@ requires:
 
 `input` is the logical action input ID; `field` is a stored field ID on its
 reference target. Each input must be required and already used by the action's
-effects. Exactly one of `equals` and `equalsInput` is required. `equalsInput`
+effects. Exactly one of `equals`, `isNull: true`, and `equalsInput` is required.
+`equals` holds a boolean, a number, or text. `equalsInput`
 names a required action input with the same compiled scalar type as the stored
 target field; the compiler refuses one that names an optional input, and a
 request without the named input is refused, never admitted with the check
 skipped. Requirements are combined with AND.
-Null is permitted only for an optional target field. Structured values and
+`isNull: true` requires the stored value to be unset and is permitted only for
+an optional target field; `null` is not an `equals` value. Structured values and
 points are not supported. The compiler rejects unknown inputs, fields,
 incompatible values, duplicate checks, and requirements above the existing
 128-field or 2 MiB bounds.

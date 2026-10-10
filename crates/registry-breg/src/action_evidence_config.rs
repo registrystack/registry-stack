@@ -232,11 +232,11 @@ mod tests {
         project.actions[0].evidence.clear();
         project.evidence_providers.clear();
         for profile in &mut project.access_profiles {
-            profile.permissions.retain(|grant| {
-                grant
-                    .action
-                    .as_ref()
-                    .is_none_or(|id| project.actions.iter().any(|action| &action.id == id))
+            profile.permissions.actions.retain(|grant| {
+                project
+                    .actions
+                    .iter()
+                    .any(|action| action.id == grant.action)
             });
         }
         let assets: Vec<_> = project
@@ -416,7 +416,7 @@ mod tests {
             "requestEntityId": "synthetic-request",
             "contractFingerprint": format!("sha256:{}", "0".repeat(64)),
             "retentionMode": "retain",
-            "review": {"mode": "none"},
+            "review": {"type": "none"},
             "onApproved": {"mode": "manual"},
             "application": {
                 "preconditions": {"evidence": [{"capability": capability, "subjects": {}, "requires": []}]}

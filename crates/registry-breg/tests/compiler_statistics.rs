@@ -14,9 +14,9 @@ use serde_json::{json, Value};
 
 fn source() -> Value {
     serde_json::from_value(json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
             "id": "statistics-test",
             "version": "1",
             "defaultLanguage": "en",
@@ -38,25 +38,27 @@ fn source() -> Value {
         }],
         "accessProfiles": [
             {
-                "id":"analyst","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+                "id":"analyst","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
                     "entity":"record","operations":["list"],
                     "readableFields":["active","category","event-date","valid-from","valid-to"],
                     "filterableFields":["active","category","event-date","valid-from","valid-to"],
                     "allowCount":true,"rowBoundaries":"unrestricted"
-                }, {"dataset":"records-by-category","operations":["read-live","read-releases"]}]
+                }], "datasets":[{"dataset":"records-by-category","operations":["read-live","read-releases"]}]}
             },
             {
-                "id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+                "id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
                     "entity":"record","operations":["list"],
                     "readableFields":["active","category","event-date","valid-from","valid-to"],
                     "filterableFields":["active","category","event-date","valid-from","valid-to"],
                     "allowCount":true,"rowBoundaries":"unrestricted"
-                }, {"dataset":"records-by-category","operations":["publish","read-releases"]}]
+                }], "datasets":[{"dataset":"records-by-category","operations":["publish","read-releases"]}]}
             },
-            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
-                {"dataset":"records-by-category","operations":["read-releases"]}
-            ]},
-            {"id":"other-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[]}
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+                "datasets":[
+                    {"dataset":"records-by-category","operations":["read-releases"]}
+                ]
+            }},
+            {"id":"other-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{}}
         ],
         "vocabularies": [{"id":"category","values":["a","b"]}],
         "statisticalDatasets": [{
@@ -79,13 +81,11 @@ const OTHER_READER: usize = 3;
 /// Write the operations one profile holds on the dataset. No operation
 /// removes the profile's dataset permission.
 fn grant(value: &mut Value, profile: usize, operations: &[&str]) {
-    let permissions = value["accessProfiles"][profile]["permissions"]
-        .as_array_mut()
-        .expect("the profile lists permissions");
-    permissions.retain(|permission| permission.get("dataset").is_none());
-    if !operations.is_empty() {
-        permissions.push(json!({"dataset":"records-by-category","operations":operations}));
-    }
+    value["accessProfiles"][profile]["permissions"]["datasets"] = if operations.is_empty() {
+        json!([])
+    } else {
+        json!([{"dataset":"records-by-category","operations":operations}])
+    };
 }
 
 fn source_with_swappable_population_fields() -> Value {
@@ -100,7 +100,7 @@ fn source_with_swappable_population_fields() -> Value {
     value["entities"][0]["fields"][0]["apiName"] = json!("active");
     for profile in [0_usize, 1] {
         for member in ["readableFields", "filterableFields"] {
-            value["accessProfiles"][profile]["permissions"][0][member]
+            value["accessProfiles"][profile]["permissions"]["entities"][0][member]
                 .as_array_mut()
                 .unwrap()
                 .push(json!("archived"));
@@ -397,7 +397,7 @@ fn read_releases_is_refused_on_a_dataset_no_profile_publishes() {
 fn a_dataset_permission_names_its_dataset_as_a_local_identifier() {
     let mut value = source();
     value["accessProfiles"][OTHER_READER]["permissions"] =
-        json!([{"dataset":"Records By Region","operations":["read-live"]}]);
+        json!({"datasets":[{"dataset":"Records By Region","operations":["read-live"]}]});
     let bytes = serde_json::to_vec(&value).expect("fixture serializes");
     parse_project_json(&bytes).expect_err("a dataset permission names a local identifier");
 }
@@ -406,7 +406,7 @@ fn a_dataset_permission_names_its_dataset_as_a_local_identifier() {
 fn a_dataset_permission_names_a_declared_dataset() {
     let mut value = source();
     value["accessProfiles"][OTHER_READER]["permissions"] =
-        json!([{"dataset":"records-by-region","operations":["read-live"]}]);
+        json!({"datasets":[{"dataset":"records-by-region","operations":["read-live"]}]});
     let failure = compile(&value).expect_err("an undeclared dataset is refused");
     let [diagnostic] = failure.diagnostics() else {
         panic!("one diagnostic refuses the undeclared dataset: {failure:?}");
@@ -417,7 +417,7 @@ fn a_dataset_permission_names_a_declared_dataset() {
     );
     assert_eq!(
         diagnostic.path,
-        "project.accessProfiles[id=other-reader].permissions[dataset=records-by-region].dataset"
+        "project.accessProfiles[id=other-reader].permissions.datasets[dataset=records-by-region].dataset"
     );
     for named in [
         "`other-reader`",
@@ -434,52 +434,59 @@ fn a_dataset_permission_names_a_declared_dataset() {
 
 #[test]
 fn a_dataset_permission_is_written_with_dataset_operations_and_nothing_else() {
-    let dataset_permission = "project.accessProfiles[0].permissions[1]";
-    let cases: [(&str, Value, &str, &str); 7] = [
+    let dataset_permission = "project.accessProfiles[0].permissions.datasets[0]";
+    let cases: [(&str, Value, &str, String, &str); 7] = [
         (
-            "/accessProfiles/0/permissions/1/operations",
+            "/accessProfiles/0/permissions/datasets/0/operations",
             json!(["read-live", "list"]),
-            dataset_permission,
-            "read-live, publish, or read-releases",
+            "config.unknown-variant",
+            format!("{dataset_permission}.operations[1]"),
+            "`read-live`, `publish`, `read-releases`",
         ),
         (
-            "/accessProfiles/0/permissions/1/operations",
+            "/accessProfiles/0/permissions/datasets/0/operations",
             json!([]),
-            dataset_permission,
+            "config.invalid-value",
+            format!("{dataset_permission}.operations"),
             "read-live, publish, or read-releases",
         ),
         (
-            "/accessProfiles/0/permissions/1/readableFields",
+            "/accessProfiles/0/permissions/datasets/0/readableFields",
             json!(["active"]),
-            dataset_permission,
-            "only dataset and operations",
+            "config.unknown-key",
+            format!("{dataset_permission}.readableFields"),
+            "`dataset`, `operations`",
         ),
         (
-            "/accessProfiles/0/permissions/1/rowBoundaries",
+            "/accessProfiles/0/permissions/datasets/0/rowBoundaries",
             json!("unrestricted"),
-            dataset_permission,
-            "only dataset and operations",
+            "config.unknown-key",
+            format!("{dataset_permission}.rowBoundaries"),
+            "`dataset`, `operations`",
         ),
         (
-            "/accessProfiles/0/permissions/1/allowCount",
+            "/accessProfiles/0/permissions/datasets/0/allowCount",
             json!(true),
-            dataset_permission,
-            "only dataset and operations",
+            "config.unknown-key",
+            format!("{dataset_permission}.allowCount"),
+            "`dataset`, `operations`",
         ),
         (
-            "/accessProfiles/0/permissions/1/entity",
+            "/accessProfiles/0/permissions/datasets/0/entity",
             json!("record"),
-            dataset_permission,
-            "only dataset and operations",
+            "config.unknown-key",
+            format!("{dataset_permission}.entity"),
+            "`dataset`, `operations`",
         ),
         (
-            "/accessProfiles/0/permissions/0/operations",
+            "/accessProfiles/0/permissions/entities/0/operations",
             json!(["list", "read-releases"]),
-            "project.accessProfiles[0].permissions[0]",
-            "a permission that names a dataset",
+            "config.unknown-variant",
+            "project.accessProfiles[0].permissions.entities[0].operations[1]".to_owned(),
+            "`get`, `lookup`, `list`",
         ),
     ];
-    for (pointer, written, path, fix) in cases {
+    for (pointer, written, code, path, fix) in cases {
         let mut value = source();
         let (parent, member) = pointer.rsplit_once('/').expect("a member pointer");
         value
@@ -487,39 +494,56 @@ fn a_dataset_permission_is_written_with_dataset_operations_and_nothing_else() {
             .and_then(Value::as_object_mut)
             .unwrap_or_else(|| panic!("{parent} is a mapping"))
             .insert(member.to_owned(), written);
-        let failure = parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
-            .expect_err("a permission mixing the two shapes is refused when it is read");
-        let [diagnostic] = failure.diagnostics() else {
-            panic!("one diagnostic refuses {pointer}: {failure:?}");
+        let refused = read_refusals(&value);
+        let [(refused_code, refused_path, message)] = refused.as_slice() else {
+            panic!("one diagnostic refuses {pointer}: {refused:?}");
         };
-        assert_eq!(diagnostic.code, "config.invalid-value", "{pointer}");
-        assert_eq!(diagnostic.path, path, "{pointer}");
+        assert_eq!(refused_code, code, "{pointer}");
+        assert_eq!(refused_path, &path, "{pointer}");
         assert!(
-            diagnostic.message.contains(fix),
-            "the refusal of {pointer} names its fix `{fix}`: {}",
-            diagnostic.message
+            message.contains(fix),
+            "the refusal of {pointer} names its fix `{fix}`: {message}"
         );
     }
 }
 
 #[test]
-fn an_unknown_permission_operation_is_refused_with_the_whole_vocabulary() {
-    let mut value = source();
-    value["accessProfiles"][0]["permissions"][1]["operations"] = json!(["read"]);
-    let refused = read_refusals(&value);
-    let [(code, path, message)] = refused.as_slice() else {
-        panic!("one diagnostic refuses the unknown operation: {refused:?}");
-    };
-    assert_eq!(code, "config.unknown-variant");
-    assert_eq!(
-        path,
-        "project.accessProfiles[0].permissions[1].operations[0]"
-    );
-    for operation in ["list", "invoke", "read-live", "publish", "read-releases"] {
-        assert!(
-            message.contains(operation),
-            "the refusal lists {operation}: {message}"
+fn an_unknown_permission_operation_is_refused_with_the_vocabulary_of_its_group() {
+    for (group, accepted, refused_elsewhere) in [
+        (
+            "datasets",
+            ["read-live", "publish", "read-releases"].as_slice(),
+            ["list", "invoke"].as_slice(),
+        ),
+        (
+            "entities",
+            ["get", "list", "invoke"].as_slice(),
+            ["read-live", "publish", "read-releases"].as_slice(),
+        ),
+    ] {
+        let mut value = source();
+        value["accessProfiles"][0]["permissions"][group][0]["operations"] = json!(["read"]);
+        let refused = read_refusals(&value);
+        let [(code, path, message)] = refused.as_slice() else {
+            panic!("one diagnostic refuses the unknown operation: {refused:?}");
+        };
+        assert_eq!(code, "config.unknown-variant");
+        assert_eq!(
+            path,
+            &format!("project.accessProfiles[0].permissions.{group}[0].operations[0]")
         );
+        for operation in accepted {
+            assert!(
+                message.contains(operation),
+                "the refusal under {group} lists {operation}: {message}"
+            );
+        }
+        for operation in refused_elsewhere {
+            assert!(
+                !message.contains(operation),
+                "the refusal under {group} does not offer {operation}: {message}"
+            );
+        }
     }
 }
 
@@ -556,12 +580,16 @@ fn a_profile_writes_its_dataset_permissions_back_into_its_permissions() {
     let project = parse_project_json(&bytes).expect("fixture parses");
     let written = serde_json::to_value(&project).expect("the project serializes");
     assert_eq!(
-        written["accessProfiles"][ANALYST]["permissions"][1],
-        json!({"dataset":"records-by-category","operations":["read-live","read-releases"]})
+        written["accessProfiles"][ANALYST]["permissions"]["datasets"],
+        json!([{"dataset":"records-by-category","operations":["read-live","read-releases"]}])
     );
     assert_eq!(
         written["accessProfiles"][READER]["permissions"],
-        json!([{"dataset":"records-by-category","operations":["read-releases"]}])
+        json!({
+            "entities":[],
+            "actions":[],
+            "datasets":[{"dataset":"records-by-category","operations":["read-releases"]}]
+        })
     );
     assert!(written["accessProfiles"][ANALYST]
         .get("datasetPermissions")
@@ -589,8 +617,8 @@ fn statistical_dataset_compiles_with_release_reader_authentication() {
         BTreeSet::from(["record".to_owned()])
     );
     assert_eq!(
-        dataset.access_profiles["reader"].principal_claim.as_deref(),
-        Some("principal")
+        dataset.access_profiles["reader"].principal_claim,
+        "principal"
     );
     assert!(dataset.access_profiles["reader"].operations.is_empty());
     let digest = dataset
@@ -646,8 +674,8 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
         ),
         (
             Box::new(|v| {
-                let again = v["accessProfiles"][ANALYST]["permissions"][1].clone();
-                v["accessProfiles"][ANALYST]["permissions"]
+                let again = v["accessProfiles"][ANALYST]["permissions"]["datasets"][0].clone();
+                v["accessProfiles"][ANALYST]["permissions"]["datasets"]
                     .as_array_mut()
                     .unwrap()
                     .push(again);
@@ -663,18 +691,21 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
             "breg.statistical-dataset.grants-empty",
         ),
         (
-            Box::new(|v| v["accessProfiles"][0]["permissions"][0]["allowCount"] = json!(false)),
+            Box::new(|v| {
+                v["accessProfiles"][0]["permissions"]["entities"][0]["allowCount"] = json!(false)
+            }),
             "breg.statistical-dataset.count-grant-count-required",
         ),
         (
             Box::new(|v| {
-                v["accessProfiles"][0]["permissions"][0]["operations"] = json!(["snapshot"])
+                v["accessProfiles"][0]["permissions"]["entities"][0]["operations"] =
+                    json!(["snapshot"])
             }),
             "breg.statistical-dataset.count-grant-list-required",
         ),
         (
             Box::new(|v| {
-                v["accessProfiles"][0]["permissions"][0]["filterableFields"] =
+                v["accessProfiles"][0]["permissions"]["entities"][0]["filterableFields"] =
                     json!(["active", "category"])
             }),
             "breg.statistical-dataset.count-grant-field-not-filterable",
@@ -685,7 +716,7 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
         ),
         (
             Box::new(|v| {
-                v["accessProfiles"][1]["permissions"][0]["rowBoundaries"] =
+                v["accessProfiles"][1]["permissions"]["entities"][0]["rowBoundaries"] =
                     json!([{"field":"category","claim":"categories","operator":"in"}])
             }),
             "breg.statistical-dataset.publisher-caller-dependent",
@@ -737,7 +768,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
                 json!({
                     "id":"organization","primaryDataset":"statistics-test","route":"organizations",
                     "mutationMode":"mutable","fields":[
-                        {"id":"name","type":"string","maxLength":80,"classification":"internal"}
+                        {"id":"name","type":"string","maximumLength":80,"classification":"internal"}
                     ]
                 }),
                 json!({
@@ -745,7 +776,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
                     "mutationMode":"mutable","classification":"restricted",
                     "fields":[
                         {"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"},
-                        {"id":"principal","type":"string","maxLength":80,"required":true,"classification":"restricted"},
+                        {"id":"principal","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
                         {"id":"active","type":"boolean","required":true,"classification":"internal"}
                     ],
                     "indexes":[{"id":"membership-principal-key","fields":["principal","organization","active"]}],
@@ -753,7 +784,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
                 }),
             ]);
             value["accessProfiles"][1]["requiredScopes"] = json!(["membership:use"]);
-            value["accessProfiles"][1]["permissions"][0]["membershipBoundaries"] = json!([{
+            value["accessProfiles"][1]["permissions"]["entities"][0]["membershipBoundaries"] = json!([{
                 "field":"organization","membershipEntity":"membership",
                 "membershipKeyField":"organization","principalField":"principal","activeField":"active"
             }]);
@@ -774,7 +805,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
                     "id":"apply-active","target":{"fromField":"target"},"operation":"patch",
                     "set":{"active":{"fromField":"active"}}
                 }],
-                "review":{"mode":"none"},"onApproved":{"mode":"manual"}
+                "review":{"type":"none"},"onApproved":{"mode":"manual"}
             });
             value["entities"].as_array_mut().unwrap().push(json!({
                 "id":"target-record","primaryDataset":"statistics-test","route":"target-records",
@@ -783,7 +814,8 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
                     {"id":"active","type":"boolean","required":true,"classification":"internal"}
                 ]
             }));
-            value["accessProfiles"][1]["permissions"][0]["requestVisibility"] = json!("owner");
+            value["accessProfiles"][1]["permissions"]["entities"][0]["requestVisibility"] =
+                json!("owner");
         },
         "breg.statistical-dataset.publisher-caller-dependent",
     );
@@ -793,7 +825,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
             value["entities"][0]["accessRequirements"] =
                 json!({"rowBoundaries":[boundary.clone()]});
             for profile in [0_usize, 1] {
-                value["accessProfiles"][profile]["permissions"][0]["rowBoundaries"] =
+                value["accessProfiles"][profile]["permissions"]["entities"][0]["rowBoundaries"] =
                     json!([boundary.clone()]);
             }
         },
@@ -809,11 +841,11 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
                 .as_array_mut()
                 .unwrap()
                 .push(json!({
-                        "id":"secret","type":"string","maxLength":80,"encrypted":true,
+                        "id":"secret","type":"string","maximumLength":80,"encrypted":true,
                         "classification":"restricted"
                 }));
             for profile in [0_usize, 1] {
-                value["accessProfiles"][profile]["permissions"][0]["readableFields"]
+                value["accessProfiles"][profile]["permissions"]["entities"][0]["readableFields"]
                     .as_array_mut()
                     .unwrap()
                     .push(json!("secret"));
@@ -838,7 +870,7 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
             ]);
             value["entities"].as_array_mut().unwrap().push(json!({
                 "id":"consent-decision","primaryDataset":"statistics-test",
-                "route":"consent-decisions","mutationMode":"create_only","classification":"restricted",
+                "route":"consent-decisions","mutationMode":"create-only","classification":"restricted",
                 "fields":[
                     {"id":"subject","type":"reference","target":"record","required":true,"classification":"restricted"},
                     {"id":"recipient","type":"vocabulary-code","vocabulary":"registry-recipients","required":true,"classification":"internal"},
@@ -851,13 +883,13 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
                 "consentRecord":{
                     "subject":"subject","recipient":"recipient","purpose":"purpose","scope":"scope",
                     "decision":{"field":"decision","gives":["given"],"revokes":["refused","withdrawn"],"refusals":["refused"]},
-                    "validity":{"from":"effective-at","until":"expires-at","maxDuration":"P365D"}
+                    "validity":{"from":"effective-at","until":"expires-at","maximumDurationDays":365}
                 }
             }));
             value["accessProfiles"][1]["actorKind"] = json!("service");
             value["accessProfiles"][1]["requesterClients"] = json!(["publisher-client"]);
             value["accessProfiles"][1]["requiredPurposes"] = json!(["statistics"]);
-            value["accessProfiles"][1]["permissions"][0]["requireConsent"] =
+            value["accessProfiles"][1]["permissions"]["entities"][0]["requireConsent"] =
                 json!([{"record":"consent-decision","on":"id"}])
         },
         "breg.statistical-dataset.count-grant-consent",
@@ -905,7 +937,7 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
                 }));
             for profile in [0_usize, 1] {
                 for member in ["readableFields", "filterableFields"] {
-                    value["accessProfiles"][profile]["permissions"][0][member]
+                    value["accessProfiles"][profile]["permissions"]["entities"][0][member]
                         .as_array_mut()
                         .unwrap()
                         .push(json!("category-two"));
@@ -929,7 +961,7 @@ fn statistical_dimension_reserved_names_follow_emitted_logical_field_ids() {
             }));
         for profile in [0_usize, 1] {
             for member in ["readableFields", "filterableFields"] {
-                value["accessProfiles"][profile]["permissions"][0][member]
+                value["accessProfiles"][profile]["permissions"]["entities"][0][member]
                     .as_array_mut()
                     .unwrap()
                     .push(json!(id));
@@ -983,7 +1015,7 @@ fn statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap() {
                     }));
                 for profile in [0_usize, 1] {
                     for member in ["readableFields", "filterableFields"] {
-                        value["accessProfiles"][profile]["permissions"][0][member]
+                        value["accessProfiles"][profile]["permissions"]["entities"][0][member]
                             .as_array_mut()
                             .unwrap()
                             .push(json!(field));
@@ -1240,7 +1272,7 @@ fn definition_digest_binds_referenced_stored_field_definitions() {
         ]);
     for profile in [0_usize, 1] {
         for member in ["readableFields", "filterableFields"] {
-            baseline_source["accessProfiles"][profile]["permissions"][0][member]
+            baseline_source["accessProfiles"][profile]["permissions"]["entities"][0][member]
                 .as_array_mut()
                 .unwrap()
                 .extend([json!("score"), json!("unused-score")]);
@@ -1252,7 +1284,7 @@ fn definition_digest_binds_referenced_stored_field_definitions() {
 
     let mut changed_type_source = baseline_source.clone();
     changed_type_source["entities"][0]["fields"][5] = json!({
-        "id":"score","type":"text","maxLength":20,"required":true,
+        "id":"score","type":"text","maximumLength":20,"required":true,
         "classification":"internal"
     });
     let changed_type = compile(&changed_type_source).expect("reviewable text successor compiles");
@@ -1310,7 +1342,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
     }]);
     for profile in [0_usize, 1] {
         for member in ["readableFields", "filterableFields"] {
-            baseline_source["accessProfiles"][profile]["permissions"][0][member]
+            baseline_source["accessProfiles"][profile]["permissions"]["entities"][0][member]
                 .as_array_mut()
                 .unwrap()
                 .extend([json!("score"), json!("amount"), json!("unused-amount")]);
@@ -1325,7 +1357,7 @@ fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
 
     let mut changed_output_source = baseline_source.clone();
     changed_output_source["entities"][0]["derived"][0]["fields"][0] = json!({
-        "id":"score","type":"text","maxLength":20,
+        "id":"score","type":"text","maximumLength":20,
         "classification":"internal"
     });
     let changed_output = compile_with_sql(&changed_output_source, sql)
@@ -1378,7 +1410,7 @@ fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
         }));
     for profile in [0_usize, 1] {
         for member in ["readableFields", "filterableFields"] {
-            value["accessProfiles"][profile]["permissions"][0][member]
+            value["accessProfiles"][profile]["permissions"]["entities"][0][member]
                 .as_array_mut()
                 .unwrap()
                 .push(json!("long-name"));
@@ -1426,19 +1458,19 @@ fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "id":"label","type":"string","minLength":8,"maxLength":12,
+            "id":"label","type":"string","minimumLength":8,"maximumLength":12,
             "required":true,"classification":"internal"
         }));
     for profile in [0_usize, 1] {
         for member in ["readableFields", "filterableFields"] {
-            bounded_string["accessProfiles"][profile]["permissions"][0][member]
+            bounded_string["accessProfiles"][profile]["permissions"]["entities"][0][member]
                 .as_array_mut()
                 .unwrap()
                 .push(json!("label"));
         }
     }
     bounded_string["statisticalDatasets"][0]["population"] = json!("contains(label,'a')");
-    compile(&bounded_string).expect("a search term shorter than the stored minLength compiles");
+    compile(&bounded_string).expect("a search term shorter than the stored minimumLength compiles");
 
     let oversized = "a".repeat(registry_breg::query::MAX_LITERAL_BYTES + 1);
     for population in [
@@ -1455,7 +1487,7 @@ fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
 
     bounded_string["statisticalDatasets"][0]["population"] =
         json!("contains(label,'thirteenchars')");
-    let failure = compile(&bounded_string).expect_err("a term beyond maxLength is refused");
+    let failure = compile(&bounded_string).expect_err("a term beyond maximumLength is refused");
     assert!(failure
         .diagnostics()
         .iter()
@@ -1751,16 +1783,16 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
         "fields":[{"id":"flag","type":"boolean","required":true,"classification":"internal"}]
     }));
     for profile in [0_usize, 1] {
-        value["accessProfiles"][profile]["permissions"][0]["readableFields"]
+        value["accessProfiles"][profile]["permissions"]["entities"][0]["readableFields"]
             .as_array_mut()
             .unwrap()
             .push(json!("evaluated-category"));
-        value["accessProfiles"][profile]["permissions"][0]["filterableFields"]
+        value["accessProfiles"][profile]["permissions"]["entities"][0]["filterableFields"]
             .as_array_mut()
             .unwrap()
             .push(json!("evaluated-category"));
     }
-    value["accessProfiles"][1]["permissions"]
+    value["accessProfiles"][1]["permissions"]["entities"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -1785,7 +1817,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     let baseline_digest = dataset.definition_digest.clone();
 
     let mut additional_read = value.clone();
-    additional_read["accessProfiles"][PUBLISHER]["permissions"][2]["operations"] =
+    additional_read["accessProfiles"][PUBLISHER]["permissions"]["entities"][1]["operations"] =
         json!(["get", "list"]);
     let additional_read = compile_with_sql(&additional_read, sql)
         .expect("another ordinary dependency read operation compiles");
@@ -1797,7 +1829,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
 
     let mut batch_select = value.clone();
     batch_select["entities"][1]["batch"] = json!({"maximumItems": 10, "maximumBytes": 4096});
-    batch_select["accessProfiles"][PUBLISHER]["permissions"][2] = json!({
+    batch_select["accessProfiles"][PUBLISHER]["permissions"]["entities"][1] = json!({
         "entity":"lookup","operations":["patch","batch"],"writableFields":["flag"],
         "rowBoundaries":"unrestricted"
     });
@@ -1810,10 +1842,10 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     );
 
     let mut additional_mutation = value.clone();
-    additional_mutation["accessProfiles"][PUBLISHER]["permissions"][2]["operations"] =
+    additional_mutation["accessProfiles"][PUBLISHER]["permissions"]["entities"][1]["operations"] =
         json!(["list", "patch"]);
-    additional_mutation["accessProfiles"][PUBLISHER]["permissions"][2]["writableFields"] =
-        json!(["flag"]);
+    additional_mutation["accessProfiles"][PUBLISHER]["permissions"]["entities"][1]
+        ["writableFields"] = json!(["flag"]);
     let additional_mutation = compile_with_sql(&additional_mutation, sql)
         .expect("an unrelated dependency mutation grant compiles");
     assert_eq!(
@@ -1833,7 +1865,8 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
         }),
     ] {
         let mut mutation_only_dependency = value.clone();
-        mutation_only_dependency["accessProfiles"][PUBLISHER]["permissions"][2] = permission;
+        mutation_only_dependency["accessProfiles"][PUBLISHER]["permissions"]["entities"][1] =
+            permission;
         let failure = compile_with_sql(&mutation_only_dependency, sql)
             .expect_err("a publisher needs an ordinary read operation on every derived dependency");
         assert!(failure.diagnostics().iter().any(|diagnostic| {
@@ -1843,7 +1876,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     }
 
     let mut missing_dependency_grant = value.clone();
-    missing_dependency_grant["accessProfiles"][1]["permissions"]
+    missing_dependency_grant["accessProfiles"][1]["permissions"]["entities"]
         .as_array_mut()
         .unwrap()
         .pop();
@@ -1872,7 +1905,8 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     let long_entity = "l".repeat(64);
     value["entities"][1]["id"] = json!(long_entity.clone());
     value["entities"][1]["route"] = json!("long-lookups");
-    value["accessProfiles"][PUBLISHER]["permissions"][2]["entity"] = json!(long_entity.clone());
+    value["accessProfiles"][PUBLISHER]["permissions"]["entities"][1]["entity"] =
+        json!(long_entity.clone());
     let long_sql = sql.replace(
         "registry_source.lookup",
         &format!("registry_source.{long_entity}"),

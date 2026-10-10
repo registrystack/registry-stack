@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: asset-site-placement-change-requests
   canonicalBaseIri: "https://asset-site-placement.example.gov"
   version: 0.1.0
@@ -47,20 +47,20 @@ entities:
     mutationMode: mutable
     batch: {maximumItems: 4, maximumBytes: 16384}
     fields:
-      - {id: asset-code, type: string, required: true, maxLength: 64, classification: internal}
-      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - {id: asset-code, type: string, required: true, maximumLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 200, classification: internal}
       - {id: asset-class, type: vocabulary-code, vocabulary: asset-classification, required: true, classification: internal}
     constraints:
-      - {kind: unique, fields: [asset-code]}
+      - {type: unique, fields: [asset-code]}
   - id: asset-site
     primaryDataset: "asset-site-placement-change-requests"
     route: sites
     mutationMode: mutable
     fields:
-      - {id: site-code, type: string, required: true, maxLength: 64, classification: internal}
-      - {id: label, type: string, required: true, maxLength: 200, classification: internal}
+      - {id: site-code, type: string, required: true, maximumLength: 64, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 200, classification: internal}
     constraints:
-      - {kind: unique, fields: [site-code]}
+      - {type: unique, fields: [site-code]}
   - id: asset-placement
     primaryDataset: "asset-site-placement-change-requests"
     route: placements
@@ -77,7 +77,7 @@ entities:
       endField: valid-to
       scopeFields: [asset]
     constraints:
-      - {kind: temporal-non-overlap, scopeFields: [asset], startField: valid-from, endField: valid-to}
+      - {type: temporal-non-overlap, scopeFields: [asset], startField: valid-from, endField: valid-to}
     indexes:
       - {id: placement-valid-from, fields: [valid-from]}
   - id: placement-correction-request
@@ -88,16 +88,17 @@ entities:
     fields:
       - {id: placement, type: reference, target: asset-placement, required: true, classification: internal}
       - {id: proposed-site, type: reference, target: asset-site, required: true, classification: internal}
-      - {id: reason, type: text, maxLength: 1000, required: true, classification: internal}
+      - {id: reason, type: text, maximumLength: 1000, required: true, classification: internal}
     changeRequest:
       retention:
-        mode: operator_erase
+        mode: operator-erase
       effects:
         - target: {fromField: placement}
           operation: patch
           set:
             site: {fromField: proposed-site}
       review:
+        type: required
         authority: casework
         policyId: asset-placement-correction
       onApproved:
@@ -105,7 +106,7 @@ entities:
   - id: inspection-event
     primaryDataset: "asset-site-placement-change-requests"
     route: inspections
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - {id: asset, type: reference, target: asset-item, required: true, classification: internal}
       - {id: observed-at, type: timestamp, required: true, classification: internal}
@@ -117,78 +118,83 @@ accessProfiles:
     requiredScopes: unrestricted
     requiredPurposes: [asset-management]
     permissions:
-      - {entity: asset-item, operations: [create, get, list, patch, batch], readableFields: [asset-code, label, asset-class], writableFields: [asset-code, label, asset-class], rowBoundaries: unrestricted}
-      - {entity: asset-site, operations: [create, get, list, patch], readableFields: [site-code, label], writableFields: [site-code, label], rowBoundaries: unrestricted}
-      - entity: asset-placement
-        rowBoundaries: unrestricted
-        operations: [create, get, list]
-        readableFields: [asset, site, valid-from, valid-to]
-        writableFields: [asset, site, valid-from, valid-to]
-        requestPresence:
-          - {requestType: placement-correction-request, rowBoundaries: unrestricted}
-      - {entity: inspection-event, operations: [create, get, list], readableFields: [asset, observed-at, result], writableFields: [asset, observed-at, result], rowBoundaries: unrestricted}
+      entities:
+        - {entity: asset-item, operations: [create, get, list, patch, batch], readableFields: [asset-code, label, asset-class], writableFields: [asset-code, label, asset-class], rowBoundaries: unrestricted}
+        - {entity: asset-site, operations: [create, get, list, patch], readableFields: [site-code, label], writableFields: [site-code, label], rowBoundaries: unrestricted}
+        - entity: asset-placement
+          rowBoundaries: unrestricted
+          operations: [create, get, list]
+          readableFields: [asset, site, valid-from, valid-to]
+          writableFields: [asset, site, valid-from, valid-to]
+          requestPresence:
+            - {requestType: placement-correction-request, rowBoundaries: unrestricted}
+        - {entity: inspection-event, operations: [create, get, list], readableFields: [asset, observed-at, result], writableFields: [asset, observed-at, result], rowBoundaries: unrestricted}
   - id: site-planner
     principalClaim: registry_principal
     requiredScopes: unrestricted
     requiredPurposes: [site-planning]
     permissions:
-      - {entity: asset-item, operations: [get, list], readableFields: [asset-code, label], filterableFields: [asset-code], rowBoundaries: unrestricted}
-      - {entity: asset-site, operations: [get, list], readableFields: [site-code, label], filterableFields: [site-code], rowBoundaries: unrestricted}
-      - entity: asset-placement
-        rowBoundaries: unrestricted
-        operations: [create, get, list]
-        readableFields: [asset, site, valid-from, valid-to]
-        writableFields: [asset, site, valid-from, valid-to]
-        filterableFields: [asset, site, valid-from]
-        requestPresence:
-          - {requestType: placement-correction-request, rowBoundaries: unrestricted}
+      entities:
+        - {entity: asset-item, operations: [get, list], readableFields: [asset-code, label], filterableFields: [asset-code], rowBoundaries: unrestricted}
+        - {entity: asset-site, operations: [get, list], readableFields: [site-code, label], filterableFields: [site-code], rowBoundaries: unrestricted}
+        - entity: asset-placement
+          rowBoundaries: unrestricted
+          operations: [create, get, list]
+          readableFields: [asset, site, valid-from, valid-to]
+          writableFields: [asset, site, valid-from, valid-to]
+          filterableFields: [asset, site, valid-from]
+          requestPresence:
+            - {requestType: placement-correction-request, rowBoundaries: unrestricted}
   - id: correction-submitter
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:submit]
     requiredPurposes: [asset-correction]
     permissions:
-      - entity: asset-item
-        rowBoundaries: unrestricted
-        operations: [get]
-        readableFields: [asset-code, label]
-      - entity: asset-placement
-        rowBoundaries: unrestricted
-        operations: [list]
-        readableFields: [asset, valid-from, valid-to]
-      - entity: asset-site
-        rowBoundaries: unrestricted
-        operations: [list]
-        readableFields: [site-code]
-      - entity: placement-correction-request
-        rowBoundaries: unrestricted
-        operations: [create, get, list, patch, submit_request, revise_request, cancel_request]
-        readableFields: [placement, proposed-site, reason]
-        readableRequestFields: [reason, review_state]
-        writableFields: [placement, proposed-site, reason]
-        requestVisibility: owner
+      entities:
+        - entity: asset-item
+          rowBoundaries: unrestricted
+          operations: [get]
+          readableFields: [asset-code, label]
+        - entity: asset-placement
+          rowBoundaries: unrestricted
+          operations: [list]
+          readableFields: [asset, valid-from, valid-to]
+        - entity: asset-site
+          rowBoundaries: unrestricted
+          operations: [list]
+          readableFields: [site-code]
+        - entity: placement-correction-request
+          rowBoundaries: unrestricted
+          operations: [create, get, list, patch, submit-request, revise-request, cancel-request]
+          readableFields: [placement, proposed-site, reason]
+          readableRequestFields: [reason, review-state]
+          writableFields: [placement, proposed-site, reason]
+          requestVisibility: owner
   - id: correction-reviewer
     default: true
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:review]
     requiredPurposes: [asset-correction-review]
     permissions:
-      - entity: placement-correction-request
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [placement, proposed-site, reason]
-        readableRequestFields: [reason, review_state]
+      entities:
+        - entity: placement-correction-request
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [placement, proposed-site, reason]
+          readableRequestFields: [reason, review-state]
   - id: correction-applier
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:apply]
     requiredPurposes: [asset-correction-apply]
     permissions:
-      - entity: placement-correction-request
-        rowBoundaries: unrestricted
-        operations: [get, apply_request]
-        readableFields: [placement, proposed-site, reason]
-        readableRequestFields: [reason, review_state]
-        applyTargets:
-          - {entity: asset-placement, rowBoundaries: unrestricted}
+      entities:
+        - entity: placement-correction-request
+          rowBoundaries: unrestricted
+          operations: [get, apply-request]
+          readableFields: [placement, proposed-site, reason]
+          readableRequestFields: [reason, review-state]
+          applyTargets:
+            - {entity: asset-placement, rowBoundaries: unrestricted}
 vocabularies:
   - {id: asset-classification, values: [equipment, vehicle, furniture]}
   - {id: inspection-result, values: [passed, failed]}

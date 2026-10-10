@@ -19,8 +19,16 @@ use crate::{
     JwksDocument,
 };
 
-pub const EVIDENCE_CLIENT_PROFILE_SCHEMA_V1: &str = "registry.evidence-client-profile/v1";
-pub const EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1: &str = "registry.evidence-client-contracts/v1";
+/// The `apiVersion` a client profile declares.
+pub const EVIDENCE_CLIENT_PROFILE_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/client-profile/v1";
+/// The `kind` a client profile declares.
+pub const EVIDENCE_CLIENT_PROFILE_KIND: &str = "EvidenceClientProfile";
+/// The `apiVersion` a reviewed contracts file declares.
+pub const EVIDENCE_CLIENT_CONTRACTS_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/client-contracts/v1";
+/// The `kind` a reviewed contracts file declares.
+pub const EVIDENCE_CLIENT_CONTRACTS_KIND: &str = "EvidenceClientContracts";
 pub const DEFAULT_METADATA_CACHE_SECONDS: u64 = 600;
 pub const MAXIMUM_METADATA_CACHE_SECONDS: u64 = 600;
 // A profile and a contracts file are read whole by the shared reader, which
@@ -39,7 +47,8 @@ const MAXIMUM_ENVIRONMENT_VARIABLE_BYTES: usize = 128;
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceClientProfile {
-    pub schema: String,
+    pub api_version: String,
+    pub kind: String,
     pub base_url: String,
     pub client_id: String,
     pub private_key: PrivateKeyReference,
@@ -93,7 +102,8 @@ impl EvidenceClientProfile {
 
     pub fn validate(&self) -> Result<(), EvidenceClientError> {
         let base_url = url::Url::parse(&self.base_url).map_err(|_| profile_error())?;
-        if self.schema != EVIDENCE_CLIENT_PROFILE_SCHEMA_V1
+        if self.api_version != EVIDENCE_CLIENT_PROFILE_API_VERSION
+            || self.kind != EVIDENCE_CLIENT_PROFILE_KIND
             || self.client_id.is_empty()
             || self.client_id.len() > 256
             || !valid_private_key_reference(&self.private_key)
@@ -321,7 +331,8 @@ impl fmt::Debug for EvidenceClientProfile {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("EvidenceClientProfile")
-            .field("schema", &self.schema)
+            .field("api_version", &self.api_version)
+            .field("kind", &self.kind)
             .field("base_url", &self.base_url)
             .field("client_id", &self.client_id)
             .field("trust", &self.trust)
@@ -332,7 +343,7 @@ impl fmt::Debug for EvidenceClientProfile {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-#[serde(tag = "source", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum PrivateKeyReference {
     File { path: PathBuf },
     Environment { variable: String },
@@ -387,7 +398,8 @@ impl fmt::Debug for ContractsProfile {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewedContracts {
-    pub schema: String,
+    pub api_version: String,
+    pub kind: String,
     pub assurance_profile: registry_evidence_verifier::AssuranceProfile,
     pub audience: String,
     pub issued_by: String,
@@ -398,7 +410,9 @@ pub struct ReviewedContracts {
 impl ReviewedContracts {
     /// Validate a reviewed offline contract using the same rules as live publication.
     pub fn validate(&self) -> Result<(), crate::EvidenceClientError> {
-        if self.schema != crate::EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1 {
+        if self.api_version != EVIDENCE_CLIENT_CONTRACTS_API_VERSION
+            || self.kind != EVIDENCE_CLIENT_CONTRACTS_KIND
+        {
             return Err(profile_error());
         }
         self.clone().into_definitions().validate_for_request()
@@ -411,7 +425,7 @@ impl ReviewedContracts {
             audience: self.audience,
             issued_by: self.issued_by,
             provided_by: self.provided_by,
-            holder_bound_batch_max_size: 1,
+            maximum_holder_bound_batch_size: 1,
             definitions: self.definitions,
         }
     }
@@ -556,7 +570,7 @@ mod tests {
 
     #[test]
     fn profile_is_closed_and_cache_is_bounded() {
-        let json = r#"{"schema":"registry.evidence-client-profile/v1","baseUrl":"https://evidence.example.org","clientId":"client","privateKey":{"source":"environment","variable":"EVIDENCE_KEY"},"trust":{"type":"https-discovery"},"contracts":{"type":"published"},"verification":{}}"#;
+        let json = r#"{"apiVersion":"id.registrystack.org/formats/evidence/client-profile/v1","kind":"EvidenceClientProfile","baseUrl":"https://evidence.example.org","clientId":"client","privateKey":{"type":"environment","variable":"EVIDENCE_KEY"},"trust":{"type":"https-discovery"},"contracts":{"type":"published"},"verification":{}}"#;
         let profile: EvidenceClientProfile = serde_json::from_str(json).expect("profile parses");
         profile.validate().expect("profile validates");
         let widened = json.replace("\"clientId\"", "\"serverSecret\":true,\"clientId\"");
@@ -574,7 +588,8 @@ mod tests {
     #[test]
     fn profile_origin_must_use_its_exact_canonical_serialization() {
         let profile = |base_url: &str| EvidenceClientProfile {
-            schema: EVIDENCE_CLIENT_PROFILE_SCHEMA_V1.to_owned(),
+            api_version: EVIDENCE_CLIENT_PROFILE_API_VERSION.to_owned(),
+            kind: EVIDENCE_CLIENT_PROFILE_KIND.to_owned(),
             base_url: base_url.to_owned(),
             client_id: "client".to_owned(),
             private_key: PrivateKeyReference::Environment {
@@ -606,7 +621,7 @@ mod tests {
     /// is absent from a profile that does not state it.
     #[test]
     fn the_optional_oauth_object_validates_and_round_trips() {
-        let base = r#"{"schema":"registry.evidence-client-profile/v1","baseUrl":"https://evidence.example.org","clientId":"client","privateKey":{"source":"environment","variable":"EVIDENCE_KEY"}}"#;
+        let base = r#"{"apiVersion":"id.registrystack.org/formats/evidence/client-profile/v1","kind":"EvidenceClientProfile","baseUrl":"https://evidence.example.org","clientId":"client","privateKey":{"type":"environment","variable":"EVIDENCE_KEY"}}"#;
         // `base` closes the profile object, so splice the oauth object in
         // before its closing brace rather than appending after it.
         let members = |oauth: &str| {
@@ -673,7 +688,8 @@ mod tests {
     #[test]
     fn strict_profiles_refuse_literal_origins_the_fetch_policy_will_deny() {
         let profile = |base_url: &str, trust: TrustProfile| EvidenceClientProfile {
-            schema: EVIDENCE_CLIENT_PROFILE_SCHEMA_V1.to_owned(),
+            api_version: EVIDENCE_CLIENT_PROFILE_API_VERSION.to_owned(),
+            kind: EVIDENCE_CLIENT_PROFILE_KIND.to_owned(),
             base_url: base_url.to_owned(),
             client_id: "client".to_owned(),
             private_key: PrivateKeyReference::Environment {
@@ -729,7 +745,8 @@ mod tests {
     #[test]
     fn expected_service_identities_are_bounded_absolute_uris() {
         let profile = |expected: ExpectedServiceProfile| EvidenceClientProfile {
-            schema: EVIDENCE_CLIENT_PROFILE_SCHEMA_V1.to_owned(),
+            api_version: EVIDENCE_CLIENT_PROFILE_API_VERSION.to_owned(),
+            kind: EVIDENCE_CLIENT_PROFILE_KIND.to_owned(),
             base_url: "https://evidence.example.org".to_owned(),
             client_id: "client".to_owned(),
             private_key: PrivateKeyReference::Environment {
@@ -776,7 +793,8 @@ mod tests {
     #[test]
     fn profile_artifact_references_are_bounded_and_closed_before_use() {
         let profile = |private_key, trust, contracts| EvidenceClientProfile {
-            schema: EVIDENCE_CLIENT_PROFILE_SCHEMA_V1.to_owned(),
+            api_version: EVIDENCE_CLIENT_PROFILE_API_VERSION.to_owned(),
+            kind: EVIDENCE_CLIENT_PROFILE_KIND.to_owned(),
             base_url: "https://evidence.example.org".to_owned(),
             client_id: "client".to_owned(),
             private_key,

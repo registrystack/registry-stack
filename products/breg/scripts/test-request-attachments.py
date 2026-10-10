@@ -66,9 +66,9 @@ def isolate_attachment_contract(project: Path) -> None:
     change_request = requests[0].get("changeRequest")
     require(isinstance(change_request, dict), "Attachment fixture lost its change request")
     require(change_request.get("review") == {
-        "authority": "casework", "policyId": "attachment-correction"},
+        "type": "required", "authority": "casework", "policyId": "attachment-correction"},
         "Attachment fixture review contract changed unexpectedly")
-    change_request["review"] = {"mode": "none"}
+    change_request["review"] = {"type": "none"}
     registry_path.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
 
 
@@ -193,10 +193,10 @@ def test_request_attachment_journey() -> None:
             # The dev runtime keeps running and holds its audit file's writer lock.
             configured["audit"]["path"] = str(temporary / "verified-audit" / "audit.jsonl")
             configured["attachmentVerification"] = {
-                "kind": "http", "endpoint": f"http://127.0.0.1:{verifier.server_port}/verify",
+                "type": "http", "endpoint": f"http://127.0.0.1:{verifier.server_port}/verify",
                 "authorizationRef": "secret:env/BREG_ACCEPTANCE_VERIFIER_AUTHORIZATION",
                 "policyId": "acceptance-v1",
-                "timeoutMilliseconds": 1000}
+                "attemptTimeoutMilliseconds": 1000}
             runtime = str(temporary / "verified-runtime.json")
             Path(runtime).write_text(json.dumps(configured), encoding="utf-8")
             configured_log = (temporary / "verified-runtime.log").open("wb")
@@ -276,11 +276,11 @@ def test_request_attachment_journey() -> None:
             candidates = [entry for entry in state["actions"] if entry["operation"] == operation]
             require(len(candidates) == 1, f"{operation} needs one discovered action")
             selected = candidates[0]
-            body = {} if operation in ("submit_request", "cancel_request") else {
+            body = {} if operation in ("submit-request", "cancel-request") else {
                 "proposalVersion": state["proposalVersion"], "effectDigest": state["effectDigest"]}
             return request("POST", selected["href"], role, body, etag=selected["ifMatch"], key=key)
 
-        missing = action("submit_request", "owner", key="attachment-submit-missing")
+        missing = action("submit-request", "owner", key="attachment-submit-missing")
         require(missing[0] == 412, f"Missing required slot expected HTTP 412, received {missing[0]}")
         current, headers = get()
         require(current["data"]["request"]["bregState"] == "draft", "Refusal changed draft state")
@@ -341,7 +341,7 @@ def test_request_attachment_journey() -> None:
             pending_etag = uploaded_headers["etag"]
             pending_status = request("GET", attachment_path, "owner", version=pending_version)[0]
             require(pending_status == 404, f"Pending evidence expected HTTP 404, received {pending_status}")
-            require(action("submit_request", "owner", key="attachment-submit-pending")[0] == 412,
+            require(action("submit-request", "owner", key="attachment-submit-pending")[0] == 412,
                     "Pending evidence allowed submission")
             print("Acknowledged upload stayed quarantined while the verifier was held.", flush=True)
             verifier_mode["value"] = "approved"
@@ -379,7 +379,7 @@ def test_request_attachment_journey() -> None:
             rejected_status = request("GET", attachment_path, "owner",
                                       version=rejected["data"]["request"]["proposalVersion"])[0]
             require(rejected_status == 404, f"Rejected evidence expected HTTP 404, received {rejected_status}")
-            require(action("submit_request", "owner", key="attachment-submit-rejected")[0] == 412,
+            require(action("submit-request", "owner", key="attachment-submit-rejected")[0] == 412,
                     "Rejected evidence allowed submission")
             verifier_mode["value"] = "approved"
             evidence = PDF + b"Approved replacement.\n"
@@ -392,7 +392,7 @@ def test_request_attachment_journey() -> None:
                     and metadata["sha256"] in verifier_mode["hashes"],
                     "Approval was not obtained for exact replacement bytes")
             print("Replacement evidence required its own verdict; rejected content remained unavailable.", flush=True)
-        document(action("submit_request", "owner", key="attachment-submit"), 200, "Submit complete draft")
+        document(action("submit-request", "owner", key="attachment-submit"), 200, "Submit complete draft")
         submitted, _ = get("reviewer")
         version = submitted["data"]["request"]["proposalVersion"]
         require(submitted["data"]["domainData"][SLOT]["sha256"] == metadata["sha256"],
@@ -414,7 +414,7 @@ def test_request_attachment_journey() -> None:
                                 "Read target before explicit application")
         require(unchanged["data"]["domainData"]["label"] == "Original label",
                 "Submission applied effects without an explicit application")
-        document(action("cancel_request", "owner", key="attachment-cancel"), 200,
+        document(action("cancel-request", "owner", key="attachment-cancel"), 200,
                  "Cancel submitted request")
         print("Exact submitted evidence downloads, non-application and cancellation passed.", flush=True)
         listing = cli("retention-list", "request-retention", "list", "--runtime-config", runtime,

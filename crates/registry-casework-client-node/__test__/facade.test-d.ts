@@ -65,26 +65,26 @@ void client.nextWorkItem(token, profile, sourceProfile, { queue: 'review', curso
   void item
 })
 void client.listWorkItems(token, profile, sourceProfile, {
-  view: 'my_teams', sourceId: 'source-one', subjectKind: 'resident-record', subjectId: 'human-reference-42',
+  view: 'my-teams', sourceId: 'source-one', subjectKind: 'resident-record', subjectId: 'human-reference-42',
 }).then((page) => {
   const servedQueue: string | undefined = page.value.servedQueues[0]
   void servedQueue
 })
 // @ts-expect-error subject selectors must include all three fields
-void client.listWorkItems(token, profile, sourceProfile, { view: 'my_teams', sourceId: 'source-one' })
+void client.listWorkItems(token, profile, sourceProfile, { view: 'my-teams', sourceId: 'source-one' })
 void client.directoryTargets(token, profile, { purpose: 'assignment', queue: 'review', limit: 25 })
-void client.directoryTargets(token, profile, { purpose: 'absence_person' }).then((page) => {
+void client.directoryTargets(token, profile, { purpose: 'absence-person' }).then((page) => {
   const displayName: string | null | undefined = page.value.items[0]?.displayName
   void displayName
 })
-void client.directoryTargets(token, profile, { purpose: 'absence_person' })
+void client.directoryTargets(token, profile, { purpose: 'absence-person' })
 void client.directoryTargets(token, profile, {
-  purpose: 'absence_cover', personIssuer: 'https://idp.example', personSubject: 'officer',
+  purpose: 'absence-cover', personIssuer: 'https://idp.example', personSubject: 'officer',
 })
 // @ts-expect-error assignment target discovery requires a queue
 void client.directoryTargets(token, profile, { purpose: 'assignment' })
 // @ts-expect-error absence cover discovery requires the complete person identity
-void client.directoryTargets(token, profile, { purpose: 'absence_cover', personIssuer: 'https://idp.example' })
+void client.directoryTargets(token, profile, { purpose: 'absence-cover', personIssuer: 'https://idp.example' })
 client.absences(token, profile, { cursor: 'opaque-absence-cursor', limit: 1000 }).then((result) => {
   const directoryRevision: number = result.value.directoryRevision
   const absenceCount: number = result.value.items.length
@@ -163,7 +163,7 @@ void client.reviewAccountability(token, 'supervisor', '00000000-0000-0000-0000-0
   })
 const reviewDecision: ReviewTaskDecisionRequest = { decision: { type: 'approve' } }
 void client.decideReviewTask(token, profile, item.itemId, item.revision, 'decide-43', reviewDecision, sourceProfile)
-const assignedReviewTasks: ReviewTaskQuery = { queue: 'review', ownership: 'assigned_to_me', limit: 25 }
+const assignedReviewTasks: ReviewTaskQuery = { queue: 'review', ownership: 'assigned-to-me', limit: 25 }
 void client.reviewTasks(token, profile, assignedReviewTasks, sourceProfile)
 void client.supervisoryReviewTasks(token, 'supervisor', { queue: 'review', requestId: item.itemId, limit: 25 }, sourceProfile)
 
@@ -176,7 +176,7 @@ void taskHolder
 function decidedByMe(task: ReviewerTask): boolean {
   if (task.state !== 'decided' || task.decidedByCaller !== true) return false
   const decision = task.decisionReceipt?.decision
-  return decision === 'approve' || decision === 'reject' || decision === 'changes_requested' || decision === 'answer'
+  return decision === 'approve' || decision === 'reject' || decision === 'changes-requested' || decision === 'answer'
 }
 void decidedByMe
 
@@ -231,20 +231,20 @@ const heldSince: string | undefined = item.heldSince
 void heldSince
 
 function completedAccountability(entry: HistoryEntry): string | undefined {
-  if (entry.kind !== 'action_completed') return undefined
+  if (entry.kind !== 'action-completed') return undefined
   return `${entry.detail.bindingReference}:${entry.detail.sourceReceipt.sourceRevision}`
 }
 void completedAccountability
 
 function settlementDecision(entry: HistoryEntry): string | undefined {
-  if (entry.kind !== 'attempt_settled') return undefined
-  const outcome: 'applied' | 'not_applied' = entry.detail.outcome
+  if (entry.kind !== 'attempt-settled') return undefined
+  const outcome: 'applied' | 'not-applied' = entry.detail.outcome
   return `${entry.detail.attemptId}:${entry.detail.bindingReference}:${outcome}:${entry.detail.reason}:${entry.detail.decidedBy}`
 }
 void settlementDecision
 
 function uncertaintyAccountability(entry: HistoryEntry): string | undefined {
-  if (entry.kind !== 'attempt_uncertain') return undefined
+  if (entry.kind !== 'attempt-uncertain') return undefined
   const operation: string = entry.detail.operation
   const reason: string | undefined = entry.detail.reason
   if (entry.detail.operatorReason !== undefined) {
@@ -263,7 +263,7 @@ function uncertaintyAccountability(entry: HistoryEntry): string | undefined {
 void uncertaintyAccountability
 
 void client.reviewTasks(token, profile, { limit: 25 }).then((page) => {
-  const status: 'complete' | 'budget_exhausted' | 'source_unavailable' = page.value.status
+  const status: 'complete' | 'budget-exhausted' | 'source-unavailable' = page.value.status
   void status
 })
 function pageLimit(error: CaseworkClientError): boolean {

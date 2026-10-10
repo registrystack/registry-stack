@@ -351,7 +351,7 @@ export interface EvidenceRequestBatchSpec {
  *   is `protocol`
  * - `code`: `denied`, `protocol` (optional), `verification`, and any `token`
  *   failure whose `tokenKind` is `refused`
- * - `traceId`: `denied`, `not_available`, `protocol` (all optional)
+ * - `traceId`: `denied`, `not-available`, `protocol` (all optional)
  * - `retryAfterSeconds`: `denied`, `protocol` (both optional)
  * - `transportKind`: `transport`, and any `token` failure whose `tokenKind`
  *   is `transport`

@@ -89,7 +89,7 @@ test('statistics methods preserve route, representation, status and caller key',
     assert.equal(requests[7].key, 'caller-owned-key');
     assert.equal(requests[8].body, '{"reason":"disclosure-risk"}');
     const count = requests.length;
-    await assert.rejects(client.statisticsReleaseVersion('enrolments', '2025-01', 0), error => error.kind === 'invalid_request');
+    await assert.rejects(client.statisticsReleaseVersion('enrolments', '2025-01', 0), error => error.kind === 'invalid-request');
     assert.equal(requests.length, count);
 
     await client.statisticsLive('enrolments', '0001', '9998');
@@ -99,11 +99,11 @@ test('statistics methods preserve route, representation, status and caller key',
     const afterCanonicalPeriods = requests.length;
     await assert.rejects(
       client.statisticsPublish('enrolments', '2025-99', 'final', 'publisher', 'invalid-period-key'),
-      error => error.kind === 'invalid_request',
+      error => error.kind === 'invalid-request',
     );
     await assert.rejects(
       client.statisticsWithdraw('enrolments', '----', 1, 'source-data-error', 'publisher', 'invalid-period-key'),
-      error => error.kind === 'invalid_request',
+      error => error.kind === 'invalid-request',
     );
     assert.equal(requests.length, afterCanonicalPeriods);
 
@@ -113,7 +113,7 @@ test('statistics methods preserve route, representation, status and caller key',
       () => client.statisticsReleases('vary-missing', 10),
       () => client.statisticsReleases('cache-control-wrong', 10),
     ]) {
-      await assert.rejects(read(), error => error.kind === 'protocol' && error.code === 'cache_policy');
+      await assert.rejects(read(), error => error.kind === 'protocol' && error.code === 'cache-policy');
     }
 
     const maximumCursor = 'c'.repeat(10_978);
@@ -121,20 +121,20 @@ test('statistics methods preserve route, representation, status and caller key',
     const afterMaximumCursor = requests.length;
     await assert.rejects(
       client.statisticsReleases('d'.repeat(64), 10, `${maximumCursor}c`, 'p'.repeat(64)),
-      error => error.kind === 'invalid_request',
+      error => error.kind === 'invalid-request',
     );
     assert.equal(requests.length, afterMaximumCursor);
 
     await assert.rejects(
       client.statisticsPublish('digest-missing', '2025-01', 'final', 'publisher', 'digest-missing-key'),
-      error => error.kind === 'protocol' && error.code === 'representation_digest',
+      error => error.kind === 'protocol' && error.code === 'representation-digest',
     );
     await assert.rejects(
       client.statisticsWithdraw('digest-mismatch', '2025-01', 7, 'source-data-error', 'publisher', 'digest-mismatch-key'),
-      error => error.kind === 'protocol' && error.code === 'representation_digest',
+      error => error.kind === 'protocol' && error.code === 'representation-digest',
     );
 
-    await assert.rejects(client.statisticsLive('missing'), error => error.kind === 'not_found' && error.code === 'resource.not_found');
+    await assert.rejects(client.statisticsLive('missing'), error => error.kind === 'not-found' && error.code === 'resource.not_found');
     await assert.rejects(
       client.statisticsPublish('release-refused', '2025-01', 'final', 'publisher', 'refusal-key'),
       error => error.code === 'statistical_dataset.release_refused' && error.refusalCode === 'period-not-ended',

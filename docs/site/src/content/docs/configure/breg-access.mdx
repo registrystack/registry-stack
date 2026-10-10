@@ -58,34 +58,36 @@ accessProfiles:
     requiredScopes: [registry:sites:plan]
     requiredPurposes: [site-planning]
     permissions:
-      - entity: asset-site
-        operations: [get, list]
-        readableFields: [site-code, label, zone]
-        filterableFields: [site-code, zone]
-        sortableFields: [site-code]
-        allowCount: true
-        rowBoundaries:
-          - field: zone
-            claim: planning_zones
-            operator: in
-      - entity: household
-        rowBoundaries: unrestricted
-        operations: [get, lookup]
-        readableFields: [household-code]
-        lookups:
-          - selector: by-household-code
-            valueOrigin: request
-        readPaths:
-          - path: people
-            readableFields: [person-code, legal-name]
+      entities:
+        - entity: asset-site
+          operations: [get, list]
+          readableFields: [site-code, label, zone]
+          filterableFields: [site-code, zone]
+          sortableFields: [site-code]
+          allowCount: true
+          rowBoundaries:
+            - field: zone
+              claim: planning_zones
+              operator: in
+        - entity: household
+          rowBoundaries: unrestricted
+          operations: [get, lookup]
+          readableFields: [household-code]
+          lookups:
+            - selector: by-household-code
+              valueOrigin: request
+          readPaths:
+            - path: people
+              readableFields: [person-code, legal-name]
   - id: public-directory
     principalClaim: registry_principal
     requiredScopes: [registry:sites:directory]
     permissions:
-      - entity: asset-site
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [site-code, label]
+      entities:
+        - entity: asset-site
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [site-code, label]
 ```
 
 Profile members:
@@ -103,7 +105,9 @@ An item spelled `*` or `unrestricted` inside a list of scopes, purposes, or clie
 
 ## Grant operations, fields, and rows
 
-Each entry under `permissions` names one entity, or one action, and what the profile may do with it.
+`permissions` groups what the profile may do by what each permission names: `entities` lists the entity permissions, `actions` the action permissions, and `datasets` the [statistical dataset](../breg-statistics/) permissions.
+Each entry names one entity, one action, or one dataset, and what the profile may do with it.
+Omit a group the profile does not use; a member that belongs to another group is refused as an unknown key.
 
 Three field lists bound every entity permission.
 `readableFields` decide what a response may carry, `writableFields` what a create or patch may set, and `filterableFields` which fields `$filter` may name; `sortableFields` and `allowCount` do the same for `$orderby` and `$count`.
@@ -135,14 +139,14 @@ The remaining permission members:
 
 | Member | Effect |
 |---|---|
-| `lookups` | The selector profiles this permission may use, and whether the values come from the `request` or from a `verified_claim` with a `claimMapping`. |
+| `lookups` | The selector profiles this permission may use, and whether the values come from the `request` or from a `verified-claim` with a `claimMapping`. |
 | `readPaths` | The read paths this permission may follow and the target fields it may read. |
 | `spatialQueries.bbox` | Allows bounding-box queries and caps their longitude and latitude span in degrees. |
 | `revisionAccess` | With the `revisions` operation, lets the profile read a record's revision history. `check` reports `breg.access.profile-revision-history`, because history can disclose values removed from the current record. |
 | `allowDataExport` | Enables bulk export through the profile. `check` reports `breg.access.profile-data-export`, because disabling it later cannot recall downloaded data. |
 | `requestPresence` | Lets a reader of a target entity see that a change request of the named `requestType` is pending against a record. |
-| `readableRequestFields` | Which engine-owned request metadata the selected profile may receive, including external `review_state`, application `reason`, and actor references. |
-| `applyTargets` | Which target entities an applier may write when using the ordinary `apply_request` action. |
+| `readableRequestFields` | Which engine-owned request metadata the selected profile may receive, including external `review-state`, application `reason`, and actor references. |
+| `applyTargets` | Which target entities an applier may write when using the ordinary `apply-request` action. |
 | `submitterTargets` | Requires the submitter to currently hold same-profile `get` authority over every native-reference target a change request names. |
 | `action`, `targets`, `results` | An action permission instead of an entity permission. |
 
@@ -155,11 +159,11 @@ The operations a permission may list:
 | `create`, `get`, `list`, `patch`, `tombstone`, `batch` | Direct reads and writes. `tombstone` needs `tombstone: true` on the entity. |
 | `lookup` | Selector lookups declared under `lookups`. |
 | `revisions`, `snapshot` | Reading revision history and snapshot or effective-time reads. |
-| `submit_request`, `revise_request`, `cancel_request` | Submitter actions on a change-request entity. |
-| `apply_request` | Applying a request with exactly correlated approved external-review evidence, or an explicit no-review proposal, limited by `applyTargets`. |
+| `submit-request`, `revise-request`, `cancel-request` | Submitter actions on a change-request entity. |
+| `apply-request` | Applying a request with exactly correlated approved external-review evidence, or an explicit no-review proposal, limited by `applyTargets`. |
 | `invoke` | Invoking an immediate action. |
 
-{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; products/breg/acceptance/business-establishments/registry.yaml; products/breg/starters/professional-licences/core/registry.yaml; crates/registry-breg/src/auth.rs; crates/registry-breg/src/contract.rs, AccessProfileSource and AccessPermissionSource; crates/registry-breg/src/access.rs; crates/registry-breg/src/change_request.rs. */}
+{/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml; products/breg/acceptance/business-establishments/registry.yaml; products/breg/starters/professional-licences/core/registry.yaml; crates/registry-breg/src/auth.rs; crates/registry-breg/src/contract.rs, AccessProfileSource and PermissionsSource; crates/registry-breg/src/access.rs; crates/registry-breg/src/change_request.rs. */}
 
 ## Access requirements
 
@@ -211,7 +215,7 @@ A project with a `manifestProjection`, like the one `init` wrote, needs that dat
     - id: consent
       title: Consent records
       description: Privacy notices, consent decisions, and consent links.
-      status: under_development
+      status: under-development
       classificationCeiling: restricted
       accessProfile: record-consent-steward
 ```
@@ -243,12 +247,13 @@ Add it to a read-only profile for the recipient's client:
     requiredScopes: [registry:record:targeting]
     requiredPurposes: [food-assistance]
     permissions:
-      - entity: record
-        operations: [get, list]
-        readableFields: [code, label, status]
-        rowBoundaries: unrestricted
-        requireConsent:
-          - {record: record-consent-decision, on: id}
+      entities:
+        - entity: record
+          operations: [get, list]
+          readableFields: [code, label, status]
+          rowBoundaries: unrestricted
+          requireConsent:
+            - {record: record-consent-decision, on: id}
 ```
 
 A gated profile needs `actorKind`, `requesterClients` that a recipient organization lists, and `requiredPurposes` from `data-use-purpose`.
@@ -259,13 +264,13 @@ The project now passes `check`, with a warning the gate cannot close by itself, 
 With `food-targeting` added first under `accessProfiles`, the three read:
 
 ```text
-warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:220:9 /accessProfiles/3/permissions/0
+warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:225:11 /accessProfiles/3/permissions/entities/0
   this profile admits any client and reads `record` without consent, so a client of the consent-gated `food-targeting` can read the same rows through it. List requesterClients that no gated profile admits (in entities[].accessProfiles[].requesterClients)
   next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:174:9 /accessProfiles/1/permissions/1
+warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:177:11 /accessProfiles/1/permissions/entities/1
   this profile admits any client and reads `record` without consent, so a client of the consent-gated `food-targeting` can read the same rows through it. List requesterClients that no gated profile admits (in entities[].accessProfiles[].requesterClients)
   next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:196:9 /accessProfiles/2/permissions/0
+warning[breg.access.consent-ungated-client] ./my-registry/registry.yaml:200:11 /accessProfiles/2/permissions/entities/0
   this profile admits any client and reads `record` without consent, so a client of the consent-gated `food-targeting` can read the same rows through it. List requesterClients that no gated profile admits (in entities[].accessProfiles[].requesterClients)
   next: Review the finding, and change the source if the behavior it describes is not intended.
 ```
@@ -348,8 +353,8 @@ Synthetic profile admission: allowed
   printed.
 ```
 
-Remove `registry:generic:read` from `scopes` and the heading becomes `Synthetic profile admission: refused` over the reason `required_scope_missing`.
-The other reasons are `principal_missing_or_mismatched`, `purpose_missing_or_not_allowed`, `actor_kind_missing`, `actor_kind_mismatched`, `requester_client_missing_or_mismatched`, `row_claim_missing_or_wrong_cardinality`, `operation_not_granted`, and `entity_or_profile_not_found`.
+Remove `registry:generic:read` from `scopes` and the heading becomes `Synthetic profile admission: refused` over the reason `required-scope-missing`.
+The other reasons are `principal-missing-or-mismatched`, `purpose-missing-or-not-allowed`, `actor-kind-missing`, `actor-kind-mismatched`, `requester-client-missing-or-mismatched`, `row-claim-missing-or-wrong-cardinality`, `operation-not-granted`, and `entity-or-profile-not-found`.
 Both admitted and refused previews exit successfully, because a refusal is the answer you asked for; `bregctl --format json explain access ./my-registry --scenario ./access-scenario.json` reports the same verdict as `explanation.admitted` and `explanation.reason`.
 A scenario may add `readPath` with `operation: list` to preview a read path.
 The file is limited to 64 KiB, must be strict JSON without duplicate keys, and refuses unknown members.
@@ -392,7 +397,7 @@ Admission is not disclosure: whether a row is returned depends on the consent de
 
 {/* Evidence: crates/registry-breg/src/access_preview.rs, ScenarioClaims, AccessPreview.recipients and synthetic_claims();
     crates/registry-breg/src/model.rs, recipient_set();
-    crates/registry-breg/src/api/mod.rs, requester_client_missing_or_mismatched. */}
+    crates/registry-breg/src/api/mod.rs, requester-client-missing-or-mismatched. */}
 
 ## Start from a working example
 
@@ -409,13 +414,13 @@ Follow its README to compare profile admission with the limits that need a runni
 |---|---|
 | A request is refused when `accessProfile` is omitted. | Several profiles expose that operation or path and none is the default. Have the application select the intended profile; it must still satisfy that profile's permissions. |
 | `check` refuses a permission because the entity has no such field. | Field ids in permissions are the authored kebab-case ids, not the camelCase API names. Use `asset-code`, not `assetCode`. |
-| The preview refuses with `required_scope_missing`, `purpose_missing_or_not_allowed`, or `principal_missing_or_mismatched`. | The scenario's claims do not satisfy the profile. Compare `scopes`, `purpose`, and `principalClaim` with the profile's `requiredScopes`, `requiredPurposes`, and `principalClaim`. |
-| The preview refuses with `row_claim_missing_or_wrong_cardinality`. | A row boundary found no claim, or an `in` boundary found a single value where it needs a list. Add the claim under `directClaims` with the cardinality the operator expects. |
-| The preview refuses with `operation_not_granted` or `entity_or_profile_not_found`. | The scenario names an operation the permission does not list, or an entity or profile the project does not declare. Check the ids against `explain access`. |
+| The preview refuses with `required-scope-missing`, `purpose-missing-or-not-allowed`, or `principal-missing-or-mismatched`. | The scenario's claims do not satisfy the profile. Compare `scopes`, `purpose`, and `principalClaim` with the profile's `requiredScopes`, `requiredPurposes`, and `principalClaim`. |
+| The preview refuses with `row-claim-missing-or-wrong-cardinality`. | A row boundary found no claim, or an `in` boundary found a single value where it needs a list. Add the claim under `directClaims` with the cardinality the operator expects. |
+| The preview refuses with `operation-not-granted` or `entity-or-profile-not-found`. | The scenario names an operation the permission does not list, or an entity or profile the project does not declare. Check the ids against `explain access`. |
 | `check` reports `breg.access.profile-unrestricted-collection`. | A profile lists an entity with no row boundary. Add a claim-bound boundary, or accept a registry-wide role knowingly and record why. |
 | `check` refuses with `breg.consent.require-unused`. | A consent record exists and no permission requires it yet. Add the `requireConsent` line the error names to a read permission, or list a former gated profile id under `retiredConsentScopes`. |
 | `check` reports `breg.access.consent-ungated-client`. | A profile reads a gated entity without `requireConsent` and admits any client, or a client a gated profile admits. List `requesterClients` on it that no gated profile admits. |
-| The preview refuses with `actor_kind_missing`, `actor_kind_mismatched`, or `requester_client_missing_or_mismatched`. | The profile declares `actorKind` or `requesterClients`. Add `actorKind` and `requesterClient` to the scenario's `claims` with the values the profile lists. |
+| The preview refuses with `actor-kind-missing`, `actor-kind-mismatched`, or `requester-client-missing-or-mismatched`. | The profile declares `actorKind` or `requesterClients`. Add `actorKind` and `requesterClient` to the scenario's `claims` with the values the profile lists. |
 | The preview refuses a scenario with `access.scenario.invalid` naming `registry:recipients`. | `directClaims` named a claim only the engine fills. Remove it and set `requesterClient`; the preview derives the recipients from it. |
 | The server refuses to start after recipients were declared. | A client a recipient organization lists is missing from the issuer's `allowedClients`. Add it there, or remove it from the organization. |
 

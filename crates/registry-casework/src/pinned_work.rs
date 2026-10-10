@@ -1,12 +1,15 @@
 //! Activation preflight for work pinned under an earlier policy package.
 //!
 //! A review request pins its kind's policy snapshot when it is admitted, and a
-//! work item keeps the queue it was routed to. A later package can remove the
-//! queue or access profile that pinned work still names, change a kind's
-//! content under an unchanged version, or change the fields a source read
-//! discloses so that the pinned display schema refuses them. Each of those
-//! hides or orphans in-flight work without any error, so the runtime compares
-//! the package it is about to activate with the work already retained.
+//! work item keeps the queue it was routed to. A review request also keeps the
+//! id of the producer that submitted it, and that producer reads it only under
+//! that id. A later package can remove the queue or access profile that pinned
+//! work still names, remove or rename the producer of an in-flight review,
+//! change a kind's content under an unchanged version, or change the fields a
+//! source read discloses so that the pinned display schema refuses them. Each
+//! of those hides or orphans in-flight work without any error, so the runtime
+//! compares the package it is about to activate with the work already
+//! retained.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,6 +40,10 @@ pub enum StrandedWork {
     /// In-flight reviews have a remaining stage decided only through an
     /// access profile the package no longer declares.
     ProfileRemoved { profile: String, reviews: u64 },
+    /// In-flight reviews were submitted by a review producer the package no
+    /// longer declares, so no caller can read, cancel, or receive the result
+    /// of them.
+    ProducerRemoved { producer: String, reviews: u64 },
     /// The package declares the pinned review kind version with different
     /// content, so one kind version would name two policies.
     ReviewKindChanged {
@@ -89,6 +96,10 @@ impl StrandedWork {
             ),
             Self::ProfileRemoved { profile, reviews } => format!(
                 "{} can be decided only through access profile {profile}, which the package no longer declares",
+                count(*reviews, "in-flight review"),
+            ),
+            Self::ProducerRemoved { producer, reviews } => format!(
+                "{} came from review producer {producer}, which the package no longer declares",
                 count(*reviews, "in-flight review"),
             ),
             Self::ReviewKindChanged {
@@ -204,6 +215,8 @@ pub(crate) struct PinnedReviewGroup {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PinnedWorkInventory {
     pub(crate) reviews: Vec<PinnedReviewGroup>,
+    /// In-flight reviews per producer that submitted them.
+    pub(crate) reviews_by_producer: BTreeMap<String, u64>,
     /// Open work items per queue.
     pub(crate) work_items: BTreeMap<String, u64>,
     /// Open work items per source.
@@ -236,6 +249,11 @@ pub(crate) fn compare_pinned_work(
         .access_profiles
         .iter()
         .map(|profile| profile.id.as_str())
+        .collect();
+    let producers: BTreeSet<&str> = project
+        .review_producers
+        .iter()
+        .map(|producer| producer.id.as_str())
         .collect();
     let kinds: BTreeMap<(&str, &str), _> = project
         .review_kinds
@@ -351,6 +369,16 @@ pub(crate) fn compare_pinned_work(
             .map(|(profile, reviews)| StrandedWork::ProfileRemoved { profile, reviews }),
     );
     conflicts.extend(
+        inventory
+            .reviews_by_producer
+            .iter()
+            .filter(|(producer, _)| !producers.contains(producer.as_str()))
+            .map(|(producer, reviews)| StrandedWork::ProducerRemoved {
+                producer: producer.clone(),
+                reviews: *reviews,
+            }),
+    );
+    conflicts.extend(
         changed_kinds
             .into_iter()
             .map(
@@ -447,10 +475,10 @@ mod tests {
     use async_trait::async_trait;
     use registry_casework_core::{
         AccessProfile, ActiveSubjectsPage, AuthoritativeObservation, CallerSubjectView,
-        CaseworkIdentity, CaseworkRole, DiscoveryCursor, EphemeralCredential, EventRequest,
-        ExecutePreparedRequest, PrepareActionRequest, PreparedSourceAttempt, QueuePolicy,
-        ReviewKindPolicy, ReviewKindPurpose, ReviewRetentionPolicy, ReviewStagePolicy,
-        SourceAdapterError, SourceReceipt, SubjectRef, TransitionHint,
+        CaseworkRole, DiscoveryCursor, EphemeralCredential, EventRequest, ExecutePreparedRequest,
+        PrepareActionRequest, PreparedSourceAttempt, ProjectIdentity, QueuePolicy,
+        ReviewKindPolicy, ReviewKindPurpose, ReviewProducerPolicy, ReviewRetentionPolicy,
+        ReviewStagePolicy, SourceAdapterError, SourceReceipt, SubjectRef, TransitionHint,
     };
     use serde_json::json;
 
@@ -506,8 +534,8 @@ mod tests {
         CaseworkProject {
             api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
             kind: registry_casework_core::CASEWORK_KIND.to_owned(),
-            casework: CaseworkIdentity {
-                id: "pinned".to_owned(),
+            project: ProjectIdentity {
+                id: "pinned".parse().unwrap(),
                 version: "1".to_owned(),
             },
             access_profiles: vec![profile("clerk"), profile("senior-officer")],
@@ -611,7 +639,7 @@ mod tests {
         let inventory = PinnedWorkInventory {
             reviews: vec![group(&pinned, 0, 3)],
             work_items: BTreeMap::from([("intake".to_owned(), 2)]),
-            work_items_by_source: BTreeMap::new(),
+            ..PinnedWorkInventory::default()
         };
         assert!(compare_pinned_work(&project(pinned), &[], &inventory).is_empty());
     }
@@ -624,7 +652,7 @@ mod tests {
             // second: only the first two still need the intake queue.
             reviews: vec![group(&pinned, 0, 2), group(&pinned, 1, 1)],
             work_items: BTreeMap::from([("intake".to_owned(), 4), ("retired".to_owned(), 1)]),
-            work_items_by_source: BTreeMap::new(),
+            ..PinnedWorkInventory::default()
         };
         let mut renamed = pinned.clone();
         renamed.version = "2".to_owned();
@@ -661,8 +689,7 @@ mod tests {
         let pinned = kind(ReviewContextStrategy::Submitted);
         let inventory = PinnedWorkInventory {
             reviews: vec![group(&pinned, 0, 1), group(&pinned, 1, 2)],
-            work_items: BTreeMap::new(),
-            work_items_by_source: BTreeMap::new(),
+            ..PinnedWorkInventory::default()
         };
         let mut renamed = pinned.clone();
         renamed.stages[1].deciding_profiles = vec!["licence-officer".to_owned()];
@@ -690,8 +717,7 @@ mod tests {
         let pinned = kind(ReviewContextStrategy::Source);
         let inventory = PinnedWorkInventory {
             reviews: vec![group(&pinned, 0, 5)],
-            work_items: BTreeMap::new(),
-            work_items_by_source: BTreeMap::new(),
+            ..PinnedWorkInventory::default()
         };
         let candidate = project(pinned);
 
@@ -747,6 +773,7 @@ mod tests {
                 ("registry".to_owned(), 2),
                 ("retired-registry".to_owned(), 1),
             ]),
+            ..PinnedWorkInventory::default()
         };
         let candidate = project(pinned);
 
@@ -815,6 +842,82 @@ mod tests {
                  package no longer declares. Let that work finish under the earlier package, or \
                  set package.acknowledgeStrandedWork to {digest} to activate this package anyway"
             )
+        );
+    }
+
+    fn producer(id: &str) -> ReviewProducerPolicy {
+        ReviewProducerPolicy {
+            id: id.to_owned(),
+            profile: "clerk".to_owned(),
+            issuer: "https://issuer.test".to_owned(),
+            subject: "registry-service".to_owned(),
+            trusted_initiator_issuer: None,
+            initiator_profile: None,
+            source_namespaces: vec!["registry".to_owned()],
+            kinds: vec!["correction".to_owned()],
+            recovery_days: 30,
+            completion: None,
+        }
+    }
+
+    #[test]
+    fn a_removed_producer_counts_the_in_flight_reviews_it_submitted() {
+        let pinned = kind(ReviewContextStrategy::Submitted);
+        let inventory = PinnedWorkInventory {
+            reviews: vec![group(&pinned, 0, 3)],
+            // The id the earlier package declared is compared as it was
+            // stored, whatever grammar this release holds a declared id to.
+            reviews_by_producer: BTreeMap::from([
+                ("Registry_Service".to_owned(), 2),
+                ("payments".to_owned(), 1),
+            ]),
+            ..PinnedWorkInventory::default()
+        };
+        let mut declared = project(pinned.clone());
+        declared.review_producers = vec![producer("Registry_Service"), producer("payments")];
+        assert!(compare_pinned_work(&declared, &[], &inventory).is_empty());
+
+        let mut renamed = project(pinned);
+        renamed.review_producers = vec![producer("registry-service"), producer("payments")];
+        let conflicts = compare_pinned_work(&renamed, &[], &inventory);
+        assert_eq!(
+            conflicts,
+            vec![StrandedWork::ProducerRemoved {
+                producer: "Registry_Service".to_owned(),
+                reviews: 2,
+            }]
+        );
+        assert_eq!(
+            describe_stranded_work(&conflicts),
+            "2 in-flight reviews came from review producer Registry_Service, which the package \
+             no longer declares"
+        );
+        assert_eq!(
+            serde_json::to_value(&conflicts[0]).unwrap(),
+            json!({"reason": "producer-removed", "producer": "Registry_Service", "reviews": 2})
+        );
+    }
+
+    #[test]
+    fn a_package_with_no_producer_strands_every_producer_with_in_flight_reviews() {
+        let pinned = kind(ReviewContextStrategy::Submitted);
+        let inventory = PinnedWorkInventory {
+            reviews: vec![group(&pinned, 0, 1)],
+            reviews_by_producer: BTreeMap::from([("registry".to_owned(), 1)]),
+            ..PinnedWorkInventory::default()
+        };
+        let conflicts = compare_pinned_work(&project(pinned), &[], &inventory);
+        assert_eq!(
+            conflicts,
+            vec![StrandedWork::ProducerRemoved {
+                producer: "registry".to_owned(),
+                reviews: 1,
+            }]
+        );
+        assert_eq!(
+            describe_stranded_work(&conflicts),
+            "1 in-flight review came from review producer registry, which the package no longer \
+             declares"
         );
     }
 

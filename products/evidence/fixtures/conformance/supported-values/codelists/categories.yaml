@@ -1,3 +1,6 @@
-id: urn:example:fixture:scheme:category
+apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
+kind: EvidenceCodelist
+uri: urn:example:fixture:scheme:category
 version: '1'
+type: code-list
 codes: [category-a, category-bound]

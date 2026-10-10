@@ -32,13 +32,6 @@
         "evidenceTypeIds"
       ],
       "type": "object"
-    },
-    "MappingSchemaVersion": {
-      "description": "The header an evidence mapping file carries.",
-      "enum": [
-        "registry-discovery/evidence-mapping/v1alpha1"
-      ],
-      "type": "string"
     }
   },
   "$id": "https://id.registrystack.org/schemas/discovery/evidence-mapping/evidence-mapping.v1alpha1.schema.json",
@@ -55,12 +48,22 @@
       "minItems": 1,
       "type": "array"
     },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1",
+      "description": "The format and version of this file.",
+      "type": "string"
+    },
     "jurisdiction": {
       "description": "An absolute URI of at most 4096 characters. Leave the key out for a\nmapping that applies in every jurisdiction.",
       "format": "uri",
       "maxLength": 4096,
       "minLength": 1,
       "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "kind": {
+      "const": "DiscoveryEvidenceMapping",
+      "description": "The kind of this file.",
       "type": "string"
     },
     "mappingAuthorityId": {
@@ -86,13 +89,11 @@
       "minLength": 1,
       "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
       "type": "string"
-    },
-    "schemaVersion": {
-      "$ref": "#/$defs/MappingSchemaVersion"
     }
   },
   "required": [
-    "schemaVersion",
+    "apiVersion",
+    "kind",
     "mappingId",
     "mappingAuthorityId",
     "requirementId",

@@ -2584,6 +2584,78 @@ on:
                 self.assertTrue(outputs["docs"])
                 self.assertTrue(outputs["breg_contracts"])
 
+    def test_scheduling_config_schema_change_runs_docs(self) -> None:
+        """The docs Scheduling configuration page is generated from these files."""
+        for path in (
+            "products/scheduling/generated/project/project.schema.json",
+            "products/scheduling/generated/records/records.schema.json",
+            "products/scheduling/generated/fixture/fixture.schema.json",
+            "products/scheduling/generated/runtime/runtime.schema.json",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(Path(path).is_file())
+                self.assertTrue(classify(self.workspace, (path,))["docs"])
+
+    def test_config_format_registry_change_runs_docs(self) -> None:
+        """The docs configuration files page is generated from the registry."""
+        path = "products/platform/config-formats.yaml"
+        self.assertTrue(Path(path).is_file())
+        self.assertTrue(classify(self.workspace, (path,))["docs"])
+
+    def test_every_published_openapi_description_runs_docs(self) -> None:
+        """Whatever description the site fetches, a change to it rebuilds the docs."""
+        fetcher = Path("docs/site/scripts/fetch-openapi.mjs").read_text(
+            encoding="utf-8"
+        )
+        sources = set(
+            re.findall(r"^  '[\w-]+': '([^']+\.openapi\.json)',$", fetcher, re.MULTILINE)
+        )
+        self.assertIn(
+            "products/scheduling/generated/registry-scheduling.openapi.json", sources
+        )
+        for path in sorted(sources):
+            with self.subTest(path=path):
+                self.assertTrue(Path(path).is_file())
+                self.assertTrue(classify(self.workspace, (path,))["docs"])
+
+    def test_client_capability_inventory_change_runs_docs(self) -> None:
+        """The docs client capabilities page imports this inventory at build."""
+        path = "products/breg/contracts/client-capabilities.json"
+        self.assertTrue(Path(path).is_file())
+        self.assertTrue(classify(self.workspace, (path,))["docs"])
+
+    def test_scheduling_and_render_command_changes_select_docs(self) -> None:
+        """The generated CLI pages publish these Clap trees with the others."""
+        for path in (
+            "crates/registry-cli-reference/src/lib.rs",
+            "crates/registry-render/src/cli.rs",
+            "crates/registry-render/src/check.rs",
+            "crates/registry-scheduling/src/runtime.rs",
+            "crates/registry-schedulingctl/src/lib.rs",
+            "crates/registry-schedulingctl/src/main.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(Path(path).is_file())
+                self.assertTrue(classify(self.workspace, (path,))["docs"])
+
+    def test_files_the_docs_suite_holds_pages_against_run_docs(self) -> None:
+        """The docs script tests read these files beside the pages they check."""
+        for path in (
+            "crates/registry-linkml/publicschema/PIN.yaml",
+            "crates/registry-platform-httputil/src/destination.rs",
+            "docker/compose/README.md",
+            "docker/compose/docker-compose.yaml",
+            "docker/compose/runtime.docker.yaml",
+            "products/manifest/CHANGELOG.md",
+            "release/exercises/README.md",
+            "release/manifests/registry-stack-beta-51.yaml",
+            "release/notes/v0.39.0.md",
+            "release/openssf-best-practices-silver.yaml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(Path(path).is_file())
+                self.assertTrue(classify(self.workspace, (path,))["docs"])
+
     def test_evidence_authoring_schema_change_runs_docs(self) -> None:
         """The same page publishes the authoring form beside the frozen ones."""
         for path in (
@@ -3266,6 +3338,56 @@ class DocsInstallRetryTest(unittest.TestCase):
                 status, calls = self.install_calls(step["run"], refusals=2)
                 self.assertNotEqual(status, 0)
                 self.assertEqual(calls, ["npm ci", "sleep 30", "npm ci"])
+
+
+class PinnedYamlTestStepTest(unittest.TestCase):
+    """Hold every ci.yml test module that reads YAML to the pinned PyYAML."""
+
+    PINNED = "uv run --no-project --with PyYAML==6.0.2 python"
+    SETUP_UV = "astral-sh/setup-uv@"
+    TEST_MODULE = re.compile(r"[\w./-]*\btest_\w+\.py\b")
+    YAML_IMPORT = re.compile(r"^\s*import yaml\b", re.MULTILINE)
+
+    @classmethod
+    def reads_yaml(cls, module: Path) -> bool:
+        """Whether the module, or a file beside it that it names, imports yaml."""
+        text = module.read_text()
+        named = (
+            sibling
+            for sibling in sorted(module.parent.iterdir())
+            if sibling.is_file()
+            and sibling != module
+            and (
+                sibling.name in text
+                or (
+                    sibling.suffix == ".py"
+                    and re.search(rf"\b{re.escape(sibling.stem)}\b", text)
+                )
+            )
+        )
+        return any(
+            cls.YAML_IMPORT.search(candidate.read_text(errors="replace"))
+            for candidate in (module, *named)
+        )
+
+    def test_a_test_module_that_reads_yaml_runs_with_the_pinned_pyyaml(self) -> None:
+        workflow = yaml.safe_load(Path(".github/workflows/ci.yml").read_text())
+        held = 0
+        for job_name, job in workflow["jobs"].items():
+            uv_installed = False
+            for step in job.get("steps", ()):
+                uv_installed = uv_installed or self.SETUP_UV in step.get("uses", "")
+                command = step.get("run", "")
+                for module in map(Path, self.TEST_MODULE.findall(command)):
+                    if not module.is_file() or not self.reads_yaml(module):
+                        continue
+                    held += 1
+                    with self.subTest(job=job_name, module=module.as_posix()):
+                        self.assertIn(self.PINNED, command)
+                        self.assertTrue(
+                            uv_installed, "Install uv must come before this step"
+                        )
+        self.assertGreater(held, 0)
 
 
 if __name__ == "__main__":

@@ -399,7 +399,7 @@ pub(crate) fn module_access_findings(
 /// The members of a profile that decide which tokens may select it.
 struct TokenGates<'a> {
     actor_kind: Option<ActorKindSource>,
-    principal_claim: Option<&'a str>,
+    principal_claim: &'a str,
     required_purposes: &'a BTreeSet<String>,
     requester_clients: &'a BTreeSet<String>,
     task_grant: bool,
@@ -409,7 +409,7 @@ impl<'a> From<&'a ProjectAccessProfileSource> for TokenGates<'a> {
     fn from(profile: &'a ProjectAccessProfileSource) -> Self {
         Self {
             actor_kind: profile.actor_kind,
-            principal_claim: profile.principal_claim.as_deref(),
+            principal_claim: &profile.principal_claim,
             required_purposes: &profile.required_purposes,
             requester_clients: &profile.requester_clients,
             task_grant: profile.task_grant.is_some(),
@@ -421,7 +421,7 @@ impl<'a> From<&'a AccessProfileSource> for TokenGates<'a> {
     fn from(profile: &'a AccessProfileSource) -> Self {
         Self {
             actor_kind: profile.actor_kind,
-            principal_claim: profile.principal_claim.as_deref(),
+            principal_claim: &profile.principal_claim,
             required_purposes: &profile.required_purposes,
             requester_clients: &profile.requester_clients,
             task_grant: profile.task_grant.is_some(),
@@ -610,7 +610,7 @@ pub struct ConsentClientExplanation {
 #[serde(rename_all = "camelCase")]
 pub struct ConsentRecordExplanation {
     pub entity: String,
-    pub max_duration: String,
+    pub maximum_duration_days: u32,
     pub gives: Vec<String>,
     pub revokes: Vec<String>,
     pub refusals: Vec<String>,
@@ -629,7 +629,7 @@ pub struct GatedPermissionExplanation {
     pub condition: String,
     pub purposes: Vec<String>,
     pub scope: String,
-    pub max_duration: String,
+    pub maximum_duration_days: u32,
     pub probe_function: String,
     pub indexes: Vec<String>,
     pub readable_fields: Vec<ReadableFieldExplanation>,
@@ -894,7 +894,7 @@ fn explain_consent(registry: &CompiledRegistry) -> Option<ConsentExplanation> {
             let record = entity.consent_record.as_ref()?;
             Some(ConsentRecordExplanation {
                 entity: entity.id.clone(),
-                max_duration: record.max_duration.iso.clone(),
+                maximum_duration_days: record.maximum_duration_days,
                 gives: record.gives.iter().cloned().collect(),
                 revokes: record.revokes.iter().cloned().collect(),
                 refusals: record.refusals.iter().cloned().collect(),
@@ -937,7 +937,12 @@ fn explain_consent(registry: &CompiledRegistry) -> Option<ConsentExplanation> {
                     .iter()
                     .cloned()
                     .collect::<Vec<_>>();
-                let max_duration = record.max_duration.iso.clone();
+                let maximum_duration_days = record.maximum_duration_days;
+                let days = if maximum_duration_days == 1 {
+                    "day"
+                } else {
+                    "days"
+                };
                 permissions.push(GatedPermissionExplanation {
                     entity: entity.id.clone(),
                     profile: profile.id.clone(),
@@ -948,7 +953,7 @@ fn explain_consent(registry: &CompiledRegistry) -> Option<ConsentExplanation> {
                     record: requirement.record.clone(),
                     on: requirement.on.clone(),
                     condition: format!(
-                        "each `{}` row is disclosed only while `{}` holds a {} decision whose subject is the row's `{}`, whose recipient is in the caller's recipient set, whose purpose is the request purpose and whose scope is `{}`; the decision must have started, must not have passed its until or {max_duration} after it was given, and no later revoke for the same subject, recipient, purpose and scope may supersede it",
+                        "each `{}` row is disclosed only while `{}` holds a {} decision whose subject is the row's `{}`, whose recipient is in the caller's recipient set, whose purpose is the request purpose and whose scope is `{}`; the decision must have started, must not have passed its until or {maximum_duration_days} {days} after it was given, and no later revoke for the same subject, recipient, purpose and scope may supersede it",
                         entity.id,
                         requirement.record,
                         record
@@ -962,7 +967,7 @@ fn explain_consent(registry: &CompiledRegistry) -> Option<ConsentExplanation> {
                     ),
                     purposes,
                     scope: profile.id.clone(),
-                    max_duration,
+                    maximum_duration_days,
                     probe_function: crate::consent::function_name(&entity.id, &profile.id, index),
                     indexes: index_names(record_entity),
                     readable_fields: profile

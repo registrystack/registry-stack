@@ -2,10 +2,10 @@
 
 //! Pins the generated DDL and compiled revision of every authored fixture
 //! that declares no consent record. Row-probe policies are one builder shared
-//! by membership and consent boundaries; a project that declares no consent
-//! must keep the exact SQL and revision it compiled to before that builder
-//! existed. A deliberate DDL or artifact change updates these digests in the
-//! same commit that explains it.
+//! by membership and consent boundaries, so a change to that builder must not
+//! move the SQL or revision of a project that declares no consent. A
+//! deliberate DDL or artifact change updates these digests in the same commit
+//! that explains it.
 
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
@@ -28,7 +28,7 @@ const FIXTURES: &[Fixture] = &[
         ),
         module: None,
         ddl_sha256: "33dd380479e2c45354d1bd601f9eb6d9a9bca907bc90be8fd25236f675a7699e",
-        revision: "sha256:75e462b2ff92591c1bb88d6e6f928932ebf54fe1e116eb81502924d9d8e7d5d1",
+        revision: "sha256:77ce2e8b1e635b74608ca276480ce079577a722405bce6075a7753c61d4ea44d",
     },
     Fixture {
         name: "asset-registration-actions",
@@ -38,8 +38,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
-        ddl_sha256: "aecd19165df9a20532616537f3e407bcd279b06d99d57c26aad1b4cd35f4d884",
-        revision: "sha256:ae86bc2052c3d64b79ca55cf8c5afe6684c3da2e3701dd4080eef153a2ce3f71",
+        ddl_sha256: "4c890f2db3f02fd4d686bd4affd8900cf0374ecfc78f020042b53c12cd748d06",
+        revision: "sha256:b0a8ab3887fad800767155cfe02a99bc5eb6287baf494f3bf8852358fdc33dd1",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -49,8 +49,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
-        ddl_sha256: "9bfd5199cc4b3e088eb1ca038a4cf107257412e7baea03c1bd2c077ed62c1587",
-        revision: "sha256:2de0a7d6055ac926ac022d5f930425f2322a1e0fea9217017b36c0ec1a4f0321",
+        ddl_sha256: "9bed3098641136e121665725ced8d58dc69b7f60692068e6000e6599e268636f",
+        revision: "sha256:0e28782296d94c2be855dd49c9c2170ac1aa438c358ab0a98c76dcc9a8a291f0",
     },
     Fixture {
         name: "household-contact-actions",
@@ -60,8 +60,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
-        ddl_sha256: "c34618ef0c2050aa34f76de318fae87433beec9b71d89c0d371b0c0e301e8b28",
-        revision: "sha256:72dd24db3ce2c3c2b20efabcddfcf74deb00e7d41ee53ed5a2d50ad50fa4face",
+        ddl_sha256: "106449513ed214ebb719db8bed6a4e992896c861a220a7f7fbdfcf8656b8ee87",
+        revision: "sha256:dabe618531b357e17d39cc943dd1914dc11feab492796826fc92e3a64e2d7f52",
     },
 ];
 
@@ -100,8 +100,10 @@ fn fixtures_without_consent_keep_their_exact_ddl_and_revision() {
 }
 
 /// Idempotent retries match a stored request against its action's contract
-/// fingerprint, so an engine upgrade that leaves a project unchanged must
-/// leave every action fingerprint unchanged too.
+/// fingerprint. These values are regression pins over the committed fixture
+/// projects: a change that moves one orphans the retries stored under the
+/// earlier value, so it is deliberate and updates the pin in the same commit
+/// that explains it.
 #[test]
 fn fixtures_keep_their_action_contract_fingerprints() {
     let mut fingerprints = Vec::new();
@@ -117,10 +119,10 @@ fn fixtures_keep_their_action_contract_fingerprints() {
 }
 
 const ACTION_FINGERPRINTS: &[&str] = &[
-    "asset-registration-actions/register-asset-with-inspection: sha256:3fa3f521dc91b83863d5afb93827fc6a85594d4af74b586afecd748a017402e1",
-    "facility-registry-actions/register-facility: sha256:14179e571a8c08e1fb368972534e29143f084d2e858eafa4542963cb0da7fff8",
-    "facility-registry-actions/transfer-facility: sha256:19df2b5b87d517e25815420acd0c3f8207575a2c48776eb451f62a2cd250c011",
-    "household-contact-actions/register-household-contact: sha256:121d47d280e477162d48a4c41d4db80d1778c1a6ab2252c8bf638deae997caab",
+    "asset-registration-actions/register-asset-with-inspection: sha256:e9bd42c7373430e6fe13d5d0a8a0cfa46fb77d05728e635610d1deb230668359",
+    "facility-registry-actions/register-facility: sha256:a0433e560dbf1874c2b7fc74a1ee25c71e5604d0b7b527b717559febe5be850e",
+    "facility-registry-actions/transfer-facility: sha256:1bf7d19ae85b660bed9f833e6f3f15fb97228a8ee97070416e9b55fcfaedab9b",
+    "household-contact-actions/register-household-contact: sha256:4c9055ac68dfe2b745f75b2e538c277ed19ed2ae83b4f84c3f91fedb4812ad3e",
 ];
 
 struct RequestFixture {
@@ -188,9 +190,10 @@ const REQUEST_FIXTURES: &[RequestFixture] = &[
 
 /// A submitted proposal is bound to its request type's contract fingerprint,
 /// and a successor package activates only while every submitted proposal still
-/// matches. These values are the ones the previous release compiled the same
-/// projects to, so an engine upgrade that leaves a project unchanged must leave
-/// every request fingerprint unchanged too.
+/// matches. These values are regression pins over the committed fixture
+/// projects: a change that moves one blocks activation over the proposals
+/// submitted under the earlier value, so it is deliberate and updates the pin
+/// in the same commit that explains it.
 #[test]
 fn fixtures_keep_their_change_request_contract_fingerprints() {
     let mut fingerprints = Vec::new();
@@ -226,8 +229,8 @@ fn fixtures_keep_their_change_request_contract_fingerprints() {
 }
 
 const CHANGE_REQUEST_FINGERPRINTS: &[&str] = &[
-    "asset-site-placement-change-requests/placement-correction-request: sha256:e95a1e3b26ecc0f7f816bc62772c54bba9fa136bfbc367ef72f4cf2486a54003",
-    "person-name-change-rhai/person-name-change-request: sha256:141d45ada88aa8347bff812ebdeb6ac4bb45dd9aac3a4e9599119b6a4c3f4b61",
-    "publicschema-household-change-requests/register-household-contact-request: sha256:652ae970f524cb0b2eea0d1368b6ccbd77a956009906cb5fb52ebd2f4af2ee0a",
-    "request-attachments/correction-request: sha256:107cdf2dca9efad8858e6ec6541b5daacd2f7615256850279ca38105158aa761",
+    "asset-site-placement-change-requests/placement-correction-request: sha256:f5d7d62a27d58b0b4809ec330aace7300dde6a5c0300e825fc5576cd93b116be",
+    "person-name-change-rhai/person-name-change-request: sha256:6a5c03890d429b98d9e88fd75ad03cefc09d93031fff6d368264f5525f56075e",
+    "publicschema-household-change-requests/register-household-contact-request: sha256:455d7c75edc8e328c02a2c8148993de203e1f852b00f3f9905fc7019b188ba15",
+    "request-attachments/correction-request: sha256:cb3b2bf47b4120c6b794da09cde9e40fcba7e23b1327ceaad88cd641c3f033f4",
 ];

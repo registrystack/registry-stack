@@ -382,11 +382,11 @@ process opens no metrics socket and the delivery listener still has no `/metrics
 
 The request labels are closed to the registered routes plus `unmatched`, the methods `GET`,
 `POST`, `HEAD`, `OPTIONS`, and `other`, three status classes, and the protocol's fixed problem
-classes. The complete outcome vocabulary is `offer_created`, `offer_authorization_refused`,
-`store_saturated`, `code_redeemed`, `code_claim_refused`, `token_claimed`,
-`token_claim_refused`, `nonce_minted`, `nonce_invalid`, `nonce_tampered`, `nonce_expired`,
-`proof_refused`, `credential_issued`, `evidence_refused`, `evidence_not_available`,
-`evidence_unavailable`, `store_fault`, and `cleanup_expired`. These labels contain no request-derived or
+classes. The complete outcome vocabulary is `offer-created`, `offer-authorization-refused`,
+`store-saturated`, `code-redeemed`, `code-claim-refused`, `token-claimed`,
+`token-claim-refused`, `nonce-minted`, `nonce-invalid`, `nonce-tampered`, `nonce-expired`,
+`proof-refused`, `credential-issued`, `evidence-refused`, `evidence-not-available`,
+`evidence-unavailable`, `store-fault`, and `cleanup-expired`. These labels contain no request-derived or
 deployment-specific identifier.
 
 Structured request logs use the same closed route, method, status, and problem classes. Logs and

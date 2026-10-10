@@ -12,7 +12,7 @@ review decision.
 
 `scripts/person-name-change.rhai` trims the supplied name parts and joins them
 with a single space. Submission freezes the complete proposal. The selected
-`name-change-submitter` profile has `apply_request` plus the matching
+`name-change-submitter` profile has `apply-request` plus the matching
 `applyTargets` grant, so a separate manual application can later apply those
 frozen effects without rerunning the planner.
 

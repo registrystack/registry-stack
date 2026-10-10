@@ -1,4 +1,4 @@
-apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: /tmp/registry-evidence-local/bundle
@@ -13,7 +13,7 @@ listener:
 secretProviders:
   file: {root: /tmp/registry-evidence-local/secrets}
 signer:
-  kind: local-jwk
+  type: local-jwk
   privateKeyRef: secret:file/evidence-signing
 audit: {path: /tmp/registry-evidence-local/audit/evidence.jsonl}
 outboundTls: {systemRoots: true, trustProfiles: {}}

@@ -35,10 +35,10 @@ fn write_project(root: &Path, fixture_paths: &[&str]) -> PathBuf {
     let mut requirements = String::new();
     for (index, fixture_path) in fixture_paths.iter().enumerate() {
         requirements.push_str(&format!(
-            "  - id: urn:example:fixture:requirement:{index}\n    fixtures: {fixture_path}\n"
+            "  - uri: urn:example:fixture:requirement:{index}\n    fixtures: {fixture_path}\n"
         ));
     }
-    let evidence_yaml = format!("version: 1\nrequirements:\n{requirements}");
+    let evidence_yaml = format!("apiVersion: id.registrystack.org/formats/evidence/bundle/v1\nkind: EvidenceBundle\nrequirements:\n{requirements}");
     fs::write(project.join("bundle").join("evidence.yaml"), evidence_yaml)
         .expect("write bundle evidence.yaml");
     project
@@ -1093,7 +1093,7 @@ fn fixtures_are_discovered_at_a_relative_package_root_named_in_runtime_yaml() {
     .expect("write runtime.yaml");
     fs::write(
         project.join("custom-bundle").join("evidence.yaml"),
-        "version: 1\nrequirements:\n  - id: urn:example:fixture:requirement:0\n    fixtures: fixtures/a.yaml\n",
+        "apiVersion: id.registrystack.org/formats/evidence/bundle/v1\nkind: EvidenceBundle\nrequirements:\n  - uri: urn:example:fixture:requirement:0\n    fixtures: fixtures/a.yaml\n",
     )
     .expect("write bundle evidence.yaml");
 
@@ -1132,7 +1132,7 @@ fn fixtures_are_discovered_at_an_absolute_package_root_named_in_runtime_yaml() {
     fs::write(project.join("runtime.yaml"), runtime_yaml).expect("write runtime.yaml");
     fs::write(
         bundle_directory.join("evidence.yaml"),
-        "version: 1\nrequirements:\n  - id: urn:example:fixture:requirement:0\n    fixtures: fixtures/a.yaml\n",
+        "apiVersion: id.registrystack.org/formats/evidence/bundle/v1\nkind: EvidenceBundle\nrequirements:\n  - uri: urn:example:fixture:requirement:0\n    fixtures: fixtures/a.yaml\n",
     )
     .expect("write bundle evidence.yaml");
 

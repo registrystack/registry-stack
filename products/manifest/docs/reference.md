@@ -430,8 +430,8 @@ the canonical inline policy.
 | `source_basis` | Yes | Object describing the evidence pack's source basis. |
 | `semantic_profile` | Yes | Object describing the evidence pack's semantic profile. |
 | `evidence_envelope` | Yes | Object describing the evidence pack's evidence envelope shape. |
-| `required_gates` | Yes | Must include all of: `purpose`, `jurisdiction`, `legal_basis`, `consent`, `authority_basis`, `requester_identity`, `subject_identity`, `subject_relationship`, `assurance`, `source_binding`, `source_freshness`, `requested_disclosure`, `credential_format`, `route_scope`. |
-| `allowed_outputs` | Yes | Must include `minimized_json`, currently the only supported output value. |
+| `required_gates` | Yes | Must include all of: `purpose`, `jurisdiction`, `legal-basis`, `consent`, `authority-basis`, `requester-identity`, `subject-identity`, `subject-relationship`, `assurance`, `source-binding`, `source-freshness`, `requested-disclosure`, `credential-format`, `route-scope`. |
+| `allowed_outputs` | Yes | Must include `minimized-json`, currently the only supported output value. |
 | `policy_id` | Yes | Policy identifier. |
 | `policy_version` | No | Policy version string. |
 | `policy_hash` | Yes | Digest of the canonical inline policy, formatted `sha256:<64 lowercase hex>`. Must match the digest of `policy` when `policy` is present. |

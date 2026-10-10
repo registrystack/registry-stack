@@ -394,19 +394,19 @@ fn quote_identifier(value: &str) -> String {
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"statistics-catalog","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"statistics-catalog","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test"},
           "entities":[{
             "id":"entry","primaryDataset":"statistics-catalog","route":"entries",
             "mutationMode":"mutable","classification":"internal",
-            "fields":[{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"code","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           }],
           "accessProfiles":[{
             "id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"entry","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )

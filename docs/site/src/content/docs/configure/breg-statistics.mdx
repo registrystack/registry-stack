@@ -33,23 +33,27 @@ statisticalDatasets:
     disclosure: {minimumCount: 5, roundingBase: 5}
 ```
 
-The dataset names no profile. Grant it in each access profile's `permissions`, beside the profile's record grants, so one profile review shows everything the profile reaches:
+The dataset names no profile. Grant it under `permissions.datasets` in each access profile, beside the record grants the profile holds under `permissions.entities`, so one profile review shows everything the profile reaches:
 
 ```yaml
 accessProfiles:
   - id: facility-operator
-    # principalClaim, requiredScopes, and the record permissions
+    # principalClaim and requiredScopes
     permissions:
-      - dataset: monthly-discharge-reports
-        operations: [read-live, read-releases]
+      # entities, with the record permissions
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations: [read-live, read-releases]
   - id: statistics-publisher
     permissions:
-      - dataset: monthly-discharge-reports
-        operations: [publish, read-releases]
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations: [publish, read-releases]
   - id: statistics-reader
     permissions:
-      - dataset: monthly-discharge-reports
-        operations: [read-releases]
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations: [read-releases]
 ```
 
 A dataset permission holds `dataset` and `operations` only. `read-live` reads exact live counts, `publish` publishes and withdraws releases, and `read-releases` reads released documents. Exactly one profile may hold `publish` on a dataset. When a dataset has a publisher, the publisher and every `read-live` profile also write `read-releases`, because the release routes serve them; `bregctl check` refuses the project otherwise and names the profile. `read-releases` on a dataset nobody publishes is refused the same way.

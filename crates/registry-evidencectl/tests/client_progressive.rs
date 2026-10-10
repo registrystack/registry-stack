@@ -33,10 +33,11 @@ fn profile_create_writes_the_strict_https_default_as_an_owner_only_file() {
     assert_eq!(
         profile,
         json!({
-            "schema": "registry.evidence-client-profile/v1",
+            "apiVersion": "id.registrystack.org/formats/evidence/client-profile/v1",
+            "kind": "EvidenceClientProfile",
             "baseUrl": "https://evidence.example.test",
             "clientId": "relying-party",
-            "privateKey": {"source": "file", "path": "keys/client-private.jwk"},
+            "privateKey": {"type": "file", "path": "keys/client-private.jwk"},
             "trust": {"type": "https-discovery"},
             "contracts": {"type": "published"},
             "verification": {
@@ -74,7 +75,7 @@ fn local_loopback_and_environment_keys_are_explicit() {
     let profile: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
     assert_eq!(
         profile["privateKey"],
-        json!({"source": "environment", "variable": "EVIDENCE_CLIENT_PRIVATE_JWK"})
+        json!({"type": "environment", "variable": "EVIDENCE_CLIENT_PRIVATE_JWK"})
     );
     assert_eq!(
         profile["trust"],
@@ -244,7 +245,7 @@ fn unsafe_profile_permissions_fail_before_network_or_artifact_creation() {
     let profile = directory.path().join("client.json");
     fs::write(
         &profile,
-        br#"{"schema":"registry.evidence-client-profile/v1","baseUrl":"https://evidence.example.test/","clientId":"client","privateKey":{"source":"environment","variable":"EVIDENCE_KEY"},"trust":{"type":"https-discovery"},"contracts":{"type":"published"},"verification":{"maximumAssertionLifetimeSeconds":300,"clockSkewSeconds":30}}"#,
+        br#"{"apiVersion":"id.registrystack.org/formats/evidence/client-profile/v1","kind":"EvidenceClientProfile","baseUrl":"https://evidence.example.test/","clientId":"client","privateKey":{"type":"environment","variable":"EVIDENCE_KEY"},"trust":{"type":"https-discovery"},"contracts":{"type":"published"},"verification":{"maximumAssertionLifetimeSeconds":300,"clockSkewSeconds":30}}"#,
     )
     .unwrap();
     fs::set_permissions(&profile, fs::Permissions::from_mode(0o644)).unwrap();

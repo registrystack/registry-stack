@@ -31,7 +31,7 @@ test('a Base Registry Engine registry.yaml declares a project root', () => {
   const directory = tempDirectory();
   fs.writeFileSync(
     path.join(directory, 'registry.yaml'),
-    'apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry:\n  id: business\n',
+    'apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: business\n',
   );
   assert.strictEqual(isProjectRoot(directory), true);
 });
@@ -81,7 +81,7 @@ test('a Base Registry Engine registry.yaml beside an Evidence marker declares a 
   const directory = tempDirectory();
   fs.writeFileSync(
     path.join(directory, 'registry.yaml'),
-    'apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\n',
+    'apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\n',
   );
   fs.writeFileSync(path.join(directory, 'evidence-project.yaml'), 'version: 1\n');
   assert.strictEqual(isProjectRoot(directory), true);
@@ -127,10 +127,10 @@ test('a symlinked questions directory does not declare a project root', () => {
 
 
 for (const [file, content] of [
-  ['casework.yaml', 'kind: CaseworkProject\n'],
+  ['casework.yaml', 'apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\n'],
   ['scheduling.yaml', 'apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\n'],
   ['messaging.yaml', 'kind: MessagingProject\n'],
-  ['origins.yaml', 'schemaVersion: registry-discovery/origins/v1alpha1\n'],
+  ['origins.yaml', 'apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\n'],
   ['manifest.yaml', 'apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\n'],
   ['metadata.yaml', 'schema_version: registry-manifest/v1\n'],
 ]) {

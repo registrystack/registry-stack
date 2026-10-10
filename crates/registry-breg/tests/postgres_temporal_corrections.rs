@@ -266,22 +266,22 @@ async fn real_postgres_temporal_correction_batches_validate_only_completed_inter
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"temporal-corrections","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"temporal-corrections","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
             "batch":{"maximumItems":4,"maximumBytes":16384},
             "fields":[
-              {"id":"subject","type":"string","maxLength":96,"required":true,"classification":"internal"},
+              {"id":"subject","type":"string","maximumLength":96,"required":true,"classification":"internal"},
               {"id":"group","type":"vocabulary-code","vocabulary":"membership-group","required":true,"classification":"internal"},
               {"id":"valid-from","type":"date","required":true,"classification":"internal"},
               {"id":"valid-to","type":"date","classification":"internal"},
-              {"id":"source-reference","type":"string","maxLength":120,"classification":"restricted"}
+              {"id":"source-reference","type":"string","maximumLength":120,"classification":"restricted"}
             ],
             "temporal":{"startField":"valid-from","endField":"valid-to"},
             "constraints":[{
-              "kind":"temporal-non-overlap",
+              "type":"temporal-non-overlap",
               "scopeFields":["subject"],
               "startField":"valid-from",
               "endField":"valid-to"
@@ -294,12 +294,12 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredPurposes":["history-maintenance"],"requiredScopes":["history-maintain"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"membership","operations":["create","get","patch","batch"],
               "readableFields":["subject","group","valid-from","valid-to"],
               "writableFields":["subject","group","valid-from","valid-to","source-reference"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }],
           "vocabularies":[{"id":"membership-group","values":["A","B"]}]
         }"#,

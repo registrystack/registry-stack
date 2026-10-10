@@ -1,10 +1,11 @@
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+kind: EvidenceBundle
 assuranceProfile: evidence-grade
 service:
   providerId: urn:example:fixture:provider:selector-conformance
   publicOrigin: https://evidence.invalid
   trustDomain: urn:example:fixture:trust-domain:selector-conformance
-issuer: {id: urn:example:fixture:issuer:selector-conformance}
+issuer: {uri: urn:example:fixture:issuer:selector-conformance}
 authentication:
   oidc:
     issuer: https://identity.invalid
@@ -13,11 +14,12 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [ES256]
     jwksSource:
-      kind: uri
+      type: uri
       uri: https://identity.invalid/.well-known/jwks.json
     principalClaim: sub
     requesterTagsClaim: evidence_tags
     evidenceAudienceClaim: evidence_audience
+    requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
 audit:
@@ -67,10 +69,10 @@ selectorProfiles:
       kappa: {type: controlled-code, codelist: codelists/opaque-codes.yaml, codelistVersion: '1', maximumBytes: 16}
 sources:
   classification-source:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-token}
     request:
       method: POST
       path: /v1/selector-facts
@@ -85,17 +87,17 @@ sources:
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/matched]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/response.schema.yaml
     extractScript: adapters/classification-source.rhai
     factSchema: schemas/facts.schema.yaml
   context-source:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-token}
     request:
       method: POST
       path: /v1/selector-facts
@@ -110,17 +112,17 @@ sources:
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/matched]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/response.schema.yaml
     extractScript: adapters/context-source.rhai
     factSchema: schemas/facts.schema.yaml
   grant-source:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-token}
     request:
       method: POST
       path: /v1/selector-facts
@@ -135,17 +137,17 @@ sources:
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/matched]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/response.schema.yaml
     extractScript: adapters/grant-source.rhai
     factSchema: schemas/facts.schema.yaml
   relationship-source:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-token}
     request:
       method: POST
       path: /v1/selector-facts
@@ -165,17 +167,17 @@ sources:
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 24, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/matched]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/response.schema.yaml
     extractScript: adapters/relationship-source.rhai
     factSchema: schemas/facts.schema.yaml
   opaque-source:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-token}
     request:
       method: POST
       path: /v1/selector-facts
@@ -190,9 +192,9 @@ sources:
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/matched]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/response.schema.yaml
     extractScript: adapters/opaque-source.rhai
     factSchema: schemas/facts.schema.yaml
@@ -268,10 +270,10 @@ authorityProfiles:
           - {role: subject-b, selectorProfile: demographics-with-event-v1, valueOrigin: request}
 requirements:
   - handle: classification
-    id: urn:example:fixture:requirement:classification:v1
+    uri: urn:example:fixture:requirement:classification:v1
     kind: criterion
     acquisition:
-      kind: single
+      type: single
       source: classification-source
     purposes: [fixture-procedure]
     subjectRoles:
@@ -281,15 +283,15 @@ requirements:
     validitySeconds: 300
     derivation: {script: derivations/classification.rhai, parameters: {}}
     concepts:
-      - {handle: classification, id: urn:example:fixture:concept:classification, form: boolean, required: true, constraints: {}}
+      - {handle: classification, uri: urn:example:fixture:concept:classification, type: boolean, required: true, constraints: {}}
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:classification]}
     existenceDisclosure: collapse-unresolved
   - handle: property
-    id: urn:example:fixture:requirement:property:v1
+    uri: urn:example:fixture:requirement:property:v1
     kind: information-requirement
     acquisition:
-      kind: single
+      type: single
       source: context-source
     purposes: [fixture-procedure]
     subjectRoles:
@@ -299,15 +301,15 @@ requirements:
     validitySeconds: 300
     derivation: {script: derivations/property.rhai, parameters: {}}
     concepts:
-      - {handle: property, id: urn:example:fixture:concept:property, form: boolean, required: true, constraints: {}}
+      - {handle: property, uri: urn:example:fixture:concept:property, type: boolean, required: true, constraints: {}}
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:property]}
     existenceDisclosure: collapse-unresolved
   - handle: property-with-event
-    id: urn:example:fixture:requirement:property-with-event:v1
+    uri: urn:example:fixture:requirement:property-with-event:v1
     kind: information-requirement
     acquisition:
-      kind: single
+      type: single
       source: grant-source
     purposes: [fixture-procedure]
     subjectRoles:
@@ -317,15 +319,15 @@ requirements:
     validitySeconds: 300
     derivation: {script: derivations/property-with-event.rhai, parameters: {}}
     concepts:
-      - {handle: property-with-event, id: urn:example:fixture:concept:property-with-event, form: boolean, required: true, constraints: {}}
+      - {handle: property-with-event, uri: urn:example:fixture:concept:property-with-event, type: boolean, required: true, constraints: {}}
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:property-with-event]}
     existenceDisclosure: collapse-unresolved
   - handle: relationship
-    id: urn:example:fixture:requirement:relationship:v1
+    uri: urn:example:fixture:requirement:relationship:v1
     kind: criterion
     acquisition:
-      kind: single
+      type: single
       source: relationship-source
     purposes: [fixture-procedure]
     subjectRoles:
@@ -336,15 +338,15 @@ requirements:
     validitySeconds: 300
     derivation: {script: derivations/relationship.rhai, parameters: {}}
     concepts:
-      - {handle: relationship, id: urn:example:fixture:concept:relationship, form: boolean, required: true, constraints: {}}
+      - {handle: relationship, uri: urn:example:fixture:concept:relationship, type: boolean, required: true, constraints: {}}
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:relationship]}
     existenceDisclosure: collapse-unresolved
   - handle: opaque
-    id: urn:example:fixture:requirement:opaque:v1
+    uri: urn:example:fixture:requirement:opaque:v1
     kind: information-requirement
     acquisition:
-      kind: single
+      type: single
       source: opaque-source
     purposes: [fixture-procedure]
     subjectRoles:
@@ -354,7 +356,7 @@ requirements:
     validitySeconds: 300
     derivation: {script: derivations/opaque.rhai, parameters: {}}
     concepts:
-      - {handle: opaque, id: urn:example:fixture:concept:opaque, form: boolean, required: true, constraints: {}}
+      - {handle: opaque, uri: urn:example:fixture:concept:opaque, type: boolean, required: true, constraints: {}}
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:opaque]}
     existenceDisclosure: collapse-unresolved

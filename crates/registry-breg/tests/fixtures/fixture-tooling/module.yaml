@@ -1,2 +1,4 @@
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: fixture-core
 version: 1.0.0

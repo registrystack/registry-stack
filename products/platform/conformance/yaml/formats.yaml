@@ -6,6 +6,10 @@ formats:
   breg/module:
     project: products/breg/examples/minimal
     init: {command: "bregctl init {directory}", file: modules/record-notes/module.yaml}
+    removedKeys:
+      - /entities/0/hooks/0/handler/kind
+      - /extendEntities/0/hooks/0/handler/kind
+      - /actions/0/handler/kind
   # Journeys are checked against the project whose routes they call, and a
   # reviewed migration file at its place in the project tree.
   breg/journeys:
@@ -23,6 +27,7 @@ formats:
       - /registry/requestTimeoutMilliseconds
       - /limits/maxRequestBodyBytes
       - /audit/retainDays
+      - /resourceServer/jwksSource/kind
     retiredApiVersions:
       - registry.registrystack.org/breg-mcp-runtime/v1alpha1
   breg/review-runtime:
@@ -54,6 +59,18 @@ formats:
     removedKeys:
       - /version
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: dev-clients.yaml}
+  casework/runtime:
+    retiredApiVersions:
+      - registry.registrystack.org/casework-runtime/v1alpha1
+    removedKeys:
+      - /authentication/oidc/jwksUri
+      - /authentication/oidc/jwksSource/kind
+      - /authentication/oidc/principalClaim
+      - /audit/retainDays
+      - /reviewCompletionDestinations/payment-results/timeoutMilliseconds
+      - /reviewCompletionDestinations/payment-results/retrySeconds
+      - /package/expectedPolicyDigest
+    init: {command: "caseworkctl init --template standalone-decision {directory}", file: runtime.example.yaml}
 
   # The retired apiVersions and renamed keys each Scheduling reader refuses by
   # name.
@@ -83,6 +100,7 @@ formats:
       - /retention/attemptReceiptDays
       - /retention/hookPayloadDays
       - /authentication/oidc/jwksUri
+      - /authentication/oidc/jwksSource/kind
     init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: runtime.example.yaml}
 
   # The removed keys and the retired apiVersion the Messaging authoring
@@ -110,6 +128,7 @@ formats:
     project: products/messaging/examples/starter
     removedKeys:
       - /authentication/oidc/jwksUri
+      - /authentication/oidc/jwksSource/kind
       - /providers/sms-gateway/attemptTimeoutSeconds
       - /providers/sms-gateway/timeoutMilliseconds
       - /providers/sms-gateway/concurrencyLimit
@@ -124,14 +143,24 @@ formats:
       - registry.registrystack.org/messaging-runtime/v1alpha1
     init: {command: "messagingctl init {directory}", file: runtime.example.yaml}
 
+  # The header key the origins and mapping readers refuse by name.
+  discovery/origins:
+    removedKeys:
+      - /schemaVersion
   discovery/evidence-mapping:
     project: products/discovery/fixtures/project
+    removedKeys:
+      - /schemaVersion
   # The keys the Discovery runtime loader refuses by name.
   discovery/runtime:
     removedKeys:
       - /schemaVersion
       - /listener/address
       - /indexPath
+      - /limits/requestTimeoutSeconds
+      - /limits/shutdownTimeoutSeconds
+    retiredApiVersions:
+      - registry.registrystack.org/discovery-runtime/v1alpha1
 
   manifest/profile:
     project: products/manifest/profiles
@@ -215,6 +244,20 @@ formats:
         set:
           /package/root: "{project}"
     digests: SHA256SUMS
+    removedKeys:
+      - /version
+      - /sources/registered-birth-date/request/timeoutMilliseconds
+      - /sources/registered-birth-date/request/concurrencyLimit
+      - /sources/registered-birth-date/transport
+      - /sources/registered-birth-date/authentication/kind
+      - /requirements/0/acquisition/kind
+      - /issuer/id
+      - /requirements/0/id
+      - /requirements/0/concepts/0/id
+      - /requirements/0/concepts/0/form
+      - /sources/registered-birth-date/request/pathTemplate
+      - /holderBoundBatchMaxSize
+      - /authentication/oidc/jwksSource/kind
 
   # A code list is checked the same way, through the bundle that holds it.
   evidence/codelist:
@@ -225,6 +268,9 @@ formats:
         set:
           /package/root: "{project}"
     digests: SHA256SUMS
+    removedKeys:
+      - /id
+      - /allowed_outputs
 
   # The runtime configuration is checked against the bundle its staged
   # deployment project holds. The removed keys are the ones the Evidence
@@ -239,6 +285,20 @@ formats:
       - /listener/port
       - /metricsListener/bindHost
       - /metricsListener/port
+      - /audit/retainDays
+      - /signer/timeoutMilliseconds
+      - /signer/kind
+    retiredApiVersions:
+      - registry.registrystack.org/evidence-runtime/v1alpha1
+
+  # The member an expected output's form refuses by name, with the shape to
+  # write; the registry does not declare it yet.
+  evidence/verification-policy:
+    removedKeys:
+      - /expectedOutputs/0/form/list
+  evidence/holder-bound-verification-policy:
+    removedKeys:
+      - /expectedOutputs/0/form/list
 
   # The keys the delivery runtime refuses by name, each naming its
   # replacement; the registry does not declare them yet.
@@ -257,14 +317,42 @@ formats:
   # modeline). Formats with an entry above carry their `init` there.
   breg/project:
     init: {command: "bregctl init {directory}", file: registry.yaml}
+    removedKeys:
+      - /registry
+      - /entities/0/fields/0/minLength
+      - /entities/0/fields/0/maxLength
+      - /entities/0/fields/0/maxBytes
+      - /entities/0/hooks/0/handler/kind
+      - /actions/0/handler/kind
+    retiredApiVersions:
+      - registry.registrystack.org/v1alpha1
   breg/runtime:
     init: {command: "bregctl init {directory}", file: runtime.example.yaml}
+    retiredApiVersions:
+      - registry.registrystack.org/breg-runtime/v1alpha1
+    removedKeys:
+      - /database/pool/maxSize
+      - /authentication/oidc/maxTokenLifetimeSeconds
+      - /authentication/oidc/jwksCache/maxDocumentBytes
+      - /authentication/oidc/jwksCache/requestTimeoutMilliseconds
+      - /audit/retainDays
+      - /cursor/maxAgeSeconds
+      - /wasmExecution/maxModuleBytes
+      - /wasmExecution/maxGuestMemoryBytes
+      - /fieldEncryption/provider/timeoutMilliseconds
+      - /attachmentStorage/timeoutMilliseconds
+      - /attachmentVerification/timeoutMilliseconds
+      - /fieldEncryption/provider/kind
+      - /attachmentStorage/kind
+      - /attachmentVerification/kind
+      - /authentication/oidc/jwksSource/kind
   breg/dev-clients:
     init: {command: "bregctl init {directory}", file: dev-clients.yaml}
   casework/project:
+    retiredApiVersions:
+      - registry.registrystack.org/casework/v1alpha1
+    removedKeys: [/casework]
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: casework.yaml}
-  casework/runtime:
-    init: {command: "caseworkctl init --template standalone-decision {directory}", file: runtime.example.yaml}
   scheduling/records:
     init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: records.yaml}
   evidence/authoring-project:

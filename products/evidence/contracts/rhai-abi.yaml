@@ -30,7 +30,7 @@ functions:
       validation: Rust applies the source preparationLimits and validates the complete normalized RequestParts before credential resolution.
     core_owned_transport:
       - source and fixed origin selected by the requirement acquisition, never by a script or response
-      - fixed method and fixed path, or complete-segment pathTemplate and pathBindings bound to authorized selectors or, on a fetch source only, a scalar prior fact that stage receives
+      - fixed method and fixed path, a literal or a complete-segment template whose pathBindings are bound to authorized selectors or, on a fetch source only, a scalar prior fact that stage receives
       - fixed non-secret headers and every authentication header
       - credentials, TLS trust, hostname verification, redirect denial, proxy denial, timeout, response limit, concurrency, and one request per source stage
   extraction:

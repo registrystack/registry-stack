@@ -21,7 +21,7 @@ engine, and PostgreSQL 17 stays the minimum version.
 fields:
   - id: identifier
     type: string
-    maxLength: 13
+    maximumLength: 13
     required: true
     classification: restricted
     pattern: '^[0-9]{13}$'
@@ -58,8 +58,8 @@ Caller-filtered operation metadata exposes the expression under `storageValidati
 ## Fixed bounds
 
 An expression is limited to 4,096 UTF-8 bytes and cannot contain NUL; exceeding either reports
-`breg.field.pattern-bounds-invalid`. Values keep the field bounds they already had: `string.maxLength` is
-at most 1,000,000 characters and `text.maxLength` at most 10,000,000. The HTTP request,
+`breg.field.pattern-bounds-invalid`. Values keep the field bounds they already had: `string.maximumLength` is
+at most 1,000,000 characters and `text.maximumLength` at most 10,000,000. The HTTP request,
 transaction, and database statement deadlines bound native evaluation, and a pathological expression
 can exhaust them, so schema-test each expression against representative values before activation.
 
@@ -92,7 +92,7 @@ expect:
 
 ## What changing one costs
 
-Adding a rule emits `field_pattern_added`, classified `compatible_additive`. The classification
+Adding a rule emits `field-pattern-added`, classified `compatible-additive`. The classification
 permits the compiler-owned DDL path; it does not promise that existing rows satisfy the rule.
 PostgreSQL validates every existing row before the addition commits, under an `ACCESS EXCLUSIVE`
 table lock and a full scan, and a failure keeps the old package active, pins the target in
@@ -100,8 +100,8 @@ maintenance, and reports `breg.field.pattern-existing-rows-invalid`. Size
 `operationalTimeouts.migrationStatementMilliseconds` for lock acquisition plus the validation scan,
 and use `migrationLockMilliseconds` when a shorter separate lock wait is useful.
 
-Changing or removing a rule emits `field_pattern_changed` or `field_pattern_removed`, classified
-`destructive_or_irreversible` under the reviewed migration contract. That includes loosening: the
+Changing or removing a rule emits `field-pattern-changed` or `field-pattern-removed`, classified
+`destructive-or-irreversible` under the reviewed migration contract. That includes loosening: the
 compiler does not attempt to prove containment between two regular-expression languages. Each
 pattern check keeps a stable identity derived from its entity and field, independent of the
 expression, and its physical-name inventory member is `pattern:<field-id>`.

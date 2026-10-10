@@ -46,20 +46,20 @@ const ECOSYSTEM_BINDING_TYPE_GOVERNED_EVIDENCE: &str = "governed-evidence";
 pub const REQUIRED_EVIDENCE_PACK_GATES: &[&str] = &[
     "purpose",
     "jurisdiction",
-    "legal_basis",
+    "legal-basis",
     "consent",
-    "authority_basis",
-    "requester_identity",
-    "subject_identity",
-    "subject_relationship",
+    "authority-basis",
+    "requester-identity",
+    "subject-identity",
+    "subject-relationship",
     "assurance",
-    "source_binding",
-    "source_freshness",
-    "requested_disclosure",
-    "credential_format",
-    "route_scope",
+    "source-binding",
+    "source-freshness",
+    "requested-disclosure",
+    "credential-format",
+    "route-scope",
 ];
-pub const SUPPORTED_EVIDENCE_PACK_OUTPUTS: &[&str] = &["minimized_json"];
+pub const SUPPORTED_EVIDENCE_PACK_OUTPUTS: &[&str] = &["minimized-json"];
 const BUILTIN_VOCABULARIES: &[(&str, &str)] = &[
     ("adms", "http://www.w3.org/ns/adms#"),
     ("cccev", "http://data.europa.eu/m8g/"),
@@ -1352,7 +1352,7 @@ pub enum Sensitivity {
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum AccessRights {
     Public,
     #[default]
@@ -1362,7 +1362,7 @@ pub enum AccessRights {
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum UpdateFrequency {
     Continuous,
     Daily,
@@ -1379,7 +1379,7 @@ pub enum UpdateFrequency {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum AdmsStatus {
     UnderDevelopment,
     Active,
@@ -2372,12 +2372,12 @@ fn validate_required_evidence_pack_outputs(
     if !evidence_pack
         .allowed_outputs
         .iter()
-        .any(|output| output == "minimized_json")
+        .any(|output| output == "minimized-json")
     {
         errors.push(ValidationError::new(
             ValidationCondition::MissingMember,
             field_path,
-            "allowed_outputs must include minimized_json",
+            "allowed_outputs must include minimized-json",
         ));
     }
 }
@@ -4385,17 +4385,17 @@ fn validate_fulfillment_mode(
 ) {
     if !matches!(
         mode,
-        "manual_input"
-            | "file_upload"
-            | "registry_lookup"
-            | "oots_evidence_exchange"
-            | "self_declaration"
-            | "known_from_context"
+        "manual-input"
+            | "file-upload"
+            | "registry-lookup"
+            | "oots-evidence-exchange"
+            | "self-declaration"
+            | "known-from-context"
     ) {
         errors.push(ValidationError::new(
             ValidationCondition::InvalidValue,
             path,
-            "fulfillment mode must be manual_input, file_upload, registry_lookup, oots_evidence_exchange, self_declaration, or known_from_context",
+            "fulfillment mode must be manual-input, file-upload, registry-lookup, oots-evidence-exchange, self-declaration, or known-from-context",
         ));
     }
 }
@@ -7782,7 +7782,7 @@ fn access_rights_name(access_rights: AccessRights) -> &'static str {
     match access_rights {
         AccessRights::Public => "public",
         AccessRights::Restricted => "restricted",
-        AccessRights::NonPublic => "non_public",
+        AccessRights::NonPublic => "non-public",
     }
 }
 
@@ -7796,7 +7796,7 @@ fn update_frequency_name(update_frequency: UpdateFrequency) -> &'static str {
         UpdateFrequency::Quarterly => "quarterly",
         UpdateFrequency::Annual => "annual",
         UpdateFrequency::Irregular => "irregular",
-        UpdateFrequency::AsNeeded => "as_needed",
+        UpdateFrequency::AsNeeded => "as-needed",
         UpdateFrequency::Unknown => "unknown",
     }
 }

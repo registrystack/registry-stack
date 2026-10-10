@@ -155,7 +155,7 @@ impl StartupFixture {
         fs::write(
             &path,
             format!(
-                r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+                r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:9
@@ -172,7 +172,7 @@ database:
   runtimeUrlRef: secret:env/BREG_STARTUP_TEST_DATABASE_URL
   migrationUrlRef: secret:env/BREG_STARTUP_TEST_MIGRATION_DATABASE_URL
   pool:
-    maxSize: 1
+    maximumConnections: 1
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -190,14 +190,14 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: unrestricted
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 10
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 10
       outageToleranceSeconds: 0
   authorityClaims:
     principal: principal
@@ -206,7 +206,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/missing-cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 operationalTimeouts:
   httpRequestMilliseconds: 1000
   shutdownGraceMilliseconds: 1000
@@ -311,13 +311,13 @@ impl PackageFixture {
 
 fn project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
 
 fn module_bytes() -> Vec<u8> {
-    br#"{"id":"core","version":"1","entities":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#.to_vec()
+    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#.to_vec()
 }
 
 fn first_generated_path(root: &Path) -> PathBuf {

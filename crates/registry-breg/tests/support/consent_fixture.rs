@@ -62,7 +62,7 @@ pub fn self_issued_project() -> Value {
         "mutationMode": "mutable", "classification": "restricted",
         "fields": [
             {"id": "subject", "type": "reference", "target": "person", "required": true, "classification": "restricted"},
-            {"id": "principal", "type": "string", "maxLength": 255, "required": true, "classification": "restricted"},
+            {"id": "principal", "type": "string", "maximumLength": 255, "required": true, "classification": "restricted"},
             {"id": "active", "type": "boolean", "required": true, "classification": "internal"}
         ]
     }));
@@ -94,7 +94,7 @@ pub fn self_issued_project() -> Value {
     }));
     value["accessProfiles"].as_array_mut().unwrap().push(json!({
         "id": "consent-self", "principalClaim": "principal", "requiredScopes": ["consent:self"],
-        "permissions": [{
+        "permissions": {"actions": [{
             "action": "withdraw-consent", "operations": ["invoke"],
             "targets": [
                 {"entity": "consent-subject-link", "rowBoundaries": [{"field": "principal", "claim": "principal", "operator": "equals"}]},
@@ -102,7 +102,7 @@ pub fn self_issued_project() -> Value {
                 {"entity": "consent-decision", "rowBoundaries": "unrestricted"}
             ],
             "results": ["decision"]
-        }]
+        }]}
     }));
     value
 }

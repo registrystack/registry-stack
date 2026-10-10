@@ -356,7 +356,7 @@ pub(crate) fn event_data_schema_binding(
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
-        EventTrigger::RequestLifecycle => "request_lifecycle",
+        EventTrigger::RequestLifecycle => "request-lifecycle",
     };
     let mut properties = Map::new();
     properties.insert("entity".to_owned(), json!({"const": entity.id}));
@@ -604,7 +604,7 @@ fn entity_schema(entity: &CompiledEntity, entities: &BTreeMap<String, CompiledEn
         "required": required,
         "x-registry-mutationMode": match entity.mutation_mode {
             MutationMode::Mutable => "mutable",
-            MutationMode::CreateOnly => "create_only",
+            MutationMode::CreateOnly => "create-only",
         }
     });
     let object = schema.as_object_mut().expect("entity schema is an object");
@@ -654,7 +654,7 @@ pub(crate) fn openapi_entity_input_schema(
         "required": required,
         "x-registry-mutationMode": match entity.mutation_mode {
             MutationMode::Mutable => "mutable",
-            MutationMode::CreateOnly => "create_only",
+            MutationMode::CreateOnly => "create-only",
         }
     })
 }
@@ -1029,14 +1029,14 @@ fn render_request_planner(
 fn render_request_retention(mode: CompiledChangeRequestRetentionMode) -> Value {
     let mode = match mode {
         CompiledChangeRequestRetentionMode::Retain => "retain",
-        CompiledChangeRequestRetentionMode::OperatorErase => "operator_erase",
+        CompiledChangeRequestRetentionMode::OperatorErase => "operator-erase",
     };
     json!({
         "mode": mode,
         "effectivePolicy": {
             "payloadSnapshots": match mode {
                 "retain" => "retained_until_package_or_operator_policy_changes",
-                "operator_erase" => "operator_erasable_after_terminal_state",
+                "operator-erase" => "operator_erasable_after_terminal_state",
                 _ => unreachable!("closed retention mode"),
             },
             "provenanceStub": "retained_while_target_revisions_reference_request",
@@ -1051,7 +1051,7 @@ fn render_target_binding(binding: &CompiledChangeRequestTargetBinding) -> Value 
             json!({"kind": "existing", "fromField": from_field})
         }
         CompiledChangeRequestTargetBinding::ReservedCreate { effect } => {
-            json!({"kind": "reserved_create", "effect": effect})
+            json!({"kind": "reserved-create", "effect": effect})
         }
     }
 }
@@ -1078,13 +1078,13 @@ fn render_request_mutation(
 fn render_request_value(value: &CompiledChangeRequestValue) -> Value {
     match value {
         CompiledChangeRequestValue::FromField { field } => {
-            json!({"kind": "from_field", "field": field})
+            json!({"kind": "from-field", "field": field})
         }
         CompiledChangeRequestValue::FromEffect {
             effect,
             target_entity_id,
         } => json!({
-            "kind": "from_effect",
+            "kind": "from-effect",
             "effect": effect,
             "targetEntity": target_entity_id,
         }),
@@ -1427,7 +1427,7 @@ pub(crate) fn public_action_metadata_entry(
             "targetConditions": action.condition_route.as_ref().map(|path| json!({
                 "method": "POST",
                 "path": path,
-                "operationId": format!("actions.{}.target_conditions", action.id),
+                "operationId": format!("actions.{}.target-conditions", action.id),
                 "requiresIdempotencyKey": false,
                 "inputSchema": openapi_action_condition_request_schema_id(&action.id),
                 "responseSchema": openapi_action_condition_response_schema_id(&action.id),
@@ -1781,7 +1781,7 @@ fn action_problem_responses(
 fn action_route_kind_name(kind: ActionRouteKind) -> &'static str {
     match kind {
         ActionRouteKind::Invoke => "invoke",
-        ActionRouteKind::TargetConditions => "target_conditions",
+        ActionRouteKind::TargetConditions => "target-conditions",
     }
 }
 
@@ -3670,7 +3670,7 @@ fn request_action_link_schema() -> Value {
         "properties": {
             "operation": {
                 "type": "string",
-                "enum": ["submit_request", "revise_request", "cancel_request", "apply_request"]
+                "enum": ["submit-request", "revise-request", "cancel-request", "apply-request"]
             },
             "method": {"const": "POST"},
             "href": {"type": "string", "maxLength": 2048},
@@ -4114,8 +4114,9 @@ fn request_proposal_schema() -> Value {
                             {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": ["authority", "policyId"],
+                                "required": ["type", "authority", "policyId"],
                                 "properties": {
+                                    "type": {"const": "required"},
                                     "authority": {"type": "string", "minLength": 1, "maxLength": 512},
                                     "policyId": {"type": "string", "minLength": 1, "maxLength": 512}
                                 }
@@ -4123,8 +4124,8 @@ fn request_proposal_schema() -> Value {
                             {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": ["mode"],
-                                "properties": {"mode": {"const": "none"}}
+                                "required": ["type"],
+                                "properties": {"type": {"const": "none"}}
                             }
                         ]
                     }
@@ -4628,7 +4629,7 @@ fn render_query_profile(
     let mut rendered = json!({
         "profile": operation.profile_id,
         "kind": query_kind_name(operation.kind),
-        "maxPageSize": operation.max_page_size,
+        "maximumPageSize": operation.max_page_size,
         "allowCount": operation.allow_count,
         "selectableProperties": api_field_names(entity, &selectable_fields),
         "filterableProperties": operation.filter_fields.iter().map(|field| {
@@ -4653,7 +4654,7 @@ fn render_query_profile(
                 CompiledQueryTemporalValueKind::Date => "date",
                 CompiledQueryTemporalValueKind::Timestamp => "timestamp",
             },
-            "semantics": "start_inclusive_end_exclusive",
+            "semantics": "start-inclusive-end-exclusive",
         }))
     });
     if let Some(bbox) = operation
@@ -4677,8 +4678,8 @@ fn query_filter_operator_name(operator: crate::model::CompiledQueryFilterOperato
         crate::model::CompiledQueryFilterOperator::Equals => "equals",
         crate::model::CompiledQueryFilterOperator::In => "in",
         crate::model::CompiledQueryFilterOperator::Range => "range",
-        crate::model::CompiledQueryFilterOperator::IsNull => "is_null",
-        crate::model::CompiledQueryFilterOperator::IsNotNull => "is_not_null",
+        crate::model::CompiledQueryFilterOperator::IsNull => "is-null",
+        crate::model::CompiledQueryFilterOperator::IsNotNull => "is-not-null",
         crate::model::CompiledQueryFilterOperator::Prefix => "prefix",
         crate::model::CompiledQueryFilterOperator::Contains => "contains",
     }
@@ -4801,7 +4802,7 @@ fn query_kind_name(kind: CompiledQueryKind) -> &'static str {
     match kind {
         CompiledQueryKind::List => "list",
         CompiledQueryKind::Current => "current",
-        CompiledQueryKind::AsOf => "as_of",
+        CompiledQueryKind::AsOf => "as-of",
         CompiledQueryKind::Snapshot => "snapshot",
     }
 }
@@ -4817,10 +4818,10 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
         Operation::Snapshot => "snapshot",
-        Operation::SubmitRequest => "submit_request",
-        Operation::ReviseRequest => "revise_request",
-        Operation::CancelRequest => "cancel_request",
-        Operation::ApplyRequest => "apply_request",
+        Operation::SubmitRequest => "submit-request",
+        Operation::ReviseRequest => "revise-request",
+        Operation::CancelRequest => "cancel-request",
+        Operation::ApplyRequest => "apply-request",
         Operation::Invoke => "invoke",
         Operation::Import => "import",
     }
@@ -4927,15 +4928,15 @@ mod problem_contract_tests {
             .compile(&schema)
             .unwrap();
         assert!(validator.is_valid(&json!({
-            "review": {"authority": "casework-main", "policyId": "request-review"}
+            "review": {"type": "required", "authority": "casework-main", "policyId": "request-review"}
         })));
-        assert!(validator.is_valid(&json!({"review": {"mode": "none"}})));
+        assert!(validator.is_valid(&json!({"review": {"type": "none"}})));
         assert!(validator.is_valid(&Value::Null));
         assert!(!validator.is_valid(&json!({
-            "review": {"authority": "casework-main"}
+            "review": {"type": "required", "authority": "casework-main"}
         })));
         assert!(!validator.is_valid(&json!({
-            "review": {"mode": "none"},
+            "review": {"type": "none"},
             "unexpected": "value"
         })));
     }
@@ -5072,22 +5073,22 @@ mod spatial_tests {
 
     fn registry() -> CompiledRegistry {
         let project = parse_project_json(br#"{
-            "apiVersion":"registry.registrystack.org/v1alpha1",
-            "kind":"RegistryProject",
-            "registry":{"id":"spatial-artifacts","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-artifacts.example.test"},
+            "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind":"BRegProject",
+            "project":{"id":"spatial-artifacts","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-artifacts.example.test"},
             "entities":[{
                 "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
                 "geojson":{"geometryField":"location"},
                 "fields":[
-                    {"id":"code","type":"string","maxLength":32,"classification":"internal"},
-                    {"id":"label","type":"string","maxLength":64,"classification":"internal"},
+                    {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
+                    {"id":"label","type":"string","maximumLength":64,"classification":"internal"},
                     {"id":"location","apiName":"position","type":"crs84-point","precision":9,"classification":"internal"}
                 ]
             }],
             "accessProfiles":[
-                {"id":"map","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"site","operations":["get","list"],"readableFields":["code","label","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}, "rowBoundaries": "unrestricted"}]},
-                {"id":"plain","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"site","operations":["get","list"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]},
-                {"id":"geometry-only","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"site","operations":["get","list"],"readableFields":["location"], "rowBoundaries": "unrestricted"}]}
+                {"id":"map","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"site","operations":["get","list"],"readableFields":["code","label","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}, "rowBoundaries": "unrestricted"}]}},
+                {"id":"plain","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"site","operations":["get","list"],"readableFields":["code"], "rowBoundaries": "unrestricted"}]}},
+                {"id":"geometry-only","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"site","operations":["get","list"],"readableFields":["location"], "rowBoundaries": "unrestricted"}]}}
             ]
         }"#).expect("spatial artifact fixture parses");
         compile_project(&project, &[], CompileProfile::Authoring)

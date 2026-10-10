@@ -109,7 +109,7 @@ sourceConnections:
   registry:
     baseUrl: https://registry.example.invalid
     authentication:
-      kind: oauth2-client-credentials
+      type: oauth2-private-key-jwt
       tokenEndpoint: https://registry-identity.example.invalid/token
       clientIdRef: secret:file/registry-client-id
       clientAssertionKeyRef: secret:file/registry-client-key
@@ -117,7 +117,7 @@ sourceConnections:
       audience: urn:example:resource:registry
       scope: registry:evidence:lookup
       maximumCacheSeconds: 60
-    concurrencyLimit: 4
+    maximumConcurrency: 4
     admissionTimeoutMilliseconds: 5000
     tokenTimeoutMilliseconds: 5000
 ```
@@ -158,12 +158,12 @@ Replace the local signer under `runtime` with the actual proxy and key binding:
 
 ```yaml
 signer:
-  kind: transit
+  type: transit
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: 1
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
 ```
 
 Use the operator's exact selected version, which may differ from this example.

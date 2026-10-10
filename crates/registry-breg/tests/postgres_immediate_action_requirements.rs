@@ -244,14 +244,14 @@ async fn action_effect_fields_are_authorized_under_a_locale_collation() {
             .as_array_mut()
             .unwrap()
             .push(json!({
-                "id": field, "type": "string", "maxLength": 32, "required": true,
+                "id": field, "type": "string", "maximumLength": 32, "required": true,
                 "classification": "restricted"
             }));
         source["actions"][0]["inputs"]
             .as_array_mut()
             .unwrap()
             .push(json!({
-                "id": field, "apiName": api_name, "type": "string", "maxLength": 32,
+                "id": field, "apiName": api_name, "type": "string", "maximumLength": 32,
                 "required": true, "classification": "restricted"
             }));
         source["actions"][0]["effects"][0]["set"][field] = json!({"fromField": field});

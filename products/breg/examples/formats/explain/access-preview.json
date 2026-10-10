@@ -1,6 +1,6 @@
 {
   "admitted": true,
-  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
+  "apiVersion": "id.registrystack.org/formats/breg/access-preview/v1alpha4",
   "authorityIssued": false,
   "credentialsVerified": false,
   "effectiveProfile": {
@@ -38,10 +38,10 @@
     "sortableFields": [],
     "writableFields": []
   },
-  "kind": "AccessPreview",
-  "mode": "offline_synthetic",
+  "kind": "BRegAccessPreview",
+  "mode": "offline-synthetic",
   "reason": "profile_requirements_satisfied",
   "recipients": [],
-  "recordAccess": "not_evaluated",
+  "recordAccess": "not-evaluated",
   "rowValuesDisclosed": false
 }

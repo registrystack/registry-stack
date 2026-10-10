@@ -1,11 +1,12 @@
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+kind: EvidenceBundle
 assuranceProfile: evidence-grade
 service:
   providerId: urn:gov:example:evidence:licence-register
   publicOrigin: https://evidence.example.org
   trustDomain: urn:gov:example:trust-domain:professional-registration
 issuer:
-  id: urn:gov:example:issuer:licence-authority
+  uri: urn:gov:example:issuer:licence-authority
 # Inbound callers present access tokens from the deployment's operated OIDC
 # issuer. The extract is a local file, so this is the only network credential
 # contract in the project.
@@ -16,11 +17,13 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [ES256]
     jwksSource:
-      kind: uri
+      type: uri
       uri: https://tokens.gov.example/.well-known/jwks.json
     principalClaim: sub
     requesterTagsClaim: evidence_tags
     evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
 audit:
@@ -54,7 +57,7 @@ selectorProfiles:
         maximumBytes: 64
 sources:
   licence-register:
-    transport: sqlite-extract
+    type: sqlite-extract
     # The statement returns only the aggregate needed for derivation, so only
     # that narrow fact crosses the source boundary.
     posture: source-derived
@@ -79,7 +82,7 @@ sources:
       # selector field and binds it with nothing standing in between.
       parameterBindings:
         record_reference:
-          kind: selector
+          type: selector
           role: subject
           profile: record-reference-v1
           field: record_reference
@@ -92,9 +95,9 @@ sources:
       maximumRows: 2
       maximumCellBytes: 64
       maximumStatementSteps: 100000
-      timeoutMilliseconds: 2000
+      attemptTimeoutMilliseconds: 2000
       maximumResponseBytes: 8192
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     # Shape contract for the projected result, checked before extraction runs.
     responseSchema: schemas/professional-licence-response.schema.yaml
     extractScript: adapters/professional-licence-extract.rhai
@@ -114,10 +117,10 @@ authorityProfiles:
             valueOrigin: request
 requirements:
   - handle: licence-register-status
-    id: urn:gov:example:requirement:licence-register-status:v1
+    uri: urn:gov:example:requirement:licence-register-status:v1
     kind: criterion
     acquisition:
-      kind: single
+      type: single
       source: licence-register
     purposes: [professional-licence-verification]
     subjectRoles:
@@ -137,8 +140,8 @@ requirements:
       parameters: {}
     concepts:
       - handle: licence-active
-        id: urn:gov:example:concept:professional-licence-active
-        form: boolean
+        uri: urn:gov:example:concept:professional-licence-active
+        type: boolean
         required: true
         constraints: {}
     fixtures: fixtures/professional-licence-cases.yaml

@@ -16,23 +16,24 @@ accessProfiles:
     principalClaim: principal
     requiredScopes: [records:read, membership:use]
     permissions:
-      - entity: facility
-        rowBoundaries: unrestricted
-        operations: [get, list, lookup, snapshot, revisions]
-        readableFields: [label]
-        filterableFields: [label]
-        sortableFields: [label]
-        allowCount: true
-        revisionAccess: true
-        lookups:
-          - selector: label
-            valueOrigin: request
-        membershipBoundaries:
-          - field: organization
-            membershipEntity: membership
-            membershipKeyField: organization
-            principalField: principal
-            activeField: active
+      entities:
+        - entity: facility
+          rowBoundaries: unrestricted
+          operations: [get, list, lookup, snapshot, revisions]
+          readableFields: [label]
+          filterableFields: [label]
+          sortableFields: [label]
+          allowCount: true
+          revisionAccess: true
+          lookups:
+            - selector: label
+              valueOrigin: request
+          membershipBoundaries:
+            - field: organization
+              membershipEntity: membership
+              membershipKeyField: organization
+              principalField: principal
+              activeField: active
 ```
 
 The `label` lookup selector must already be declared on the facility entity.

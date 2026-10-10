@@ -803,16 +803,16 @@ pub(crate) struct RawFieldEncryptionConfig {
     provider: Option<RawFieldEncryptionProvider>,
 }
 
-/// Raw provider binding; the `kind` member selects the custodian.
+/// Raw provider binding; the `type` member selects the custodian.
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Clone, Deserialize)]
 #[serde(
     remote = "Self",
-    rename_all = "camelCase",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub(crate) enum RawFieldEncryptionProvider {
     Transit {
         #[cfg_attr(feature = "schema", schemars(length(min = 2, max = 4096)))]
@@ -827,7 +827,7 @@ pub(crate) enum RawFieldEncryptionProvider {
             feature = "schema",
             schemars(with = "registry_platform_yaml::BoundedU64<1, 30_000>")
         )]
-        timeout_milliseconds: u64,
+        attempt_timeout_milliseconds: u64,
     },
     LocalFile {
         /// The data encryption key, named by a `secret:file/NAME` reference;
@@ -835,7 +835,7 @@ pub(crate) enum RawFieldEncryptionProvider {
         dek_ref: SecretReference,
     },
 }
-registry_platform_yaml::tagged_union!(RawFieldEncryptionProvider, tag = "kind");
+registry_platform_yaml::tagged_union!(RawFieldEncryptionProvider);
 
 #[cfg(feature = "schema")]
 impl serde::Serialize for RawFieldEncryptionProvider {
@@ -845,7 +845,7 @@ impl serde::Serialize for RawFieldEncryptionProvider {
     ) -> std::result::Result<S::Ok, S::Error> {
         crate::contract::serialize_tagged_union(
             Self::serialize(self, serde_json::value::Serializer),
-            "kind",
+            "type",
             serializer,
         )
     }
@@ -878,7 +878,7 @@ impl FieldEncryptionConfig {
                 unix_socket_path,
                 mount,
                 key_name,
-                timeout_milliseconds,
+                attempt_timeout_milliseconds,
             }) => {
                 if unix_socket_path.len() > MAX_UNIX_SOCKET_PATH_CHARS {
                     return Err(InvalidFieldEncryptionConfig);
@@ -888,7 +888,7 @@ impl FieldEncryptionConfig {
                         unix_socket_path,
                         mount,
                         key_name,
-                        Duration::from_millis(timeout_milliseconds),
+                        Duration::from_millis(attempt_timeout_milliseconds),
                     )
                     .map_err(|_| InvalidFieldEncryptionConfig)?,
                 ))

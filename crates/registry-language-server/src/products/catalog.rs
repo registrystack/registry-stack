@@ -4,7 +4,7 @@
 use super::spec::{DocumentRules, FileRule, NameRule as N, ProductKind, ProductSpec, Scope};
 
 const BREG_DECLARATIONS: &[N] = &[
-    N::global("registry/id", "BReg registry"),
+    N::global("project/id", "BReg registry"),
     N::global("entities/*/id", "BReg entity"),
     N::scoped("entities/*/fields/*/id", "BReg field", 1, "id"),
     N::scoped("entities/*/attachments/*/id", "BReg attachment", 1, "id"),
@@ -138,50 +138,56 @@ const BREG_REFERENCES: &[N] = &[
         3,
         "id",
     ),
-    N::global("accessProfiles/*/permissions/*/entity", "BReg entity"),
-    N::global("accessProfiles/*/permissions/*/action", "BReg action"),
     N::global(
-        "accessProfiles/*/permissions/*/targets/*/entity",
+        "accessProfiles/*/permissions/entities/*/entity",
+        "BReg entity",
+    ),
+    N::global(
+        "accessProfiles/*/permissions/actions/*/action",
+        "BReg action",
+    ),
+    N::global(
+        "accessProfiles/*/permissions/actions/*/targets/*/entity",
         "BReg entity",
     ),
     N::scoped(
-        "accessProfiles/*/permissions/*/results/*",
+        "accessProfiles/*/permissions/actions/*/results/*",
         "BReg action effect",
         0,
         "action",
     ),
     N::scoped(
-        "accessProfiles/*/permissions/*/readableFields/*",
+        "accessProfiles/*/permissions/entities/*/readableFields/*",
         "BReg field",
         0,
         "entity",
     ),
     N::scoped(
-        "accessProfiles/*/permissions/*/writableFields/*",
+        "accessProfiles/*/permissions/entities/*/writableFields/*",
         "BReg field",
         0,
         "entity",
     ),
     N::scoped(
-        "accessProfiles/*/permissions/*/filterableFields/*",
+        "accessProfiles/*/permissions/entities/*/filterableFields/*",
         "BReg field",
         0,
         "entity",
     ),
     N::scoped(
-        "accessProfiles/*/permissions/*/sortableFields/*",
+        "accessProfiles/*/permissions/entities/*/sortableFields/*",
         "BReg field",
         0,
         "entity",
     ),
     N::scoped(
-        "accessProfiles/*/permissions/*/rowBoundaries/*/field",
+        "accessProfiles/*/permissions/entities/*/rowBoundaries/*/field",
         "BReg field",
         0,
         "entity",
     ),
     N::scoped(
-        "accessProfiles/*/permissions/*/targets/*/rowBoundaries/*/field",
+        "accessProfiles/*/permissions/actions/*/targets/*/rowBoundaries/*/field",
         "BReg field",
         0,
         "entity",
@@ -275,7 +281,7 @@ const BREG_MODULE_FILES: &[FileRule] = &[
 ];
 
 const CASEWORK_DECLARATIONS: &[N] = &[
-    N::global("casework/id", "Casework project"),
+    N::global("project/id", "Casework project"),
     N::global("sources/*/id", "Casework source"),
     N::global("queues/*/id", "Casework queue"),
     N::global("accessProfiles/*/id", "Casework access profile"),
@@ -591,13 +597,13 @@ pub(super) fn spec(product: ProductKind) -> Option<ProductSpec> {
     let (marker, version_prefix, kind, documents) = match product {
         ProductKind::Breg => (
             "registry.yaml",
-            "registry.registrystack.org/v1alpha1",
-            "RegistryProject",
+            "id.registrystack.org/formats/breg/project/v1alpha1",
+            "BRegProject",
             BREG_DOCUMENTS,
         ),
         ProductKind::Casework => (
             "casework.yaml",
-            "registry.registrystack.org/casework/",
+            "id.registrystack.org/formats/casework/project/",
             "CaseworkProject",
             CASEWORK_DOCUMENTS,
         ),

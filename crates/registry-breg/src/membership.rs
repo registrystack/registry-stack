@@ -22,10 +22,6 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                 "entities[id={}].accessProfiles[id={}].membershipBoundaries",
                 entity.id, profile.id
             );
-            if profile.principal_claim.is_none() {
-                errors.push(Diagnostic::error("breg.access.membership-authentication", &location,
-                    "membership boundaries require an authenticated profile with a verified principalClaim"));
-            }
             if profile.operations.iter().any(|operation| {
                 !matches!(
                     operation,

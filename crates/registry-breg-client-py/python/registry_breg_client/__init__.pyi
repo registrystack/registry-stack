@@ -153,7 +153,7 @@ class BRegAttachmentState(TypedDict):
     verification_status: AttachmentVerificationStatus | None
 
 class BRegAttachmentSlotValue(TypedDict):
-    kind: Literal["not_selected", "empty", "filled"]
+    kind: Literal["not-selected", "empty", "filled"]
     value: BRegAttachmentState | None
 
 class BRegAttachmentUpload:

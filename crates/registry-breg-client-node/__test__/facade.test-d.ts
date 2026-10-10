@@ -80,7 +80,7 @@ verifiedWebhook.attempt.toUpperCase()
 verifiedWebhook.deliveryTime.toUpperCase()
 verifiedWebhook.idempotencyKey.toUpperCase()
 verifiedWebhook.body.byteLength.toFixed()
-const webhookRefusal: WebhookVerificationRefusalCode = 'signature_mismatch'
+const webhookRefusal: WebhookVerificationRefusalCode = 'signature-mismatch'
 webhookRefusal.toUpperCase()
 // @ts-expect-error Webhook bodies must remain exact bytes.
 verifyWebhookDelivery({ method: 'POST', path: '/', headers: {}, body: '{}', key: Buffer.alloc(32) })

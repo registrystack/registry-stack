@@ -57,10 +57,10 @@ impl BRegLifecycleOperation {
     #[must_use]
     pub const fn identifier(self) -> &'static str {
         match self {
-            Self::SubmitRequest => "submit_request",
-            Self::ReviseRequest => "revise_request",
-            Self::CancelRequest => "cancel_request",
-            Self::ApplyRequest => "apply_request",
+            Self::SubmitRequest => "submit-request",
+            Self::ReviseRequest => "revise-request",
+            Self::CancelRequest => "cancel-request",
+            Self::ApplyRequest => "apply-request",
         }
     }
 
@@ -2130,8 +2130,9 @@ impl BRegLifecycleReceiptRequest {
         if let Some(proposal) = &self.proposal {
             value["proposal"] = json!({
                 "review": match &proposal.review {
-                    BRegRequestReviewRequirement::None => json!({"mode": "none"}),
+                    BRegRequestReviewRequirement::None => json!({"type": "none"}),
                     BRegRequestReviewRequirement::External(requirement) => json!({
+                        "type": "required",
                         "authority": requirement.authority,
                         "policyId": requirement.policy_id,
                     }),
@@ -2199,11 +2200,10 @@ pub(crate) fn decode_review_requirement(
     let Value::Object(mut object) = value else {
         return Err(BRegLifecycleDecodeError::Profile);
     };
-    if object.len() == 1 && object.remove("mode") == Some(Value::String("none".to_owned())) {
-        return Ok(BRegRequestReviewRequirement::None);
-    }
-    if object.len() != 2 {
-        return Err(BRegLifecycleDecodeError::Profile);
+    match object.remove("type").as_ref().and_then(Value::as_str) {
+        Some("none") if object.is_empty() => return Ok(BRegRequestReviewRequirement::None),
+        Some("required") if object.len() == 2 => {}
+        _ => return Err(BRegLifecycleDecodeError::Profile),
     }
     let authority = take_string(&mut object, "authority")?;
     let policy_id = take_string(&mut object, "policyId")?;

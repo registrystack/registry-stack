@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/casework/v1alpha1
+apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
-casework:
+project:
   id: payment-review
   version: "1"
 accessProfiles:

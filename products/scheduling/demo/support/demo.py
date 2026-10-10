@@ -419,7 +419,7 @@ database:
     audience: {DEMO_AUDIENCE}
     allowedClients: [{BOOKER_A}, {BOOKER_B}, {READER}]
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/jwks
 audit:
   path: {audit_path}

@@ -669,7 +669,7 @@ def validate_fixture(errors: list[str]) -> None:
         {
             "apiVersion",
             "kind",
-            "registry",
+            "project",
             "package",
             "manifestProjection",
             "modules",
@@ -680,13 +680,13 @@ def validate_fixture(errors: list[str]) -> None:
         "asset fixture",
         errors,
     )
-    if document.get("apiVersion") != "registry.registrystack.org/v1alpha1" or document.get("kind") != "RegistryProject":
+    if document.get("apiVersion") != "id.registrystack.org/formats/breg/project/v1alpha1" or document.get("kind") != "BRegProject":
         errors.append("asset fixture: must identify the strict Registry Project authoring form")
-    registry = as_mapping(document.get("registry"), "asset fixture.registry", errors)
+    registry = as_mapping(document.get("project"), "asset fixture.project", errors)
     exact_keys(
         registry,
         {"id", "version", "defaultLanguage", "canonicalBaseIri"},
-        "asset fixture.registry",
+        "asset fixture.project",
         errors,
     )
     if registry.get("id") != "asset-site-placement":
@@ -714,7 +714,7 @@ def validate_fixture(errors: list[str]) -> None:
     if routes != {"assets", "sites", "placements", "inspections"}:
         errors.append("asset fixture: routes must be explicit and configuration-owned")
     create_only = [item for item in entities if isinstance(item, dict) and item.get("id") == "inspection-event"]
-    if len(create_only) != 1 or create_only[0].get("mutationMode") != "create_only":
+    if len(create_only) != 1 or create_only[0].get("mutationMode") != "create-only":
         errors.append("asset fixture: inspection event must prove create-only configuration")
     if any(item.get("primaryDataset") != "asset-site-placement" for item in entities if isinstance(item, dict)):
         errors.append("asset fixture: every entity must resolve to the governed primary dataset")

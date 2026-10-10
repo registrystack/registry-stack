@@ -1,4 +1,4 @@
-apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: /srv/registry-evidence/staging/bundle
@@ -13,11 +13,11 @@ listener:
 secretProviders:
   file: {root: /run/registry-evidence/secrets}
 signer:
-  kind: transit
+  type: transit
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: 7
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
 audit: {path: /var/lib/registry-evidence/staging/evidence.jsonl}
 outboundTls: {systemRoots: true, trustProfiles: {}}

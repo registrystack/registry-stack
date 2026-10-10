@@ -163,11 +163,12 @@ async fn automatic_successor_adds_optional_field_and_change_request_policy() {
 
 fn change_request_policy_module(add_submitter: bool, add_optional_field: bool) -> Vec<u8> {
     let mut module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
         "id": "core", "version": "1", "entities": [{
             "id": "asset", "primaryDataset": "neutral-registry", "route": "assets",
             "mutationMode": "mutable", "changeControl": {"requiredFor": ["patch"]},
             "fields": [{
-                "id": "label", "type": "string", "maxLength": 40,
+                "id": "label", "type": "string", "maximumLength": 40,
                 "required": true, "classification": "internal"
             }]
         }, {
@@ -177,7 +178,7 @@ fn change_request_policy_module(add_submitter: bool, add_optional_field: bool) -
                 "id": "asset", "type": "reference", "target": "asset",
                 "required": true, "classification": "internal"
             }, {
-                "id": "label", "type": "string", "maxLength": 40,
+                "id": "label", "type": "string", "maximumLength": 40,
                 "required": true, "classification": "internal"
             }],
             "changeRequest": {
@@ -185,13 +186,13 @@ fn change_request_policy_module(add_submitter: bool, add_optional_field: bool) -
                     "id": "apply-label", "target": {"fromField": "asset"},
                     "operation": "patch", "set": {"label": {"fromField": "label"}}
                 }],
-                "review": {"authority": "casework-main", "policyId": "request-review"},
+                "review": {"type": "required", "authority": "casework-main", "policyId": "request-review"},
                 "onApproved": {"mode": "manual"}
             },
             "accessProfiles": [{
                 "id": "reader", "default": true, "principalClaim": "principal",
-                "operations": ["create", "patch", "get", "list", "submit_request",
-                    "revise_request", "cancel_request", "apply_request"],
+                "operations": ["create", "patch", "get", "list", "submit-request",
+                    "revise-request", "cancel-request", "apply-request"],
                 "readableFields": ["asset", "label"],
                 "writableFields": ["asset", "label"],
                 "applyTargets": [{"entity": "asset", "rowBoundaries":"unrestricted"}],
@@ -204,7 +205,7 @@ fn change_request_policy_module(add_submitter: bool, add_optional_field: bool) -
             .as_array_mut()
             .unwrap()
             .push(json!({
-                "id": "note", "type": "string", "maxLength": 80,
+                "id": "note", "type": "string", "maximumLength": 80,
                 "classification": "internal"
             }));
     }
@@ -214,7 +215,7 @@ fn change_request_policy_module(add_submitter: bool, add_optional_field: bool) -
             .unwrap()
             .push(json!({
                 "id": "backup-submitter", "principalClaim": "principal",
-                "operations": ["get", "list", "submit_request"],
+                "operations": ["get", "list", "submit-request"],
                 "readableFields": ["asset", "label"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"
             }));
     }
@@ -225,7 +226,7 @@ fn profile_module(auditor: Option<Value>) -> Vec<u8> {
     let mut module: Value = serde_json::from_slice(&module_bytes(PlanChoice::Schema)).unwrap();
     let entity = &mut module["entities"][0];
     entity["fields"].as_array_mut().unwrap().push(json!({
-        "id": "note", "type": "string", "maxLength": 80, "classification": "internal"
+        "id": "note", "type": "string", "maximumLength": 80, "classification": "internal"
     }));
     if let Some(auditor) = auditor {
         entity["accessProfiles"]

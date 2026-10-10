@@ -53,17 +53,17 @@ fn compiled() -> CompiledRegistry {
         "readableFields":["label"], "lookups":[{"selector":"by-subject","valueOrigin":"request"}],
         "rowBoundaries":"unrestricted"});
     let source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
         "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
-            "fields":[{"id":"subject","type":"string","minLength":1,"maxLength":128,"required":true,"classification":"restricted"},
-                {"id":"label","type":"string","maxLength":128,"required":true,"classification":"restricted"}],
+            "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
+                {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
             "selectorProfiles":[{"id":"by-subject","fields":["subject"]}],
             "accessLog":{"subjectField":"subject","trustedIntermediaries":["evidence-service"],
                 "exemptions":{"investigator":{"reason":"investigation-policy-canary","delayDays":7}}}}],
         "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":[permission.clone()]},
-            {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":[permission]}
+            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{"entities":[permission.clone()]}},
+            {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{"entities":[permission]}}
         ]
     });
     compile_project(
@@ -76,11 +76,11 @@ fn compiled() -> CompiledRegistry {
 
 fn compiled_relationships() -> CompiledRegistry {
     let source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
         "entities":[
             {"id":"case","primaryDataset":"records","route":"cases","mutationMode":"mutable","classification":"restricted",
-                "fields":[{"id":"case-code","type":"string","maxLength":64,"required":true,"classification":"restricted"}],
+                "fields":[{"id":"case-code","type":"string","maximumLength":64,"required":true,"classification":"restricted"}],
                 "readPaths":[{"id":"people","through":"case-person","to":"person","route":"people"}]},
             {"id":"case-person","primaryDataset":"records","route":"case-people","mutationMode":"mutable","classification":"restricted",
                 "fields":[
@@ -88,22 +88,31 @@ fn compiled_relationships() -> CompiledRegistry {
                     {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}]},
             {"id":"person","primaryDataset":"records","route":"people","mutationMode":"mutable","classification":"restricted",
                 "fields":[
-                    {"id":"subject","type":"string","minLength":1,"maxLength":128,"required":true,"classification":"restricted"},
-                    {"id":"label","type":"string","maxLength":128,"required":true,"classification":"restricted"}],
+                    {"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
+                    {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
                 "accessLog":{"subjectField":"subject","exemptions":{
                     "investigator":{"reason":"target-local-policy-canary","delayDays":7},
                     "relationship-investigator":{"sourceEntity":"case","reason":"relationship-policy-canary","delayDays":7}}}}
         ],
         "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":[
-                {"entity":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}]},
-            {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":[
-                {"entity":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
-                    "readPaths":[{"path":"people","readableFields":["label"]}]},
-                {"entity":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}]},
-            {"id":"relationship-investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":[
-                {"entity":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
-                    "readPaths":[{"path":"people","readableFields":["label"]}]}]}
+            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
+                "entities":[
+                    {"entity":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
+                ]
+            }},
+            {"id":"investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{
+                "entities":[
+                    {"entity":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
+                        "readPaths":[{"path":"people","readableFields":["label"]}]},
+                    {"entity":"person","operations":["get"],"readableFields":["label"],"rowBoundaries":"unrestricted"}
+                ]
+            }},
+            {"id":"relationship-investigator","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"actorKind":"service","requesterClients":["agency"],"permissions":{
+                "entities":[
+                    {"entity":"case","operations":["get"],"readableFields":["case-code"],"rowBoundaries":"unrestricted",
+                        "readPaths":[{"path":"people","readableFields":["label"]}]}
+                ]
+            }}
         ]
     });
     compile_project(
@@ -840,19 +849,25 @@ async fn a_retention_tick_without_failure_records_its_last_success() {
 
 fn compiled_with_history() -> CompiledRegistry {
     let source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
         "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
-            "fields":[{"id":"subject","type":"string","minLength":1,"maxLength":128,"required":true,"classification":"restricted"},
-                {"id":"label","type":"string","maxLength":128,"required":true,"classification":"restricted"}],
+            "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
+                {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
             "accessLog":{"subjectField":"subject"}}],
         "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":[
-                {"entity":"entry","operations":["get","snapshot","revisions"],"readableFields":["label"],
-                    "revisionAccess":true,"rowBoundaries":"unrestricted"}]},
-            {"id":"steward","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":[
-                {"entity":"entry","operations":["create"],"readableFields":["subject","label"],
-                    "writableFields":["subject","label"],"rowBoundaries":"unrestricted"}]}
+            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
+                "entities":[
+                    {"entity":"entry","operations":["get","snapshot","revisions"],"readableFields":["label"],
+                        "revisionAccess":true,"rowBoundaries":"unrestricted"}
+                ]
+            }},
+            {"id":"steward","principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
+                "entities":[
+                    {"entity":"entry","operations":["create"],"readableFields":["subject","label"],
+                        "writableFields":["subject","label"],"rowBoundaries":"unrestricted"}
+                ]
+            }}
         ]
     });
     compile_project(

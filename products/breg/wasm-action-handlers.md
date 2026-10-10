@@ -7,7 +7,7 @@ configuration, and the upgrade and rollback paths. Authoring help lives in
 
 ## What ships
 
-- An authored handler kind (`kind: wasm` with a project-local `module:` path
+- An authored handler kind (`type: wasm` with a project-local `module:` path
   beside `script:`), a backend-tagged compiled representation, an optional
   operator configuration section, and a cargo feature (`wasm`) gating
   admission and execution. Maintained `registry-breg` and `registry-bregctl`
@@ -65,8 +65,8 @@ Optional `wasmExecution` section in the runtime configuration:
 
 | Field | Range | Default | Enforcement |
 |---|---|---|---|
-| `maxModuleBytes` | 1 KiB..=5 MiB | 2 MiB | Package load into the runtime, and prepare |
-| `maxGuestMemoryBytes` | 1 MiB..=1 GiB | 32 MiB | Per-invocation guest memory |
+| `maximumModuleBytes` | 1 KiB..=5 MiB | 2 MiB | Package load into the runtime, and prepare |
+| `maximumGuestMemoryBytes` | 1 MiB..=1 GiB | 32 MiB | Per-invocation guest memory |
 | `backend` | `pulley` or `native` | `pulley` | One resolved value feeds execution, admission validation, and the prepared-module cache key |
 
 - Typed refusals carry a code and a path; unknown members are refused. The
@@ -75,7 +75,7 @@ Optional `wasmExecution` section in the runtime configuration:
 - A structural 5 MiB ceiling sits above the operator range: compiler
   admission, the package closure, and bregctl capture enforce it whatever the
   configuration, so configuration can never admit what authoring refused.
-  Raise `maxModuleBytes` above 2 MiB only for pre-initialized library modules.
+  Raise `maximumModuleBytes` above 2 MiB only for pre-initialized library modules.
 - The backend is single-sourced: one resolver feeds execution, admission
   validation, and the prepared-module cache key, which is
   (module content hash, backend). A module admitted under one backend cannot

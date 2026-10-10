@@ -34,11 +34,11 @@ fs.mkdirSync(path.dirname(installerMetadata), { recursive: true });
 fs.writeFileSync(installerMetadata, `${evidencectlWrapper}\n`);
 fs.writeFileSync(
   path.join(projectAlpha, 'registry.yaml'),
-  'apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry: { id: alpha-registry }\n',
+  'apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: { id: alpha-registry }\n',
 );
 fs.writeFileSync(
   path.join(projectBeta, 'registry.yaml'),
-  'apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry: { id: beta-registry }\n',
+  'apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: { id: beta-registry }\n',
 );
 fs.writeFileSync(
   path.join(projectEvidence, 'evidence-project.yaml'),

@@ -94,7 +94,7 @@ a new bundle, a fresh check, and a restart.
 
 **The audit trail.** One process owns one audit path, so scaling out means several processes, each
 with its own audit path, or a `stdout` destination gathered by your log collector. The file
-rotates on its own and the runtime deletes sealed files after `retainDays`, so shipping each
+rotates on its own and the runtime deletes sealed files after `retentionDays`, so shipping each
 sealed file to append-only storage before then is operator work, and that store is the only place
 the log is tamper-evident.
 

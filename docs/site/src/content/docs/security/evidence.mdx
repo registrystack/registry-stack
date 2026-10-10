@@ -54,7 +54,10 @@ on its own (`V1-I07`). Callers cannot choose selector fields, operators,
 weights, thresholds, normalization, or query plans; named profiles close the
 exact field set (`V1-I08`).
 
-When authentication states `allowedClients` or `requiredScopes`, admission is
+Every bundle states `allowedClients` and `requiredScopes`, each as the keyword
+`unrestricted` or a nonempty list; an omitted member and an empty list are
+refused when the bundle is read, so no bundle leaves a gate open by silence.
+When a list is stated, admission is
 that explicit client list and the verified token's required scope set; an
 audience plus static issuer-governed attributes never establishes resource
 permission on its own, and a missing scope is never inferred from tags,
@@ -166,7 +169,7 @@ separately enabled it in the runtime configuration (`V1-I42`). A `sqlite-extract
 exactly one bundle-fixed, reviewed statement against one read-only extract file the runtime bound,
 under declared row, cell, statement-step, time, and concurrency bounds that no caller, response, or
 script can change (`V1-I43`). A selector value that a source would bind into a request path segment
-the value cannot occupy is refused as `request.selector_invalid` during selector resolution, before
+the value cannot occupy is refused as `request.selector-invalid` during selector resolution, before
 any access audit event, credential acquisition, or source contact (`V1-I56`).
 
 ### Holder-bound assertions
@@ -190,7 +193,7 @@ other's input (`V1-I48`).
 A multi-subject request batch authenticates once, uses one evaluation instant, charges its complete
 item count against the request rate atomically, and validates and authorizes every item before any
 source credential or I/O (`V1-I49`). It returns one ordered result per item and releases the complete
-envelope or nothing: a condition a single request would collapse to `evidence_not_available` becomes
+envelope or nothing: a condition a single request would collapse to `evidence-not-available` becomes
 that item's outcome, and every other failure aborts through the ordinary problem contract
 (`V1-I50`). Optional source batching is one fixed-path HTTP call, selected before I/O only when the
 bundle, the runtime, the source, and the requirement all allow it, and it never retries or fans out

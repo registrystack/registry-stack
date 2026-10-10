@@ -24,16 +24,17 @@ changeRequest:
       set:
         site: {fromField: proposed-site}
   review:
+    type: required
     authority: casework
     policyId: asset-placement-correction
   onApproved:
     mode: manual
   retention:
-    mode: operator_erase
+    mode: operator-erase
 ```
 
 `manual` has no executor. A currently authorized caller must invoke the ordinary
-`apply_request` action after BReg has durably reconciled the exact accepted
+`apply-request` action after BReg has durably reconciled the exact accepted
 Casework result. `automatic` requires an explicit logical executor:
 
 ```yaml
@@ -50,7 +51,7 @@ manual application. A completion notification is not application authority.
 For a request that intentionally needs no external review, say so explicitly:
 
 ```yaml
-  review: {mode: none}
+  review: {type: none}
   onApproved: {mode: manual}
 ```
 
@@ -66,14 +67,15 @@ scalar, AND-only configuration.
 ```yaml
 changeRequest:
   review:
+    type: required
     authority: casework
     policyId: seed-release
   onApproved: {mode: manual}
   application:
     preconditions:
       request:
-        - {field: valid-from, currentDate: on_or_before}
-        - {field: valid-through, currentDate: on_or_after}
+        - {field: valid-from, currentDate: on-or-before}
+        - {field: valid-through, currentDate: on-or-after}
       targets:
         - id: lot
           entity: lots
@@ -89,8 +91,8 @@ changeRequest:
             subject:
               profile: lot-release-v1
               selectors:
-                lot-reference: {source: request_field, field: lot-reference}
-                owner-reference: {source: target_field, target: lot, field: owner-reference}
+                lot-reference: {type: request-field, field: lot-reference}
+                owner-reference: {type: target-field, target: lot, field: owner-reference}
           requires:
             - {output: report-reference, equalsFromRequestField: report-reference}
             - {output: germination-basis-points, atLeast: 9000}
@@ -108,18 +110,19 @@ Casework or acquiring Evidence again.
 
 ## Reading external review status
 
-Review status is separately disclosure-controlled. Add `review_state` to each
+Review status is separately disclosure-controlled. Add `review-state` to each
 authenticated request permission that should receive `data.request.review`.
 Explicit fields replace the default metadata projection, so retain `reason` if
 that profile should also see retained explanations.
 
 ```yaml
 permissions:
-  - entity: placement-correction-request
-    operations: [get, list]
-    readableFields: [placement, proposed-site, reason]
-    readableRequestFields: [reason, review_state]
-    rowBoundaries: unrestricted
+  entities:
+    - entity: placement-correction-request
+      operations: [get, list]
+      readableFields: [placement, proposed-site, reason]
+      readableRequestFields: [reason, review-state]
+      rowBoundaries: unrestricted
 ```
 
 The closed review projection identifies the frozen authority and policy,
@@ -167,11 +170,11 @@ missing, repair the named binding and rerun doctor to discover the next one.
 Restore the exact `reviewAuthorities.<authority>` binding and producer identity,
 then start BReg and reconcile the retained requests through their ordinary
 source request and review-authority workflows. Read each source request through
-a profile granted `review_state` and correlate its retained external review
+a profile granted `review-state` and correlate its retained external review
 request. If the authority has a terminal result, let the worker ingest it and
 then use the source action the request advertises. If the authority still holds
 the review pending and the operator intends to close it, an authorized source
-caller invokes the advertised `cancel_request` action with its current
+caller invokes the advertised `cancel-request` action with its current
 `ifMatch`; keep the restored binding until cancellation reconciles and the
 source request reports `cancelled`. A manual approval retains the authority
 until the source request is applied, revised, or cancelled; an automatic
@@ -238,7 +241,7 @@ test, not by an invented local review decision.
 
 1. Create supporting records using ordinary source permissions.
 2. Create and edit the draft request.
-3. GET the request and use the advertised `submit_request` action with its
+3. GET the request and use the advertised `submit-request` action with its
    `ifMatch` value.
 4. BReg durably submits the exact frozen proposal to the configured Casework
    authority and stores the accepted request ID, subject, policy binding, and
@@ -246,7 +249,7 @@ test, not by an invented local review decision.
 5. Casework independently evaluates its policy. BReg reconciles the exact result
    through authenticated completion delivery or the requester result feed.
 6. For manual mode, an ordinary currently authorized source caller GETs the
-   request and invokes the advertised `apply_request` action with its proposal
+   request and invokes the advertised `apply-request` action with its proposal
    version, effect digest, and `ifMatch` binding.
 7. For automatic mode, the configured executor does the same through the bounded
    self-HTTP path.
@@ -258,7 +261,7 @@ terminal source transition wins.
 
 ## Retention operator checks
 
-Both examples use `retention.mode: operator_erase`. This creates no TTL or
+Both examples use `retention.mode: operator-erase`. This creates no TTL or
 scheduler. An operator must list, dry-run, and erase an exact eligible request:
 
 ```bash

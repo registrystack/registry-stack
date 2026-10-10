@@ -42,12 +42,12 @@ def production_settings(
     runtime["package"]["root"] = "/srv/registry-evidence/package"
     runtime["secretProviders"]["file"]["root"] = str(project / "secrets")
     runtime["signer"] = {
-        "kind": "transit",
+        "type": "transit",
         "unixSocketPath": "/run/registry-evidence/transit-proxy.sock",
         "mount": "transit",
         "keyName": "evidence-signing",
         "keyVersion": 1,
-        "timeoutMilliseconds": 2000,
+        "attemptTimeoutMilliseconds": 2000,
     }
     runtime["audit"]["path"] = str(project / "audit/evidence.jsonl")
     return settings
@@ -149,7 +149,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     assert source["connection"] == "registry"
     assert source["baseUrl"] == owner["baseUrl"]
     assert source["authentication"] == owner["authentication"]
-    assert source["request"]["concurrencyLimit"] == owner["concurrencyLimit"]
+    assert source["request"]["maximumConcurrency"] == owner["maximumConcurrency"]
     assert len(bundle["requirements"]) == 2
     assert all(requirement["acquisition"]["source"] == "registry-status"
                for requirement in bundle["requirements"])
@@ -163,7 +163,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     model_path = registry / "registry.yaml"
     model = yaml.safe_load(model_path.read_text())
     model["entities"][0]["fields"].append({
-        "id": "operator-note", "type": "string", "maxLength": 32,
+        "id": "operator-note", "type": "string", "maximumLength": 32,
         "classification": "internal",
     })
     model_path.write_text(yaml.safe_dump(model, sort_keys=False))
@@ -182,7 +182,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     assert len(unrelated["questionRevisions"]) == 2
     assert all(item["change"] == "unchanged" for item in unrelated["questionRevisions"])
     # A consumed identity bound changes both questions that share this source.
-    model["entities"][0]["fields"][0]["maxLength"] = 63
+    model["entities"][0]["fields"][0]["maximumLength"] = 63
     model_path.write_text(yaml.safe_dump(model, sort_keys=False))
     changed_export = workspace / "changed-export"
     run(binaries["bregctl"], *export_arguments, "--output", changed_export,
@@ -206,7 +206,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     field["id"] = "lifecycle-status"
     field["apiName"] = "lifecycleStatus"
     for profile in model["accessProfiles"]:
-        for permission in profile["permissions"]:
+        for permission in profile["permissions"]["entities"]:
             for key in ("readableFields", "writableFields"):
                 if key in permission:
                     permission[key] = [
@@ -442,12 +442,12 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
         assert all(not entity.get("selectorProfiles") for entity in authored["entities"])
         # Private test-only field, prepared before first start to prove disclosure denial.
         entity = next(entity for entity in authored["entities"] if entity["id"] == "record")
-        entity["fields"].append({"id": "operator-note", "type": "string", "maxLength": 64,
+        entity["fields"].append({"id": "operator-note", "type": "string", "maximumLength": 64,
                                  "classification": "internal"})
         operator_profile = next(profile for profile in authored["accessProfiles"] if profile["id"] == "operator")
         permission = next(
             permission
-            for permission in operator_profile["permissions"]
+            for permission in operator_profile["permissions"]["entities"]
             if permission["entity"] == "record"
         )
         for field_list in ["readableFields", "writableFields"]:
@@ -523,7 +523,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
                     model["registry"]["canonicalBaseIri"] += "/unexpected"
                 else:
                     entity = next(entity for entity in model["entities"] if entity["id"] == "record")
-                    next(field for field in entity["fields"] if field["id"] == "name")["maxLength"] = 254
+                    next(field for field in entity["fields"] if field["id"] == "name")["maximumLength"] = 254
                 model_path.write_text(yaml.safe_dump(model, sort_keys=False))
                 try:
                     refused = subprocess.run([str(binaries["bregctl"]), "dev", "start", str(registry)],

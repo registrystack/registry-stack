@@ -14,7 +14,6 @@ use registry_platform_oidc::{
     GrantContextError, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
     TokenVerifierConfig, VerifiedToken,
 };
-use registry_platform_yaml::UniqueList;
 use serde_json::{Map, Value};
 use thiserror::Error;
 
@@ -295,13 +294,7 @@ impl Authenticator {
         .with_max_token_lifetime(Some(Duration::from_secs(
             config.maximum_token_lifetime_seconds.get(),
         )))
-        .with_allowed_clients(
-            config
-                .allowed_clients
-                .clone()
-                .map(UniqueList::into_vec)
-                .unwrap_or_default(),
-        )
+        .with_allowed_clients(config.allowed_clients.admitted())
         .with_assertion_issuers(
             config
                 .assertion_issuers
@@ -325,13 +318,7 @@ impl Authenticator {
             actor_claim: config.actor_claim.clone(),
         };
         Self::new(verifier, claims)
-            .with_required_scopes(
-                config
-                    .required_scopes
-                    .clone()
-                    .map(UniqueList::into_vec)
-                    .unwrap_or_default(),
-            )
+            .with_required_scopes(config.required_scopes.admitted())
             .with_resources(vec![config.audience().to_owned()])
     }
 
@@ -685,7 +672,7 @@ fn jwks_fetch_policy(
 /// Those default to the caller's side: a failure this code has never seen is
 /// one it cannot honestly describe as an unreachable key set, and an operator
 /// misdirected by a confident wrong message is worse off than one who reads
-/// the same `auth.invalid_credential` twice.
+/// the same `auth.invalid-credential` twice.
 fn is_key_source_failure(error: &OidcError) -> bool {
     match error {
         OidcError::Transport(_)

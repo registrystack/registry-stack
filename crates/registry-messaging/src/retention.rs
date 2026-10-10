@@ -6,7 +6,7 @@
 //!
 //! - a message's payload, its recipient contact and rendered parts, is
 //!   erased `payloadRetentionDays` after its dispatch job reached a terminal state
-//!   (`delivered`, `dead_lettered`, `expired`, or `cancelled`), and the
+//!   (`delivered`, `dead-lettered`, `expired`, or `cancelled`), and the
 //!   content-free message record stays;
 //! - the message record is deleted `recordRetentionDays` after that terminal state,
 //!   and its payload, job, attempts, and delivery receipts go with it; its
@@ -73,7 +73,7 @@ const STATEMENT_TIMEOUT: &str = "60s";
 pub const RETENTION_BATCH: u32 = 1_000;
 
 /// The job states a message ends in. Only these are ever erased.
-const TERMINAL: &str = "('delivered', 'dead_lettered', 'expired', 'cancelled')";
+const TERMINAL: &str = "('delivered', 'dead-lettered', 'expired', 'cancelled')";
 
 /// Who ran a retention pass.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -627,5 +627,28 @@ impl RetentionSweep {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use registry_platform_dispatch::postgres::JobState;
+
+    use super::TERMINAL;
+
+    /// The job table stores the dispatch core's words. A terminal state
+    /// spelled any other way matches no row, and a message that ended in it
+    /// would be kept forever without a refusal to show for it.
+    #[test]
+    fn the_terminal_states_are_the_words_the_dispatch_core_stores() {
+        let terminal = [
+            JobState::Delivered,
+            JobState::DeadLettered,
+            JobState::Expired,
+            JobState::Cancelled,
+        ]
+        .map(|state| format!("'{}'", state.as_str()))
+        .join(", ");
+        assert_eq!(TERMINAL, format!("({terminal})"));
     }
 }

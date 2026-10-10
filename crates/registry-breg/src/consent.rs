@@ -13,15 +13,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::contract::{
     AccessProfileSource, ActionSource, BoundaryOperator, ConsentIssuerSource, EntitySource,
     FieldTypeSource, MutationMode, Operation, ProjectAccessProfileSource, RegistryProject,
-    RowBoundarySource,
+    RowBoundarySource, MAX_CONSENT_DURATION_DAYS,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::{quote_identifier, quote_literal};
 use crate::membership::{RowProbe, RowProbeForm};
 use crate::model::{
     CompiledAction, CompiledActionInput, CompiledActionMutation, CompiledActionValue,
-    CompiledConsentDuration, CompiledConsentRecord, CompiledConsentRequirement, CompiledEntity,
-    CompiledRecipients,
+    CompiledConsentRecord, CompiledConsentRequirement, CompiledEntity, CompiledRecipients,
 };
 use crate::physical_names::hex_prefix;
 use sha2::{Digest, Sha256};
@@ -38,10 +37,6 @@ pub const DECISIONS_CLAIM_PREFIX: &str = "registry:consent-decisions:";
 /// The canonical row identity, bound to `record_id` by the consent probe.
 pub(crate) const OWN_ID: &str = "id";
 
-/// Ten years of 365.25 days.
-const MAX_DURATION_SECONDS: u64 = 315_576_000;
-const SECONDS_PER_YEAR: u64 = 31_557_600;
-const SECONDS_PER_MONTH: u64 = 2_629_800;
 /// One organization plus its groups stays within the 64-value `in` bound.
 const MAX_GROUPS_PER_ORGANIZATION: usize = 63;
 const MAX_FEED_DECISIONS: usize = 64;
@@ -352,11 +347,11 @@ fn validate_record(
             "gives and revokes are non-empty, distinct, disjoint codes of the decision vocabulary, at most 64 together, and refusals are a subset of revokes",
         ));
     }
-    if parse_duration(&record.validity.max_duration).is_none() {
+    if !(1..=MAX_CONSENT_DURATION_DAYS).contains(&record.validity.maximum_duration_days) {
         errors.push(Diagnostic::error(
             "breg.consent.record-max-duration",
-            format!("{location}.validity.maxDuration"),
-            "maxDuration is a positive ISO 8601 duration such as P365D, at most ten years",
+            format!("{location}.validity.maximumDurationDays"),
+            "maximumDurationDays is a whole number of days from 1 to 3652, ten years",
         ));
     }
     let plaintext = [
@@ -632,11 +627,7 @@ fn validate_reserved_claims(
                 "entities[id={}].accessProfiles[id={}]",
                 entity.id, profile.id
             );
-            if profile
-                .principal_claim
-                .as_deref()
-                .is_some_and(is_reserved_claim)
-            {
+            if is_reserved_claim(&profile.principal_claim) {
                 refuse_claim(&format!("{path}.principalClaim"), errors);
             }
             for boundary in &profile.row_boundaries {
@@ -722,11 +713,7 @@ fn validate_reserved_claims(
         }
     }
     for profile in &project.access_profiles {
-        if profile
-            .principal_claim
-            .as_deref()
-            .is_some_and(is_reserved_claim)
-        {
+        if is_reserved_claim(&profile.principal_claim) {
             refuse_claim(
                 &format!("project.accessProfiles[id={}].principalClaim", profile.id),
                 errors,
@@ -766,8 +753,7 @@ pub(crate) fn compile(
                 gives: record.decision.gives.iter().cloned().collect(),
                 revokes: record.decision.revokes.iter().cloned().collect(),
                 refusals: record.decision.refusals.iter().cloned().collect(),
-                max_duration: parse_duration(&record.validity.max_duration)
-                    .expect("validated consent maxDuration"),
+                maximum_duration_days: record.validity.maximum_duration_days,
             };
             let claim = decisions_claim(&entity.id);
             for profile in entity.access_profiles.values_mut() {
@@ -1006,16 +992,15 @@ fn subject_bound_through_link(
             .flat_map(|profile| {
                 profile
                     .permissions
+                    .actions
                     .iter()
-                    .filter(|grant| grant.action.as_deref() == Some(action.id.as_str()))
+                    .filter(|grant| grant.action == action.id)
                     .map(move |grant| (profile, grant))
             })
             .collect::<Vec<_>>();
         let principal_bound = !permissions.is_empty()
             && permissions.iter().all(|(profile, grant)| {
-                let Some(claim) = profile.principal_claim.as_deref() else {
-                    return false;
-                };
+                let claim = profile.principal_claim.as_str();
                 grant
                     .targets
                     .iter()
@@ -1043,24 +1028,22 @@ fn principal_field(field_type: FieldTypeSource) -> bool {
 }
 
 /// Action-permission rules: a gated profile is read-only, so it holds no
-/// consent check on an action and no action reaching a gated entity.
+/// action reaching a gated entity.
 pub(crate) fn validate_action_permission(
     profile: &ProjectAccessProfileSource,
-    grant: &crate::contract::AccessPermissionSource,
+    grant: &crate::contract::ActionPermissionSource,
     entities: &BTreeMap<String, CompiledEntity>,
     errors: &mut Vec<Diagnostic>,
 ) {
-    if !grant.require_consent.is_empty()
-        || grant.targets.iter().any(|target| {
-            entities
-                .get(&target.entity)
-                .is_some_and(|entity| !requirements(entity, &profile.id).is_empty())
-        })
-    {
+    if grant.targets.iter().any(|target| {
+        entities
+            .get(&target.entity)
+            .is_some_and(|entity| !requirements(entity, &profile.id).is_empty())
+    }) {
         errors.push(Diagnostic::error(
             "breg.consent.require-read-only",
-            "project.accessProfiles[].permissions[].action",
-            "a consent-checked profile is read-only: it cannot carry requireConsent on an action or invoke an action targeting its gated entity",
+            "project.accessProfiles[].permissions.actions[].action",
+            "a consent-checked profile is read-only: it cannot invoke an action targeting its gated entity",
         ));
     }
     if grant.targets.iter().any(|target| {
@@ -1070,82 +1053,19 @@ pub(crate) fn validate_action_permission(
             .any(|boundary| is_reserved_claim(&boundary.claim))
     }) {
         refuse_claim(
-            "project.accessProfiles[].permissions[].targets[].rowBoundaries",
+            "project.accessProfiles[].permissions.actions[].targets[].rowBoundaries",
             errors,
         );
     }
 }
 
-/// Parse a positive ISO 8601 duration of at most ten years:
-/// `P[nY][nM][nW][nD][T[nH][nM][nS]]` with integer components.
-pub(crate) fn parse_duration(text: &str) -> Option<CompiledConsentDuration> {
-    let rest = text.strip_prefix('P')?;
-    let (date, time) = match rest.split_once('T') {
-        Some((date, time)) if !time.is_empty() => (date, Some(time)),
-        Some(_) => return None,
-        None => (rest, None),
-    };
-    let date = components(date, &['Y', 'M', 'W', 'D'])?;
-    let time = match time {
-        Some(time) => components(time, &['H', 'M', 'S'])?,
-        None => vec![None; 3],
-    };
-    if date.iter().chain(&time).all(Option::is_none) {
-        return None;
-    }
-    let value = |part: &Option<u32>| part.unwrap_or(0);
-    let duration = CompiledConsentDuration {
-        iso: text.to_owned(),
-        years: value(&date[0]),
-        months: value(&date[1]),
-        weeks: value(&date[2]),
-        days: value(&date[3]),
-        hours: value(&time[0]),
-        minutes: value(&time[1]),
-        seconds: value(&time[2]),
-    };
-    let seconds = duration_seconds(&duration)?;
-    (seconds > 0 && seconds <= MAX_DURATION_SECONDS).then_some(duration)
-}
-
-/// A duration's length in seconds, counting a year as 365.25 days and a month
-/// as a twelfth of that. None when it overflows.
-pub(crate) fn duration_seconds(duration: &CompiledConsentDuration) -> Option<u64> {
-    [
-        (duration.years, SECONDS_PER_YEAR),
-        (duration.months, SECONDS_PER_MONTH),
-        (duration.weeks, 604_800),
-        (duration.days, 86_400),
-        (duration.hours, 3_600),
-        (duration.minutes, 60),
-        (duration.seconds, 1),
-    ]
-    .into_iter()
-    .try_fold(0u64, |total, (count, unit)| {
-        total.checked_add(u64::from(count).checked_mul(unit)?)
-    })
-}
-
-/// Split `1Y2D` into one optional integer per unit, units in order and at
-/// most once each.
-fn components(text: &str, units: &[char]) -> Option<Vec<Option<u32>>> {
-    let mut values = vec![None; units.len()];
-    let mut next = 0;
-    let mut digits = String::new();
-    for character in text.chars() {
-        if character.is_ascii_digit() {
-            digits.push(character);
-            continue;
-        }
-        let position = units[next..].iter().position(|unit| *unit == character)? + next;
-        if digits.is_empty() {
-            return None;
-        }
-        values[position] = Some(digits.parse().ok()?);
-        digits.clear();
-        next = position + 1;
-    }
-    digits.is_empty().then_some(values)
+/// The interval a give lasts from its ordering time: the whole days the
+/// consent record states.
+fn duration_interval(record: &CompiledConsentRecord) -> String {
+    format!(
+        "make_interval(0, 0, 0, {}, 0, 0, 0)",
+        record.maximum_duration_days
+    )
 }
 
 fn valid_identifier(value: &str) -> bool {
@@ -1228,18 +1148,7 @@ pub(crate) fn probe_body(name: &str, table: &str, record: &CompiledConsentRecord
     .map(|key| format!("revoked.{0} = given.{0}", quote_identifier(key)))
     .collect::<Vec<_>>()
     .join(" AND ");
-    let duration = &record.max_duration;
-    let cap = format!(
-        "{} + make_interval({}, {}, {}, {}, {}, {}, {})",
-        order("given"),
-        duration.years,
-        duration.months,
-        duration.weeks,
-        duration.days,
-        duration.hours,
-        duration.minutes,
-        duration.seconds,
-    );
+    let cap = format!("{} + {}", order("given"), duration_interval(record));
     let expiry = match &record.until_column {
         Some(until) => format!("LEAST({}, {cap})", column("given", until)),
         None => cap,
@@ -1331,7 +1240,7 @@ pub(crate) fn index_statements(entity: &CompiledEntity) -> Vec<(String, String, 
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{parse_duration, validate, RowProbeForm};
+    use super::{probe_body, validate, RowProbeForm};
     use crate::contract::{parse_project_yaml, EntitySource};
 
     /// The grammar refuses `encrypted` on reference, vocabulary-code and
@@ -1522,24 +1431,31 @@ mod tests {
         );
     }
 
-    #[test]
-    fn durations_parse_integer_components_in_order() {
-        let parsed = parse_duration("P1Y2M3W4DT5H6M7S").expect("full duration");
-        assert_eq!(
-            (
-                parsed.years,
-                parsed.months,
-                parsed.weeks,
-                parsed.days,
-                parsed.hours,
-                parsed.minutes,
-                parsed.seconds
-            ),
-            (1, 2, 3, 4, 5, 6, 7)
-        );
-        assert!(parse_duration("PT90M").is_some());
-        for invalid in ["P1D2Y", "P1DD", "PD", "P1.5D", "P1DT", "P+1D", "p1d", "P1d"] {
-            assert!(parse_duration(invalid).is_none(), "{invalid}");
+    fn consent_record(maximum_duration_days: u32) -> crate::model::CompiledConsentRecord {
+        crate::model::CompiledConsentRecord {
+            subject_column: "subject".to_owned(),
+            recipient_column: "recipient".to_owned(),
+            purpose_column: "purpose".to_owned(),
+            scope_column: "scope".to_owned(),
+            decision_field: "decision".to_owned(),
+            decision_column: "decision".to_owned(),
+            from_column: "effective_at".to_owned(),
+            until_column: None,
+            gives: ["given".to_owned()].into(),
+            revokes: ["withdrawn".to_owned()].into(),
+            refusals: Default::default(),
+            maximum_duration_days,
         }
+    }
+
+    #[test]
+    fn the_probe_caps_a_give_at_its_whole_days() {
+        let body = probe_body("consent_probe", "consent_decision", &consent_record(365));
+        assert!(
+            body.contains(
+                "now() < LEAST(given.\"effective_at\", given.created_at) + make_interval(0, 0, 0, 365, 0, 0, 0)"
+            ),
+            "{body}"
+        );
     }
 }

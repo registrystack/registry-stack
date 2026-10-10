@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: membership-example
   version: '1'
   defaultLanguage: en
@@ -15,7 +15,7 @@ entities:
   fields:
   - id: name
     type: string
-    maxLength: 80
+    maximumLength: 80
     classification: internal
 - id: membership
   primaryDataset: test-dataset
@@ -30,7 +30,7 @@ entities:
     classification: internal
   - id: principal
     type: string
-    maxLength: 80
+    maximumLength: 80
     required: true
     classification: restricted
   - id: active
@@ -39,7 +39,7 @@ entities:
     classification: internal
   - id: private-note
     type: string
-    maxLength: 80
+    maximumLength: 80
     classification: restricted
   indexes:
   - id: membership-principal-key
@@ -63,7 +63,7 @@ entities:
     classification: internal
   - id: label
     type: string
-    maxLength: 80
+    maximumLength: 80
     required: true
     classification: internal
   selectorProfiles:
@@ -78,70 +78,72 @@ accessProfiles:
   - records:read
   - membership:use
   permissions:
-  - entity: facility
-    rowBoundaries: unrestricted
-    operations:
-    - get
-    - list
-    - lookup
-    - snapshot
-    - revisions
-    readableFields:
-    - label
-    filterableFields:
-    - label
-    sortableFields:
-    - label
-    allowCount: true
-    revisionAccess: true
-    lookups:
-    - selector: label
-      valueOrigin: request
-    membershipBoundaries:
-    - field: organization
-      membershipEntity: membership
-      membershipKeyField: organization
-      principalField: principal
-      activeField: active
+    entities:
+    - entity: facility
+      rowBoundaries: unrestricted
+      operations:
+      - get
+      - list
+      - lookup
+      - snapshot
+      - revisions
+      readableFields:
+      - label
+      filterableFields:
+      - label
+      sortableFields:
+      - label
+      allowCount: true
+      revisionAccess: true
+      lookups:
+      - selector: label
+        valueOrigin: request
+      membershipBoundaries:
+      - field: organization
+        membershipEntity: membership
+        membershipKeyField: organization
+        principalField: principal
+        activeField: active
 - id: steward
   principalClaim: principal
   requiredScopes:
   - records:manage
   - membership:use
   permissions:
-  - entity: organization
-    rowBoundaries: unrestricted
-    operations:
-    - create
-    - get
-    readableFields:
-    - name
-    writableFields:
-    - name
-  - entity: membership
-    rowBoundaries: unrestricted
-    operations:
-    - create
-    - get
-    - patch
-    readableFields:
-    - organization
-    - principal
-    - active
-    writableFields:
-    - organization
-    - principal
-    - active
-    - private-note
-  - entity: facility
-    rowBoundaries: unrestricted
-    operations:
-    - create
-    - get
-    - patch
-    readableFields:
-    - organization
-    - label
-    writableFields:
-    - organization
-    - label
+    entities:
+    - entity: organization
+      rowBoundaries: unrestricted
+      operations:
+      - create
+      - get
+      readableFields:
+      - name
+      writableFields:
+      - name
+    - entity: membership
+      rowBoundaries: unrestricted
+      operations:
+      - create
+      - get
+      - patch
+      readableFields:
+      - organization
+      - principal
+      - active
+      writableFields:
+      - organization
+      - principal
+      - active
+      - private-note
+    - entity: facility
+      rowBoundaries: unrestricted
+      operations:
+      - create
+      - get
+      - patch
+      readableFields:
+      - organization
+      - label
+      writableFields:
+      - organization
+      - label

@@ -48,9 +48,17 @@ const AUDIT_WRITER_MIGRATION: &str = include_str!("../migrations/0017_audit_writ
 const SOURCE_RECONCILIATION_HEALTH_MIGRATION: &str =
     include_str!("../migrations/0018_source_reconciliation_health.sql");
 const ACTIVATIONS_MIGRATION: &str = include_str!("../migrations/0019_activations.sql");
+const OCCURRENCE_STATE_SPELLING_MIGRATION: &str =
+    include_str!("../migrations/0022_occurrence_state_spelling.sql");
+const REVIEW_OUTCOME_SPELLING_MIGRATION: &str =
+    include_str!("../migrations/0023_review_outcome_spelling.sql");
+const HISTORY_EVENT_SPELLING_MIGRATION: &str =
+    include_str!("../migrations/0024_history_event_spelling.sql");
+const CLOCK_STAFFING_INBOX_SPELLING_MIGRATION: &str =
+    include_str!("../migrations/0025_clock_staffing_inbox_spelling.sql");
 
 /// Every schema version in ledger order.
-pub(crate) const MIGRATIONS: [(i64, &str); 21] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 25] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -78,6 +86,10 @@ pub(crate) const MIGRATIONS: [(i64, &str); 21] = [
         21,
         include_str!("../migrations/0021_own_review_decisions.sql"),
     ),
+    (22, OCCURRENCE_STATE_SPELLING_MIGRATION),
+    (23, REVIEW_OUTCOME_SPELLING_MIGRATION),
+    (24, HISTORY_EVENT_SPELLING_MIGRATION),
+    (25, CLOCK_STAFFING_INBOX_SPELLING_MIGRATION),
 ];
 
 /// The newest schema version this binary knows how to run against.
@@ -258,8 +270,10 @@ pub(crate) async fn register_source_generation_in(
 }
 
 /// In-flight reviews grouped by pinned policy, subject source and type, and
-/// active stage, plus open work items per queue and per source, read inside
-/// `client`.
+/// active stage, and counted per producer that submitted them, plus open work
+/// items per queue and per source, read inside `client`. A review is in
+/// flight while its lifecycle is `reviewing`, the one state that is not
+/// terminal.
 pub(crate) async fn pinned_work_inventory_in(
     client: &tokio_postgres::Transaction<'_>,
 ) -> Result<crate::pinned_work::PinnedWorkInventory, StoreError> {
@@ -282,6 +296,19 @@ pub(crate) async fn pinned_work_inventory_in(
                 .map_err(|_| StoreError::Corrupt)?,
             reviews: u64::try_from(reviews).map_err(|_| StoreError::Corrupt)?,
         });
+    }
+    for row in client
+        .query(
+            "SELECT producer_id,count(*) FROM casework_review_requests WHERE lifecycle='reviewing' GROUP BY producer_id",
+            &[],
+        )
+        .await?
+    {
+        let reviews: i64 = row.try_get(1)?;
+        inventory.reviews_by_producer.insert(
+            row.try_get(0)?,
+            u64::try_from(reviews).map_err(|_| StoreError::Corrupt)?,
+        );
     }
     for row in client
         .query(
@@ -720,7 +747,7 @@ impl PostgresStore {
         let request_hash = request_hash(request)?;
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "directory_bootstrapped",
+                "directory-bootstrapped",
                 Some(actor),
                 &actor.profile_id,
                 json!({"teamId": request.team_id, "queueId": request.queue_id}),
@@ -788,13 +815,13 @@ impl PostgresStore {
         let now = Utc::now();
         let detail = json!({"teamId":request.team_id,"queueId":request.queue_id});
         transaction.execute(
-            "INSERT INTO casework_directory_events(event_id,directory_revision,event_kind,occurred_at,actor_issuer,actor_subject,profile_id,detail) VALUES($1,$2,'directory_bootstrapped',$3,$4,$5,$6,$7)",
+            "INSERT INTO casework_directory_events(event_id,directory_revision,event_kind,occurred_at,actor_issuer,actor_subject,profile_id,detail) VALUES($1,$2,'directory-bootstrapped',$3,$4,$5,$6,$7)",
             &[&event_id,&next,&now,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&detail],
         ).await?;
         audit.record(
             event_id,
             json!({
-                "event":"casework.directory_bootstrapped","directoryRevision":next,
+                "event":"casework.directory-bootstrapped","directoryRevision":next,
                 "actor":{"issuer":actor.principal.issuer,"subject":actor.principal.subject},
                 "profileId":actor.profile_id,"teamId":request.team_id,"queueId":request.queue_id
             }),
@@ -1346,7 +1373,7 @@ impl PostgresStore {
         }
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "draft_saved",
+                "draft-saved",
                 Some(actor),
                 &actor.profile_id,
                 json!({"itemId": item_id}),
@@ -1479,7 +1506,7 @@ impl PostgresStore {
     ) -> Result<bool, StoreError> {
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "draft_saved",
+                "draft-saved",
                 Some(actor),
                 &actor.profile_id,
                 json!({"itemId": item_id}),
@@ -1605,7 +1632,7 @@ impl PostgresStore {
     ) -> Result<(AttemptStatus, Uuid), StoreError> {
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "attempt_reserved",
+                "attempt-reserved",
                 Some(actor),
                 &actor.profile_id,
                 json!({"itemId": item_id}),
@@ -1728,7 +1755,7 @@ impl PostgresStore {
     ) -> Result<AttemptStatus, StoreError> {
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "attempt_uncertain",
+                "attempt-uncertain",
                 Some(actor),
                 &actor.profile_id,
                 json!({}),
@@ -1866,9 +1893,9 @@ impl PostgresStore {
         let mut audit = self
             .begin_audit(crate::audit::request_record(
                 if state == AttemptState::Completed {
-                    "action_completed"
+                    "action-completed"
                 } else {
-                    "attempt_uncertain"
+                    "attempt-uncertain"
                 },
                 Some(actor),
                 &actor.profile_id,
@@ -1978,7 +2005,8 @@ impl PostgresStore {
         )
         .await?;
         if state == AttemptState::Completed
-            && parse_operation(&row.get::<_, String>(6))?.as_str() == "request_correction"
+            && parse_operation(&row.get::<_, String>(6))?.as_str()
+                == OperationName::REQUEST_CORRECTION
         {
             let reason: Option<String> = row.get(11);
             let reason = reason.ok_or(StoreError::Corrupt)?;
@@ -2040,7 +2068,7 @@ impl PostgresStore {
         let audit = if apply {
             Some(
                 self.begin_audit(crate::audit::request_record(
-                    "attempt_settled",
+                    "attempt-settled",
                     None,
                     "system:operator",
                     json!({}),
@@ -2136,7 +2164,7 @@ impl PostgresStore {
         )
         .await?;
         if settlement.outcome == AttemptSettlementOutcome::Applied {
-            if operation.as_str() == "request_correction" {
+            if operation.as_str() == OperationName::REQUEST_CORRECTION {
                 let reason: Option<String> = row.get(4);
                 let reason = reason.ok_or(StoreError::Corrupt)?;
                 transaction.execute("INSERT INTO casework_correction_context(item_id,source_binding,reason,flagged_fields,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(item_id) DO UPDATE SET source_binding=EXCLUDED.source_binding,reason=EXCLUDED.reason,flagged_fields=EXCLUDED.flagged_fields,created_at=EXCLUDED.created_at", &[&item_id,&row.get::<_,Value>(3),&reason,&row.get::<_,Value>(5),&now]).await?;
@@ -2185,7 +2213,7 @@ impl PostgresStore {
         let audit = if apply {
             Some(
                 self.begin_audit(crate::audit::request_record(
-                    "attempt_uncertain",
+                    "attempt-uncertain",
                     None,
                     "system:operator",
                     json!({}),
@@ -2819,7 +2847,7 @@ impl PostgresStore {
             ),
         };
         let query = format!(
-            "WITH cursor_parameters AS (SELECT $11::timestamptz AS after_due,$12::timestamptz AS after_observed,$13::text AS after_kind,$14::uuid AS after_item), visible_items AS (SELECT i.* FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships m ON m.team_id=q.team_id AND m.issuer=$1 AND m.subject=$2 WHERE i.erased_at IS NULL AND m.membership_kind=$3 AND ($4::text IS NULL OR i.queue_id=$4) AND ($6::text IS NULL OR (i.source_id=$6 AND i.subject_kind=$7 AND i.subject_id=$8)) AND ($9::text IS NULL OR i.display_reference COLLATE \"C\"=$9 COLLATE \"C\") AND ($5='completed_by_me' OR i.state NOT IN ('completed','superseded','cancelled'))), clock_due AS (SELECT o.item_id,min(c.due_at) FILTER (WHERE o.state IN ('running','verification_pending')) AS active_due_at,bool_or(o.state='paused') AS paused FROM casework_clock_occurrences o JOIN visible_items ON visible_items.item_id=o.item_id LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation GROUP BY o.item_id), candidates AS (SELECT visible_items.*,COALESCE(clock_due.active_due_at,CASE WHEN clock_due.paused THEN NULL ELSE visible_items.passive_due_at END) AS effective_due_at FROM visible_items LEFT JOIN clock_due ON clock_due.item_id=visible_items.item_id) SELECT candidates.* FROM candidates CROSS JOIN cursor_parameters WHERE (($5='mine' AND state NOT IN ('completed','superseded','cancelled') AND holder_issuer=$1 AND holder_subject=$2) OR ($5='my_teams' AND state NOT IN ('completed','superseded','cancelled')) OR ($5='team_holdings' AND state NOT IN ('completed','superseded','cancelled') AND holder_issuer IS NOT NULL) OR ($5='overdue' AND state NOT IN ('completed','superseded','cancelled') AND effective_due_at<now()) OR ($5='completed_by_me' AND state='completed' AND EXISTS(SELECT 1 FROM casework_history h WHERE h.item_id=candidates.item_id AND h.kind='action_completed' AND h.actor_issuer=$1 AND h.actor_subject=$2))) AND {continuation} ORDER BY {ordering} LIMIT $15"
+            "WITH cursor_parameters AS (SELECT $11::timestamptz AS after_due,$12::timestamptz AS after_observed,$13::text AS after_kind,$14::uuid AS after_item), visible_items AS (SELECT i.* FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships m ON m.team_id=q.team_id AND m.issuer=$1 AND m.subject=$2 WHERE i.erased_at IS NULL AND m.membership_kind=$3 AND ($4::text IS NULL OR i.queue_id=$4) AND ($6::text IS NULL OR (i.source_id=$6 AND i.subject_kind=$7 AND i.subject_id=$8)) AND ($9::text IS NULL OR i.display_reference COLLATE \"C\"=$9 COLLATE \"C\") AND ($5='completed_by_me' OR i.state NOT IN ('completed','superseded','cancelled'))), clock_due AS (SELECT o.item_id,min(c.due_at) FILTER (WHERE o.state IN ('running','verification-pending')) AS active_due_at,bool_or(o.state='paused') AS paused FROM casework_clock_occurrences o JOIN visible_items ON visible_items.item_id=o.item_id LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation GROUP BY o.item_id), candidates AS (SELECT visible_items.*,COALESCE(clock_due.active_due_at,CASE WHEN clock_due.paused THEN NULL ELSE visible_items.passive_due_at END) AS effective_due_at FROM visible_items LEFT JOIN clock_due ON clock_due.item_id=visible_items.item_id) SELECT candidates.* FROM candidates CROSS JOIN cursor_parameters WHERE (($5='mine' AND state NOT IN ('completed','superseded','cancelled') AND holder_issuer=$1 AND holder_subject=$2) OR ($5='my_teams' AND state NOT IN ('completed','superseded','cancelled')) OR ($5='team_holdings' AND state NOT IN ('completed','superseded','cancelled') AND holder_issuer IS NOT NULL) OR ($5='overdue' AND state NOT IN ('completed','superseded','cancelled') AND effective_due_at<now()) OR ($5='completed_by_me' AND state='completed' AND EXISTS(SELECT 1 FROM casework_history h WHERE h.item_id=candidates.item_id AND h.kind='action-completed' AND h.actor_issuer=$1 AND h.actor_subject=$2))) AND {continuation} ORDER BY {ordering} LIMIT $15"
         );
         let rows = client
             .query(
@@ -2895,7 +2923,7 @@ impl PostgresStore {
         }
         let client = self.client().await?;
         let rows=client.query(
-            "WITH held AS (SELECT i.item_id,i.holder_issuer,i.holder_subject,i.queue_id,i.passive_due_at FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships lead ON lead.team_id=q.team_id AND lead.issuer=$1 AND lead.subject=$2 AND lead.membership_kind='supervisor' WHERE i.erased_at IS NULL AND i.holder_issuer IS NOT NULL AND i.state NOT IN ('completed','superseded','cancelled')), clock_due AS (SELECT o.item_id,min(c.due_at) FILTER (WHERE o.state IN ('running','verification_pending')) AS active_due_at,bool_or(o.state='paused') AS paused FROM casework_clock_occurrences o JOIN held ON held.item_id=o.item_id LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation GROUP BY o.item_id), counted AS (SELECT held.holder_issuer,held.holder_subject,held.queue_id,COALESCE(clock_due.active_due_at,CASE WHEN clock_due.paused THEN NULL ELSE held.passive_due_at END) AS effective_due_at FROM held LEFT JOIN clock_due ON clock_due.item_id=held.item_id) SELECT holder_issuer,holder_subject,queue_id,count(*)::bigint,count(*) FILTER(WHERE effective_due_at IS NOT NULL AND effective_due_at<now())::bigint FROM counted GROUP BY holder_issuer,holder_subject,queue_id ORDER BY queue_id,holder_issuer,holder_subject",
+            "WITH held AS (SELECT i.item_id,i.holder_issuer,i.holder_subject,i.queue_id,i.passive_due_at FROM casework_items i JOIN casework_queue_service q ON q.queue_id=i.queue_id JOIN casework_memberships lead ON lead.team_id=q.team_id AND lead.issuer=$1 AND lead.subject=$2 AND lead.membership_kind='supervisor' WHERE i.erased_at IS NULL AND i.holder_issuer IS NOT NULL AND i.state NOT IN ('completed','superseded','cancelled')), clock_due AS (SELECT o.item_id,min(c.due_at) FILTER (WHERE o.state IN ('running','verification-pending')) AS active_due_at,bool_or(o.state='paused') AS paused FROM casework_clock_occurrences o JOIN held ON held.item_id=o.item_id LEFT JOIN casework_clock_calculations c ON c.clock_occurrence_id=o.clock_occurrence_id AND c.generation=o.current_calculation_generation GROUP BY o.item_id), counted AS (SELECT held.holder_issuer,held.holder_subject,held.queue_id,COALESCE(clock_due.active_due_at,CASE WHEN clock_due.paused THEN NULL ELSE held.passive_due_at END) AS effective_due_at FROM held LEFT JOIN clock_due ON clock_due.item_id=held.item_id) SELECT holder_issuer,holder_subject,queue_id,count(*)::bigint,count(*) FILTER(WHERE effective_due_at IS NOT NULL AND effective_due_at<now())::bigint FROM counted GROUP BY holder_issuer,holder_subject,queue_id ORDER BY queue_id,holder_issuer,holder_subject",
             &[&actor.principal.issuer,&actor.principal.subject]
         ).await?;
         rows.into_iter()
@@ -2961,7 +2989,7 @@ impl PostgresStore {
         let client = self.client().await?;
         let rows = client
             .query(
-                "SELECT i.item_id,i.revision,CASE WHEN i.holder_issuer IS NULL THEN NULL ELSE (SELECT h.occurred_at FROM casework_history h WHERE h.item_id=i.item_id AND h.kind IN ('claimed','assigned','delegated','caseload_moved') ORDER BY h.item_revision DESC,h.occurred_at DESC,h.event_id DESC LIMIT 1) END FROM casework_items i WHERE i.item_id=ANY($1) AND i.erased_at IS NULL",
+                "SELECT i.item_id,i.revision,CASE WHEN i.holder_issuer IS NULL THEN NULL ELSE (SELECT h.occurred_at FROM casework_history h WHERE h.item_id=i.item_id AND h.kind IN ('claimed','assigned','delegated','caseload-moved') ORDER BY h.item_revision DESC,h.occurred_at DESC,h.event_id DESC LIMIT 1) END FROM casework_items i WHERE i.item_id=ANY($1) AND i.erased_at IS NULL",
                 &[&item_ids],
             )
             .await?;
@@ -3560,8 +3588,9 @@ impl PostgresStore {
     }
 
     /// In-flight reviews grouped by pinned policy, subject source and type,
-    /// and active stage, plus open work items per queue and per source. The inventory holds
-    /// counts and pinned policy only, never subject data.
+    /// and active stage, and counted per producer that submitted them, plus
+    /// open work items per queue and per source. The inventory holds counts,
+    /// pinned policy, and the ids a package declared only, never subject data.
     pub(crate) async fn pinned_work_inventory(
         &self,
     ) -> Result<crate::pinned_work::PinnedWorkInventory, StoreError> {
@@ -3889,7 +3918,7 @@ async fn update_observed_item(
             HistoryKind::Released,
             None,
             "system:reconciliation",
-            json!({"previousHolder":previous_holder,"reason":"source_observation","sourceRevision":observation.ordered_revision}),
+            json!({"previousHolder":previous_holder,"reason":"source-observation","sourceRevision":observation.ordered_revision}),
         )
         .await?;
     }
@@ -4055,7 +4084,7 @@ fn assignment_context(row: &Row) -> Result<Option<AssignmentContext>, StoreError
         .get::<_, Option<String>>("staffing_diagnostic")
         .as_deref()
     {
-        Some("no_cover_available") => Some(StaffingDiagnostic::NoCoverAvailable),
+        Some("no-cover-available") => Some(StaffingDiagnostic::NoCoverAvailable),
         None => None,
         Some(_) => return Err(StoreError::Corrupt),
     };
@@ -4098,6 +4127,42 @@ fn history_from_row(row: Row) -> Result<HistoryEntry, StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_history_kind_is_stored_under_the_word_it_is_served_under() {
+        let kinds = [
+            HistoryKind::Observed,
+            HistoryKind::Opened,
+            HistoryKind::Claimed,
+            HistoryKind::Assigned,
+            HistoryKind::Delegated,
+            HistoryKind::CaseloadMoved,
+            HistoryKind::Released,
+            HistoryKind::DraftSaved,
+            HistoryKind::TaskApproved,
+            HistoryKind::TaskRevoked,
+            HistoryKind::TaskInvalidated,
+            HistoryKind::AttemptReserved,
+            HistoryKind::AttemptUncertain,
+            HistoryKind::ActionCompleted,
+            HistoryKind::AttemptSettled,
+            HistoryKind::ClockReminder,
+            HistoryKind::ClockStepApplied,
+            HistoryKind::ClockRecomputed,
+            HistoryKind::Superseded,
+            HistoryKind::Completed,
+        ];
+        for kind in kinds {
+            let stored = history_kind_name(kind);
+            assert_eq!(serde_json::to_value(kind).unwrap(), stored);
+            assert!(matches!(parse_history(stored), Ok(read) if read == kind));
+            assert!(!stored.contains('_'), "{stored} is spelled in kebab-case");
+        }
+        assert!(matches!(
+            parse_history("caseload_moved"),
+            Err(StoreError::Corrupt)
+        ));
+    }
 
     #[test]
     fn migrations_are_contiguous_and_the_outbox_drop_is_the_audit_writer_migration() {
@@ -4274,8 +4339,8 @@ fn state_name(value: OccurrenceState) -> &'static str {
     match value {
         OccurrenceState::Open => "open",
         OccurrenceState::Claimed => "claimed",
-        OccurrenceState::WaitingApplicant => "waiting_applicant",
-        OccurrenceState::WaitingApplication => "waiting_application",
+        OccurrenceState::WaitingApplicant => "waiting-applicant",
+        OccurrenceState::WaitingApplication => "waiting-application",
         OccurrenceState::Synchronizing => "synchronizing",
         OccurrenceState::Completed => "completed",
         OccurrenceState::Superseded => "superseded",
@@ -4286,8 +4351,8 @@ fn parse_state(value: &str) -> Result<OccurrenceState, StoreError> {
     match value {
         "open" => Ok(OccurrenceState::Open),
         "claimed" => Ok(OccurrenceState::Claimed),
-        "waiting_applicant" => Ok(OccurrenceState::WaitingApplicant),
-        "waiting_application" => Ok(OccurrenceState::WaitingApplication),
+        "waiting-applicant" => Ok(OccurrenceState::WaitingApplicant),
+        "waiting-application" => Ok(OccurrenceState::WaitingApplication),
         "synchronizing" => Ok(OccurrenceState::Synchronizing),
         "completed" => Ok(OccurrenceState::Completed),
         "superseded" => Ok(OccurrenceState::Superseded),
@@ -4322,19 +4387,19 @@ fn history_kind_name(value: HistoryKind) -> &'static str {
         HistoryKind::Claimed => "claimed",
         HistoryKind::Assigned => "assigned",
         HistoryKind::Delegated => "delegated",
-        HistoryKind::CaseloadMoved => "caseload_moved",
+        HistoryKind::CaseloadMoved => "caseload-moved",
         HistoryKind::Released => "released",
-        HistoryKind::DraftSaved => "draft_saved",
-        HistoryKind::TaskApproved => "task_approved",
-        HistoryKind::TaskRevoked => "task_revoked",
-        HistoryKind::TaskInvalidated => "task_invalidated",
-        HistoryKind::AttemptReserved => "attempt_reserved",
-        HistoryKind::AttemptUncertain => "attempt_uncertain",
-        HistoryKind::ActionCompleted => "action_completed",
-        HistoryKind::AttemptSettled => "attempt_settled",
-        HistoryKind::ClockReminder => "clock_reminder",
-        HistoryKind::ClockStepApplied => "clock_step_applied",
-        HistoryKind::ClockRecomputed => "clock_recomputed",
+        HistoryKind::DraftSaved => "draft-saved",
+        HistoryKind::TaskApproved => "task-approved",
+        HistoryKind::TaskRevoked => "task-revoked",
+        HistoryKind::TaskInvalidated => "task-invalidated",
+        HistoryKind::AttemptReserved => "attempt-reserved",
+        HistoryKind::AttemptUncertain => "attempt-uncertain",
+        HistoryKind::ActionCompleted => "action-completed",
+        HistoryKind::AttemptSettled => "attempt-settled",
+        HistoryKind::ClockReminder => "clock-reminder",
+        HistoryKind::ClockStepApplied => "clock-step-applied",
+        HistoryKind::ClockRecomputed => "clock-recomputed",
         HistoryKind::Superseded => "superseded",
         HistoryKind::Completed => "completed",
     }
@@ -4346,19 +4411,19 @@ fn parse_history(value: &str) -> Result<HistoryKind, StoreError> {
         "claimed" => Ok(HistoryKind::Claimed),
         "assigned" => Ok(HistoryKind::Assigned),
         "delegated" => Ok(HistoryKind::Delegated),
-        "caseload_moved" => Ok(HistoryKind::CaseloadMoved),
+        "caseload-moved" => Ok(HistoryKind::CaseloadMoved),
         "released" => Ok(HistoryKind::Released),
-        "draft_saved" => Ok(HistoryKind::DraftSaved),
-        "task_approved" => Ok(HistoryKind::TaskApproved),
-        "task_revoked" => Ok(HistoryKind::TaskRevoked),
-        "task_invalidated" => Ok(HistoryKind::TaskInvalidated),
-        "attempt_reserved" => Ok(HistoryKind::AttemptReserved),
-        "attempt_uncertain" => Ok(HistoryKind::AttemptUncertain),
-        "action_completed" => Ok(HistoryKind::ActionCompleted),
-        "attempt_settled" => Ok(HistoryKind::AttemptSettled),
-        "clock_reminder" => Ok(HistoryKind::ClockReminder),
-        "clock_step_applied" => Ok(HistoryKind::ClockStepApplied),
-        "clock_recomputed" => Ok(HistoryKind::ClockRecomputed),
+        "draft-saved" => Ok(HistoryKind::DraftSaved),
+        "task-approved" => Ok(HistoryKind::TaskApproved),
+        "task-revoked" => Ok(HistoryKind::TaskRevoked),
+        "task-invalidated" => Ok(HistoryKind::TaskInvalidated),
+        "attempt-reserved" => Ok(HistoryKind::AttemptReserved),
+        "attempt-uncertain" => Ok(HistoryKind::AttemptUncertain),
+        "action-completed" => Ok(HistoryKind::ActionCompleted),
+        "attempt-settled" => Ok(HistoryKind::AttemptSettled),
+        "clock-reminder" => Ok(HistoryKind::ClockReminder),
+        "clock-step-applied" => Ok(HistoryKind::ClockStepApplied),
+        "clock-recomputed" => Ok(HistoryKind::ClockRecomputed),
         "superseded" => Ok(HistoryKind::Superseded),
         "completed" => Ok(HistoryKind::Completed),
         _ => Err(StoreError::Corrupt),

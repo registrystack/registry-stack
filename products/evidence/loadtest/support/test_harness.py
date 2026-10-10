@@ -67,7 +67,7 @@ class EvidenceStub:
     """A loopback stand-in for Evidence that records only what the tests assert on."""
 
     def __init__(
-        self, limit_after: int | None = None, limited_code: str = "evidence.rate_limited", retry_after: str = "1"
+        self, limit_after: int | None = None, limited_code: str = "evidence.rate-limited", retry_after: str = "1"
     ) -> None:
         self.requests: list[dict[str, object]] = []
         self.lock = threading.Lock()

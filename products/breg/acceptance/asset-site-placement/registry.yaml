@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: asset-site-placement
   canonicalBaseIri: "https://asset-site-placement.example.gov"
   version: 0.1.0
@@ -52,12 +52,12 @@ entities:
       - id: asset-code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: internal
       - id: label
         type: string
         required: true
-        maxLength: 200
+        maximumLength: 200
         classification: internal
       - id: asset-class
         type: vocabulary-code
@@ -65,7 +65,7 @@ entities:
         required: true
         classification: internal
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - asset-code
   - id: asset-site
@@ -76,15 +76,15 @@ entities:
       - id: site-code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: internal
       - id: label
         type: string
         required: true
-        maxLength: 200
+        maximumLength: 200
         classification: internal
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - site-code
   - id: asset-placement
@@ -116,7 +116,7 @@ entities:
       scopeFields:
         - asset
     constraints:
-      - kind: temporal-non-overlap
+      - type: temporal-non-overlap
         scopeFields:
           - asset
         startField: valid-from
@@ -127,7 +127,7 @@ entities:
   - id: inspection-event
     primaryDataset: "asset-site-placement"
     route: inspections
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - id: asset
         type: reference
@@ -151,113 +151,115 @@ accessProfiles:
     requiredPurposes:
       - asset-management
     permissions:
-      - entity: asset-item
-        rowBoundaries: unrestricted
-        operations:
-          - create
-          - get
-          - list
-          - patch
-          - batch
-        readableFields:
-          - asset-code
-          - label
-          - asset-class
-        writableFields:
-          - asset-code
-          - label
-          - asset-class
-      - entity: asset-site
-        rowBoundaries: unrestricted
-        operations:
-          - create
-          - get
-          - list
-          - patch
-        readableFields:
-          - site-code
-          - label
-        writableFields:
-          - site-code
-          - label
-      - entity: asset-placement
-        rowBoundaries: unrestricted
-        operations:
-          - create
-          - get
-          - list
-          - patch
-        readableFields:
-          - asset
-          - site
-          - valid-from
-          - valid-to
-        writableFields:
-          - asset
-          - site
-          - valid-from
-          - valid-to
-      - entity: inspection-event
-        rowBoundaries: unrestricted
-        operations:
-          - create
-          - get
-          - list
-        readableFields:
-          - asset
-          - observed-at
-          - result
-        writableFields:
-          - asset
-          - observed-at
-          - result
+      entities:
+        - entity: asset-item
+          rowBoundaries: unrestricted
+          operations:
+            - create
+            - get
+            - list
+            - patch
+            - batch
+          readableFields:
+            - asset-code
+            - label
+            - asset-class
+          writableFields:
+            - asset-code
+            - label
+            - asset-class
+        - entity: asset-site
+          rowBoundaries: unrestricted
+          operations:
+            - create
+            - get
+            - list
+            - patch
+          readableFields:
+            - site-code
+            - label
+          writableFields:
+            - site-code
+            - label
+        - entity: asset-placement
+          rowBoundaries: unrestricted
+          operations:
+            - create
+            - get
+            - list
+            - patch
+          readableFields:
+            - asset
+            - site
+            - valid-from
+            - valid-to
+          writableFields:
+            - asset
+            - site
+            - valid-from
+            - valid-to
+        - entity: inspection-event
+          rowBoundaries: unrestricted
+          operations:
+            - create
+            - get
+            - list
+          readableFields:
+            - asset
+            - observed-at
+            - result
+          writableFields:
+            - asset
+            - observed-at
+            - result
   - id: site-planner
     principalClaim: registry_principal
     requiredScopes: unrestricted
     requiredPurposes:
       - site-planning
     permissions:
-      - entity: asset-item
-        rowBoundaries: unrestricted
-        operations:
-          - get
-          - list
-        readableFields:
-          - asset-code
-          - label
-        filterableFields:
-          - asset-code
-      - entity: asset-site
-        rowBoundaries: unrestricted
-        operations:
-          - get
-          - list
-        readableFields:
-          - site-code
-          - label
-        filterableFields:
-          - site-code
-      - entity: asset-placement
-        rowBoundaries: unrestricted
-        operations:
-          - create
-          - get
-          - list
-          - patch
-        readableFields:
-          - asset
-          - site
-          - valid-from
-          - valid-to
-        writableFields:
-          - asset
-          - site
-          - valid-from
-          - valid-to
-        filterableFields:
-          - asset
-          - site
-          - valid-from
+      entities:
+        - entity: asset-item
+          rowBoundaries: unrestricted
+          operations:
+            - get
+            - list
+          readableFields:
+            - asset-code
+            - label
+          filterableFields:
+            - asset-code
+        - entity: asset-site
+          rowBoundaries: unrestricted
+          operations:
+            - get
+            - list
+          readableFields:
+            - site-code
+            - label
+          filterableFields:
+            - site-code
+        - entity: asset-placement
+          rowBoundaries: unrestricted
+          operations:
+            - create
+            - get
+            - list
+            - patch
+          readableFields:
+            - asset
+            - site
+            - valid-from
+            - valid-to
+          writableFields:
+            - asset
+            - site
+            - valid-from
+            - valid-to
+          filterableFields:
+            - asset
+            - site
+            - valid-from
 vocabularies:
   - id: asset-classification
     values:

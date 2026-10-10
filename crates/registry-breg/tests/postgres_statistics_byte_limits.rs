@@ -46,11 +46,11 @@ async fn authored_multi_period_response_obeys_the_shared_document_byte_limit() {
     let mut accessible = dimension_ids.clone();
     accessible.push("event-date".to_owned());
     let source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"statistics-load","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://load.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"statistics-load","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://load.example.test"},
         "entities":[{"id":"unit","route":"units","primaryDataset":"load","mutationMode":"mutable","fields":fields}],
         "vocabularies":vocabularies,
-        "accessProfiles":[{"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted","readableFields":accessible,"filterableFields":accessible},{"dataset":"units-by-category","operations":["read-live"]}]}],
+        "accessProfiles":[{"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted","readableFields":accessible,"filterableFields":accessible}],"datasets":[{"dataset":"units-by-category","operations":["read-live"]}]}}],
         "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"eventDate ne null","period":{"type":"flow","field":"event-date","granularity":"day","firstPeriod":"2025-01-01"},"dimensions":dimension_ids,"disclosure":{"minimumCount":5,"roundingBase":5}}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();

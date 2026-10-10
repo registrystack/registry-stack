@@ -51,8 +51,8 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
     let source = String::from_utf8(authoring_fixture().to_vec())
         .unwrap()
         .replace(
-            "        maxLength: 64",
-            "        maxLength: 64\n        pattern: '[native-pattern-expression-canary'",
+            "        maximumLength: 64",
+            "        maximumLength: 64\n        pattern: '[native-pattern-expression-canary'",
         );
     let project = TestProject::from_registry_source(source.as_bytes());
     let output = bregctl(&["--format", "json", "check", path(project.path())]);
@@ -65,7 +65,7 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
         .find(|finding| finding["code"] == "breg.field.pattern-unverified-offline")
         .expect("offline success must identify native syntax as unverified");
     assert_eq!(finding["severity"], "warning");
-    assert_check_diagnostic(finding, Some("RegistryProject"));
+    assert_check_diagnostic(finding, Some("BRegProject"));
     let pointer = finding["path"].as_str().unwrap();
     assert!(
         pointer.starts_with("/entities/") && pointer.ends_with("/pattern"),
@@ -146,7 +146,7 @@ fn explain_access_states_consent_gates_recipients_and_the_ungated_client() {
         "whose scope is `food-targeting`",
         "record consent-decision",
         "scope food-targeting",
-        "max duration P365D",
+        "maximum duration 365 days",
         "readable fields district (internal), given-name (restricted)",
         "issuing actions record-consent (steward)",
         "client wfp-scope wfp: referral-network, wfp",
@@ -242,7 +242,7 @@ fn missing_action_script_identifies_action_and_safe_relative_path() {
         .as_str()
         .unwrap()
         .contains("scripts/register-person.rhai"));
-    assert_check_diagnostic(diagnostic, Some("RegistryProject"));
+    assert_check_diagnostic(diagnostic, Some("BRegProject"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("fn handle"));
 }
 
@@ -277,7 +277,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         (
             &include_bytes!("../../../products/breg/examples/access-review/missing-scope.json")[..],
             false,
-            "required_scope_missing",
+            "required-scope-missing",
         ),
     ] {
         fs::write(&scenario_path, source).unwrap();
@@ -294,7 +294,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         let report = json_stdout(&output);
         assert_eq!(report["explanation"]["admitted"], expected);
         assert_eq!(report["explanation"]["reason"], reason);
-        assert_eq!(report["explanation"]["recordAccess"], "not_evaluated");
+        assert_eq!(report["explanation"]["recordAccess"], "not-evaluated");
         assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-reader"));
         assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-district"));
     }
@@ -320,7 +320,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         "../../../products/breg/examples/access-review/registry.yaml"
     ))
     .unwrap();
-    source["accessProfiles"][0]["permissions"][0]["rowBoundaries"] =
+    source["accessProfiles"][0]["permissions"]["entities"][0]["rowBoundaries"] =
         serde_json::json!("unrestricted");
     fs::write(
         project.path().join("registry.yaml"),
@@ -501,9 +501,9 @@ fn asset_fixture_module() -> &'static [u8] {
 }
 
 fn authoring_fixture() -> &'static [u8] {
-    br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+    br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: cli-authoring-fixture
   version: "1"
   defaultLanguage: en
@@ -512,19 +512,19 @@ entities:
   - id: record
     primaryDataset: test-dataset
     route: records
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - id: code
         type: string
-        maxLength: 64
+        maximumLength: 64
         classification: internal
 "#
 }
 
 fn action_fixture() -> &'static [u8] {
-    br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+    br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: action-fixture
   version: "1"
   defaultLanguage: en
@@ -535,19 +535,19 @@ entities:
     route: households
     mutationMode: mutable
     fields:
-      - {id: household-code, apiName: householdCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: household-code, apiName: householdCode, type: string, required: true, maximumLength: 64, classification: internal}
       - {id: contact-person, apiName: contactPerson, type: reference, target: person, required: false, classification: restricted}
   - id: person
     primaryDataset: test-dataset
     route: people
     mutationMode: mutable
     fields:
-      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
-      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
   - id: group-membership
     primaryDataset: test-dataset
     route: group-memberships
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - {id: person, type: reference, target: person, required: true, classification: restricted}
       - {id: household, type: reference, target: household, required: true, classification: restricted}
@@ -555,8 +555,8 @@ actions:
   - id: register-household-contact
     inputs:
       - {id: household, apiName: householdId, type: reference, target: household, required: true, classification: restricted}
-      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
-      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
     effects:
       - id: person
         target: {entity: person}
@@ -582,25 +582,27 @@ accessProfiles:
     requiredScopes: [registry:contact:register]
     requiredPurposes: [contact-registration]
     permissions:
-      - action: register-household-contact
-        operations: [invoke]
-        targets:
-          - {entity: household, rowBoundaries: unrestricted}
-          - {entity: person, rowBoundaries: unrestricted}
-          - {entity: group-membership, rowBoundaries: unrestricted}
-        results: [person, membership, household]
+      actions:
+        - action: register-household-contact
+          operations: [invoke]
+          targets:
+            - {entity: household, rowBoundaries: unrestricted}
+            - {entity: person, rowBoundaries: unrestricted}
+            - {entity: group-membership, rowBoundaries: unrestricted}
+          results: [person, membership, household]
   - id: contact-auditor
     principalClaim: other_private_claim
     requiredScopes: [registry:contact:audit]
     requiredPurposes: [contact-audit]
     permissions:
-      - action: register-household-contact
-        operations: [invoke]
-        targets:
-          - {entity: household, rowBoundaries: unrestricted}
-          - {entity: person, rowBoundaries: unrestricted}
-          - {entity: group-membership, rowBoundaries: unrestricted}
-        results: [household]
+      actions:
+        - action: register-household-contact
+          operations: [invoke]
+          targets:
+            - {entity: household, rowBoundaries: unrestricted}
+            - {entity: person, rowBoundaries: unrestricted}
+            - {entity: group-membership, rowBoundaries: unrestricted}
+          results: [household]
 "#
 }
 
@@ -609,9 +611,9 @@ accessProfiles:
 /// grants both an entity-level operation and an action invocation, so `explain routes`
 /// serves a genuinely mixed list: entity routes and action routes side by side.
 fn mixed_entity_and_action_route_fixture() -> &'static [u8] {
-    br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+    br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: mixed-route-fixture
   version: "1"
   defaultLanguage: en
@@ -622,12 +624,12 @@ entities:
     route: households
     mutationMode: mutable
     fields:
-      - {id: household-code, apiName: householdCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: household-code, apiName: householdCode, type: string, required: true, maximumLength: 64, classification: internal}
 actions:
   - id: archive-household
     inputs:
       - {id: household, apiName: householdId, type: reference, target: household, required: true, classification: restricted}
-      - {id: household-code, apiName: householdCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: household-code, apiName: householdCode, type: string, required: true, maximumLength: 64, classification: internal}
     effects:
       - id: household
         target: {fromField: household}
@@ -641,21 +643,23 @@ accessProfiles:
     requiredScopes: unrestricted
     requiredPurposes: [household-read]
     permissions:
-      - entity: household
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [household-code]
-        writableFields: []
+      entities:
+        - entity: household
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [household-code]
+          writableFields: []
   - id: household-archiver
     principalClaim: registry_principal
     requiredScopes: unrestricted
     requiredPurposes: [household-archive]
     permissions:
-      - action: archive-household
-        operations: [invoke]
-        targets:
-          - {entity: household, rowBoundaries: unrestricted}
-        results: [household]
+      actions:
+        - action: archive-household
+          operations: [invoke]
+          targets:
+            - {entity: household, rowBoundaries: unrestricted}
+          results: [household]
 "#
 }
 
@@ -947,7 +951,7 @@ fn authored_project_findings_use_the_tool_finding_schema() {
         .any(|finding| finding["code"] == "breg.package.identity-missing"));
     for finding in diagnostics {
         assert_eq!(finding["severity"], "warning", "{finding}");
-        assert_check_diagnostic(finding, Some("RegistryProject"));
+        assert_check_diagnostic(finding, Some("BRegProject"));
     }
 }
 
@@ -977,7 +981,7 @@ fn production_profile_refuses_missing_package_closure() {
         .as_array()
         .expect("diagnostics is an array")
     {
-        assert_check_diagnostic(diagnostic, Some("RegistryProject"));
+        assert_check_diagnostic(diagnostic, Some("BRegProject"));
     }
 }
 
@@ -1055,7 +1059,7 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     assert!(registry.contains("vocabularies:"));
     assert!(registry.contains("declare `hooks`"));
     assert!(registry.contains("hook declares `phase: after`"));
-    assert!(registry.contains("{kind: url, destinationId: registry-events}"));
+    assert!(registry.contains("{type: url, destinationId: registry-events}"));
     assert!(!registry.contains("declare `events`"));
     assert!(registry.contains("`breg.access.profile-writable-row-boundary` follows"));
     let journeys = fs::read_to_string(destination.join("tests/journeys.yaml"))
@@ -1264,7 +1268,7 @@ fn project_lock_check_refuses_stale_digest_without_rewriting() {
         module_directory.join("module.yaml"),
         String::from_utf8(modular_project_module().to_vec())
             .expect("module is UTF-8")
-            .replace("maxLength: 16", "maxLength: 17"),
+            .replace("maximumLength: 16", "maximumLength: 17"),
     )
     .expect("module source changes");
     let stale = bregctl(&[
@@ -1294,9 +1298,9 @@ fn project_lock_check_refuses_stale_digest_without_rewriting() {
 #[test]
 fn project_lock_keeps_comments_written_inside_the_modules_block() {
     let project = TestProject::from_registry_source(
-        br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: modular-lock-fixture
   version: "1"
   defaultLanguage: en
@@ -1417,9 +1421,9 @@ fn project_lock_replaces_the_modules_block_when_a_module_is_added() {
 #[test]
 fn project_lock_sorts_module_locks_authored_out_of_order() {
     let project = TestProject::from_registry_source(
-        br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: modular-lock-fixture
   version: "1"
   defaultLanguage: en
@@ -1528,7 +1532,7 @@ fn check_refuses_a_deleted_or_renamed_module_source_like_the_lock_check() {
         // A missing module is a problem of the project's lock; a renamed one
         // is a problem of the module file.
         let artifact = if case == "breg.module.lock-source-missing" {
-            "RegistryProject"
+            "BRegProject"
         } else {
             "BRegModule"
         };
@@ -1546,9 +1550,9 @@ fn project_lock_refuses_missing_locked_source_without_rendering_values() {
     const MODULE_CANARY: &str = "missing-module-canary";
     let project = TestProject::from_registry_source(
         format!(
-            r#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+            r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: modular-lock-missing
   version: "1"
   defaultLanguage: en
@@ -1619,6 +1623,49 @@ fn deny_warnings_refuses_on_the_warnings_that_refused_it() {
     // The warnings are the ones the passing check reported, in its words.
     let warnings = |text: &str| text.lines().skip(1).map(str::to_owned).collect::<Vec<_>>();
     assert_eq!(warnings(&rendered), warnings(&passed));
+}
+
+/// Every `--format json` report opens with the two members that name its
+/// format, whichever writer produced it: a passing check, a refused one, a
+/// single-file check, an explanation, a command line clap refused, and a
+/// command that failed before it had a report of its own.
+#[test]
+fn every_json_report_names_the_ctl_report_format() {
+    let minimal = minimal_example();
+    let registry = minimal.join("registry.yaml");
+    let access_review = minimal.join("../access-review");
+    let scratch = TestProject::asset_fixture();
+    let missing = scratch.path().join("no-such-project");
+    let cases: [(&str, Vec<&str>); 6] = [
+        ("a passing check", vec!["check", path(&minimal)]),
+        ("a refused check", vec!["check", path(&missing)]),
+        ("a file check", vec!["check", "--file", path(&registry)]),
+        (
+            "an explanation",
+            vec!["explain", "actions", path(&access_review)],
+        ),
+        ("a refused command line", vec!["no-such-command"]),
+        ("a failed command", vec!["examples", "list"]),
+    ];
+    for (name, arguments) in cases {
+        let mut command = vec!["--format", "json"];
+        command.extend(arguments);
+        let output = bregctl(&command);
+        let rendered = String::from_utf8(output.stdout.clone()).expect("report is UTF-8");
+        assert!(
+            rendered.starts_with(
+                "{\n  \"apiVersion\": \"id.registrystack.org/formats/breg/ctl-report/v1alpha1\",\n  \"kind\": \"BRegCtlReport\",\n  \""
+            ),
+            "{name} opens with its format: {rendered}"
+        );
+        let report = json_stdout(&output);
+        assert_eq!(
+            report["ok"],
+            output.status.success(),
+            "{name} keeps its own members: {rendered}"
+        );
+        assert!(report["command"].is_string(), "{name}: {rendered}");
+    }
 }
 
 /// The committed minimal example: a project and the runtime file that runs it.
@@ -2052,20 +2099,20 @@ fn check_substitutes_the_environment_only_when_asked_and_never_repeats_a_value()
 /// absolute path, each such member written as an expression, then `tail`.
 fn runtime_config_with_deferred_locations(scratch: &TestProject, tail: &str) -> PathBuf {
     const BLOCKS: &str = r"attachmentStorage:
-  kind: s3
+  type: s3
   endpoint: ${BREG_CHECK_TEST_STORAGE}
   bucket: test-bucket
   region: us-east-1
   accessKeyIdRef: secret:file/access
   secretAccessKeyRef: secret:file/key
 attachmentVerification:
-  kind: http
+  type: http
   endpoint: ${BREG_CHECK_TEST_VERIFIER}
   policyId: scanner-rules-v1
   authorizationRef: secret:file/verifier-token
 fieldEncryption:
   provider:
-    kind: transit
+    type: transit
     unixSocketPath: ${BREG_CHECK_TEST_TRANSIT_SOCKET}
     mount: transit
     keyName: breg-field-dek
@@ -2073,8 +2120,8 @@ eventDestinations:
   case-operations:
     origin: ${BREG_CHECK_TEST_EVENTS_ORIGIN}
     path: ${BREG_CHECK_TEST_EVENTS_PATH}
-    networkProfile: productionHttps
-    dnsFamily: dualStackStrict
+    networkProfile: production-https
+    dnsFamily: dual-stack-strict
     allowedPrivateCidrs: []
     hmacSha256KeyRef: secret:file/event-hmac-key
     classificationCeiling: restricted
@@ -2129,7 +2176,7 @@ taskGrantStatus:
             )
             .replace(
                 "    issuer: https://issuer.example.com\n",
-                "    issuer: ${BREG_CHECK_TEST_ISSUER}\n    jwksSource:\n      kind: uri\n      \
+                "    issuer: ${BREG_CHECK_TEST_ISSUER}\n    jwksSource:\n      type: uri\n      \
                  uri: ${BREG_CHECK_TEST_JWKS}\n",
             )
             .replace(
@@ -2287,9 +2334,9 @@ fn an_authored_claim_name_cannot_forge_a_line_of_the_access_report() {
     // the closed identifier grammar, so a claim name is the authored value
     // that reaches a rendered line with nothing removed from it.
     let project = TestProject::from_registry_source(
-        br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: forged-line-fixture
   version: "1"
   defaultLanguage: en
@@ -2298,21 +2345,22 @@ entities:
   - id: record
     primaryDataset: test-dataset
     route: records
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - id: code
         type: string
-        maxLength: 64
+        maximumLength: 64
         classification: internal
 accessProfiles:
   - id: reader
     principalClaim: "registry_principal\n  error  forged.code  forged"
     requiredScopes: unrestricted
     permissions:
-      - entity: record
-        operations: [get]
-        readableFields: [code]
-        rowBoundaries: unrestricted
+      entities:
+        - entity: record
+          operations: [get]
+          readableFields: [code]
+          rowBoundaries: unrestricted
 "#,
     );
 
@@ -2573,7 +2621,7 @@ fn init_from_publicschema_prints_the_reader_diagnostics_for_a_selection_an_earli
         b"apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
 kind: ModelSelection
 model: publicschema
-registry:
+project:
   id: places
   title: Places
 entities:
@@ -2679,6 +2727,69 @@ fn init_selection_flags_require_from() {
     assert!(!destination.exists());
     let stderr = String::from_utf8(output.stderr).expect("usage error is UTF-8");
     assert!(stderr.contains("--from"), "{stderr}");
+}
+
+/// The first line of a configuration file `init` wrote, which an editor reads
+/// to find the schema the file is checked against.
+fn first_line(path: &Path) -> String {
+    fs::read_to_string(path)
+        .expect("the initialized file reads")
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+const PROJECT_MODELINE: &str = "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json";
+const MODULE_MODELINE: &str = "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json";
+const RUNTIME_MODELINE: &str = "# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json";
+
+#[test]
+fn init_opens_each_configuration_file_with_its_schema_modeline() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("initialized");
+
+    let output = bregctl(&["init", path(&destination)]);
+
+    assert!(output.status.success(), "{output:?}");
+    for (relative, modeline) in [
+        ("registry.yaml", PROJECT_MODELINE),
+        ("modules/record-notes/module.yaml", MODULE_MODELINE),
+        ("runtime.example.yaml", RUNTIME_MODELINE),
+    ] {
+        assert_eq!(
+            first_line(&destination.join(relative)),
+            modeline,
+            "{relative}"
+        );
+    }
+}
+
+#[test]
+fn init_from_a_model_opens_each_configuration_file_with_its_schema_modeline() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("derived");
+
+    let output = bregctl(&[
+        "init",
+        path(&destination),
+        "--from",
+        "publicschema",
+        "--starter",
+        "household",
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    for (relative, modeline) in [
+        ("registry.yaml", PROJECT_MODELINE),
+        ("runtime.example.yaml", RUNTIME_MODELINE),
+    ] {
+        assert_eq!(
+            first_line(&destination.join(relative)),
+            modeline,
+            "{relative}"
+        );
+    }
 }
 
 #[test]
@@ -2867,6 +2978,8 @@ fn init_and_generate_missing_output_parents_have_exact_logical_diagnostics() {
     assert_eq!(
         json_stdout(&init_output),
         json!({
+            "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
+            "kind": "BRegCtlReport",
             "ok": false,
             "command": "init",
             "diagnostics": [{
@@ -2896,6 +3009,8 @@ fn init_and_generate_missing_output_parents_have_exact_logical_diagnostics() {
     assert_eq!(
         json_stdout(&generate_output),
         json!({
+            "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
+            "kind": "BRegCtlReport",
             "ok": false,
             "command": "generate",
             "diagnostics": [{
@@ -3264,8 +3379,8 @@ fn explain_reports_are_derived_from_compiled_inventories() {
         json!([
             "equals",
             "in",
-            "is_null",
-            "is_not_null",
+            "is-null",
+            "is-not-null",
             "prefix",
             "contains"
         ])
@@ -3293,8 +3408,8 @@ fn explain_reports_are_derived_from_compiled_inventories() {
         .is_empty());
     assert_eq!(planner_list["wire"]["filter"], "$filter");
     assert_eq!(planner_list["wire"]["orderBy"], "$orderby");
-    assert_eq!(planner_list["bounds"]["maxPageSize"], 100);
-    assert_eq!(planner_list["bounds"]["maxInValues"], 100);
+    assert_eq!(planner_list["bounds"]["maximumPageSize"], 100);
+    assert_eq!(planner_list["bounds"]["maximumInValues"], 100);
     assert!(!String::from_utf8(queries.stdout)
         .expect("queries JSON is UTF-8")
         .contains("registry_data"));
@@ -3326,7 +3441,7 @@ fn explain_routes_preserves_action_free_output_shape() {
     let routes = explanation["routes"].as_array().expect("routes are listed");
     assert!(!routes.is_empty());
     assert!(routes.iter().all(|route| route.get("actionId").is_none()));
-    assert!(routes.iter().all(|route| route["kind"] == "entity"));
+    assert!(routes.iter().all(|route| route["type"] == "entity"));
 }
 
 #[test]
@@ -3350,8 +3465,8 @@ fn explain_routes_includes_served_immediate_action_routes() {
     // entityId, and no route is missing both or carrying both.
     assert!(all_routes.iter().all(|route| {
         match (route.get("entityId"), route.get("actionId")) {
-            (Some(_), None) => route["kind"] == "entity",
-            (None, Some(_)) => route["kind"] == "action",
+            (Some(_), None) => route["type"] == "entity",
+            (None, Some(_)) => route["type"] == "action",
             (None, None) | (Some(_), Some(_)) => false,
         }
     }));
@@ -3364,7 +3479,7 @@ fn explain_routes_includes_served_immediate_action_routes() {
         let profiles = route["accessProfiles"]
             .as_array()
             .expect("action route lists access profiles");
-        route["kind"] == "action"
+        route["type"] == "action"
             && route["actionRouteKind"] == "invoke"
             && route["path"] == "/v1/actions/register-household-contact"
             && route["operation"] == "invoke"
@@ -3375,10 +3490,10 @@ fn explain_routes_includes_served_immediate_action_routes() {
             && route["defaultAccessProfile"] == "contact-registrar"
     }));
     assert!(action_routes.iter().any(|route| {
-        // Pin that `kind` is a record-shape discriminator distinct from `actionRouteKind`:
-        // a target_conditions route is still `kind: "action"`.
-        route["kind"] == "action"
-            && route["actionRouteKind"] == "target_conditions"
+        // Pin that `type` is a record-shape discriminator distinct from `actionRouteKind`:
+        // a target-conditions route is still `type: "action"`.
+        route["type"] == "action"
+            && route["actionRouteKind"] == "target-conditions"
             && route["path"] == "/v1/actions/register-household-contact/target-conditions"
             && route["operation"] == "invoke"
             && route["requiresIdempotencyKey"] == false
@@ -3421,8 +3536,8 @@ fn explain_routes_discriminates_mixed_entity_and_action_route_shapes() {
 
     for route in routes {
         match (route.get("entityId"), route.get("actionId")) {
-            (Some(_), None) => assert_eq!(route["kind"], "entity", "{route:?}"),
-            (None, Some(_)) => assert_eq!(route["kind"], "action", "{route:?}"),
+            (Some(_), None) => assert_eq!(route["type"], "entity", "{route:?}"),
+            (None, Some(_)) => assert_eq!(route["type"], "action", "{route:?}"),
             (None, None) => panic!("route has neither entityId nor actionId: {route:?}"),
             (Some(_), Some(_)) => panic!("route carries both entityId and actionId: {route:?}"),
         }
@@ -3515,8 +3630,8 @@ fn explain_actions_reports_compiled_effects_conditions_results_and_grants() {
     );
     assert_eq!(action["effects"][0]["id"], "person");
     assert_eq!(
-        action["effects"][1]["fields"][0]["value"]["kind"],
-        "from_effect"
+        action["effects"][1]["fields"][0]["value"]["type"],
+        "from-effect"
     );
     assert_eq!(action["targets"][0]["conditionRequired"], false);
     assert!(action["targets"]
@@ -3569,7 +3684,7 @@ fn explain_actions_reports_reference_acceptance_conditions() {
     assert_eq!(requirement["entity"], "register");
     assert_eq!(requirement["field"]["field"], "active");
     assert_eq!(requirement["equals"], true);
-    assert_eq!(requirement["evaluated"], "before_effects_under_target_lock");
+    assert_eq!(requirement["evaluated"], "before-effects-under-target-lock");
     // A Rhai handler's server contract is the baseline: no compatibility
     // member, which the WASM summary alone carries.
     assert_eq!(action["handler"]["kind"], "rhai");
@@ -3595,7 +3710,9 @@ const MINIMAL_ABI_WAT: &str = r#"
 #[test]
 #[cfg(feature = "wasm")]
 fn check_collects_project_and_module_hook_handler_assets() {
-    let module_source = br#"id: hook-module
+    let module_source = br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: hook-module
 version: "1"
 extendEntities:
   - entity: record
@@ -3605,7 +3722,7 @@ extendEntities:
         trigger: patched
         projection: [label]
         handler:
-          kind: wasm
+          type: wasm
           module: hooks/record-patched.wasm
           abi: registry.hook-handler/v1
 "#;
@@ -3617,9 +3734,9 @@ extendEntities:
         bytes: wasm_module.clone(),
     }];
     let project_source = format!(
-        r#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+        r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: hook-asset-fixture
   version: "1"
   defaultLanguage: en
@@ -3636,7 +3753,7 @@ entities:
     fields:
       - id: label
         type: string
-        maxLength: 64
+        maximumLength: 64
         classification: internal
     hooks:
       - id: record-created-local
@@ -3644,7 +3761,7 @@ entities:
         trigger: created
         projection: [label]
         handler:
-          kind: rhai
+          type: rhai
           script: hooks/record-created.rhai
           abi: registry.hook-handler/v1
 "#,
@@ -3680,9 +3797,9 @@ entities:
 
 #[cfg(feature = "wasm")]
 fn wasm_action_fixture() -> &'static [u8] {
-    br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+    br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: wasm-explain-fixture
   version: "1"
   defaultLanguage: en
@@ -3693,15 +3810,15 @@ entities:
     route: people
     mutationMode: mutable
     fields:
-      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
-      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
 actions:
   - id: register-person
     inputs:
-      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
-      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
     handler:
-      kind: wasm
+      type: wasm
       module: wasm/handler.wasm
       abi: registry.action-handler/v1
       writes:
@@ -3715,11 +3832,12 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - action: register-person
-        operations: [invoke]
-        targets:
-          - {entity: person, rowBoundaries: unrestricted}
-        results: [person]
+      actions:
+        - action: register-person
+          operations: [invoke]
+          targets:
+            - {entity: person, rowBoundaries: unrestricted}
+          results: [person]
 "#
 }
 
@@ -3808,6 +3926,7 @@ fn explain_change_requests_reports_compiled_effects_actions_and_controlled_write
     assert_eq!(
         request["review"],
         json!({
+            "type": "required",
             "authority": "casework",
             "policyId": "asset-placement-correction"
         })
@@ -3817,7 +3936,7 @@ fn explain_change_requests_reports_compiled_effects_actions_and_controlled_write
         .as_array()
         .expect("actions are listed")
         .iter()
-        .find(|action| action["operation"] == "apply_request")
+        .find(|action| action["operation"] == "apply-request")
         .expect("source-owned apply action is explained");
     assert_eq!(
         apply["preconditions"],
@@ -3830,7 +3949,7 @@ fn explain_change_requests_reports_compiled_effects_actions_and_controlled_write
     );
     assert_eq!(
         explanation["controlledWrites"][0]["directWriteRestriction"],
-        "controlled operations are absent from ordinary permissions and require compiled apply_request context"
+        "controlled operations are absent from ordinary permissions and require compiled apply-request context"
     );
     assert_eq!(
         explanation["controlledWrites"][0]["eligibleRequestTypes"],
@@ -3841,9 +3960,9 @@ fn explain_change_requests_reports_compiled_effects_actions_and_controlled_write
 #[test]
 fn explain_query_filter_examples_match_field_types() {
     let project = TestProject::from_registry_source(
-        br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: typed-query-examples
   version: "1"
   defaultLanguage: en
@@ -3852,11 +3971,11 @@ entities:
   - id: typed-record
     primaryDataset: test-dataset
     route: typed-records
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - id: label
         type: string
-        maxLength: 64
+        maximumLength: 64
         classification: internal
       - id: score
         type: int64
@@ -3875,11 +3994,12 @@ accessProfiles:
     principalClaim: principal
     requiredScopes: unrestricted
     permissions:
-      - entity: typed-record
-        rowBoundaries: unrestricted
-        operations: [list]
-        readableFields: [label, score, enabled, observed-on, observed-at]
-        filterableFields: [label, score, enabled, observed-on, observed-at]
+      entities:
+        - entity: typed-record
+          rowBoundaries: unrestricted
+          operations: [list]
+          readableFields: [label, score, enabled, observed-on, observed-at]
+          filterableFields: [label, score, enabled, observed-on, observed-at]
 "#,
     );
 
@@ -3929,14 +4049,14 @@ accessProfiles:
 #[test]
 fn explain_spatial_queries_maps_the_exact_profile_and_api_geometry() {
     let project = TestProject::from_registry_source(
-        br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry: {id: map-explanation, version: "1", defaultLanguage: en, canonicalBaseIri: https://map-explanation.example.test}
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: map-explanation, version: "1", defaultLanguage: en, canonicalBaseIri: https://map-explanation.example.test}
 entities:
   - id: service-site
     primaryDataset: test-dataset
     route: service-sites
-    mutationMode: create_only
+    mutationMode: create-only
     geojson: {geometryField: location}
     fields:
       - {id: location, apiName: position, type: crs84-point, precision: 9, classification: internal}
@@ -3946,17 +4066,19 @@ accessProfiles:
     principalClaim: principal
     requiredScopes: unrestricted
     permissions:
-      - entity: service-site
-        rowBoundaries: unrestricted
-        operations: [get, list]
-        readableFields: [location]
-        spatialQueries:
-          bbox: {maximumLongitudeSpanDegrees: 0.5, maximumLatitudeSpanDegrees: 0.25}
+      entities:
+        - entity: service-site
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [location]
+          spatialQueries:
+            bbox: {maximumLongitudeSpanDegrees: 0.5, maximumLatitudeSpanDegrees: 0.25}
   - id: geometry-reader
     principalClaim: principal
     requiredScopes: unrestricted
     permissions:
-      - {entity: service-site, operations: [get, list], readableFields: [location], rowBoundaries: unrestricted}
+      entities:
+        - {entity: service-site, operations: [get, list], readableFields: [location], rowBoundaries: unrestricted}
 "#,
     );
     let output = bregctl(&[
@@ -3997,9 +4119,9 @@ accessProfiles:
 #[test]
 fn check_reports_derived_sql_module_path_without_sql_values() {
     let project = TestProject::from_registry_source(
-        br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: derived-diagnostic-fixture
   version: "1"
   defaultLanguage: en
@@ -4013,17 +4135,19 @@ modules:
     fs::create_dir_all(module_dir.join("sql")).expect("module SQL directory creates");
     fs::write(
         module_dir.join("module.yaml"),
-        br#"id: core
+        br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: core
 version: "1"
 entities:
   - id: record
     primaryDataset: test-dataset
     route: records
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - id: code
         type: string
-        maxLength: 16
+        maximumLength: 16
         classification: internal
     derived:
       - id: summary
@@ -4032,7 +4156,7 @@ entities:
         fields:
           - id: summary
             type: string
-            maxLength: 16
+            maximumLength: 16
             classification: internal
     accessProfiles:
       - requiredScopes: unrestricted
@@ -4086,9 +4210,9 @@ fn explain_events_is_empty_for_outbox_only_and_deterministic_for_webhooks() {
     assert_eq!(json_stdout(&empty)["explanation"]["deliveries"], json!([]));
 
     let outbox_only = TestProject::from_registry_source(
-        br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: event-explain-outbox
   version: "1"
   defaultLanguage: en
@@ -4101,7 +4225,7 @@ entities:
     fields:
       - id: label
         type: string
-        maxLength: 64
+        maximumLength: 64
         classification: public
     hooks:
       - id: case-created
@@ -4121,9 +4245,9 @@ entities:
     assert_eq!(json_stdout(&outbox)["explanation"]["deliveries"], json!([]));
 
     let webhook = TestProject::from_registry_source(
-        br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: event-explain-webhook
   version: "1"
   defaultLanguage: en
@@ -4136,7 +4260,7 @@ entities:
     fields:
       - id: label
         type: string
-        maxLength: 64
+        maximumLength: 64
         classification: public
     hooks:
       - id: case-created
@@ -4144,7 +4268,7 @@ entities:
         trigger: created
         projection: [label]
         handler:
-          kind: url
+          type: url
           destinationId: case-operations
 "#,
     );
@@ -4377,7 +4501,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
     let original_module_digest = module_digest(&original_module_model);
     let altered_module = String::from_utf8(original_module.clone())
         .expect("module is UTF-8")
-        .replace("\"maxLength\":16", "\"maxLength\":17")
+        .replace("\"maximumLength\":16", "\"maximumLength\":17")
         .into_bytes();
     let altered_module_model =
         parse_module_json(&altered_module).expect("altered package module parses");
@@ -5418,7 +5542,7 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
         "127.0.0.1:1".parse().unwrap(),
         String::from_utf8(package_module_bytes())
             .unwrap()
-            .replace(r#""maxLength":16"#, r#""maxLength":32"#)
+            .replace(r#""maximumLength":16"#, r#""maximumLength":32"#)
             .into_bytes(),
     );
     assert_ne!(other.package_digest, fixture.package_digest);
@@ -5646,7 +5770,7 @@ fn apply_and_plan_refuse_a_package_other_than_the_expected_digest_before_databas
         "127.0.0.1:1".parse().unwrap(),
         String::from_utf8(package_module_bytes())
             .unwrap()
-            .replace(r#""maxLength":16"#, r#""maxLength":32"#)
+            .replace(r#""maximumLength":16"#, r#""maximumLength":32"#)
             .into_bytes(),
     );
     let other_digest = fixture.package_digest.as_str();
@@ -5813,7 +5937,7 @@ fn apply_requires_safe_field_encryption_custody_before_database_authority() {
     fs::write(
         &local_file_runtime,
         format!(
-            "{runtime}\nfieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:file/field-encryption-dek\n"
+            "{runtime}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/field-encryption-dek\n"
         ),
     )
     .expect("runtime variant writes");
@@ -6071,6 +6195,8 @@ fn verify_is_runtime_bound_deterministic_and_listener_free() {
     assert_eq!(
         report,
         json!({
+            "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
+            "kind": "BRegCtlReport",
             "ok": true,
             "command": "verify",
             "assurance": "runtime_bound",
@@ -6150,6 +6276,8 @@ fn migration_explain_is_runtime_bound_deterministic_and_listener_free() {
     assert_eq!(
         report,
         json!({
+            "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
+            "kind": "BRegCtlReport",
             "ok": true,
             "command": "migration explain",
             "assurance": "runtime_bound",
@@ -6446,7 +6574,7 @@ fn apply_names_both_digests_when_the_active_package_misses_its_pin() {
         "127.0.0.1:1".parse().unwrap(),
         String::from_utf8(package_module_bytes())
             .unwrap()
-            .replace(r#""maxLength":16"#, r#""maxLength":32"#)
+            .replace(r#""maximumLength":16"#, r#""maximumLength":32"#)
             .into_bytes(),
     );
 
@@ -6687,7 +6815,7 @@ fn unknown_source_is_refused_without_echoing_source_values() {
     assert!(report["diagnostics"][0]["source"]["line"]
         .as_u64()
         .is_some());
-    assert_check_diagnostic(&report["diagnostics"][0], Some("RegistryProject"));
+    assert_check_diagnostic(&report["diagnostics"][0], Some("BRegProject"));
 }
 
 #[test]
@@ -6965,15 +7093,15 @@ fn generation_refuses_a_broken_symlink_destination_without_publishing_output() {
 
 fn package_project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"verify-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{PACKAGE_SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Verify Registry Catalog","publisher":{{"id":"verify-registry-authority","name":"Verify Publisher"}}}},"publicService":{{"id":"verify-registry-service","title":"Verify Registry Catalog"}},"datasets":[{{"id":"verify-registry","title":"Verify Registry Dataset","owner":"Verify Publisher","status":"active"}}],"dataServices":[{{"id":"verify-registry-data-service","title":"Verify Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["verify-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"verify-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{PACKAGE_SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Verify Registry Catalog","publisher":{{"id":"verify-registry-authority","name":"Verify Publisher"}}}},"publicService":{{"id":"verify-registry-service","title":"Verify Registry Catalog"}},"datasets":[{{"id":"verify-registry","title":"Verify Registry Dataset","owner":"Verify Publisher","status":"active"}}],"dataServices":[{{"id":"verify-registry-data-service","title":"Verify Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["verify-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
 
 fn modular_project_without_locks() -> &'static [u8] {
-    br#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+    br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: modular-lock-fixture
   version: "1"
   defaultLanguage: en
@@ -6982,17 +7110,19 @@ registry:
 }
 
 fn modular_project_extra_module() -> &'static [u8] {
-    br#"id: extra
+    br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: extra
 version: "1"
 entities:
   - id: extra-record
     primaryDataset: test-dataset
     route: extra-records
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - id: code
         type: string
-        maxLength: 16
+        maximumLength: 16
         classification: internal
     accessProfiles:
       - requiredScopes: unrestricted
@@ -7005,17 +7135,19 @@ entities:
 }
 
 fn modular_project_module() -> &'static [u8] {
-    br#"id: core
+    br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: core
 version: "1"
 entities:
   - id: record
     primaryDataset: test-dataset
     route: records
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - id: code
         type: string
-        maxLength: 16
+        maximumLength: 16
         classification: internal
     accessProfiles:
       - requiredScopes: unrestricted
@@ -7028,22 +7160,22 @@ entities:
 }
 
 fn package_module_bytes() -> Vec<u8> {
-    br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
+    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":16,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
         .to_vec()
 }
 
 fn encrypted_package_module_bytes() -> Vec<u8> {
-    br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":16,"classification":"restricted","encrypted":true}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
+    br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{"id":"record","primaryDataset":"verify-registry","route":"records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":16,"classification":"restricted","encrypted":true}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
         .to_vec()
 }
 
 fn data_package_fixture() -> (TestProject, PathBuf) {
-    let module_bytes = br#"{"id":"core","version":"1","entities":[{"id":"record","primaryDataset":"data-registry","route":"records","mutationMode":"create_only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minLength":2,"maxLength":16,"required":true,"classification":"internal"}],"accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true, "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#.to_vec();
+    let module_bytes = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{"id":"record","primaryDataset":"data-registry","route":"records","mutationMode":"create-only","batch":{"maximumItems":2,"maximumBytes":400},"fields":[{"id":"code","type":"string","minimumLength":2,"maximumLength":16,"required":true,"classification":"internal"}],"accessProfiles":[{"id":"operator","principalClaim":"principal","operations":["create","batch","list"],"readableFields":["code"],"writableFields":["code"],"allowDataExport":true, "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#.to_vec();
     let module = parse_module_json(&module_bytes).expect("data module parses");
     let module_digest = module_digest(&module);
     let project = TestProject::from_registry_source(
         format!(
-            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"data-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://data.example.test"}},"package":{{"sourceRevision":"data-source"}},"manifestProjection":{{"accessProfile":"operator","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://data.example.test","title":"Data Registry Catalog","publisher":{{"id":"data-registry-authority","name":"Data Publisher"}}}},"publicService":{{"id":"data-registry-service","title":"Data Registry Catalog"}},"datasets":[{{"id":"data-registry","title":"Data Registry Dataset","owner":"Data Publisher","status":"active"}}],"dataServices":[{{"id":"data-registry-data-service","title":"Data Registry Catalog","endpointUrl":"https://data.example.test","servesDatasets":["data-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+            r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"data-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://data.example.test"}},"package":{{"sourceRevision":"data-source"}},"manifestProjection":{{"accessProfile":"operator","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://data.example.test","title":"Data Registry Catalog","publisher":{{"id":"data-registry-authority","name":"Data Publisher"}}}},"publicService":{{"id":"data-registry-service","title":"Data Registry Catalog"}},"datasets":[{{"id":"data-registry","title":"Data Registry Dataset","owner":"Data Publisher","status":"active"}}],"dataServices":[{{"id":"data-registry-data-service","title":"Data Registry Catalog","endpointUrl":"https://data.example.test","servesDatasets":["data-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
         )
         .as_bytes(),
     );
@@ -7090,7 +7222,7 @@ fn write_runtime_config(parent: &Path, package: &Path, bind: SocketAddr) -> Path
     fs::write(
         &path,
         format!(
-            r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: {bind}
@@ -7107,7 +7239,7 @@ database:
   runtimeUrlRef: secret:env/{VERIFY_RUNTIME_DATABASE_SECRET_CANARY}
   migrationUrlRef: secret:env/{VERIFY_MIGRATION_DATABASE_SECRET_CANARY}
   pool:
-    maxSize: 1
+    maximumConnections: 1
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -7125,15 +7257,14 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [verify-client]
-    deniedKids: []
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 1
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 1
       outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
@@ -7143,7 +7274,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/{PACKAGE_VALUE_CANARY}
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000

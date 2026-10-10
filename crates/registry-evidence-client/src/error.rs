@@ -98,7 +98,7 @@ impl EvidenceClientError {
             Self::Token(_) => "token",
             Self::Transport { .. } => "transport",
             Self::Denied { .. } => "denied",
-            Self::NotAvailable { .. } => "not_available",
+            Self::NotAvailable { .. } => "not-available",
             Self::Protocol { .. } => "protocol",
             Self::Verification(_) => "verification",
         }
@@ -178,7 +178,7 @@ mod tests {
             ),
             (
                 EvidenceClientError::NotAvailable { trace_id: None },
-                "not_available",
+                "not-available",
             ),
             (
                 EvidenceClientError::Protocol {
@@ -210,7 +210,7 @@ mod tests {
             (TransportKind::Connect, "connect"),
             (TransportKind::Timeout, "timeout"),
             (TransportKind::Exchange, "exchange"),
-            (TransportKind::ResponseTooLarge, "response_too_large"),
+            (TransportKind::ResponseTooLarge, "response-too-large"),
         ];
         for (kind, name) in &cases {
             assert_eq!(kind.kind(), *name, "{kind}");

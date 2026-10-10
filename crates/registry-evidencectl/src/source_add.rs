@@ -848,12 +848,12 @@ fn connection(endpoints: &Endpoints, scope: Option<&str>, name: &str) -> Value {
     let mut binding = json!({
         "baseUrl": endpoints.breg_url,
         "authentication": {
-            "kind": "oauth2-client-credentials", "tokenEndpoint": endpoints.token_endpoint,
+            "type": "oauth2-private-key-jwt", "tokenEndpoint": endpoints.token_endpoint,
             "clientIdRef": format!("secret:file/{name}-client-id"),
             "clientAssertionKeyRef": format!("secret:file/{name}-client-key"),
             "audience": endpoints.audience, "maximumCacheSeconds": 60,
         },
-        "concurrencyLimit": 4, "admissionTimeoutMilliseconds": 5000, "tokenTimeoutMilliseconds": 5000,
+        "maximumConcurrency": 4, "admissionTimeoutMilliseconds": 5000, "tokenTimeoutMilliseconds": 5000,
     });
     if let Some(resource) = &endpoints.resource {
         binding["authentication"]["resource"] = json!(resource);
@@ -1214,7 +1214,7 @@ mod tests {
     }
 
     fn write_export(root: &Path, id: &str, connection: &str) -> Result<()> {
-        let source = format!("apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntransport: http-json\nconnection: {connection}\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParametersSchema: schemas/{id}-parameters.yaml\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
+        let source = format!("apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1\nkind: EvidenceSource\ntype: http-json\nconnection: {connection}\nrequest:\n  selectorInputs:\n    - role: subject\n      alternatives: [{{profile: record-code, fields: [code]}}]\n  prepareScript: adapters/{id}-prepare.rhai\n  adapterParametersSchema: schemas/{id}-parameters.yaml\nresponseSchema: schemas/{id}-response.yaml\nfactSchema: schemas/{id}-facts.yaml\nextractScript: adapters/{id}-extract.rhai\n");
         let artifacts = BTreeMap::from([
             (format!("sources/{id}.yaml"), source),
             (

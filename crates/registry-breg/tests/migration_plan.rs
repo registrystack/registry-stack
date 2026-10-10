@@ -255,6 +255,71 @@ fn reviewed_migration_documents_refuse_their_previous_spellings_at_each_key() {
             && diagnostic.suggested_action.contains("`database`")));
 }
 
+/// Every word a descriptor enumerates is written in kebab-case (CFG-NAME-2).
+/// A word in snake_case is refused where it is written, the refusal names
+/// the accepted word, and it never repeats the refused one (CFG-SEC-3).
+#[test]
+fn reviewed_descriptor_refuses_the_snake_case_spelling_of_each_enumerated_word() {
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredField);
+    let artifacts = backfill_artifacts("required-field", &previous, &candidate);
+    let descriptor = serde_json::to_value(&artifacts.descriptor).expect("descriptor serializes");
+    assert_eq!(descriptor["changeClass"], "data-backfill-required");
+    assert_eq!(descriptor["covers"][0]["code"], "field-added-required");
+    assert_eq!(descriptor["covers"][0]["target"]["kind"], "field");
+    assert_eq!(descriptor["recovery"], "exact-target-resume");
+    read_migration_descriptor("descriptor.json", &canonical(&descriptor))
+        .expect("the reader accepts the descriptor it wrote");
+
+    for (pointer, refused, action) in [
+        (
+            "/changeClass",
+            "data_backfill_required",
+            "Use `data-backfill-required`, the closest accepted value.",
+        ),
+        (
+            "/covers/0/code",
+            "field_added_required",
+            "Use `field-added-required`, the closest accepted value.",
+        ),
+        (
+            "/covers/0/target/kind",
+            "access_profile",
+            "Use `access-profile`, the closest accepted value.",
+        ),
+        (
+            "/recovery",
+            "exact_target_resume",
+            "Use `exact-target-resume`, the closest accepted value.",
+        ),
+    ] {
+        let mut changed = descriptor.clone();
+        *changed
+            .pointer_mut(pointer)
+            .expect("the descriptor holds the member") = serde_json::Value::from(refused);
+        let report = read_migration_descriptor("descriptor.json", &canonical(&changed))
+            .expect_err("the reader refuses a snake_case word");
+        let diagnostics = report.diagnostics();
+        assert_eq!(diagnostics.len(), 1, "{pointer}: {diagnostics:?}");
+        assert_eq!(diagnostics[0].code, "config.unknown-variant", "{pointer}");
+        assert_eq!(diagnostics[0].path, pointer);
+        assert_eq!(diagnostics[0].suggested_action, action, "{pointer}");
+        assert!(
+            !format!("{diagnostics:?}").contains(refused),
+            "{pointer}: the refusal repeats the refused word"
+        );
+    }
+
+    let mut unknown = descriptor.clone();
+    unknown["covers"][0]["target"]["unknownMember"] = serde_json::Value::from(true);
+    let report = read_migration_descriptor("descriptor.json", &canonical(&unknown))
+        .expect_err("the reader refuses an unknown member");
+    let diagnostics = report.diagnostics();
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, "config.unknown-key");
+    assert_eq!(diagnostics[0].path, "/covers/0/target/unknownMember");
+}
+
 #[test]
 fn reviewed_descriptor_reformatted_by_hand_keeps_its_rehearsal_binding() {
     let previous = compile_variant(Variant::Base);
@@ -1363,7 +1428,7 @@ fn source_for_variant(variant: Variant) -> SourceFixture {
     };
     SourceFixture {
         project_bytes: format!(
-            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"{registry_id}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+            r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"{registry_id}","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
         )
         .into_bytes(),
         module_bytes,
@@ -1373,23 +1438,23 @@ fn source_for_variant(variant: Variant) -> SourceFixture {
 fn module_bytes(variant: Variant) -> Vec<u8> {
     let fields = match variant {
         Variant::RequiredField => {
-            r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"batch","type":"string","maxLength":16,"required":true,"classification":"internal"}"#
+            r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"},{"id":"batch","type":"string","maximumLength":16,"required":true,"classification":"internal"}"#
         }
         Variant::FieldRemoved => {
-            r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"}"#
+            r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"}"#
         }
         Variant::EncryptedBase => {
-            r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"secret","type":"string","maxLength":256,"classification":"restricted"}"#
+            r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"secret","type":"string","maximumLength":256,"classification":"restricted"}"#
         }
         Variant::EncryptedFlipOn => {
-            r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"secret","type":"string","maxLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["uppercase"],"unique":true}}"#
+            r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"secret","type":"string","maximumLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["uppercase"],"unique":true}}"#
         }
         Variant::Base | Variant::DifferentRegistry => {
-            r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"}"#
+            r#"{"id":"code","type":"string","maximumLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"}"#
         }
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{fields}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}},{{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create-only","fields":[{fields}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}},{{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
     )
     .into_bytes()
 }

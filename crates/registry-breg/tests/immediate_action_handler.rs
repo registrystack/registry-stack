@@ -14,22 +14,22 @@ use std::time::{Duration, Instant};
 
 fn project() -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"action-handler-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"action-handler-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "entities":[{"id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","fields":[
-            {"id":"name","type":"string","maxLength":160,"required":true,"classification":"restricted"},
+            {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
         ]}],
         "actions":[{"id":"register-person","inputs":[
-            {"id":"given-name","apiName":"givenName","type":"string","maxLength":80,"required":true,"classification":"restricted"},
-            {"id":"family-name","type":"string","maxLength":80,"classification":"restricted"},
+            {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
+            {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
-        ],"handler":{"kind":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
+        ],"handler":{"type":"rhai","script":"handlers/register.rhai","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
             {"id":"person","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"friend","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromField":"person"},"operation":"patch","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}}]
     })
 }
 fn compile(source: Value, script: &str) -> Result<CompiledAction, registry_breg::CompileFailure> {
@@ -485,15 +485,15 @@ fn handler_compiler_rejects_inputs_outside_the_scalar_abi() {
     let script = result(r#"#{effects:[#{id:"person",set:#{name:"Mina"}}]}"#);
     for (field_type, code, member, repair) in [
         (
-            json!({"type":"string","maxLength":17_000}),
+            json!({"type":"string","maximumLength":17_000}),
             "breg.action.handler-input-string-bound",
-            "maxLength",
+            "maximumLength",
             "4096",
         ),
         (
-            json!({"type":"text","maxLength":20_000}),
+            json!({"type":"text","maximumLength":20_000}),
             "breg.action.handler-input-string-bound",
-            "maxLength",
+            "maximumLength",
             "4096",
         ),
         (
@@ -503,7 +503,7 @@ fn handler_compiler_rejects_inputs_outside_the_scalar_abi() {
             "scalar",
         ),
         (
-            json!({"type":"structured","maxBytes":1024,"schema":{
+            json!({"type":"structured","maximumBytes":1024,"schema":{
                 "type":"object","properties":{"value":{"type":"number"}},
                 "additionalProperties":false
             }}),
@@ -541,13 +541,13 @@ fn handler_compiler_rejects_inputs_outside_the_scalar_abi() {
             .remove("handler");
         fixed["actions"][0]["inputs"] = json!([
             input,
-            {"id":"name","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+            {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
         ]);
         fixed["actions"][0]["effects"] = json!([{
             "id":"person","target":{"entity":"person"},"operation":"create",
             "set":{"name":{"fromField":"name"}}
         }]);
-        fixed["accessProfiles"][0]["permissions"][0]["results"] = json!(["person"]);
+        fixed["accessProfiles"][0]["permissions"]["actions"][0]["results"] = json!(["person"]);
         let fixed = parse_project_json(&serde_json::to_vec(&fixed).unwrap()).unwrap();
         compile_project_with_assets(&fixed, &[], &[], CompileProfile::Authoring).unwrap();
     }
@@ -562,7 +562,7 @@ fn handler_string_declarations_cover_the_full_unicode_boundary() {
             .as_array_mut()
             .unwrap()
             .push(json!({
-                "id":"extra","type":kind,"maxLength":4096,"classification":"restricted"
+                "id":"extra","type":kind,"maximumLength":4096,"classification":"restricted"
             }));
         let action = compile(source.clone(), &script).unwrap();
         let mut input = inputs();
@@ -589,7 +589,7 @@ fn handler_string_declarations_cover_the_full_unicode_boundary() {
         assert_eq!(diagnostic.kind, ActionHandlerError::Input);
         assert_eq!(diagnostic.field.as_deref(), Some("extra"));
 
-        source["actions"][0]["inputs"][3]["maxLength"] = json!(4097);
+        source["actions"][0]["inputs"][3]["maximumLength"] = json!(4097);
         assert!(compile(source, &script)
             .unwrap_err()
             .diagnostics()
@@ -890,7 +890,7 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     );
 
     let mut source = project();
-    source["entities"][0]["fields"][0]["maxLength"] = json!(1_000_000);
+    source["entities"][0]["fields"][0]["maximumLength"] = json!(1_000_000);
     assert_diagnostic(
         source,
         "breg.action.bounds-snapshot-bytes",
@@ -1053,7 +1053,7 @@ fn handler_package_captures_exact_project_and_module_script_origins() {
 
     let action = source["actions"].take();
     source.as_object_mut().unwrap().remove("actions");
-    let module_value = json!({"id":"actions","version":"1","actions":action});
+    let module_value = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"actions","version":"1","actions":action});
     let module =
         registry_breg::contract::parse_module_json(&serde_json::to_vec(&module_value).unwrap())
             .unwrap();
@@ -1086,9 +1086,9 @@ fn fixed_action_fingerprints_omit_handler_and_bind_native_patterns() {
         .as_object_mut()
         .unwrap()
         .remove("handler");
-    source["actions"][0]["inputs"][0]["maxLength"] = json!(160);
+    source["actions"][0]["inputs"][0]["maximumLength"] = json!(160);
     source["actions"][0]["effects"] = json!([{"id":"person","target":{"entity":"person"},"operation":"create","set":{"name":{"fromField":"given-name"}}}]);
-    source["accessProfiles"][0]["permissions"][0]["results"] = json!(["person"]);
+    source["accessProfiles"][0]["permissions"]["actions"][0]["results"] = json!(["person"]);
     let compile = |source: &Value| {
         let project = parse_project_json(&serde_json::to_vec(source).unwrap()).unwrap();
         registry_breg::compiler::compile_project(&project, &[], CompileProfile::Authoring)
@@ -1121,7 +1121,7 @@ fn handler_rejects_reference_to_a_create_of_an_incompatible_entity() {
     second["route"] = json!("organizations");
     source["entities"].as_array_mut().unwrap().push(second);
     source["actions"][0]["handler"]["writes"][1]["target"]["entity"] = json!("organization");
-    source["accessProfiles"][0]["permissions"][0]["targets"]
+    source["accessProfiles"][0]["permissions"]["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({"entity":"organization","rowBoundaries":"unrestricted"}));

@@ -1,11 +1,12 @@
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+kind: EvidenceBundle
 assuranceProfile: evidence-grade
 service:
   providerId: urn:gov:example:evidence:opencrvs
   publicOrigin: https://evidence.example.org
   trustDomain: urn:gov:example:trust-domain:civil-registration
 issuer:
-  id: urn:gov:example:issuer:civil-registration-authority
+  uri: urn:gov:example:issuer:civil-registration-authority
 authentication:
   oidc:
     issuer: https://identity.gov.example
@@ -14,11 +15,12 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [ES256]
     jwksSource:
-      kind: uri
+      type: uri
       uri: https://identity.gov.example/.well-known/jwks.json
     principalClaim: sub
     requesterTagsClaim: evidence_tags
     evidenceAudienceClaim: evidence_audience
+    requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
 audit:
@@ -59,11 +61,11 @@ selectorProfiles:
         maximumBytes: 128
 sources:
   registered-birth-date:
-    transport: http-json
+    type: http-json
     baseUrl: https://events.opencrvs.gov.example
     posture: record-transformed
     authentication:
-      kind: oauth2-client-credentials
+      type: oauth2-client-credentials
       tokenEndpoint: https://auth.opencrvs.gov.example/token
       clientIdRef: secret:file/opencrvs-client-id
       clientSecretRef: secret:file/opencrvs-client-secret
@@ -110,19 +112,19 @@ sources:
         - /results/*/trackingId
         - /results/*/dateOfEvent
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 262144
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     # Shape contract for the projected response, checked before extraction runs.
     responseSchema: schemas/birth-adult-response.schema.yaml
     extractScript: adapters/birth-adult-extract.rhai
     factSchema: schemas/birth-adult-facts.schema.yaml
   registered-birth-parents:
-    transport: http-json
+    type: http-json
     baseUrl: https://events.opencrvs.gov.example
     posture: record-transformed
     authentication:
-      kind: oauth2-client-credentials
+      type: oauth2-client-credentials
       tokenEndpoint: https://auth.opencrvs.gov.example/token
       clientIdRef: secret:file/opencrvs-client-id
       clientSecretRef: secret:file/opencrvs-client-secret
@@ -176,9 +178,9 @@ sources:
         - /results/*/declaration/mother.personReference
         - /results/*/declaration/father.personReference
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 262144
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     # Shape contract for the projected response, checked before extraction runs.
     responseSchema: schemas/birth-parents-response.schema.yaml
     extractScript: adapters/birth-parents-extract.rhai
@@ -221,10 +223,10 @@ authorityProfiles:
             valueOrigin: request
 requirements:
   - handle: adult-status-from-birth
-    id: urn:gov:example:requirement:adult-status-from-birth:v1
+    uri: urn:gov:example:requirement:adult-status-from-birth:v1
     kind: criterion
     acquisition:
-      kind: single
+      type: single
       source: registered-birth-date
     purposes: [eligibility-assessment]
     subjectRoles:
@@ -245,8 +247,8 @@ requirements:
       parameters: {minimum_age_years: 18}
     concepts:
       - handle: adult-status
-        id: urn:gov:example:concept:adult-status
-        form: boolean
+        uri: urn:gov:example:concept:adult-status
+        type: boolean
         required: true
         constraints: {}
     fixtures: fixtures/adult-status-cases.yaml
@@ -254,10 +256,10 @@ requirements:
       families: [urn:gov:example:disclosure-family:adult-status]
     existenceDisclosure: collapse-unresolved
   - handle: registered-parent-relationship
-    id: urn:gov:example:requirement:registered-parent-relationship:v1
+    uri: urn:gov:example:requirement:registered-parent-relationship:v1
     kind: criterion
     acquisition:
-      kind: single
+      type: single
       source: registered-birth-parents
     purposes: [family-relationship-verification]
     subjectRoles:
@@ -287,8 +289,8 @@ requirements:
         relationship_set_contract: urn:gov:example:opencrvs:registered-parent-set:v1
     concepts:
       - handle: relationship-confirmed
-        id: urn:gov:example:concept:registered-parent-relationship-confirmed
-        form: boolean
+        uri: urn:gov:example:concept:registered-parent-relationship-confirmed
+        type: boolean
         required: true
         constraints: {}
     fixtures: fixtures/registered-parent-relationship-cases.yaml
@@ -296,10 +298,10 @@ requirements:
       families: [urn:gov:example:disclosure-family:registered-parent-relationship]
     existenceDisclosure: collapse-unresolved
   - handle: identify-registered-parents
-    id: urn:gov:example:requirement:identify-registered-parents:v1
+    uri: urn:gov:example:requirement:identify-registered-parents:v1
     kind: information-requirement
     acquisition:
-      kind: single
+      type: single
       source: registered-birth-parents
     purposes: [family-case-record]
     subjectRoles:
@@ -321,8 +323,8 @@ requirements:
         relationship_set_contract: urn:gov:example:opencrvs:registered-parent-set:v1
     concepts:
       - handle: parent-references
-        id: urn:gov:example:concept:registered-parent-references
-        form: entity-reference-list
+        uri: urn:gov:example:concept:registered-parent-references
+        type: entity-reference-list
         required: true
         constraints:
           minimumItems: 1

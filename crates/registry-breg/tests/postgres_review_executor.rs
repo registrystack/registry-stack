@@ -895,7 +895,7 @@ async fn read_request(
                 "effectDigest": DIGEST,
                 "editable": false,
                 "actions": [{
-                    "operation": "apply_request",
+                    "operation": "apply-request",
                     "method": "POST",
                     "href": format!(
                         "/v1/records/requests/{request_id}/actions/apply?accessProfile=automatic-applier"
@@ -1021,7 +1021,7 @@ async fn read_competing_application(
                 "effectDigest": DIGEST,
                 "editable": false,
                 "actions": [{
-                    "operation": "apply_request",
+                    "operation": "apply-request",
                     "method": "POST",
                     "href": format!(
                         "/v1/records/requests/{request_id}/actions/apply?accessProfile=automatic-applier"
@@ -1100,7 +1100,7 @@ async fn read_exhausted_application(
                 "effectDigest": DIGEST,
                 "editable": false,
                 "actions": [{
-                    "operation": "apply_request",
+                    "operation": "apply-request",
                     "method": "POST",
                     "href": format!(
                         "/v1/records/requests/{request_id}/actions/apply?accessProfile=automatic-applier"
@@ -6277,14 +6277,14 @@ async fn a_scrape_reports_how_long_the_oldest_due_item_in_each_queue_has_waited(
 
     let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
 
-    let submission = queue_age(&scrape, "review_submission")
+    let submission = queue_age(&scrape, "review-submission")
         .unwrap_or_else(|| panic!("the review submission queue is sampled:\n{scrape}"));
     assert!(
         (90.0..3600.0).contains(&submission),
         "the oldest due submission has waited about ninety seconds: {submission}"
     );
-    assert_eq!(queue_age(&scrape, "webhook_delivery"), Some(0.0));
-    assert_eq!(queue_age(&scrape, "review_application"), Some(0.0));
+    assert_eq!(queue_age(&scrape, "webhook-delivery"), Some(0.0));
+    assert_eq!(queue_age(&scrape, "review-application"), Some(0.0));
 
     drop(pool);
     database.cleanup().await;
@@ -6352,7 +6352,7 @@ async fn a_scrape_counts_a_claimable_cancellation_as_waiting_review_submission_w
 
     let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
 
-    let submission = queue_age(&scrape, "review_submission")
+    let submission = queue_age(&scrape, "review-submission")
         .unwrap_or_else(|| panic!("the review submission queue is sampled:\n{scrape}"));
     assert!(
         (120.0..3600.0).contains(&submission),
@@ -6426,7 +6426,7 @@ async fn a_scrape_ages_an_expired_review_submission_lease_from_its_expiry() {
 
     let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
 
-    let submission = queue_age(&scrape, "review_submission")
+    let submission = queue_age(&scrape, "review-submission")
         .unwrap_or_else(|| panic!("the review submission queue is sampled:\n{scrape}"));
     assert!(
         (90.0..1800.0).contains(&submission),
@@ -6483,7 +6483,7 @@ async fn a_scrape_counts_an_expired_webhook_lease_as_waiting_delivery_work() {
 
     let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
 
-    let webhook = queue_age(&scrape, "webhook_delivery")
+    let webhook = queue_age(&scrape, "webhook-delivery")
         .unwrap_or_else(|| panic!("the webhook delivery queue is sampled:\n{scrape}"));
     assert!(
         (120.0..3600.0).contains(&webhook),
@@ -6510,7 +6510,7 @@ async fn an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free
         "an unreadable sample publishes no queue age rather than an empty queue:\n{scrape}"
     );
     assert!(
-        scrape.contains("breg_pool_connections{state=\"max_size\"}"),
+        scrape.contains("breg_pool_connections{state=\"maximum-size\"}"),
         "the rest of the scrape is still served"
     );
     let records = logs

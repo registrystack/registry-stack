@@ -377,7 +377,7 @@ fn check_signer(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Che
         );
         return run.finish();
     };
-    match signer.get("kind").and_then(YamlValue::as_str) {
+    match signer.get("type").and_then(YamlValue::as_str) {
         Some("local-jwk") => match signer.get("privateKeyRef").and_then(YamlValue::as_str) {
             Some(reference) if reference.starts_with(SECRET_REFERENCE_PREFIX) => {
                 run.note(format!(
@@ -408,7 +408,7 @@ fn check_signer(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Che
             runtime_path,
             format!("declares signer kind {kind}, which is neither local-jwk nor transit"),
         ),
-        None => run.refuse(runtime_path, "declares a signer with no kind".to_owned()),
+        None => run.refuse(runtime_path, "declares a signer with no type".to_owned()),
     }
     run.finish()
 }
@@ -448,13 +448,13 @@ fn check_audit(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Chec
     let Some(rotate_bytes) = audit_setting(&mut run, runtime_path, audit, "rotateBytes") else {
         return run.finish();
     };
-    let Some(retain_days) = audit_setting(&mut run, runtime_path, audit, "retainDays") else {
+    let Some(retention_days) = audit_setting(&mut run, runtime_path, audit, "retentionDays") else {
         return run.finish();
     };
-    let Ok(retain_days) = retain_days.map(u32::try_from).transpose() else {
+    let Ok(retention_days) = retention_days.map(u32::try_from).transpose() else {
         run.refuse(
             runtime_path,
-            "declares audit retainDays out of range".to_owned(),
+            "declares audit retentionDays out of range".to_owned(),
         );
         return run.finish();
     };
@@ -476,7 +476,7 @@ fn check_audit(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Chec
         }
     };
     let destination =
-        match AuditDestination::from_settings(kind, absolute, rotate_bytes, retain_days) {
+        match AuditDestination::from_settings(kind, absolute, rotate_bytes, retention_days) {
             Ok(destination) => destination,
             Err(error) => {
                 run.refuse(
@@ -550,7 +550,7 @@ fn audit_setting(
 /// against unknown members: a bundle written for a later runtime must still
 /// render here rather than be reported as broken by adopter tooling.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(tag = "type", rename_all = "kebab-case")]
 enum AcquisitionProjection {
     Single {
         source: String,
@@ -574,7 +574,7 @@ struct FetchMemberProjection {
 
 #[derive(Debug, Deserialize)]
 struct RequirementProjection {
-    id: String,
+    uri: String,
     acquisition: AcquisitionProjection,
 }
 
@@ -732,7 +732,7 @@ fn check_acquisition(
             }
         }
         plans.push(AcquisitionPlanReport {
-            requirement: projected.id,
+            requirement: projected.uri,
             kind: projected.acquisition.kind(),
             stages: projected.acquisition.stages(),
         });
@@ -840,7 +840,7 @@ fn check_rate_limits(
         });
     let holder_bound_release = if batch_container && requirements.iter().any(holder_bound) {
         bundle
-            .get("holderBoundBatchMaxSize")
+            .get("maximumHolderBoundBatchSize")
             .and_then(YamlValue::as_u64)
             .unwrap_or(DEFAULT_HOLDER_BOUND_BATCH_SIZE)
     } else {
@@ -851,7 +851,7 @@ fn check_rate_limits(
         return (run.finish(), None);
     }
     let message = format!(
-        "rateLimits.burstPerPrincipal is below {cost}, the largest request cost this bundle admits: a request batch or holder-bound release that costs more than the burst is always refused as evidence.invalid_request. Raise rateLimits.burstPerPrincipal to at least {cost} unless capping those requests below {cost} is intended"
+        "rateLimits.burstPerPrincipal is below {cost}, the largest request cost this bundle admits: a request batch or holder-bound release that costs more than the burst is always refused as evidence.invalid-request. Raise rateLimits.burstPerPrincipal to at least {cost} unless capping those requests below {cost} is intended"
     );
     run.warn(bundle_config_path, message.clone());
     let diagnostic = serde_json::json!({

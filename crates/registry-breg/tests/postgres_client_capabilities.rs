@@ -23,38 +23,38 @@ use std::collections::{BTreeMap, BTreeSet};
 
 fn registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(br#"{
-      "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-      "registry":{"id":"client-capabilities","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+      "project":{"id":"client-capabilities","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
       "entities":[{
         "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","tombstone":true,"classification":"internal",
         "batch":{"maximumItems":4,"maximumBytes":16384},
         "fields":[
-          {"id":"code","type":"string","maxLength":64,"required":true,"classification":"internal"},
-          {"id":"label","type":"string","maxLength":128,"required":true,"classification":"internal"},
+          {"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"},
+          {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"internal"},
           {"id":"valid-from","type":"date","required":true,"classification":"internal"},
           {"id":"valid-to","type":"date","classification":"internal"}
         ],
         "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["code"]},
-        "constraints":[{"kind":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
+        "constraints":[{"type":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
       },{
         "id":"timestamp-entry","primaryDataset":"test-dataset","route":"timestamp-entries","mutationMode":"mutable","classification":"internal",
         "fields":[
-          {"id":"code","type":"string","maxLength":64,"required":true,"classification":"internal"},
+          {"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"},
           {"id":"valid-from","type":"timestamp","required":true,"classification":"internal"},
           {"id":"valid-to","type":"timestamp","classification":"internal"}
         ],
         "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["code"]},
-        "constraints":[{"kind":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
+        "constraints":[{"type":"temporal-non-overlap","scopeFields":["code"],"startField":"valid-from","endField":"valid-to"}]
       }],
       "accessProfiles":[{
         "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["case-management"],
-        "permissions":[{"entity":"entry","operations":["create","get","list","patch","batch","tombstone","revisions","snapshot"],
+        "permissions":{"entities":[{"entity":"entry","operations":["create","get","list","patch","batch","tombstone","revisions","snapshot"],
           "readableFields":["code","label","valid-from","valid-to"],"writableFields":["code","label","valid-from","valid-to"],
           "filterableFields":["code"],"sortableFields":["valid-from"],"allowCount":true,"revisionAccess":true,"rowBoundaries":"unrestricted"
         },{"entity":"timestamp-entry","operations":["snapshot"],
           "readableFields":["code","valid-from","valid-to"],"writableFields":[],"rowBoundaries":"unrestricted"
-        }]
+        }]}
       }]
     }"#).expect("SDK fixture follows ordinary authoring contract");
     compile_project(&project, &[], CompileProfile::Authoring).expect("SDK fixture compiles")

@@ -16,7 +16,50 @@ use std::process::{Command, Output};
 use jsonschema::{Draft, JSONSchema};
 use serde_json::{json, Value};
 
-const API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha4";
+/// The header an explanation opens with, by the name of its schema file: each
+/// of the nine formats carries its own `apiVersion` and a `kind` that names
+/// the product.
+fn envelope(contract: &str) -> (&'static str, &'static str) {
+    match contract {
+        "ModelExplanation" => (
+            "id.registrystack.org/formats/breg/model-explanation/v1alpha4",
+            "BRegModelExplanation",
+        ),
+        "AccessExplanation" => (
+            "id.registrystack.org/formats/breg/access-explanation/v1alpha4",
+            "BRegAccessExplanation",
+        ),
+        "AccessPreview" => (
+            "id.registrystack.org/formats/breg/access-preview/v1alpha4",
+            "BRegAccessPreview",
+        ),
+        "RoutesExplanation" => (
+            "id.registrystack.org/formats/breg/routes-explanation/v1alpha4",
+            "BRegRoutesExplanation",
+        ),
+        "QueriesExplanation" => (
+            "id.registrystack.org/formats/breg/queries-explanation/v1alpha4",
+            "BRegQueriesExplanation",
+        ),
+        "ActionsExplanation" => (
+            "id.registrystack.org/formats/breg/actions-explanation/v1alpha4",
+            "BRegActionsExplanation",
+        ),
+        "ChangeRequestsExplanation" => (
+            "id.registrystack.org/formats/breg/change-requests-explanation/v1alpha4",
+            "BRegChangeRequestsExplanation",
+        ),
+        "EventsExplanation" => (
+            "id.registrystack.org/formats/breg/events-explanation/v1alpha4",
+            "BRegEventsExplanation",
+        ),
+        "LifecycleExplanation" => (
+            "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha4",
+            "BRegLifecycleExplanation",
+        ),
+        other => panic!("no explain contract is named {other}"),
+    }
+}
 
 /// Fixture directories the gate replays, each an on-disk registry project
 /// under `products/breg/`. Chosen to cover every subject's optional
@@ -178,14 +221,15 @@ fn load_schema_document(kind: &str) -> Value {
 /// a single failing fixture shows the complete list of what is wrong rather
 /// than only the first mismatch.
 fn assert_matches_contract(label: &str, kind: &str, explanation: &Value) {
+    let (api_version, envelope_kind) = envelope(kind);
     assert_eq!(
         explanation["apiVersion"],
-        Value::String(API_VERSION.to_owned()),
+        Value::String(api_version.to_owned()),
         "{label}: unexpected apiVersion in {explanation:#?}"
     );
     assert_eq!(
         explanation["kind"],
-        Value::String(kind.to_owned()),
+        Value::String(envelope_kind.to_owned()),
         "{label}: unexpected kind in {explanation:#?}"
     );
 
@@ -370,7 +414,7 @@ fn facility_action_permission_targets_keep_each_operation_and_source() {
             json!({
                 "entity": target["entity"],
                 "operation": target["operation"],
-                "sourceKind": source["kind"],
+                "sourceType": source["type"],
                 "sourceId": source.get("effect").unwrap_or(&source["input"]["input"]),
             })
         })
@@ -378,9 +422,9 @@ fn facility_action_permission_targets_keep_each_operation_and_source() {
     assert_eq!(
         roles,
         vec![
-            json!({"entity": "facility", "operation": "create", "sourceKind": "effect", "sourceId": "facility"}),
-            json!({"entity": "initial-operator-assignment", "operation": "create", "sourceKind": "effect", "sourceId": "initial-assignment"}),
-            json!({"entity": "operator", "operation": "invoke", "sourceKind": "input", "sourceId": "operator"}),
+            json!({"entity": "facility", "operation": "create", "sourceType": "effect", "sourceId": "facility"}),
+            json!({"entity": "initial-operator-assignment", "operation": "create", "sourceType": "effect", "sourceId": "initial-assignment"}),
+            json!({"entity": "operator", "operation": "invoke", "sourceType": "input", "sourceId": "operator"}),
         ]
     );
 }
@@ -686,6 +730,696 @@ fn reordering_or_thinning_the_lifecycle_fails_the_contract() {
     );
 }
 
+/// An enforcement layer id is a machine-matched name, so it is lowercase
+/// kebab-case, and the contract refuses the snake_case spelling of each one.
+#[test]
+fn lifecycle_contract_refuses_a_snake_case_layer_id() {
+    let report = explain_lifecycle_report();
+    let schema = load_schema("LifecycleExplanation");
+    let explanation = &report["explanation"];
+    assert!(
+        schema.is_valid(explanation),
+        "the lifecycle report satisfies LifecycleExplanation"
+    );
+    let layers = explanation["lifecycles"][0]["enforcement"]
+        .as_array()
+        .expect("enforcement array");
+    assert_eq!(layers.len(), 21);
+    for (index, layer) in layers.iter().enumerate() {
+        let id = layer["id"].as_str().expect("layer id");
+        assert!(!id.contains('_'), "layer id {id} is not kebab-case");
+        let earlier = id.replace('-', "_");
+        assert_ne!(earlier, id, "layer id {id} has one spelling only");
+        let mut document = explanation.clone();
+        document["lifecycles"][0]["enforcement"][index]["id"] = Value::String(earlier.clone());
+        assert!(
+            !schema.is_valid(&document),
+            "LifecycleExplanation accepts the earlier layer id {earlier}"
+        );
+    }
+}
+
+/// An identifier an explanation carries is a local identifier, and its
+/// contract refuses a value outside that grammar. The registry project already
+/// holds every authored identifier to it, so the output is unchanged.
+#[test]
+fn each_contract_refuses_an_identifier_outside_the_local_grammar() {
+    let cases: &[(&str, &str, &str, &[&str])] = &[
+        (
+            "model",
+            "products/breg/acceptance/asset-site-placement",
+            "ModelExplanation",
+            &["/moduleClosure/0/id"],
+        ),
+        (
+            "actions",
+            "products/breg/fixtures/asset-registration-actions",
+            "ActionsExplanation",
+            &["/actions/0/id", "/actions/0/effects/0/id"],
+        ),
+        (
+            "change-requests",
+            "products/breg/acceptance/asset-site-placement-change-requests",
+            "ChangeRequestsExplanation",
+            &["/requests/0/effects/0/id"],
+        ),
+        (
+            "access",
+            "products/breg/fixtures/consent-person-registry",
+            "AccessExplanation",
+            &["/consent/organizations/0/id", "/consent/groups/0/id"],
+        ),
+    ];
+    for (subject, fixture, kind, pointers) in cases {
+        let explanation = explain(subject, &fixture_path(fixture));
+        let schema = load_schema(kind);
+        assert!(schema.is_valid(&explanation), "{fixture} satisfies {kind}");
+        for pointer in *pointers {
+            for outside in ["Not An Id", "9lives", "a.b", ""] {
+                let mut document = explanation.clone();
+                let member = document
+                    .pointer_mut(pointer)
+                    .unwrap_or_else(|| panic!("{kind} writes {pointer} for {fixture}"));
+                assert!(member.is_string(), "{kind} {pointer} is a string");
+                *member = Value::String(outside.to_owned());
+                assert!(
+                    !schema.is_valid(&document),
+                    "{kind} accepts {outside:?} at {pointer}"
+                );
+            }
+        }
+    }
+
+    // The module a Rhai planner was declared in is named by its identifier.
+    let explanation = explain(
+        "change-requests",
+        &fixture_path("products/breg/acceptance/person-name-change-rhai"),
+    );
+    let schema = load_schema("ChangeRequestsExplanation");
+    let mut document = explanation.clone();
+    document["requests"][0]["planner"]["declaringOrigin"] =
+        json!({"type": "module", "id": "people"});
+    assert!(
+        schema.is_valid(&document),
+        "ChangeRequestsExplanation accepts a module origin"
+    );
+    document["requests"][0]["planner"]["declaringOrigin"]["id"] = json!("Not An Id");
+    assert!(
+        !schema.is_valid(&document),
+        "ChangeRequestsExplanation accepts a module origin that is no identifier"
+    );
+
+    // Every lifecycle identifier is pinned to a constant, so no other value
+    // reaches the grammar: the contract states the type beside each constant.
+    let lifecycle = load_schema_document("LifecycleExplanation");
+    let local_id = json!("#/$defs/LocalId");
+    assert_eq!(
+        lifecycle["$defs"]["LocalId"]["pattern"],
+        "^[a-z][a-z0-9_-]{0,63}$"
+    );
+    let pin = &lifecycle["$defs"]["requestLifecyclePin"]["properties"];
+    assert_eq!(pin["id"]["$ref"], local_id);
+    for state in pin["states"]["prefixItems"].as_array().expect("states") {
+        assert_eq!(state["properties"]["id"]["$ref"], local_id);
+    }
+    for layer in pin["enforcement"]["prefixItems"]
+        .as_array()
+        .expect("enforcement layers")
+    {
+        assert_eq!(layer["properties"]["id"]["$ref"], local_id);
+    }
+    for definition in ["lifecycle", "enforcementLayer", "state"] {
+        assert_eq!(
+            lifecycle["$defs"][definition]["properties"]["id"]["$ref"], local_id,
+            "LifecycleExplanation types the {definition} id"
+        );
+    }
+}
+
+/// An identifier the compiler derives, a route or operation id, is a
+/// dot-separated path of local identifiers, and its contract refuses a value
+/// outside that grammar. The compiler composes every such identifier from
+/// identifiers the project already holds to the local grammar, so the output
+/// is unchanged.
+#[test]
+fn each_contract_refuses_a_derived_identifier_outside_the_dotted_grammar() {
+    let fixture = fixture_path("products/breg/fixtures/asset-registration-actions");
+    let routes = explain("routes", &fixture);
+    let action_route = routes["routes"]
+        .as_array()
+        .expect("routes")
+        .iter()
+        .position(|route| route["type"] == "action")
+        .expect("the fixture declares an action route");
+    let cases = [
+        (
+            "RoutesExplanation",
+            routes,
+            format!("/routes/{action_route}/id"),
+        ),
+        (
+            "QueriesExplanation",
+            explain("queries", &fixture),
+            "/operations/0/id".to_owned(),
+        ),
+        (
+            "ActionsExplanation",
+            explain("actions", &fixture),
+            "/actions/0/routes/0/id".to_owned(),
+        ),
+    ];
+    for (kind, explanation, pointer) in cases {
+        let schema = load_schema(kind);
+        assert!(
+            schema.is_valid(&explanation),
+            "the fixture satisfies {kind}"
+        );
+        let document = load_schema_document(kind);
+        assert_eq!(
+            document["$defs"]["DerivedId"]["pattern"],
+            "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
+            "{kind} defines the derived grammar"
+        );
+        let written = explanation
+            .pointer(&pointer)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{kind} writes {pointer}"));
+        assert!(written.contains('.'), "{kind} {pointer} is a dotted path");
+        for outside in [
+            "Not.An.Id",
+            "records",
+            "records..list",
+            "records.9lives",
+            "",
+        ] {
+            let mut mutated = explanation.clone();
+            *mutated
+                .pointer_mut(&pointer)
+                .expect("the member is present") = Value::String(outside.to_owned());
+            assert!(
+                !schema.is_valid(&mutated),
+                "{kind} accepts {outside:?} at {pointer}"
+            );
+        }
+    }
+}
+
+/// The JSON pointers of every union an actions explanation writes: the source
+/// of each target, and the binding, the field mutations, and the values of
+/// each effect.
+fn action_union_pointers(explanation: &Value) -> Vec<String> {
+    let mut pointers = Vec::new();
+    let actions = explanation["actions"].as_array().expect("actions array");
+    for (action_index, action) in actions.iter().enumerate() {
+        let action_pointer = format!("/actions/{action_index}");
+        let targets = action["targets"].as_array().expect("targets array");
+        for (target_index, target) in targets.iter().enumerate() {
+            if target.get("source").is_some() {
+                pointers.push(format!("{action_pointer}/targets/{target_index}/source"));
+            }
+        }
+        let permissions = action["permissions"].as_array().expect("permissions array");
+        for (permission_index, permission) in permissions.iter().enumerate() {
+            let targets = permission["targets"].as_array().expect("targets array");
+            for target_index in 0..targets.len() {
+                pointers.push(format!(
+                    "{action_pointer}/permissions/{permission_index}/targets/{target_index}/source"
+                ));
+            }
+        }
+        let effects = action["effects"].as_array().expect("effects array");
+        for (effect_index, effect) in effects.iter().enumerate() {
+            let effect_pointer = format!("{action_pointer}/effects/{effect_index}");
+            pointers.push(format!("{effect_pointer}/target/binding"));
+            let fields = effect["fields"].as_array().expect("fields array");
+            for (field_index, field) in fields.iter().enumerate() {
+                pointers.push(format!("{effect_pointer}/fields/{field_index}"));
+                if field.get("value").is_some() {
+                    pointers.push(format!("{effect_pointer}/fields/{field_index}/value"));
+                }
+            }
+        }
+    }
+    pointers
+}
+
+/// Asserts the union at `pointer` is tagged by a kebab-case `type`, and that
+/// `schema` refuses the same document tagged by `kind` or by the snake_case
+/// spelling of the tag. Returns the tag.
+fn assert_union_is_tagged_by_type(
+    kind: &str,
+    schema: &JSONSchema,
+    explanation: &Value,
+    pointer: &str,
+) -> String {
+    let union = explanation
+        .pointer(pointer)
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("{kind} writes an object at {pointer}"));
+    let tag = union
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("{kind} tags {pointer} with type"))
+        .to_owned();
+    assert!(
+        !union.contains_key("kind"),
+        "{kind} writes no kind at {pointer}"
+    );
+    assert!(!tag.contains('_'), "{kind} tag {tag} is kebab-case");
+
+    let mut document = explanation.clone();
+    let member = document
+        .pointer_mut(pointer)
+        .and_then(Value::as_object_mut)
+        .expect("union object");
+    let value = member.remove("type").expect("type member");
+    member.insert("kind".to_owned(), value);
+    assert!(
+        !schema.is_valid(&document),
+        "{kind} accepts {pointer} tagged by kind"
+    );
+
+    let earlier = tag.replace('-', "_");
+    if earlier != tag {
+        let mut document = explanation.clone();
+        document.pointer_mut(pointer).expect("union object")["type"] = Value::String(earlier);
+        assert!(
+            !schema.is_valid(&document),
+            "{kind} accepts the snake_case tag at {pointer}"
+        );
+    }
+    tag
+}
+
+/// Every union an actions or routes explanation writes is tagged by `type`
+/// with a kebab-case value, and the contract refuses the `kind` tag and the
+/// snake_case values.
+#[test]
+fn actions_and_routes_contracts_refuse_a_union_tagged_by_kind() {
+    let schema = load_schema("ActionsExplanation");
+    let mut tags = std::collections::BTreeSet::new();
+    for fixture in [
+        "products/breg/fixtures/household-contact-actions",
+        "products/breg/acceptance/person-registration-rhai",
+    ] {
+        let explanation = explain("actions", &fixture_path(fixture));
+        assert_matches_contract(fixture, "ActionsExplanation", &explanation);
+        let pointers = action_union_pointers(&explanation);
+        assert!(!pointers.is_empty(), "{fixture} writes unions");
+        for pointer in pointers {
+            tags.insert(assert_union_is_tagged_by_type(
+                "ActionsExplanation",
+                &schema,
+                &explanation,
+                &pointer,
+            ));
+        }
+    }
+    assert_eq!(
+        tags.into_iter().collect::<Vec<_>>(),
+        [
+            "computed",
+            "create",
+            "effect",
+            "existing",
+            "from-effect",
+            "from-input",
+            "input",
+            "set"
+        ]
+    );
+
+    let schema = load_schema("RoutesExplanation");
+    let fixture = "products/breg/fixtures/household-contact-actions";
+    let explanation = explain("routes", &fixture_path(fixture));
+    assert_matches_contract(fixture, "RoutesExplanation", &explanation);
+    let routes = explanation["routes"].as_array().expect("routes array");
+    let mut tags = std::collections::BTreeSet::new();
+    for index in 0..routes.len() {
+        tags.insert(assert_union_is_tagged_by_type(
+            "RoutesExplanation",
+            &schema,
+            &explanation,
+            &format!("/routes/{index}"),
+        ));
+    }
+    assert_eq!(tags.into_iter().collect::<Vec<_>>(), ["action", "entity"]);
+}
+
+/// What an actions explanation states about a handler, its evidence, and a
+/// requirement is a set of constants, each written in kebab-case, and the
+/// contract refuses the snake_case spelling of every one it pins.
+#[test]
+fn actions_contract_refuses_a_snake_case_handler_constant() {
+    let schema = load_schema("ActionsExplanation");
+    let mut pinned_values = std::collections::BTreeSet::new();
+    let mut unpinned = 0;
+    for fixture in [
+        "products/breg/acceptance/person-registration-rhai",
+        "products/breg/acceptance/farmer-landholding-evidence",
+    ] {
+        let explanation = explain("actions", &fixture_path(fixture));
+        assert_matches_contract(fixture, "ActionsExplanation", &explanation);
+        let actions = explanation["actions"].as_array().expect("actions array");
+        for (action_index, action) in actions.iter().enumerate() {
+            let mut statements = Vec::new();
+            if action.get("handler").is_some() {
+                for (member, pinned) in [
+                    ("inputKeys", true),
+                    ("omittedSlots", false),
+                    ("evaluation", false),
+                    ("reads", true),
+                    ("replay", true),
+                ] {
+                    statements.push((format!("/actions/{action_index}/handler/{member}"), pinned));
+                }
+            }
+            if action.get("evidence").is_some() {
+                for member in ["deadline", "invocation", "disclosure", "lifecycle"] {
+                    statements.push((format!("/actions/{action_index}/evidence/{member}"), false));
+                }
+            }
+            let requirements = action
+                .get("requires")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            for index in 0..requirements {
+                statements.push((
+                    format!("/actions/{action_index}/requires/{index}/evaluated"),
+                    true,
+                ));
+            }
+            for (pointer, pinned) in statements {
+                let value = explanation
+                    .pointer(&pointer)
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| panic!("{fixture} writes a string at {pointer}"));
+                assert!(
+                    !value.contains('_'),
+                    "{fixture} writes {value} at {pointer}, which is not kebab-case"
+                );
+                if !pinned {
+                    unpinned += 1;
+                    continue;
+                }
+                let mut document = explanation.clone();
+                *document.pointer_mut(&pointer).expect("statement") =
+                    Value::String(value.replace('-', "_"));
+                assert!(
+                    !schema.is_valid(&document),
+                    "ActionsExplanation accepts the snake_case value at {pointer}"
+                );
+                pinned_values.insert(value.to_owned());
+            }
+        }
+    }
+    assert!(unpinned > 0, "the fixtures write unpinned statements");
+    assert_eq!(
+        pinned_values.into_iter().collect::<Vec<_>>(),
+        [
+            "authored-ids",
+            "before-effects-under-target-lock",
+            "recover-committed-result-without-handler-evaluation",
+            "supplied-inputs-only"
+        ]
+    );
+}
+
+/// A queries explanation names each bound of an operation `maximum<Thing>`,
+/// and the contract refuses the `max<Thing>` spelling of every one.
+#[test]
+fn queries_contract_refuses_a_bound_spelled_max() {
+    let schema = load_schema("QueriesExplanation");
+    let fixture = "products/breg/acceptance/asset-site-placement";
+    let explanation = explain("queries", &fixture_path(fixture));
+    assert_matches_contract(fixture, "QueriesExplanation", &explanation);
+    let operations = explanation["operations"]
+        .as_array()
+        .expect("operations array");
+    assert!(!operations.is_empty(), "{fixture} writes query operations");
+    for (index, operation) in operations.iter().enumerate() {
+        let bounds = operation["bounds"].as_object().expect("bounds object");
+        assert_eq!(
+            bounds.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "maximumFilterDepth",
+                "maximumFilterNodes",
+                "maximumFilterPayloadBytes",
+                "maximumFilterPredicates",
+                "maximumInValues",
+                "maximumPageSize",
+                "maximumSelectedFields",
+                "maximumTop"
+            ]
+        );
+        for key in bounds.keys() {
+            let mut document = explanation.clone();
+            let bounds = document["operations"][index]["bounds"]
+                .as_object_mut()
+                .expect("bounds object");
+            let value = bounds.remove(key).expect("bound");
+            bounds.insert(key.replacen("maximum", "max", 1), value);
+            assert!(
+                !schema.is_valid(&document),
+                "QueriesExplanation accepts the max spelling of {key}"
+            );
+        }
+    }
+}
+
+/// An actions explanation reports how long an accepted assertion is retained
+/// in days, the unit every retention in the stack is written in, and the
+/// contract refuses the member spelled in seconds.
+#[test]
+fn actions_contract_refuses_an_evidence_retention_in_seconds() {
+    let schema = load_schema("ActionsExplanation");
+    let fixture = "products/breg/acceptance/farmer-landholding-evidence";
+    let explanation = explain("actions", &fixture_path(fixture));
+    assert_matches_contract(fixture, "ActionsExplanation", &explanation);
+    let actions = explanation["actions"].as_array().expect("actions array");
+    let mut checked = 0;
+    for (index, action) in actions.iter().enumerate() {
+        let Some(evidence) = action.get("evidence").and_then(Value::as_object) else {
+            continue;
+        };
+        assert_eq!(evidence.get("retentionDays"), Some(&json!(1)));
+        assert!(!evidence.contains_key("retentionSeconds"));
+
+        let mut document = explanation.clone();
+        let evidence = document["actions"][index]["evidence"]
+            .as_object_mut()
+            .expect("evidence object");
+        evidence.remove("retentionDays");
+        evidence.insert("retentionSeconds".to_owned(), json!(86_400));
+        assert!(
+            !schema.is_valid(&document),
+            "ActionsExplanation accepts retentionSeconds"
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "{fixture} writes action evidence");
+}
+
+/// The access explanation and the access preview spell their own constants
+/// in kebab-case: every claim contract error the engine can report, and the
+/// preview's `mode` and `recordAccess`. Each contract refuses the snake_case
+/// spelling.
+#[test]
+fn access_contracts_refuse_a_snake_case_constant() {
+    use registry_breg::authority::AuthorityInventoryError;
+
+    let schema = load_schema("AccessExplanation");
+    let fixture = "products/breg/examples/access-review";
+    let explanation = explain("access", &fixture_path(fixture));
+    assert_matches_contract(fixture, "AccessExplanation", &explanation);
+    assert!(explanation["claimContractError"].is_null());
+    let errors = [
+        AuthorityInventoryError::PrincipalClaimMissing,
+        AuthorityInventoryError::TargetEntityNotCompiled,
+        AuthorityInventoryError::BoundaryFieldNotCompiled,
+        AuthorityInventoryError::LookupSelectorNotCompiled,
+        AuthorityInventoryError::LookupClaimMappingIncomplete,
+        AuthorityInventoryError::LookupFieldNotCompiled,
+        AuthorityInventoryError::ConflictingClaimExpectation,
+    ];
+    for error in errors {
+        let written = serde_json::to_value(error).expect("claim contract error serializes");
+        let word = written.as_str().expect("claim contract error is a string");
+        assert!(
+            !word.contains('_'),
+            "the engine writes claimContractError {word}, which is not kebab-case"
+        );
+        let mut document = explanation.clone();
+        document["claimContractError"] = written.clone();
+        assert!(
+            schema.is_valid(&document),
+            "AccessExplanation refuses claimContractError {word}"
+        );
+        document["claimContractError"] = json!(word.replace('-', "_"));
+        assert!(
+            !schema.is_valid(&document),
+            "AccessExplanation accepts a snake_case claimContractError for {word}"
+        );
+    }
+
+    let schema = load_schema("AccessPreview");
+    let project = fixture_path(fixture);
+    for (name, relative) in ACCESS_SCENARIOS {
+        let preview = explain_with_scenario(&project, &repo_root().join(relative));
+        assert_matches_contract(name, "AccessPreview", &preview);
+        assert_eq!(preview["mode"], json!("offline-synthetic"), "{name}");
+        assert_eq!(preview["recordAccess"], json!("not-evaluated"), "{name}");
+        for (member, old) in [
+            ("mode", "offline_synthetic"),
+            ("recordAccess", "not_evaluated"),
+        ] {
+            let mut document = preview.clone();
+            document[member] = json!(old);
+            assert!(
+                !schema.is_valid(&document),
+                "AccessPreview accepts {member} {old}"
+            );
+        }
+    }
+}
+
+/// The JSON pointers of every tagged union a change-requests explanation
+/// writes: the planner, its declaring origin, the target of each possible
+/// write, and the binding, the field mutations, and the values of each
+/// effect.
+fn change_request_union_pointers(explanation: &Value) -> Vec<String> {
+    let mut pointers = Vec::new();
+    let requests = explanation["requests"].as_array().expect("requests array");
+    for (request_index, request) in requests.iter().enumerate() {
+        let request_pointer = format!("/requests/{request_index}");
+        pointers.push(format!("{request_pointer}/planner"));
+        let planner = &request["planner"];
+        if planner.get("declaringOrigin").is_some() {
+            pointers.push(format!("{request_pointer}/planner/declaringOrigin"));
+        }
+        if let Some(writes) = planner.get("possibleWrites").and_then(Value::as_array) {
+            for write_index in 0..writes.len() {
+                pointers.push(format!(
+                    "{request_pointer}/planner/possibleWrites/{write_index}/target"
+                ));
+            }
+        }
+        let effects = request["effects"].as_array().expect("effects array");
+        for (effect_index, effect) in effects.iter().enumerate() {
+            let effect_pointer = format!("{request_pointer}/effects/{effect_index}");
+            pointers.push(format!("{effect_pointer}/target/binding"));
+            let fields = effect["fields"].as_array().expect("fields array");
+            for (field_index, field) in fields.iter().enumerate() {
+                pointers.push(format!("{effect_pointer}/fields/{field_index}"));
+                if field.get("value").is_some() {
+                    pointers.push(format!("{effect_pointer}/fields/{field_index}/value"));
+                }
+            }
+        }
+    }
+    pointers
+}
+
+/// Collects into `tags` the constant every schema node under `node` pins for
+/// a `type` member, and fails on a node that pins a `kind` member.
+fn collect_schema_union_tags(
+    node: &Value,
+    pointer: &str,
+    tags: &mut std::collections::BTreeSet<String>,
+) {
+    match node {
+        Value::Object(members) => {
+            if let Some(properties) = members.get("properties").and_then(Value::as_object) {
+                assert!(
+                    !properties.contains_key("kind"),
+                    "ChangeRequestsExplanation pins a kind member at {pointer}"
+                );
+                if let Some(tag) = properties
+                    .get("type")
+                    .and_then(|member| member.get("const"))
+                    .and_then(Value::as_str)
+                {
+                    tags.insert(tag.to_owned());
+                }
+            }
+            for (name, member) in members {
+                collect_schema_union_tags(member, &format!("{pointer}/{name}"), tags);
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                collect_schema_union_tags(item, &format!("{pointer}/{index}"), tags);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every tagged union a change-requests explanation writes is tagged by
+/// `type` with a kebab-case value, and the contract refuses the `kind` tag
+/// and the snake_case values, including the variants no tracked project
+/// writes.
+#[test]
+fn change_requests_contract_refuses_a_union_tagged_by_kind() {
+    let schema = load_schema("ChangeRequestsExplanation");
+    let mut tags = std::collections::BTreeSet::new();
+    for fixture in [
+        "products/breg/acceptance/publicschema-household-change-requests",
+        "products/breg/acceptance/person-name-change-rhai",
+    ] {
+        let explanation = explain("change-requests", &fixture_path(fixture));
+        assert_matches_contract(fixture, "ChangeRequestsExplanation", &explanation);
+        let pointers = change_request_union_pointers(&explanation);
+        assert!(!pointers.is_empty(), "{fixture} writes unions");
+        for pointer in pointers {
+            tags.insert(assert_union_is_tagged_by_type(
+                "ChangeRequestsExplanation",
+                &schema,
+                &explanation,
+                &pointer,
+            ));
+        }
+    }
+    assert_eq!(
+        tags.into_iter().collect::<Vec<_>>(),
+        [
+            "declarative",
+            "existing",
+            "from-effect",
+            "from-field",
+            "project",
+            "reserved-create",
+            "rhai",
+            "set"
+        ]
+    );
+
+    let document = load_schema_document("ChangeRequestsExplanation");
+    let mut pinned = std::collections::BTreeSet::new();
+    collect_schema_union_tags(
+        &document["properties"]["requests"],
+        "/properties/requests",
+        &mut pinned,
+    );
+    assert_eq!(
+        pinned.into_iter().collect::<Vec<_>>(),
+        [
+            "clear",
+            "declarative",
+            "existing",
+            "from-effect",
+            "from-field",
+            "module",
+            "none",
+            "project",
+            "required",
+            "reserved-create",
+            "rhai",
+            "set"
+        ]
+    );
+}
+
 /// The lifecycle report names no revision, because no project produced it.
 /// Every other subject does, so this also asserts the contrast rather than
 /// just the absence.
@@ -874,6 +1608,50 @@ fn committed_examples_are_what_explain_writes() {
             "{path:?} is not what `bregctl explain` writes now; rewrite the examples with the \
              commands in products/breg/contracts/explain/README.md"
         );
+    }
+}
+
+/// Every explain contract refuses the header the nine formats shared before
+/// each took its own `apiVersion` and its product-prefixed `kind`.
+#[test]
+fn each_contract_refuses_the_shared_explain_header() {
+    for (file, contract) in [
+        ("model-explanation.json", "ModelExplanation"),
+        ("access-explanation.json", "AccessExplanation"),
+        ("access-preview.json", "AccessPreview"),
+        ("actions-explanation.json", "ActionsExplanation"),
+        (
+            "change-requests-explanation.json",
+            "ChangeRequestsExplanation",
+        ),
+        ("events-explanation.json", "EventsExplanation"),
+        ("queries-explanation.json", "QueriesExplanation"),
+        ("routes-explanation.json", "RoutesExplanation"),
+        ("lifecycle-explanation.json", "LifecycleExplanation"),
+    ] {
+        let path = repo_root()
+            .join("products/breg/examples/formats/explain")
+            .join(file);
+        let bytes =
+            std::fs::read(&path).unwrap_or_else(|error| panic!("example {path:?} reads: {error}"));
+        let committed: Value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|error| panic!("example {path:?} parses: {error}"));
+        let schema = load_schema(contract);
+        assert!(schema.is_valid(&committed), "{file} satisfies {contract}");
+        for (member, earlier) in [
+            (
+                "apiVersion",
+                "registry.registrystack.org/breg-explain/v1alpha4",
+            ),
+            ("kind", contract),
+        ] {
+            let mut document = committed.clone();
+            document[member] = Value::String(earlier.to_owned());
+            assert!(
+                !schema.is_valid(&document),
+                "{contract} accepts the earlier {member}"
+            );
+        }
     }
 }
 

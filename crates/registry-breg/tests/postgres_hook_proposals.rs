@@ -119,7 +119,7 @@ fn hook_json(id: &str, principal: bool, handler: &str) -> String {
 }
 
 const PROPOSING_RHAI_HANDLER: &str =
-    r#"{"kind":"rhai","script":"hooks/propose.rhai","abi":"registry.hook-handler/v1"}"#;
+    r#"{"type":"rhai","script":"hooks/propose.rhai","abi":"registry.hook-handler/v1"}"#;
 
 fn rhai_asset(path: &str, bytes: &[u8]) -> ModuleAssetSource {
     ModuleAssetSource {
@@ -144,53 +144,53 @@ fn hook_project_json(
 ) -> String {
     format!(
         r#"{{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{{"id":"hook-proposal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{{"id":"hook-proposal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
           "entities":[{{
-            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create_only","classification":"restricted",
+            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create-only","classification":"restricted",
             "fields":[
-              {{"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"}},
-              {{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}},
-              {{"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"}}
+              {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"}},
+              {{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}},
+              {{"id":"restricted_note","type":"string","maximumLength":64,"required":true,"classification":"restricted"}}
             ],
             "hooks":{case_hooks}
           }},{{
-            "id":"followup","primaryDataset":"test-dataset","route":"followups","mutationMode":"create_only","classification":"internal",
+            "id":"followup","primaryDataset":"test-dataset","route":"followups","mutationMode":"create-only","classification":"internal",
             "fields":[
-              {{"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"internal"}},
-              {{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}},
-              {{"id":"origin","type":"string","maxLength":64,"required":true,"classification":"internal"}}
+              {{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"}},
+              {{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}},
+              {{"id":"origin","type":"string","maximumLength":64,"required":true,"classification":"internal"}}
             ],
             "hooks":{followup_hooks}
           }}],
           "actions":[{{
             "id":"open-followup",
             "inputs":[
-              {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"internal"}},
-              {{"id":"origin","apiName":"origin","type":"string","maxLength":64,"required":true,"classification":"internal"}}
+              {{"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"}},
+              {{"id":"origin","apiName":"origin","type":"string","maximumLength":64,"required":true,"classification":"internal"}}
             ],
             "handler":{{
-              "kind":"rhai","script":"scripts/open-followup.rhai","abi":"registry.action-handler/v1",
+              "type":"rhai","script":"scripts/open-followup.rhai","abi":"registry.action-handler/v1",
               "writes":[{{"id":"followup","target":{{"entity":"followup"}},"operation":"create","fields":["jurisdiction","label","origin"]}}{extra_writes}]
             }}
           }}],
           "accessProfiles":[{{
             "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
-            "permissions":[{{
+            "permissions":{{"entities":[{{
               "entity":"case","operations":["create","get","list"],
               "readableFields":["jurisdiction","label","restricted_note"],
               "writableFields":["jurisdiction","label","restricted_note"],
               "rowBoundaries":[{{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}}]
-            }}]
+            }}]}}
           }},{{
             "id":"case-hook","principalClaim":"registry_principal","requiredScopes":"unrestricted",
-            "permissions":[{{
+            "permissions":{{"actions":[{{
               "action":"open-followup","operations":["invoke"],
               "targets":[{{"entity":"followup","rowBoundaries":"unrestricted"}}],
               {case_hook_results}
-            }}]
+            }}]}}
           }}]
         }}"#,
         case_hooks = case_hooks,
@@ -309,13 +309,13 @@ fn dispositions_registry() -> CompiledRegistry {
         hook_json(
             "invalid-proposer",
             true,
-            r#"{"kind":"rhai","script":"hooks/invalid.rhai","abi":"registry.hook-handler/v1"}"#
+            r#"{"type":"rhai","script":"hooks/invalid.rhai","abi":"registry.hook-handler/v1"}"#
         ),
         hook_json("principal-less-proposer", false, PROPOSING_RHAI_HANDLER),
         hook_json(
             "silent-observer",
             false,
-            r#"{"kind":"rhai","script":"hooks/silent.rhai","abi":"registry.hook-handler/v1"}"#
+            r#"{"type":"rhai","script":"hooks/silent.rhai","abi":"registry.hook-handler/v1"}"#
         ),
     );
     compile_proposal_registry(
@@ -347,7 +347,7 @@ fn invalid_proposal_registry() -> CompiledRegistry {
             hook_json(
                 "invalid-proposer",
                 true,
-                r#"{"kind":"rhai","script":"hooks/invalid.rhai","abi":"registry.hook-handler/v1"}"#
+                r#"{"type":"rhai","script":"hooks/invalid.rhai","abi":"registry.hook-handler/v1"}"#
             )
         ),
         "[]",
@@ -365,7 +365,7 @@ fn silent_registry() -> CompiledRegistry {
             hook_json(
                 "silent-observer",
                 false,
-                r#"{"kind":"rhai","script":"hooks/silent.rhai","abi":"registry.hook-handler/v1"}"#
+                r#"{"type":"rhai","script":"hooks/silent.rhai","abi":"registry.hook-handler/v1"}"#
             )
         ),
         "[]",
@@ -410,7 +410,7 @@ const TALLY_PROPOSAL_HOOK_SCRIPT: &[u8] = br#"fn handle(ctx) {
 /// on the referenced tally beside the followup create, so one applied
 /// proposal commits two result records at different revisions.
 fn tally_proposal_registry() -> CompiledRegistry {
-    let hooks = r#"[{"phase":"after","id":"case-created","trigger":"created","principal":"case-hook","projection":["label","tally","tally-condition"],"handler":{"kind":"rhai","script":"hooks/propose-tally.rhai","abi":"registry.hook-handler/v1"}}]"#;
+    let hooks = r#"[{"phase":"after","id":"case-created","trigger":"created","principal":"case-hook","projection":["label","tally","tally-condition"],"handler":{"type":"rhai","script":"hooks/propose-tally.rhai","abi":"registry.hook-handler/v1"}}]"#;
     let mut project: Value = serde_json::from_str(&hook_project_json(
         hooks,
         "[]",
@@ -424,8 +424,8 @@ fn tally_proposal_registry() -> CompiledRegistry {
         "id": "tally", "primaryDataset": "test-dataset", "route": "tallies",
         "mutationMode": "mutable", "classification": "internal",
         "fields": [
-            {"id": "jurisdiction", "type": "string", "maxLength": 32, "required": true, "classification": "internal"},
-            {"id": "label", "type": "string", "maxLength": 64, "required": true, "classification": "internal"}
+            {"id": "jurisdiction", "type": "string", "maximumLength": 32, "required": true, "classification": "internal"},
+            {"id": "label", "type": "string", "maximumLength": 64, "required": true, "classification": "internal"}
         ],
         "hooks": []
     }));
@@ -436,7 +436,7 @@ fn tally_proposal_registry() -> CompiledRegistry {
     }));
     case_fields.push(json!({
         "id": "tally-condition", "apiName": "tallyCondition", "type": "string",
-        "maxLength": 160, "classification": "internal"
+        "maximumLength": 160, "classification": "internal"
     }));
     project["actions"][0]["inputs"]
         .as_array_mut()
@@ -445,7 +445,7 @@ fn tally_proposal_registry() -> CompiledRegistry {
             "id": "tally", "apiName": "tally", "type": "reference", "target": "tally",
             "required": true, "classification": "internal"
         }));
-    let operator = &mut project["accessProfiles"][0]["permissions"];
+    let operator = &mut project["accessProfiles"][0]["permissions"]["entities"];
     for field in ["tally", "tally-condition"] {
         operator[0]["readableFields"]
             .as_array_mut()
@@ -462,7 +462,7 @@ fn tally_proposal_registry() -> CompiledRegistry {
         "writableFields": ["jurisdiction", "label"],
         "rowBoundaries": [{"field": "jurisdiction", "claim": "jurisdiction", "operator": "equals"}]
     }));
-    project["accessProfiles"][1]["permissions"][0]["targets"]
+    project["accessProfiles"][1]["permissions"]["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({"entity": "tally", "rowBoundaries": "unrestricted"}));
@@ -1238,14 +1238,14 @@ async fn real_postgres_hook_loop_terminates_at_the_causation_ceiling_and_dead_le
              FROM registry_internal.registry_webhook_delivery_state AS state
              JOIN registry_internal.registry_outbox AS outbox
                ON outbox.event_id = state.event_id
-             WHERE state.state = 'dead_lettered'",
+             WHERE state.state = 'dead-lettered'",
             &[],
         )
         .await
         .expect("exactly one dead-lettered row keeps its payload");
     assert_eq!(
         dead_letter.get::<_, Option<String>>(0).as_deref(),
-        Some("dead_lettered")
+        Some("dead-lettered")
     );
     assert_eq!(
         dead_letter.get::<_, Option<String>>(1).as_deref(),
@@ -1438,7 +1438,7 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
             hook_json(
                 "case-created",
                 true,
-                r#"{"kind":"url","destinationId":"case-operations"}"#,
+                r#"{"type":"url","destinationId":"case-operations"}"#,
             )
         ),
         "[]",
@@ -1492,9 +1492,9 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
         "a changed answer after the commit dead-letters as a stable conflict"
     );
     let drifted = delivery_row(&setup, event.event_id, &delivery_id).await;
-    assert_eq!(drifted.state, "dead_lettered");
+    assert_eq!(drifted.state, "dead-lettered");
     assert_eq!(drifted.attempt, 2);
-    assert_eq!(drifted.disposition.as_deref(), Some("dead_lettered"));
+    assert_eq!(drifted.disposition.as_deref(), Some("dead-lettered"));
     assert_eq!(drifted.resulting_revision, None);
     assert_eq!(
         drifted.code.as_deref(),
@@ -1574,8 +1574,8 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
         "a changed none answer cannot hide an already committed proposal"
     );
     let none = delivery_row(&setup, none_event.event_id, &none_delivery_id).await;
-    assert_eq!(none.state, "dead_lettered");
-    assert_eq!(none.disposition.as_deref(), Some("dead_lettered"));
+    assert_eq!(none.state, "dead-lettered");
+    assert_eq!(none.disposition.as_deref(), Some("dead-lettered"));
     assert_eq!(none.code.as_deref(), Some("hook.proposal.answer_conflict"));
     assert_eq!(
         record_count(&setup, "followup").await,
@@ -1599,7 +1599,7 @@ async fn real_postgres_same_answer_replays_after_a_compatible_package_upgrade() 
             hook_json(
                 "case-created",
                 true,
-                r#"{"kind":"url","destinationId":"case-operations"}"#,
+                r#"{"type":"url","destinationId":"case-operations"}"#,
             )
         ),
         "[]",
@@ -1691,7 +1691,7 @@ async fn real_postgres_receipt_recovery_waits_for_an_in_flight_application() {
             hook_json(
                 "case-created",
                 true,
-                r#"{"kind":"url","destinationId":"case-operations"}"#,
+                r#"{"type":"url","destinationId":"case-operations"}"#,
             )
         ),
         "[]",
@@ -1791,9 +1791,9 @@ async fn real_postgres_receipt_recovery_waits_for_an_in_flight_application() {
         "the retry observes the committed receipt and records the answer conflict"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
-    assert_eq!(row.state, "dead_lettered");
+    assert_eq!(row.state, "dead-lettered");
     assert_eq!(row.attempt, 2);
-    assert_eq!(row.disposition.as_deref(), Some("dead_lettered"));
+    assert_eq!(row.disposition.as_deref(), Some("dead-lettered"));
     assert_eq!(row.code.as_deref(), Some("hook.proposal.answer_conflict"));
     assert_eq!(record_count(&setup, "followup").await, 1);
 
@@ -1810,7 +1810,7 @@ async fn real_postgres_terminal_retry_fences_a_late_proposal_application() {
             hook_json(
                 "case-created",
                 true,
-                r#"{"kind":"url","destinationId":"case-operations"}"#,
+                r#"{"type":"url","destinationId":"case-operations"}"#,
             )
         ),
         "[]",
@@ -1889,7 +1889,7 @@ async fn real_postgres_exhausted_failed_retry_recovers_a_committed_proposal() {
             hook_json(
                 "case-created",
                 true,
-                r#"{"kind":"url","destinationId":"case-operations"}"#,
+                r#"{"type":"url","destinationId":"case-operations"}"#,
             )
         ),
         "[]",
@@ -1930,9 +1930,9 @@ async fn real_postgres_exhausted_failed_retry_recovers_a_committed_proposal() {
         "the exhausted failed retry recovers the committed proposal receipt"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
-    assert_eq!(row.state, "dead_lettered");
+    assert_eq!(row.state, "dead-lettered");
     assert_eq!(row.attempt, 2);
-    assert_eq!(row.disposition.as_deref(), Some("dead_lettered"));
+    assert_eq!(row.disposition.as_deref(), Some("dead-lettered"));
     assert_eq!(row.code.as_deref(), Some("hook.proposal.answer_conflict"));
     assert_eq!(
         record_count(&setup, "followup").await,
@@ -1953,7 +1953,7 @@ async fn real_postgres_final_expired_lease_recovers_a_committed_proposal() {
             hook_json(
                 "case-created",
                 true,
-                r#"{"kind":"url","destinationId":"case-operations"}"#,
+                r#"{"type":"url","destinationId":"case-operations"}"#,
             )
         ),
         "[]",
@@ -1999,9 +1999,9 @@ async fn real_postgres_final_expired_lease_recovers_a_committed_proposal() {
         "the reaper terminalizes the expired final lease before claiming new work"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
-    assert_eq!(row.state, "dead_lettered");
+    assert_eq!(row.state, "dead-lettered");
     assert_eq!(row.attempt, 2);
-    assert_eq!(row.disposition.as_deref(), Some("dead_lettered"));
+    assert_eq!(row.disposition.as_deref(), Some("dead-lettered"));
     assert_eq!(row.code.as_deref(), Some("hook.proposal.answer_conflict"));
     assert_eq!(
         record_count(&setup, "followup").await,
@@ -2146,7 +2146,7 @@ async fn real_postgres_hook_delivery_rows_record_every_proposal_disposition() {
             .expect("one disposition journey iteration completes");
         outcome_names.push(match outcome {
             WebhookWorkOutcome::Delivered => "delivered",
-            WebhookWorkOutcome::DeadLettered => "dead_lettered",
+            WebhookWorkOutcome::DeadLettered => "dead-lettered",
             WebhookWorkOutcome::RetryScheduled => "retry_scheduled",
             WebhookWorkOutcome::Idle => "idle",
         });
@@ -2154,7 +2154,7 @@ async fn real_postgres_hook_delivery_rows_record_every_proposal_disposition() {
     outcome_names.sort_unstable();
     assert_eq!(
         outcome_names,
-        ["dead_lettered", "delivered", "delivered", "delivered"],
+        ["dead-lettered", "delivered", "delivered", "delivered"],
         "three hooks delivered their answers and the principal-less proposal dead-lettered"
     );
     assert_eq!(
@@ -2225,8 +2225,8 @@ async fn real_postgres_hook_delivery_rows_record_every_proposal_disposition() {
         "events.case.principal-less-proposer.webhook",
     )
     .await;
-    assert_eq!(dead_row.state, "dead_lettered");
-    assert_eq!(dead_row.disposition.as_deref(), Some("dead_lettered"));
+    assert_eq!(dead_row.state, "dead-lettered");
+    assert_eq!(dead_row.disposition.as_deref(), Some("dead-lettered"));
     assert_eq!(dead_row.resulting_revision, None);
     assert_eq!(
         dead_row.code.as_deref(),
@@ -2261,7 +2261,7 @@ async fn real_postgres_the_same_proposal_applies_identically_across_handler_kind
                 hook_json(
                     "case-created",
                     true,
-                    r#"{"kind":"url","destinationId":"case-operations"}"#,
+                    r#"{"type":"url","destinationId":"case-operations"}"#,
                 )
             ),
             "[]",
@@ -2337,7 +2337,7 @@ async fn real_postgres_the_same_proposal_applies_identically_across_handler_kind
                 hook_json(
                     "case-created",
                     true,
-                    r#"{"kind":"wasm","module":"hooks/case-created.wasm","abi":"registry.hook-handler/v1"}"#,
+                    r#"{"type":"wasm","module":"hooks/case-created.wasm","abi":"registry.hook-handler/v1"}"#,
                 )
             ),
             "[]",
@@ -2457,9 +2457,9 @@ async fn real_postgres_a_proposal_without_a_declared_principal_is_dead_lettered_
         "a principal-less proposal is dead-lettered on its first attempt"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
-    assert_eq!(row.state, "dead_lettered");
+    assert_eq!(row.state, "dead-lettered");
     assert_eq!(row.attempt, 1);
-    assert_eq!(row.disposition.as_deref(), Some("dead_lettered"));
+    assert_eq!(row.disposition.as_deref(), Some("dead-lettered"));
     assert_eq!(row.resulting_revision, None);
     assert_eq!(row.code.as_deref(), Some("hook.proposal.no_principal"));
     assert!(
@@ -2754,8 +2754,8 @@ impl DestinationFixture {
   {DESTINATION_ID}:
     origin: https://localhost:{}/
     path: {DELIVERY_PATH}
-    networkProfile: pinnedLoopbackHttpsTest
-    dnsFamily: ipv4Only
+    networkProfile: pinned-loopback-https-test
+    dnsFamily: ipv4-only
     allowedPrivateCidrs: []
     hmacSha256KeyRef: secret:file/{KEY_REF_CANARY}
     classificationCeiling: restricted
@@ -2792,7 +2792,7 @@ impl DestinationFixture {
             .display()
             .to_string();
         format!(
-            r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
@@ -2808,7 +2808,7 @@ database:
   runtimeUrlRef: secret:file/database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 12
+    maximumConnections: 12
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -2827,14 +2827,14 @@ authentication:
     scopeSeparator: " "
     allowedClients: [registry-client]
     deniedKids: [denied-kid]
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
@@ -2844,7 +2844,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 {event_destinations}operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000

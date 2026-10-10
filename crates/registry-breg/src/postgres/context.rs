@@ -2111,10 +2111,10 @@ fn is_change_request_action_operation(operation: Operation) -> bool {
 
 fn change_request_action_operation_name(operation: Operation) -> &'static str {
     match operation {
-        Operation::SubmitRequest => "submit_request",
-        Operation::ReviseRequest => "revise_request",
-        Operation::CancelRequest => "cancel_request",
-        Operation::ApplyRequest => "apply_request",
+        Operation::SubmitRequest => "submit-request",
+        Operation::ReviseRequest => "revise-request",
+        Operation::CancelRequest => "cancel-request",
+        Operation::ApplyRequest => "apply-request",
         _ => "unsupported",
     }
 }
@@ -2659,9 +2659,9 @@ mod tests {
 
     use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::{
-        parse_project_json, AccessPermissionSource, Classification, EntitySource, FieldSource,
-        FieldTypeSource, MutationMode, Operation, ProjectAccessProfileSource, RegistryProject,
-        RowBoundarySource,
+        parse_project_json, Classification, EntityPermissionSource, EntitySource, FieldSource,
+        FieldTypeSource, MutationMode, Operation, PermissionsSource, ProjectAccessProfileSource,
+        RegistryProject, RowBoundarySource,
     };
 
     use super::*;
@@ -3476,13 +3476,13 @@ mod tests {
     fn compiled_typed_registry() -> CompiledRegistry {
         let project = parse_project_json(
             br#"{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{"id":"typed-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{"id":"typed-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[
                 {
                   "id":"parent-entry","primaryDataset":"test-dataset","route":"parents","mutationMode":"mutable",
-                  "fields":[{"id":"name","type":"string","minLength":1,"maxLength":8,"required":true,"classification":"internal"}]
+                  "fields":[{"id":"name","type":"string","minimumLength":1,"maximumLength":8,"required":true,"classification":"internal"}]
                 },
                 {
                   "id":"typed-entry","primaryDataset":"test-dataset","route":"typed","mutationMode":"mutable",
@@ -3494,36 +3494,38 @@ mod tests {
                     {"id":"observed-at","type":"timestamp","required":true,"classification":"internal"},
                     {"id":"identifier","type":"uuid","required":true,"classification":"internal"},
                     {"id":"parent","type":"reference","target":"parent-entry","required":true,"classification":"internal"},
-                    {"id":"short-name","type":"string","minLength":1,"maxLength":4,"required":true,"classification":"internal"},
-                    {"id":"notes","type":"text","maxLength":6,"required":true,"classification":"internal"},
+                    {"id":"short-name","type":"string","minimumLength":1,"maximumLength":4,"required":true,"classification":"internal"},
+                    {"id":"notes","type":"text","maximumLength":6,"required":true,"classification":"internal"},
                     {"id":"color","type":"vocabulary-code","vocabulary":"colors","required":true,"classification":"internal"}
                   ]
                 }
               ],
               "accessProfiles":[{
                 "id":"typed","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                "permissions":[
-                  {
-                    "entity":"parent-entry","operations":["get"],"readableFields":["name"],
-                    "rowBoundaries": "unrestricted"
-                  },
-                  {
-                    "entity":"typed-entry","operations":["get"],
-                    "readableFields":["enabled","count","amount","effective-on","observed-at","identifier","parent","short-name","notes","color"],
-                    "rowBoundaries":[
-                      {"field":"enabled","claim":"enabled_claim","operator":"equals"},
-                      {"field":"count","claim":"count_claim","operator":"in"},
-                      {"field":"amount","claim":"amount_claim","operator":"equals"},
-                      {"field":"effective-on","claim":"date_claim","operator":"equals"},
-                      {"field":"observed-at","claim":"timestamp_claim","operator":"in"},
-                      {"field":"identifier","claim":"uuid_claim","operator":"equals"},
-                      {"field":"parent","claim":"reference_claim","operator":"in"},
-                      {"field":"short-name","claim":"string_claim","operator":"equals"},
-                      {"field":"notes","claim":"text_claim","operator":"in"},
-                      {"field":"color","claim":"vocabulary_claim","operator":"equals"}
-                    ]
-                  }
-                ]
+                "permissions":{
+                  "entities":[
+                    {
+                      "entity":"parent-entry","operations":["get"],"readableFields":["name"],
+                      "rowBoundaries": "unrestricted"
+                    },
+                    {
+                      "entity":"typed-entry","operations":["get"],
+                      "readableFields":["enabled","count","amount","effective-on","observed-at","identifier","parent","short-name","notes","color"],
+                      "rowBoundaries":[
+                        {"field":"enabled","claim":"enabled_claim","operator":"equals"},
+                        {"field":"count","claim":"count_claim","operator":"in"},
+                        {"field":"amount","claim":"amount_claim","operator":"equals"},
+                        {"field":"effective-on","claim":"date_claim","operator":"equals"},
+                        {"field":"observed-at","claim":"timestamp_claim","operator":"in"},
+                        {"field":"identifier","claim":"uuid_claim","operator":"equals"},
+                        {"field":"parent","claim":"reference_claim","operator":"in"},
+                        {"field":"short-name","claim":"string_claim","operator":"equals"},
+                        {"field":"notes","claim":"text_claim","operator":"in"},
+                        {"field":"color","claim":"vocabulary_claim","operator":"equals"}
+                      ]
+                    }
+                  ]
+                }
               }],
               "vocabularies":[{"id":"colors","values":["red","blue"]}]
             }"#,
@@ -3539,8 +3541,8 @@ mod tests {
         let project = RegistryProject {
             evidence_providers: Vec::new(),
             api_version: crate::compiler::AUTHORING_API_VERSION.to_owned(),
-            kind: "RegistryProject".to_owned(),
-            registry: crate::contract::RegistryIdentitySource {
+            kind: "BRegProject".to_owned(),
+            project: crate::contract::RegistryIdentitySource {
                 id: "context-test".to_owned(),
                 version: "0.1.0".to_owned(),
                 default_language: "en".to_owned(),
@@ -3612,51 +3614,51 @@ mod tests {
                     actor_kind: None,
                     requester_clients: Default::default(),
                     task_grant: None,
-                    principal_claim: Some("registry_principal".to_owned()),
+                    principal_claim: "registry_principal".to_owned(),
                     required_scopes: Default::default(),
                     required_purposes: ["operations".to_owned()].into(),
-                    permissions: vec![AccessPermissionSource {
-                        membership_boundaries: Vec::new(),
-                        require_consent: Vec::new(),
-                        entity: "entry".to_owned(),
-                        action: None,
-                        operations: operations.clone(),
-                        readable_fields: BTreeSet::from(["tenant".to_owned(), "region".to_owned()]),
-                        readable_request_fields: [
-                            crate::contract::RequestMetadataFieldSource::Reason,
-                        ]
-                        .into_iter()
-                        .collect(),
-                        writable_fields: BTreeSet::new(),
-                        filterable_fields: BTreeSet::new(),
-                        sortable_fields: BTreeSet::new(),
-                        spatial_queries: None,
-                        row_boundaries: vec![
-                            RowBoundarySource {
-                                field: "tenant".to_owned(),
-                                claim: "tenant_claim".to_owned(),
-                                operator: BoundaryOperator::Equals,
-                            },
-                            RowBoundarySource {
-                                field: "region".to_owned(),
-                                claim: "region_claim".to_owned(),
-                                operator: BoundaryOperator::In,
-                            },
-                        ],
-                        request_visibility: None,
-                        revision_access: false,
-                        provenance_fields: Vec::new(),
-                        allow_data_export: false,
-                        lookups: Vec::new(),
-                        read_paths: Vec::new(),
-                        apply_targets: Vec::new(),
-                        submitter_targets: Default::default(),
-                        request_presence: Vec::new(),
-                        targets: Vec::new(),
-                        results: BTreeSet::new(),
-                        allow_count: false,
-                    }],
-                    dataset_permissions: Vec::new(),
+                    permissions: PermissionsSource {
+                        entities: vec![EntityPermissionSource {
+                            membership_boundaries: Vec::new(),
+                            require_consent: Vec::new(),
+                            entity: "entry".to_owned(),
+                            operations: operations.clone().into(),
+                            readable_fields: ["tenant".to_owned(), "region".to_owned()].into(),
+                            readable_request_fields: [
+                                crate::contract::RequestMetadataFieldSource::Reason,
+                            ]
+                            .into_iter()
+                            .collect(),
+                            writable_fields: Default::default(),
+                            filterable_fields: Default::default(),
+                            sortable_fields: Default::default(),
+                            spatial_queries: None,
+                            row_boundaries: vec![
+                                RowBoundarySource {
+                                    field: "tenant".to_owned(),
+                                    claim: "tenant_claim".to_owned(),
+                                    operator: BoundaryOperator::Equals,
+                                },
+                                RowBoundarySource {
+                                    field: "region".to_owned(),
+                                    claim: "region_claim".to_owned(),
+                                    operator: BoundaryOperator::In,
+                                },
+                            ],
+                            request_visibility: None,
+                            revision_access: false,
+                            provenance_fields: Vec::new(),
+                            allow_data_export: false,
+                            lookups: Vec::new(),
+                            read_paths: Vec::new(),
+                            apply_targets: Vec::new(),
+                            submitter_targets: Default::default(),
+                            request_presence: Vec::new(),
+                            allow_count: false,
+                        }],
+                        actions: Vec::new(),
+                        datasets: Vec::new(),
+                    },
                 },
                 ProjectAccessProfileSource {
                     id: "viewer".to_owned(),
@@ -3664,44 +3666,44 @@ mod tests {
                     actor_kind: None,
                     requester_clients: Default::default(),
                     task_grant: None,
-                    principal_claim: Some("registry_principal".to_owned()),
+                    principal_claim: "registry_principal".to_owned(),
                     required_scopes: Default::default(),
                     required_purposes: Default::default(),
-                    permissions: vec![AccessPermissionSource {
-                        membership_boundaries: Vec::new(),
-                        require_consent: Vec::new(),
-                        entity: "entry".to_owned(),
-                        action: None,
-                        operations,
-                        readable_fields: BTreeSet::from(["tenant".to_owned()]),
-                        readable_request_fields: [
-                            crate::contract::RequestMetadataFieldSource::Reason,
-                        ]
-                        .into_iter()
-                        .collect(),
-                        writable_fields: BTreeSet::new(),
-                        filterable_fields: BTreeSet::new(),
-                        sortable_fields: BTreeSet::new(),
-                        spatial_queries: None,
-                        row_boundaries: vec![RowBoundarySource {
-                            field: "id".to_owned(),
-                            claim: "record_id_claim".to_owned(),
-                            operator: BoundaryOperator::Equals,
+                    permissions: PermissionsSource {
+                        entities: vec![EntityPermissionSource {
+                            membership_boundaries: Vec::new(),
+                            require_consent: Vec::new(),
+                            entity: "entry".to_owned(),
+                            operations: operations.into(),
+                            readable_fields: ["tenant".to_owned()].into(),
+                            readable_request_fields: [
+                                crate::contract::RequestMetadataFieldSource::Reason,
+                            ]
+                            .into_iter()
+                            .collect(),
+                            writable_fields: Default::default(),
+                            filterable_fields: Default::default(),
+                            sortable_fields: Default::default(),
+                            spatial_queries: None,
+                            row_boundaries: vec![RowBoundarySource {
+                                field: "id".to_owned(),
+                                claim: "record_id_claim".to_owned(),
+                                operator: BoundaryOperator::Equals,
+                            }],
+                            request_visibility: None,
+                            revision_access: false,
+                            provenance_fields: Vec::new(),
+                            allow_data_export: false,
+                            lookups: Vec::new(),
+                            read_paths: Vec::new(),
+                            apply_targets: Vec::new(),
+                            submitter_targets: Default::default(),
+                            request_presence: Vec::new(),
+                            allow_count: false,
                         }],
-                        request_visibility: None,
-                        revision_access: false,
-                        provenance_fields: Vec::new(),
-                        allow_data_export: false,
-                        lookups: Vec::new(),
-                        read_paths: Vec::new(),
-                        apply_targets: Vec::new(),
-                        submitter_targets: Default::default(),
-                        request_presence: Vec::new(),
-                        targets: Vec::new(),
-                        results: BTreeSet::new(),
-                        allow_count: false,
-                    }],
-                    dataset_permissions: Vec::new(),
+                        actions: Vec::new(),
+                        datasets: Vec::new(),
+                    },
                 },
             ],
             vocabularies: Vec::new(),
@@ -3714,23 +3716,23 @@ mod tests {
     fn compiled_action_context_registry() -> CompiledRegistry {
         let project = parse_project_json(
             br#"{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{"id":"action-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{"id":"action-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[{
                 "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
                 "fields":[
-                  {"id":"household-code","apiName":"householdCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-                  {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-                  {"id":"status-note","apiName":"statusNote","type":"string","maxLength":160,"classification":"restricted"}
+                  {"id":"household-code","apiName":"householdCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+                  {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+                  {"id":"status-note","apiName":"statusNote","type":"string","maximumLength":160,"classification":"restricted"}
                 ]
               }],
               "actions":[{
                 "id":"rename-household-local",
                 "inputs":[
                   {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
-                  {"id":"household-code","apiName":"householdCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-                  {"id":"status-note","apiName":"statusNote","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+                  {"id":"household-code","apiName":"householdCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+                  {"id":"status-note","apiName":"statusNote","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
                 ],
                 "effects":[
                   {"id":"household-code-update","target":{"fromField":"household"},"operation":"patch",
@@ -3745,12 +3747,12 @@ mod tests {
                 "principalClaim":"registry_principal",
                 "requiredScopes":"unrestricted",
                 "requiredPurposes":["contact-registration"],
-                "permissions":[{
+                "permissions":{"actions":[{
                   "action":"rename-household-local",
                   "operations":["invoke"],
                   "targets":[{"entity":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
                   "results":["household-code-update","household-note-update"]
-                }]
+                }]}
               }]
             }"#,
         )
@@ -3762,32 +3764,32 @@ mod tests {
     fn compiled_change_request_registry() -> CompiledRegistry {
         let project = parse_project_json(
             br#"{
-              "apiVersion":"registry.registrystack.org/v1alpha1",
-              "kind":"RegistryProject",
-              "registry":{"id":"change-request-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{"id":"change-request-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
               "entities":[
                 {
                   "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"mutable",
                   "fields":[
-                    {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-                    {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+                    {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+                    {"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
                   ]
                 },
                 {
                   "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
                   "changeControl":{"requiredFor":["patch"]},
                   "fields":[
-                    {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                    {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                     {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}
                   ]
                 },
                 {
                   "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
                   "fields":[
-                    {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                    {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                     {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
                     {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
-                    {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}
+                    {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
                   ],
                   "changeRequest":{
                     "effects":[{
@@ -3795,7 +3797,7 @@ mod tests {
                       "operation":"patch",
                       "set":{"site":{"fromField":"proposed-site"}}
                     }],
-                    "review":{"authority":"casework-main","policyId":"request-review"},
+                    "review":{"type":"required","authority":"casework-main","policyId":"request-review"},
                     "onApproved":{"mode":"manual"}
                   }
                 }
@@ -3803,45 +3805,45 @@ mod tests {
               "accessProfiles":[
                 {
                   "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                  "permissions":[{
+                  "permissions":{"entities":[{
                     "entity":"asset-placement",
                     "operations":["get","list"],
                     "readableFields":["tenant","site"],
                     "requestPresence":[{"requestType":"placement-correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}],
                     "rowBoundaries": "unrestricted"
-                  }]
+                  }]}
                 },
                 {
                   "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                  "permissions":[{
+                  "permissions":{"entities":[{
                     "entity":"placement-correction-request",
-                    "operations":["create","get","list","patch","submit_request","revise_request"],
+                    "operations":["create","get","list","patch","submit-request","revise-request"],
                     "readableFields":["placement","proposed-site","reason"],
                     "writableFields":["placement","proposed-site","reason"],
                     "rowBoundaries": "unrestricted"
-                  }]
+                  }]}
                 },
                 {
                   "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
-                  "permissions":[{
+                  "permissions":{"entities":[{
                     "entity":"placement-correction-request",
                     "operations":["get","list"],
                     "readableFields":["placement","proposed-site","reason"],
                     "rowBoundaries": "unrestricted"
-                  }]
+                  }]}
                 },
                 {
                   "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
-                  "permissions":[{
+                  "permissions":{"entities":[{
                     "entity":"placement-correction-request",
-                    "operations":["get","apply_request"],
+                    "operations":["get","apply-request"],
                     "readableFields":["placement","proposed-site","reason"],
                     "applyTargets":[{
                       "entity":"asset-placement",
                       "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
                     }],
                     "rowBoundaries": "unrestricted"
-                  }]
+                  }]}
                 }
               ]
             }"#,

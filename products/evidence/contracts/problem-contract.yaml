@@ -13,14 +13,14 @@ body:
     - supported value or subject binding
     - candidate count, score, hint, or comparison detail
 codes:
-  evidence.invalid_request: {status: 400, title: Evidence request is invalid, detail: the Evidence request is invalid}
-  request.selector_invalid: {status: 400, title: Selector is invalid, detail: selector does not match an available request profile}
-  auth.invalid_credential: {status: 401, title: Bearer access token is invalid, detail: bearer access token validation failed}
+  evidence.invalid-request: {status: 400, title: Evidence request is invalid, detail: the Evidence request is invalid}
+  request.selector-invalid: {status: 400, title: Selector is invalid, detail: selector does not match an available request profile}
+  auth.invalid-credential: {status: 401, title: Bearer access token is invalid, detail: bearer access token validation failed}
   evidence.denied: {status: 403, title: Evidence request is not permitted, detail: the Evidence request is not permitted}
-  resource.not_found: {status: 404, title: Requested resource was not found, detail: the requested resource was not found}
+  resource.not-found: {status: 404, title: Requested resource was not found, detail: the requested resource was not found}
   format.unsupported: {status: 406, title: Requested format is not supported, detail: the requested format is not supported}
   evidence.unavailable: {status: 422, title: Evidence could not be produced, detail: evidence could not be produced for this request}
-  evidence.rate_limited: {status: 429, title: Evidence request rate is exhausted, detail: the Evidence request rate is exhausted}
+  evidence.rate-limited: {status: 429, title: Evidence request rate is exhausted, detail: the Evidence request rate is exhausted}
   source.unavailable: {status: 503, title: Authoritative source is unavailable, detail: the authoritative source is unavailable}
   service.unavailable: {status: 503, title: Service is unavailable, detail: the request could not be served}
 type_uri_prefix: https://id.registrystack.org/problems/registry-evidence/
@@ -38,9 +38,9 @@ authorization_refusal_audit:
   applies_after: successful authentication when the authorization decision refuses the request
   order: The minimal registry.evidence.audit.authorization-refusal/v1 event is durably accepted before the evidence.denied response.
   failure: An audit append failure replaces the evidence.denied response with service.unavailable.
-  operational_only: [evidence.invalid_request, request.selector_invalid, auth.invalid_credential]
+  operational_only: [evidence.invalid-request, request.selector-invalid, auth.invalid-credential]
 selector_refusal:
-  code: request.selector_invalid
+  code: request.selector-invalid
   applies_to: Every selector the matched entitlement resolves, including a value that passes its profile but that a source of the requirement binds to a request path segment the value cannot occupy under the source path encoding rule.
   order: Returned during selector resolution, after authorization and before any access-attempt audit event, credential acquisition, or source contact. It is never reported as source.unavailable.
   budget: Counts against the caller's selector-failure budget like every other selector refusal.
@@ -55,7 +55,7 @@ existence_disclosure:
     timing_rule: Avoid intentional class-dependent delay; apply uniform bounded processing and response handling.
   explicit_existence_concept_rule: Existence may be disclosed only as a separately authorized fixed concept, never as error detail.
 request_batch:
-  singular_unavailable: Every condition the singular collapse contract exposes as evidence_not_available becomes the closed item result and does not produce an outer 422. This is exactly no_match, ambiguous, required_fact_missing, derivation_input_unresolved, and an exact source-declared unresolved outcome at a singular or search stage in Version 1. A source-declared unresolved fetch or member remains an outer dependency failure.
+  singular_unavailable: Every condition the singular collapse contract exposes as evidence-not-available becomes the closed item result and does not produce an outer 422. This is exactly no_match, ambiguous, required_fact_missing, derivation_input_unresolved, and an exact source-declared unresolved outcome at a singular or search stage in Version 1. A source-declared unresolved fetch or member remains an outer dependency failure.
   successful_mixtures: A mixed available/unavailable or all-unavailable closed envelope returns HTTP 200.
   outer_abort: Every other failure uses this existing safe Problem Details vocabulary for the outer response and releases no completed item, JWS, evidence identifier, or partial envelope.
   value_safety: The outer problem never includes item index, item count, nonce, selector, subject, authority, source, outcome, evidence identifier, or signed material.
@@ -64,4 +64,4 @@ transient_failures:
   public_codes: [source.unavailable, service.unavailable]
   retry_after: absent
 unknown_definition_rule: Unknown and unauthorized requirement identifiers must be indistinguishable to a caller lacking authorization.
-route_resolution: An unknown path or unsupported method returns resource.not_found.
+route_resolution: An unknown path or unsupported method returns resource.not-found.

@@ -100,7 +100,7 @@ Use this checklist after product configuration is valid and before exposing a de
 
 - Evidence Gateway and Render use the shared audit writer. Its `audit` block selects `file` or
   `stdout`; a file destination also sets `path`, `rotateBytes` (100 MiB by default), and
-  `retainDays` (90 by default). Put the path on durable storage in a directory owned by the service
+  `retentionDays` (90 by default). Put the path on durable storage in a directory owned by the service
   user and not writable by group or others.
 - Audit is fail-closed. Evidence Gateway durably accepts an access-attempt entry before every source
   stage and a disclosure-release entry before returning the response. Render accepts its request
@@ -111,7 +111,7 @@ Use this checklist after product configuration is valid and before exposing a de
 - After any failed write, the writer refuses later entries until restart. Readiness rechecks the
   active file, so renaming, truncating, or replacing it under a running process revokes readiness.
 - Rotation renames the active file to `<path>.<sequence>` and removes sealed files older than
-  `retainDays`. Ship each sealed file before local retention deletes it.
+  `retentionDays`. Ship each sealed file before local retention deletes it.
 - The log has no hash chain or signature. Ship sealed files or `stdout` to append-only storage the
   service account cannot change. The products do not prove remote receipt.
 - Before first use of the shared writer, archive older chained audit segments and start with a fresh

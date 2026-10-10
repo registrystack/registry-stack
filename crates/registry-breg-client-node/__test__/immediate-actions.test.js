@@ -18,7 +18,7 @@ const metadata = {
     inputMode: 'handler', maximumInputStringBytes: 16384,
     inputs: [
       { id: 'target', apiName: 'targetId', required: true, nullable: false, classification: 'internal', fieldType: { type: 'reference', target: 'item', onDelete: 'restrict' } },
-      { id: 'label', apiName: 'label', required: false, nullable: true, classification: 'internal', fieldType: { type: 'string', minLength: 1, maxLength: 16 } },
+      { id: 'label', apiName: 'label', required: false, nullable: true, classification: 'internal', fieldType: { type: 'string', minimumLength: 1, maximumLength: 16 } },
       { id: 'sequence', apiName: 'sequence', required: false, nullable: true, classification: 'internal', fieldType: { type: 'int64' } },
     ],
     referenceInputs: [{ input: 'target', apiName: 'targetId', targetEntity: 'item' }],
@@ -27,7 +27,7 @@ const metadata = {
     access: { selectedProfile: 'writer' },
     routes: {
       invoke: { method: 'POST', path: '/v1/actions/update-item', operationId: 'actions.update-item.invoke', requiresIdempotencyKey: true, inputSchema: 'action-update-item-invoke-input', responseSchema: 'action-update-item-invoke-response' },
-      targetConditions: { method: 'POST', path: '/v1/actions/update-item/target-conditions', operationId: 'actions.update-item.target_conditions', requiresIdempotencyKey: false, inputSchema: 'action-update-item-target-conditions-input', responseSchema: 'action-update-item-target-conditions-response' },
+      targetConditions: { method: 'POST', path: '/v1/actions/update-item/target-conditions', operationId: 'actions.update-item.target-conditions', requiresIdempotencyKey: false, inputSchema: 'action-update-item-target-conditions-input', responseSchema: 'action-update-item-target-conditions-response' },
     },
     bounds: { maximumTargets: 16, maximumFieldMutations: 128, maximumSnapshotBytes: 2097152 },
   }],
@@ -68,10 +68,10 @@ test('metadata-selected immediate action conditions and invocations use exact ca
     assert.match(requests.at(-1).body, /"sequence":9007199254740992/);
     assert.match(requests.at(-1).body, /"preconditions":\{"targetId":\{"ifMatch":"\\"opaque-condition\\""\}\}/);
     const count = requests.length;
-    await assert.rejects(client.invokeAction(binding, { targetId, unknown: true }, 'invalid'), error => error.kind === 'invalid_request');
-    assert.throws(() => client.invokeAction(binding, { targetId, sequence: Number.MAX_SAFE_INTEGER + 1 }, 'unsafe'), error => error.kind === 'invalid_request');
+    await assert.rejects(client.invokeAction(binding, { targetId, unknown: true }, 'invalid'), error => error.kind === 'invalid-request');
+    assert.throws(() => client.invokeAction(binding, { targetId, sequence: Number.MAX_SAFE_INTEGER + 1 }, 'unsafe'), error => error.kind === 'invalid-request');
     const foreign = new BaseRegistryClient({ baseUrl: 'http://127.0.0.1:1' });
-    await assert.rejects(foreign.invokeAction(binding, { targetId }, 'foreign', conditions), error => error.kind === 'invalid_request');
+    await assert.rejects(foreign.invokeAction(binding, { targetId }, 'foreign', conditions), error => error.kind === 'invalid-request');
     assert.equal(requests.length, count);
   } finally {
     await new Promise(resolve => server.close(resolve));
@@ -126,14 +126,14 @@ test('an immediate action recovers after a lost response from persisted bytes an
     assert.ok(restored instanceof BRegPreparedAction);
     assert.deepEqual(restored.toBytes(), persisted);
     const beforeRecovery = requests.length;
-    assert.throws(() => BRegPreparedAction.fromBytes('not bytes'), error => error.kind === 'invalid_request');
-    assert.throws(() => BRegPreparedAction.fromBytes(Buffer.from('{}')), error => error.kind === 'invalid_request');
-    assert.throws(() => restarted.recoverAction(restartedBinding, restored, inputs, 'another-key'), error => error.kind === 'invalid_request');
-    assert.throws(() => restarted.recoverAction(restartedBinding, restored, { targetId, label: 'changed' }, 'invoke-lost'), error => error.kind === 'invalid_request');
+    assert.throws(() => BRegPreparedAction.fromBytes('not bytes'), error => error.kind === 'invalid-request');
+    assert.throws(() => BRegPreparedAction.fromBytes(Buffer.from('{}')), error => error.kind === 'invalid-request');
+    assert.throws(() => restarted.recoverAction(restartedBinding, restored, inputs, 'another-key'), error => error.kind === 'invalid-request');
+    assert.throws(() => restarted.recoverAction(restartedBinding, restored, { targetId, label: 'changed' }, 'invoke-lost'), error => error.kind === 'invalid-request');
     const foreign = new BaseRegistryClient({ baseUrl: 'http://127.0.0.1:1' });
-    assert.throws(() => foreign.recoverAction(restartedBinding, restored, inputs, 'invoke-lost'), error => error.kind === 'invalid_request');
+    assert.throws(() => foreign.recoverAction(restartedBinding, restored, inputs, 'invoke-lost'), error => error.kind === 'invalid-request');
     const recovered = restarted.recoverAction(restartedBinding, restored, inputs, 'invoke-lost');
-    await assert.rejects(foreign.executeRecoveredAction(restartedBinding, recovered), error => error.kind === 'invalid_request');
+    await assert.rejects(foreign.executeRecoveredAction(restartedBinding, recovered), error => error.kind === 'invalid-request');
     assert.equal(requests.length, beforeRecovery);
 
     const result = await restarted.executeRecoveredAction(restartedBinding, recovered);
@@ -148,7 +148,7 @@ test('an immediate action recovers after a lost response from persisted bytes an
 
     const exactInputs = `{"targetId":"${targetId}","sequence":9007199254740992}`;
     const preparedExact = restarted.prepareActionJson(restartedBinding, exactInputs, 'invoke-exact', conditions);
-    assert.throws(() => restarted.recoverActionJson(restartedBinding, preparedExact, `{"targetId":"${targetId}","sequence":9007199254740993}`, 'invoke-exact'), error => error.kind === 'invalid_request');
+    assert.throws(() => restarted.recoverActionJson(restartedBinding, preparedExact, `{"targetId":"${targetId}","sequence":9007199254740993}`, 'invoke-exact'), error => error.kind === 'invalid-request');
     const recoveredExact = restarted.recoverActionJson(
       restartedBinding, BRegPreparedAction.fromBytes(preparedExact.toBytes()), exactInputs, 'invoke-exact',
     );

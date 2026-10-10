@@ -183,7 +183,7 @@ async fn version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys
         .batch_execute(&format!(
             "CREATE TABLE version_3_scratch AS SELECT * FROM messaging_idempotency; \
              DROP TABLE messaging_idempotency; \
-             DELETE FROM messaging_schema_migrations WHERE version = 3; \
+             DELETE FROM messaging_schema_migrations WHERE version >= 3; \
              {first_tail}"
         ))
         .await
@@ -289,7 +289,7 @@ async fn version_3_discards_a_record_an_earlier_runtime_commits_while_it_waits()
         .admin
         .batch_execute(&format!(
             "DROP TABLE messaging_idempotency; \
-             DELETE FROM messaging_schema_migrations WHERE version = 3; \
+             DELETE FROM messaging_schema_migrations WHERE version >= 3; \
              {first_tail}"
         ))
         .await
@@ -455,7 +455,7 @@ fn write_runtime(
         "authentication": {"oidc": {
             "issuer": "https://identity.example.test",
             "audience": "urn:example:messaging",
-            "jwksSource": {"kind": "static", "documentRef": format!("secret:env/{jwks_name}")},
+            "jwksSource": {"type": "static", "documentRef": format!("secret:env/{jwks_name}")},
             "allowedClients": ["operations-console"]
         }},
         "audit": audit

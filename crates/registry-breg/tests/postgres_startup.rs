@@ -378,7 +378,7 @@ async fn insert_captured_delivery(
                   deployed_maximum_attempts, dead_letter, operator_replay)
              VALUES ($1, $2, 'url', 'neutral-events', $3, $4, $5,
                      'https://schemas.example/neutral-created-v1', 'internal',
-                     'hmac_sha256_v1', 'after_commit', 5000, 1000, 8000, 2, 2, $6, 1024,
+                     'hmac-sha256-v1', 'after-commit', 5000, 1000, 8000, 2, 2, $6, 1024,
                      $7, 4000, 2, 'required', false)",
             &[
                 &event_id,
@@ -404,7 +404,7 @@ async fn insert_captured_delivery(
             "'delivered', 1, NULL, NULL, NULL, NULL, transaction_timestamp(), NULL"
         }
         CapturedDeliveryState::DeadLettered => {
-            "'dead_lettered', 1, NULL, NULL, NULL, NULL, NULL, transaction_timestamp()"
+            "'dead-lettered', 1, NULL, NULL, NULL, NULL, NULL, transaction_timestamp()"
         }
     };
     database
@@ -507,7 +507,7 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
     }
     let s3_config = fixture.root.join("runtime-attachment-s3.yaml");
     let base_config = fs::read_to_string(&database_config).unwrap();
-    fs::write(&s3_config,format!("{base_config}\nattachmentStorage:\n  kind: s3\n  endpoint: {endpoint}\n  bucket: startup-attachments\n  region: us-east-1\n  accessKeyIdRef: secret:file/attachment-access\n  secretAccessKeyRef: secret:file/attachment-secret\n")).unwrap();
+    fs::write(&s3_config,format!("{base_config}\nattachmentStorage:\n  type: s3\n  endpoint: {endpoint}\n  bucket: startup-attachments\n  region: us-east-1\n  accessKeyIdRef: secret:file/attachment-access\n  secretAccessKeyRef: secret:file/attachment-secret\n")).unwrap();
     let activated = registry_breg::runtime_config::load_runtime_config(&s3_config)
         .unwrap()
         .activate_attachment_storage(verified.registry().registry_id())
@@ -551,7 +551,7 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
         .root
         .join("runtime-attachment-changed-verifier.yaml");
     let original_s3 = fs::read_to_string(&s3_config).unwrap();
-    fs::write(&changed_verifier_config,format!("{original_s3}\nattachmentVerification:\n  kind: http\n  endpoint: {endpoint}/verify\n  policyId: changed-verifier-policy\n  authorizationRef: secret:file/attachment-secret\n")).unwrap();
+    fs::write(&changed_verifier_config,format!("{original_s3}\nattachmentVerification:\n  type: http\n  endpoint: {endpoint}/verify\n  policyId: changed-verifier-policy\n  authorizationRef: secret:file/attachment-secret\n")).unwrap();
     assert_eq!(
         prepare_with_connection_config_for_test(
             &changed_verifier_config,
@@ -669,7 +669,7 @@ async fn production_startup_refuses_local_file_field_encryption_custody() {
     let raw = fs::read_to_string(&base).expect("base runtime config reads");
     fs::write(
         &local_file_config,
-        format!("{raw}\nfieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:file/field-dek\n"),
+        format!("{raw}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/field-dek\n"),
     )
     .expect("local-file runtime config writes");
     assert_eq!(
@@ -2441,9 +2441,9 @@ async fn assert_metrics_publish_the_verified_package_and_every_queue(
         "the scrape names the verified package once:\n{body}"
     );
     for queue in [
-        "webhook_delivery",
-        "review_submission",
-        "review_application",
+        "webhook-delivery",
+        "review-submission",
+        "review-application",
     ] {
         assert!(
             body.contains(&format!(
@@ -2743,7 +2743,7 @@ impl StartupFixture {
             &path,
             raw.replace(
                 "    jwksCache:\n",
-                "    jwksSource:\n      kind: static\n      documentRef: secret:file/oidc-jwks\n    jwksCache:\n",
+                "    jwksSource:\n      type: static\n      documentRef: secret:file/oidc-jwks\n    jwksCache:\n",
             ),
         )
         .expect("static JWKS runtime config writes");
@@ -2787,7 +2787,7 @@ impl StartupFixture {
         fs::write(
             &path,
             format!(
-                r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+                r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: {listener}
@@ -2803,7 +2803,7 @@ database:
   runtimeUrlRef: secret:file/database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 1
+    maximumConnections: 1
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -2821,14 +2821,14 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: unrestricted
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 200
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 200
       outageToleranceSeconds: 0
   authorityClaims:
     principal: principal
@@ -2837,7 +2837,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 operationalTimeouts:
   httpRequestMilliseconds: 5000
   shutdownGraceMilliseconds: 1000
@@ -2956,7 +2956,7 @@ impl PackageFixture {
 
 fn project_bytes(module_digest: &str) -> Vec<u8> {
     let project = format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     );
     parse_project_yaml(project.as_bytes()).expect("project fixture parses");
     project.into_bytes()
@@ -2964,12 +2964,12 @@ fn project_bytes(module_digest: &str) -> Vec<u8> {
 
 fn module_bytes(successor: bool) -> Vec<u8> {
     let second = if successor {
-        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}"#
+        r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get"],"readableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}"#
     } else {
         ""
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}{second}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":8,"classification":"internal"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}{second}]}}"#
     )
     .into_bytes()
 }
@@ -2977,7 +2977,7 @@ fn module_bytes(successor: bool) -> Vec<u8> {
 /// One module whose `holder` entity carries an encrypted restricted field, so
 /// a production package built from it requires field-encryption key state.
 fn module_bytes_with_encrypted_field() -> Vec<u8> {
-    r#"{"id":"core","version":"1","entities":[{"id":"holder","primaryDataset":"neutral-registry","route":"holders","mutationMode":"mutable","fields":[{"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},{"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},{"id":"secret","type":"string","maxLength":256,"required":true,"classification":"restricted","encrypted":true,"lookup":{"normalization":["trim","uppercase"],"unique":true}}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["jurisdiction","label","secret"],"requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
+    r#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{"id":"holder","primaryDataset":"neutral-registry","route":"holders","mutationMode":"mutable","fields":[{"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},{"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},{"id":"secret","type":"string","maximumLength":256,"required":true,"classification":"restricted","encrypted":true,"lookup":{"normalization":["trim","uppercase"],"unique":true}}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["jurisdiction","label","secret"],"requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}]}"#
         .to_owned()
         .into_bytes()
 }

@@ -690,9 +690,9 @@ async fn insert_revision(
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"history-store-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"history-store-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"membership",
             "primaryDataset":"test-dataset",
@@ -702,7 +702,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "classification":"restricted",
             "fields":[
               {"id":"person","type":"uuid","required":true,"classification":"internal"},
-              {"id":"household","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+              {"id":"household","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
               {"id":"valid-from","type":"date","required":true,"classification":"internal"},
               {"id":"valid-to","type":"date","required":false,"classification":"internal"}
             ],
@@ -714,13 +714,13 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "principalClaim":"registry_principal",
             "requiredScopes":"unrestricted",
             "requiredPurposes":["operations"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"membership",
               "operations":["create","get","list","patch"],
               "readableFields":["person","household","valid-from","valid-to"],
               "writableFields":["person","household","valid-from","valid-to"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )

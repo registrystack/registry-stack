@@ -21,8 +21,7 @@ use crate::model::{
     CompiledChangeRequestEffect, CompiledChangeRequestEvidence,
     CompiledChangeRequestEvidenceExpected, CompiledChangeRequestEvidenceRequirement,
     CompiledChangeRequestEvidenceSubject, CompiledChangeRequestGuardTarget,
-    CompiledChangeRequestMutation, CompiledChangeRequestNoReview,
-    CompiledChangeRequestNoReviewMode, CompiledChangeRequestOnApproved,
+    CompiledChangeRequestMutation, CompiledChangeRequestOnApproved,
     CompiledChangeRequestOnApprovedMode, CompiledChangeRequestPlanner,
     CompiledChangeRequestPlannerKind, CompiledChangeRequestPlannerLimits,
     CompiledChangeRequestPlannerWrite, CompiledChangeRequestPreconditions,
@@ -74,9 +73,12 @@ fn compile_review(
     errors: &mut Vec<Diagnostic>,
 ) -> CompiledChangeRequestReview {
     match &request.review {
-        ChangeRequestReviewSource::Required(required) => {
+        ChangeRequestReviewSource::Required {
+            authority,
+            policy_id,
+        } => {
             validate_id(
-                &required.authority,
+                authority,
                 &format!(
                     "{}.changeRequest.review.authority",
                     entity_path(request_entity_id)
@@ -84,7 +86,7 @@ fn compile_review(
                 errors,
             );
             validate_id(
-                &required.policy_id,
+                policy_id,
                 &format!(
                     "{}.changeRequest.review.policyId",
                     entity_path(request_entity_id)
@@ -92,15 +94,11 @@ fn compile_review(
                 errors,
             );
             CompiledChangeRequestReview::Required(CompiledChangeRequestReviewRequirement {
-                authority: required.authority.clone(),
-                policy_id: required.policy_id.clone(),
+                authority: authority.clone(),
+                policy_id: policy_id.clone(),
             })
         }
-        ChangeRequestReviewSource::None(_) => {
-            CompiledChangeRequestReview::None(CompiledChangeRequestNoReview {
-                mode: CompiledChangeRequestNoReviewMode::None,
-            })
-        }
+        ChangeRequestReviewSource::None {} => CompiledChangeRequestReview::None,
     }
 }
 
@@ -1151,6 +1149,7 @@ fn compile_predicates(
             continue;
         }
         let choices = usize::from(source.equals.is_some())
+            + usize::from(source.is_null)
             + usize::from(source.equals_from_request_field.is_some())
             + usize::from(source.current_date.is_some())
             + usize::from(source.at_least.is_some())
@@ -1159,14 +1158,15 @@ fn compile_predicates(
             errors.push(Diagnostic::error(
                 "breg.change-request.preconditions-predicate-operator-invalid",
                 &path,
-                "declare exactly one literal equality, request-field equality, or current UTC date comparison",
+                "declare exactly one literal equality, isNull, request-field equality, or current UTC date comparison",
             ));
             continue;
-        } else if let Some(value) = &source.equals {
+        } else if let Some(value) = &source.literal() {
             if !predicate_literal_valid(value, target_field) {
+                let member = if source.is_null { "isNull" } else { "equals" };
                 errors.push(Diagnostic::error(
                     "breg.change-request.preconditions-predicate-value-invalid",
-                    format!("{path}.equals"),
+                    format!("{path}.{member}"),
                     "a literal predicate must use a scalar value valid for its stored field",
                 ));
                 continue;
@@ -1419,7 +1419,7 @@ fn compile_request_entity(
                 "{}.accessProfiles[].operations",
                 entity_path(&request_entity.id)
             ),
-            "a change-request type requires at least one submit_request grant",
+            "a change-request type requires at least one submit-request grant",
         ));
     }
     let contract_fingerprint = contract_fingerprint(ContractFingerprintInput {
@@ -2026,7 +2026,7 @@ fn compile_apply_permissions(
             errors.push(Diagnostic::error(
                 "breg.change-request.apply-target-operation-required",
                 format!("{profile_base}.operations"),
-                "apply target permissions require apply_request authority",
+                "apply target permissions require apply-request authority",
             ));
         }
         for target in &profile.apply_targets {
@@ -2504,15 +2504,9 @@ fn authority_payload<const N: usize>(
                 .intersection(&operations)
                 .copied()
                 .collect::<BTreeSet<_>>();
-            // A profile once carried an `anonymous` member. A project that
-            // set it cannot compile without changing, so the member is false
-            // in every project that did not change. It stays in the
-            // fingerprint input at that value, so an engine upgrade keeps the
-            // identity of every request type whose project did not change.
             (
                 profile.id.clone(),
                 json!({
-                    "anonymous": false,
                     "principalClaim": profile.principal_claim,
                     "requiredScopes": profile.required_scopes,
                     "requiredPurposes": profile.required_purposes,
@@ -2645,7 +2639,7 @@ mod tests {
     #[test]
     fn review_requirement_and_automatic_executor_compile_exactly() {
         let request = request(
-            json!({"authority": "casework", "policyId": "registry-correction"}),
+            json!({"type": "required", "authority": "casework", "policyId": "registry-correction"}),
             Some(json!({"mode": "automatic", "executor": "registry-applier"})),
         );
         let mut errors = Vec::new();
@@ -2668,7 +2662,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(review).expect("compiled review serializes"),
-            json!({"authority": "casework", "policyId": "registry-correction"})
+            json!({"type": "required", "authority": "casework", "policyId": "registry-correction"})
         );
         assert_eq!(
             serde_json::to_value(on_approved).expect("compiled application policy serializes"),
@@ -2679,23 +2673,18 @@ mod tests {
 
     #[test]
     fn explicit_no_review_defaults_to_manual_application() {
-        let request = request(json!({"mode": "none"}), None);
+        let request = request(json!({"type": "none"}), None);
         let mut errors = Vec::new();
 
         let review = compile_review("correction", &request, &mut errors);
-        assert_eq!(
-            review,
-            CompiledChangeRequestReview::None(CompiledChangeRequestNoReview {
-                mode: CompiledChangeRequestNoReviewMode::None,
-            })
-        );
+        assert_eq!(review, CompiledChangeRequestReview::None);
         assert_eq!(
             compile_on_approved("correction", &request, &mut errors),
             CompiledChangeRequestOnApproved::default()
         );
         assert_eq!(
             serde_json::to_value(review).expect("compiled no-review serializes"),
-            json!({"mode": "none"})
+            json!({"type": "none"})
         );
         assert!(errors.is_empty(), "unexpected diagnostics: {errors:?}");
     }
@@ -2712,7 +2701,7 @@ mod tests {
                 "breg.change-request.on-approved-executor-required",
             ),
         ] {
-            let request = request(json!({"mode": "none"}), Some(on_approved));
+            let request = request(json!({"type": "none"}), Some(on_approved));
             let mut errors = Vec::new();
 
             compile_on_approved("correction", &request, &mut errors);
@@ -2725,7 +2714,7 @@ mod tests {
     #[test]
     fn review_and_executor_bindings_use_bounded_identifiers() {
         let request = request(
-            json!({"authority": "Casework", "policyId": "registry-correction"}),
+            json!({"type": "required", "authority": "Casework", "policyId": "registry-correction"}),
             Some(json!({"mode": "automatic", "executor": "registry/applier"})),
         );
         let mut errors = Vec::new();
@@ -2758,7 +2747,7 @@ mod tests {
         );
         assert!(
             serde_json::from_value::<crate::contract::ChangeRequestSource>(json!({
-                "review": {"mode": "none"},
+                "review": {"type": "none"},
                 "application": {"mode": "automatic"}
             }))
             .is_err()

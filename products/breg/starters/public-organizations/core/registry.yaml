@@ -4,9 +4,9 @@
 # the reasoning behind these choices. canonicalBaseIri below is a
 # reserved example.org name standing in for your registry's real
 # identity; replace it before you build a production package.
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: public-organizations
   canonicalBaseIri: https://public-organizations.example.org
   version: 0.1.0
@@ -85,25 +85,25 @@ entities:
         required: true
         classification: restricted
         apiName: localIdentifier
-        maxLength: 160
-        minLength: 1
+        maximumLength: 160
+        minimumLength: 1
       - id: name
         type: string
         required: true
         classification: restricted
-        maxLength: 160
-        minLength: 1
+        maximumLength: 160
+        minimumLength: 1
       - id: description
         type: string
         required: false
         classification: restricted
-        maxLength: 500
-        minLength: 1
+        maximumLength: 500
+        minimumLength: 1
     changeControl:
       requiredFor:
         - patch
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - local-identifier
   - id: institutional-relationship
@@ -146,9 +146,9 @@ entities:
       requiredFor:
         - patch
     constraints:
-      - kind: compare
+      - type: compare
         left: start-date
-        operator: less_than_or_equal
+        operator: less-than-or-equal
         right: end-date
   - id: name-correction
     primaryDataset: directory
@@ -165,21 +165,21 @@ entities:
         type: string
         required: true
         classification: restricted
-        maxLength: 160
-        minLength: 1
+        maximumLength: 160
+        minimumLength: 1
       - id: reason
         type: string
         required: true
         classification: restricted
-        maxLength: 500
-        minLength: 1
+        maximumLength: 500
+        minimumLength: 1
       - id: supporting-reference
         type: string
         required: true
         classification: restricted
         apiName: supportingReference
-        maxLength: 500
-        minLength: 1
+        maximumLength: 500
+        minimumLength: 1
     changeRequest:
       effects:
         - target:
@@ -189,12 +189,13 @@ entities:
             name:
               fromField: name
       review:
+        type: required
         authority: casework
         policyId: name-correction
       onApproved:
         mode: manual
       retention:
-        mode: operator_erase
+        mode: operator-erase
   - id: relationship-correction
     primaryDataset: directory
     route: relationship-corrections
@@ -235,15 +236,15 @@ entities:
         type: string
         required: true
         classification: restricted
-        maxLength: 500
-        minLength: 1
+        maximumLength: 500
+        minimumLength: 1
       - id: supporting-reference
         type: string
         required: true
         classification: restricted
         apiName: supportingReference
-        maxLength: 500
-        minLength: 1
+        maximumLength: 500
+        minimumLength: 1
     changeRequest:
       effects:
         - target:
@@ -259,12 +260,13 @@ entities:
             start-date:
               fromField: start-date
       review:
+        type: required
         authority: casework
         policyId: relationship-correction
       onApproved:
         mode: manual
       retention:
-        mode: operator_erase
+        mode: operator-erase
 accessProfiles:
   - id: reader
     default: false
@@ -274,26 +276,27 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: public-organization
-        operations:
-          - get
-          - list
-        readableFields:
-          - local-identifier
-          - name
-          - description
-        rowBoundaries: unrestricted
-      - entity: institutional-relationship
-        operations:
-          - get
-          - list
-        readableFields:
-          - institution-from
-          - institution-to
-          - relationship-type
-          - start-date
-          - end-date
-        rowBoundaries: unrestricted
+      entities:
+        - entity: public-organization
+          operations:
+            - get
+            - list
+          readableFields:
+            - local-identifier
+            - name
+            - description
+          rowBoundaries: unrestricted
+        - entity: institutional-relationship
+          operations:
+            - get
+            - list
+          readableFields:
+            - institution-from
+            - institution-to
+            - relationship-type
+            - start-date
+            - end-date
+          rowBoundaries: unrestricted
   - id: editor
     default: true
     principalClaim: registry_principal
@@ -302,94 +305,95 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: public-organization
-        operations:
-          - get
-          - list
-          - revisions
-          - create
-        readableFields:
-          - local-identifier
-          - name
-          - description
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        writableFields:
-          - local-identifier
-          - name
-          - description
-      - entity: institutional-relationship
-        operations:
-          - get
-          - list
-          - revisions
-          - create
-        readableFields:
-          - institution-from
-          - institution-to
-          - relationship-type
-          - start-date
-          - end-date
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        writableFields:
-          - institution-from
-          - institution-to
-          - relationship-type
-          - start-date
-          - end-date
-      - entity: name-correction
-        operations:
-          - create
-          - get
-          - patch
-          - submit_request
-          - revise_request
-          - cancel_request
-        readableFields:
-          - record
-          - name
-          - reason
-          - supporting-reference
-        writableFields:
-          - record
-          - name
-          - reason
-          - supporting-reference
-        requestVisibility: owner
-        rowBoundaries: unrestricted
-        readableRequestFields:
-          - reason
-          - review_state
-      - entity: relationship-correction
-        operations:
-          - create
-          - get
-          - patch
-          - submit_request
-          - revise_request
-          - cancel_request
-        readableFields:
-          - record
-          - institution-from
-          - institution-to
-          - relationship-type
-          - start-date
-          - reason
-          - supporting-reference
-        writableFields:
-          - record
-          - institution-from
-          - institution-to
-          - relationship-type
-          - start-date
-          - reason
-          - supporting-reference
-        requestVisibility: owner
-        rowBoundaries: unrestricted
-        readableRequestFields:
-          - reason
-          - review_state
+      entities:
+        - entity: public-organization
+          operations:
+            - get
+            - list
+            - revisions
+            - create
+          readableFields:
+            - local-identifier
+            - name
+            - description
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          writableFields:
+            - local-identifier
+            - name
+            - description
+        - entity: institutional-relationship
+          operations:
+            - get
+            - list
+            - revisions
+            - create
+          readableFields:
+            - institution-from
+            - institution-to
+            - relationship-type
+            - start-date
+            - end-date
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          writableFields:
+            - institution-from
+            - institution-to
+            - relationship-type
+            - start-date
+            - end-date
+        - entity: name-correction
+          operations:
+            - create
+            - get
+            - patch
+            - submit-request
+            - revise-request
+            - cancel-request
+          readableFields:
+            - record
+            - name
+            - reason
+            - supporting-reference
+          writableFields:
+            - record
+            - name
+            - reason
+            - supporting-reference
+          requestVisibility: owner
+          rowBoundaries: unrestricted
+          readableRequestFields:
+            - reason
+            - review-state
+        - entity: relationship-correction
+          operations:
+            - create
+            - get
+            - patch
+            - submit-request
+            - revise-request
+            - cancel-request
+          readableFields:
+            - record
+            - institution-from
+            - institution-to
+            - relationship-type
+            - start-date
+            - reason
+            - supporting-reference
+          writableFields:
+            - record
+            - institution-from
+            - institution-to
+            - relationship-type
+            - start-date
+            - reason
+            - supporting-reference
+          requestVisibility: owner
+          rowBoundaries: unrestricted
+          readableRequestFields:
+            - reason
+            - review-state
   - id: reviewer
     default: false
     principalClaim: registry_principal
@@ -398,62 +402,63 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: public-organization
-        operations:
-          - get
-          - list
-          - revisions
-        readableFields:
-          - local-identifier
-          - name
-          - description
-        rowBoundaries: unrestricted
-        revisionAccess: true
-      - entity: institutional-relationship
-        operations:
-          - get
-          - list
-          - revisions
-        readableFields:
-          - institution-from
-          - institution-to
-          - relationship-type
-          - start-date
-          - end-date
-        rowBoundaries: unrestricted
-        revisionAccess: true
-      - entity: name-correction
-        operations:
-          - get
-          - apply_request
-        readableFields:
-          - record
-          - name
-          - reason
-          - supporting-reference
-        rowBoundaries: unrestricted
-        applyTargets:
-          - entity: public-organization
-            rowBoundaries: unrestricted
-        readableRequestFields:
-          - reason
-          - review_state
-      - entity: relationship-correction
-        operations:
-          - get
-          - apply_request
-        readableFields:
-          - record
-          - institution-from
-          - institution-to
-          - relationship-type
-          - start-date
-          - reason
-          - supporting-reference
-        rowBoundaries: unrestricted
-        applyTargets:
-          - entity: institutional-relationship
-            rowBoundaries: unrestricted
-        readableRequestFields:
-          - reason
-          - review_state
+      entities:
+        - entity: public-organization
+          operations:
+            - get
+            - list
+            - revisions
+          readableFields:
+            - local-identifier
+            - name
+            - description
+          rowBoundaries: unrestricted
+          revisionAccess: true
+        - entity: institutional-relationship
+          operations:
+            - get
+            - list
+            - revisions
+          readableFields:
+            - institution-from
+            - institution-to
+            - relationship-type
+            - start-date
+            - end-date
+          rowBoundaries: unrestricted
+          revisionAccess: true
+        - entity: name-correction
+          operations:
+            - get
+            - apply-request
+          readableFields:
+            - record
+            - name
+            - reason
+            - supporting-reference
+          rowBoundaries: unrestricted
+          applyTargets:
+            - entity: public-organization
+              rowBoundaries: unrestricted
+          readableRequestFields:
+            - reason
+            - review-state
+        - entity: relationship-correction
+          operations:
+            - get
+            - apply-request
+          readableFields:
+            - record
+            - institution-from
+            - institution-to
+            - relationship-type
+            - start-date
+            - reason
+            - supporting-reference
+          rowBoundaries: unrestricted
+          applyTargets:
+            - entity: institutional-relationship
+              rowBoundaries: unrestricted
+          readableRequestFields:
+            - reason
+            - review-state

@@ -77,25 +77,27 @@ fn acceptance_example(name: &str) -> (Map<String, Value>, Value) {
 /// project and write slots as `tests/script_baseline.rs`.
 fn characterization_action(script: &str) -> CompiledAction {
     let source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"script-baseline","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"script-baseline","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "entities":[{"id":"record","primaryDataset":"baseline","route":"records","mutationMode":"mutable","fields":[
-            {"id":"label","type":"string","maxLength":160,"required":true,"classification":"restricted"},
+            {"id":"label","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"classification":"restricted"}
         ]}],
         "actions":[{"id":"register-record","inputs":[
-            {"id":"label","apiName":"displayLabel","type":"string","maxLength":80,"required":true,"classification":"restricted"},
+            {"id":"label","apiName":"displayLabel","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
             {"id":"count","type":"int64","required":true,"classification":"restricted"},
             {"id":"amount","type":"decimal","precision":20,"scale":2,"required":true,"classification":"restricted"},
-            {"id":"note","type":"string","maxLength":80,"classification":"restricted"}
-        ],"handler":{"kind":"rhai","script":"handlers/baseline.rhai","abi":"registry.action-handler/v1",
+            {"id":"note","type":"string","maximumLength":80,"classification":"restricted"}
+        ],"handler":{"type":"rhai","script":"handlers/baseline.rhai","abi":"registry.action-handler/v1",
             "refusals":[{"code":"blank-label","label":"A label is required."}],
             "writes":[{"id":"record","target":{"entity":"record"},"operation":"create","fields":["label","count","amount"]}]
         }}],
-        "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
-            {"action":"register-record","operations":["invoke"],"targets":[{"entity":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
-        ]}]
+        "accessProfiles":[{"id":"writer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "actions":[
+                {"action":"register-record","operations":["invoke"],"targets":[{"entity":"record","rowBoundaries":"unrestricted"}],"results":["record"]}
+            ]
+        }}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(

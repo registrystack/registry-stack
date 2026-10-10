@@ -1,6 +1,6 @@
 {
-  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
-  "kind": "QueriesExplanation",
+  "apiVersion": "id.registrystack.org/formats/breg/queries-explanation/v1alpha4",
+  "kind": "BRegQueriesExplanation",
   "operations": [
     {
       "allowCount": false,
@@ -9,8 +9,8 @@
           "apiName": "code",
           "field": "code",
           "fieldType": {
-            "maxLength": 32,
-            "minLength": 0,
+            "maximumLength": 32,
+            "minimumLength": 0,
             "type": "string"
           },
           "sourceKind": "stored"
@@ -19,8 +19,8 @@
           "apiName": "district",
           "field": "district",
           "fieldType": {
-            "maxLength": 32,
-            "minLength": 0,
+            "maximumLength": 32,
+            "minimumLength": 0,
             "type": "string"
           },
           "sourceKind": "stored"
@@ -29,22 +29,22 @@
           "apiName": "label",
           "field": "label",
           "fieldType": {
-            "maxLength": 100,
-            "minLength": 0,
+            "maximumLength": 100,
+            "minimumLength": 0,
             "type": "string"
           },
           "sourceKind": "stored"
         }
       ],
       "bounds": {
-        "maxFilterDepth": 16,
-        "maxFilterNodes": 128,
-        "maxFilterPayloadBytes": 16384,
-        "maxFilterPredicates": 32,
-        "maxInValues": 100,
-        "maxPageSize": 100,
-        "maxSelectedFields": 128,
-        "maxTop": 100
+        "maximumFilterDepth": 16,
+        "maximumFilterNodes": 128,
+        "maximumFilterPayloadBytes": 16384,
+        "maximumFilterPredicates": 32,
+        "maximumInValues": 100,
+        "maximumPageSize": 100,
+        "maximumSelectedFields": 128,
+        "maximumTop": 100
       },
       "entity": "record",
       "filterable": [
@@ -60,15 +60,15 @@
           ],
           "field": "code",
           "fieldType": {
-            "maxLength": 32,
-            "minLength": 0,
+            "maximumLength": 32,
+            "minimumLength": 0,
             "type": "string"
           },
           "operators": [
             "equals",
             "in",
-            "is_null",
-            "is_not_null",
+            "is-null",
+            "is-not-null",
             "prefix",
             "contains"
           ],
@@ -94,15 +94,15 @@
           ],
           "field": "district",
           "fieldType": {
-            "maxLength": 32,
-            "minLength": 0,
+            "maximumLength": 32,
+            "minimumLength": 0,
             "type": "string"
           },
           "operators": [
             "equals",
             "in",
-            "is_null",
-            "is_not_null",
+            "is-null",
+            "is-not-null",
             "prefix",
             "contains"
           ],

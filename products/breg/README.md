@@ -193,7 +193,7 @@ refused before initial production control-plane state or DDL is created.
 
 OIDC key resolution is deployment configuration, not governed package content.
 If `authentication.oidc.jwksSource` is omitted, discovery is used. An operator
-can name the key set location directly with `kind: uri` and an `https` `uri`
+can name the key set location directly with `type: uri` and an `https` `uri`
 (plain `http` only on an IPv4 loopback host), which the verifier fetches and
 refreshes the same way it does a discovered key set, or pin a static document
 through a protected secret reference:
@@ -202,7 +202,7 @@ through a protected secret reference:
 authentication:
   oidc:
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/oidc-jwks
 ```
 
@@ -213,7 +213,7 @@ constructed, so rotation requires a reviewed configuration change and process
 restart.
 
 Runtime files set `apiVersion` to
-`registry.registrystack.org/breg-runtime/v1alpha1` and `kind` to
+`id.registrystack.org/formats/breg/runtime/v1alpha1` and `kind` to
 `BRegRuntimeConfig`. The generated JSON Schema at
 `generated/runtime/runtime.schema.json` is suitable for editor validation. It
 documents bounded defaults for operational tuning while keeping package,

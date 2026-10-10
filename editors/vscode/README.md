@@ -8,7 +8,7 @@ Project roots use each product's own authoring marker:
 
 | Product | Marker |
 |---|---|
-| Base Registry Engine | `registry.yaml` declaring `RegistryProject` |
+| Base Registry Engine | `registry.yaml` declaring `BRegProject` |
 | Evidence | `evidence-project.yaml`, or `source.openapi.yaml` beside `questions/` |
 | Registry Casework | `casework.yaml` declaring `CaseworkProject` |
 | Registry Scheduling | `scheduling.yaml` declaring `SchedulingProject` |

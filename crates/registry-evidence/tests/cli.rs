@@ -238,8 +238,8 @@ impl ReferenceProject {
                 1,
             )
             .replacen(
-                "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000",
-                "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/evidence-signing",
+                "signer:\n  type: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  attemptTimeoutMilliseconds: 2000",
+                "signer:\n  type: local-jwk\n  privateKeyRef: secret:file/evidence-signing",
                 1,
             );
         fs::write(root.path().join("runtime.yaml"), runtime).expect("stage runtime");
@@ -349,7 +349,7 @@ fn check_warns_when_the_burst_cannot_hold_the_largest_request_cost() {
         lines[1],
         "  the burst is below 16, the request batch item ceiling, the largest request cost this \
          bundle admits: a request batch or holder-bound release that costs more than the burst \
-         is always refused as evidence.invalid_request"
+         is always refused as evidence.invalid-request"
     );
     assert_eq!(
         lines[2],
@@ -741,6 +741,113 @@ fn check_reports_an_unsafe_package_entry_at_the_package_directory() {
         "{diagnostic}"
     );
     assert!(diagnostic["source"].get("line").is_none(), "{diagnostic}");
+}
+
+/// A package file the bundle names that is a link out of the package is still
+/// refused, and the refusal points at the bundle member that names the file
+/// (CFG-VAL-8, CFG-DIAG-1), so the author sees which path to repair. The file
+/// the link resolves to is never read.
+#[test]
+fn check_reports_a_linked_package_file_at_the_bundle_member_that_names_it() {
+    let deployment = Deployment::stage("all-definitions");
+    let bundle = deployment.path("bundle");
+    let script = bundle.join("adapters/adult-status-source.rhai");
+    let outside = deployment.path("outside.rhai");
+    fs::rename(&script, &outside).expect("move the script out of the package");
+    std::os::unix::fs::symlink(&outside, &script).expect("link the script back in");
+    let document = fs::read_to_string(bundle.join("evidence.yaml")).expect("read bundle");
+    let (line, text) = document
+        .lines()
+        .enumerate()
+        .find(|(_, text)| text.contains("extractScript: adapters/adult-status-source.rhai"))
+        .expect("the bundle names the script");
+    let column = text
+        .find("adapters/")
+        .expect("the value starts on the line")
+        + 1;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["check", "--format", "json", "--runtime-config"])
+        .arg(deployment.path("runtime.yaml"))
+        .output()
+        .expect("evidence binary starts");
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON document");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic["severity"], "error", "{diagnostic}");
+    assert_eq!(diagnostic["code"], "evidence.package.unsafe-entry");
+    assert_eq!(diagnostic["artifact"], "EvidenceBundle", "{diagnostic}");
+    assert_eq!(diagnostic["path"], "/sources/source-a/extractScript");
+    assert_eq!(
+        diagnostic["source"]["file"],
+        bundle.join("evidence.yaml").display().to_string(),
+        "{diagnostic}"
+    );
+    assert_eq!(diagnostic["source"]["line"], line + 1, "{diagnostic}");
+    assert_eq!(diagnostic["source"]["column"], column, "{diagnostic}");
+}
+
+/// The package bound on one file is the shared reader's size cap, so a bundle
+/// or a code list one byte over it is refused with the reader's code at that
+/// file, as every other format reports it, and not as a package refusal at
+/// the directory.
+#[test]
+fn check_reports_an_oversized_package_document_with_the_reader_code_at_the_file() {
+    for document in [
+        "evidence.yaml",
+        "codelists/professional-registry-regions.yaml",
+    ] {
+        let deployment = Deployment::stage("all-definitions");
+        let file = deployment.path("bundle").join(document);
+        let mut bytes = fs::read(&file).expect("read the staged document");
+        bytes.resize(1024 * 1024 + 1, b'\n');
+        fs::write(&file, bytes).expect("pad the staged document");
+        let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+            .args(["check", "--format", "json", "--runtime-config"])
+            .arg(deployment.path("runtime.yaml"))
+            .output()
+            .expect("evidence binary starts");
+        assert_eq!(output.status.code(), Some(1), "{document}");
+        let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON document");
+        let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+        assert_eq!(diagnostics.len(), 1, "{document}: {report}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic["code"], "yaml.too-large", "{document}");
+        assert_eq!(diagnostic["path"], "", "{document}");
+        assert_eq!(
+            diagnostic["source"]["file"],
+            file.display().to_string(),
+            "{diagnostic}"
+        );
+        assert!(diagnostic["source"].get("line").is_none(), "{diagnostic}");
+    }
+}
+
+/// A package file the shared reader does not read keeps the package refusal:
+/// only a configuration document is reported as the reader reports it.
+#[test]
+fn check_reports_an_oversized_package_file_that_is_no_document_at_the_package() {
+    let deployment = Deployment::stage("all-definitions");
+    let file = deployment.path("bundle").join("catalog.jsonld");
+    let mut bytes = fs::read(&file).expect("read the staged file");
+    bytes.resize(1024 * 1024 + 1, b'\n');
+    fs::write(&file, bytes).expect("pad the staged file");
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["check", "--format", "json", "--runtime-config"])
+        .arg(deployment.path("runtime.yaml"))
+        .output()
+        .expect("evidence binary starts");
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON document");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "evidence.package.too-large");
+    assert_eq!(
+        diagnostic["source"]["file"],
+        deployment.path("bundle").display().to_string(),
+        "{diagnostic}"
+    );
 }
 
 #[test]
@@ -1193,8 +1300,8 @@ fn check_refuses_an_already_stale_bound_extract_with_only_the_governed_source() 
             1,
         )
         .replacen(
-            "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000",
-            "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/evidence-signing",
+            "signer:\n  type: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  attemptTimeoutMilliseconds: 2000",
+            "signer:\n  type: local-jwk\n  privateKeyRef: secret:file/evidence-signing",
             1,
         );
     let runtime_path = root.path().join("runtime.yaml");
@@ -1433,11 +1540,11 @@ fn a_structured_value_naming_an_undeclared_key_fails_the_fixture_and_names_the_k
     let deployment = Deployment::stage("adult-status");
     deployment.replace(
         "bundle/evidence.yaml",
-        "concepts: [{handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}]",
+        "concepts: [{handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}]",
         concat!(
             "concepts: [",
-            "{handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}, ",
-            "{handle: record_note, id: urn:example:fixture:concept:record-note, form: reviewed-structured-value, required: false, constraints: {schema: urn:example:fixture:schema:record-note:v1, maximumSerializedBytes: 512}}]",
+            "{handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}, ",
+            "{handle: record_note, uri: urn:example:fixture:concept:record-note, type: reviewed-structured-value, required: false, constraints: {schema: urn:example:fixture:schema:record-note:v1, maximumSerializedBytes: 512}}]",
         ),
     );
     deployment.write(
@@ -2087,7 +2194,7 @@ fn local_relying_procedure_is_bearer_free_closed_and_selector_private() {
             "handle": "is_adult",
             "concept": "urn:example:fixture:concept:adult-status",
             "required": true,
-            "form": "boolean"
+            "form": {"type": "boolean"}
         }])
     );
     assert_eq!(procedure["maximumAssertionLifetimeSeconds"], json!(300));
@@ -2229,7 +2336,7 @@ fn failure_cases() -> Vec<FailureCase> {
             needs_runtime: false,
             check: (
                 "yaml.unexpected-end",
-                "the document ends inside the list or mapping opened with `[` on line 323, which needs a closing `]`",
+                "the document ends inside the list or mapping opened with `[` on line 325, which needs a closing `]`",
             ),
         },
         FailureCase {
@@ -2256,16 +2363,16 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.replace(
                     "bundle/evidence.yaml",
-                    "version: 1\n",
-                    &format!("version: \"{CANARY}\"\n"),
+                    ", keyVersion: 1}\n",
+                    &format!(", keyVersion: \"{CANARY}\"}}\n"),
                 );
             },
             prefix: "evidence: the configuration reader refused the configuration\nerror[config.expected-integer] ",
-            suffix: " /version\n  expected a whole number from 1 to 1, not quoted text\n  next: Write a whole number from 1 to 1.\n1 error, 0 warnings in 1 file\n",
+            suffix: " /subjectBinding/keyVersion\n  expected a whole number from 1 to 2147483647, not quoted text\n  next: Write a whole number from 1 to 2147483647.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
                 "config.expected-integer",
-                "expected a whole number from 1 to 1, not quoted text",
+                "expected a whole number from 1 to 2147483647, not quoted text",
             ),
         },
         FailureCase {
@@ -2410,11 +2517,11 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.write(
                     "bundle/codelists/residence-region-map.yaml",
-                    &format!("id: urn:example:broken\nversion: \"1\"\nentries: {CANARY}\n"),
+                    &format!("apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1\nkind: EvidenceCodelist\nuri: urn:example:broken\nversion: \"1\"\ntype: mapping\nentries: {CANARY}\nallowedOutputs: [A]\n"),
                 );
             },
             prefix: "evidence: the configuration reader refused the configuration\nerror[config.invalid-type] ",
-            suffix: "codelists/residence-region-map.yaml:3:10 /entries\n  expected a mapping, not unquoted text\n  next: Write the members as a mapping.\n1 error, 0 warnings in 1 file\n",
+            suffix: "codelists/residence-region-map.yaml:6:10 /entries\n  expected a mapping, not unquoted text\n  next: Write the members as a mapping.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
                 "config.invalid-type",
@@ -2750,10 +2857,10 @@ fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
                 let socket = deployment.path("transit.sock");
                 deployment.replace(
                     "runtime.yaml",
-                    "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/signing-key\n",
+                    "signer:\n  type: local-jwk\n  privateKeyRef: secret:file/signing-key\n",
                     &format!(
-                        "signer:\n  kind: transit\n  unixSocketPath: {}\n  mount: transit\n  \
-                         keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000\n",
+                        "signer:\n  type: transit\n  unixSocketPath: {}\n  mount: transit\n  \
+                         keyName: evidence-signing\n  keyVersion: 7\n  attemptTimeoutMilliseconds: 2000\n",
                         socket.display()
                     ),
                 );
@@ -3177,9 +3284,9 @@ fn verify_rejects_a_policy_document_outside_the_contract_list_bounds() {
         ("a maximum past the ceiling", 1, 65),
     ] {
         let policy = fixture_policy().replacen(
-            "form: boolean",
+            "form: {type: boolean}",
             &format!(
-                "form:\n      list:\n        minimumItems: {minimum_items}\n        maximumItems: {maximum_items}"
+                "form:\n      type: list\n      minimumItems: {minimum_items}\n      maximumItems: {maximum_items}"
             ),
             1,
         );
@@ -3629,7 +3736,7 @@ fn check_policy_positions_what_verify_reports_only_as_malformed() {
     assert_eq!(diagnostics[0]["path"], "/unknownExpectation");
     assert_eq!(
         diagnostics[0]["source"],
-        json!({"file": policy_arg, "line": 19, "column": 1})
+        json!({"file": policy_arg, "line": 21, "column": 1})
     );
 
     let human = check(&["--verification-policy", &policy_arg]);
@@ -3708,19 +3815,19 @@ fn check_policy_positions_what_verify_reports_only_as_malformed() {
 #[test]
 fn check_policy_refuses_a_list_form_the_verifier_refuses() {
     let root = tempfile::tempdir().expect("temporary policies");
-    let list = |form: &str| format!("    form: {{list: {form}}}\n");
+    let list = |form: &str| format!("    form: {{type: list, {form}}}\n");
     let cases = [
         (
             "unique false",
-            "{items: string, minimumItems: 1, maximumItems: 4, unique: false}",
+            "items: string, minimumItems: 1, maximumItems: 4, unique: false",
             "evidence.policy.list-not-unique",
-            "/expectedOutputs/0/form/list/unique",
+            "/expectedOutputs/0/form/unique",
         ),
         (
             "inverted bounds",
-            "{items: string, minimumItems: 5, maximumItems: 4, unique: true}",
+            "items: string, minimumItems: 5, maximumItems: 4, unique: true",
             "evidence.policy.list-bounds-inverted",
-            "/expectedOutputs/0/form/list/minimumItems",
+            "/expectedOutputs/0/form/minimumItems",
         ),
     ];
     for (flag, document) in [
@@ -3729,8 +3836,11 @@ fn check_policy_refuses_a_list_form_the_verifier_refuses() {
     ] {
         for (label, form, code, path) in cases {
             let file = root.path().join("policy.yaml");
-            fs::write(&file, document.replace("    form: boolean\n", &list(form)))
-                .expect("stage the policy");
+            fs::write(
+                &file,
+                document.replace("    form: {type: boolean}\n", &list(form)),
+            )
+            .expect("stage the policy");
             let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
                 .args(["check-policy", flag, &file.display().to_string()])
                 .args(["--format", "json"])
@@ -3748,7 +3858,9 @@ fn check_policy_refuses_a_list_form_the_verifier_refuses() {
 
 fn fixture_policy() -> String {
     format!(
-        "expectedAssuranceProfile: evidence-grade
+        "apiVersion: id.registrystack.org/formats/evidence/verification-policy/v1
+kind: EvidenceVerificationPolicy
+expectedAssuranceProfile: evidence-grade
 issuedBy: urn:example:issuer
 providedBy: urn:example:provider
 requirement: urn:example:requirement:v1
@@ -3762,7 +3874,7 @@ expectedSubjects:
     binding: urn:evidence:subject:v1_{binding}
 expectedOutputs:
   - concept: urn:example:concept
-    form: boolean
+    form: {{type: boolean}}
 maximumAssertionLifetimeSeconds: 172800
 clockSkewSeconds: 30
 revokedKeyIds: []
@@ -3791,7 +3903,9 @@ fn holder_bound_fixture_evidence() -> serde_json::Value {
 /// the fixture it controls.
 fn holder_bound_fixture_policy() -> String {
     format!(
-        "subjectBinding: holder-bound
+        "apiVersion: id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1
+kind: EvidenceHolderBoundVerificationPolicy
+subjectBinding: holder-bound
 expectedAssuranceProfile: evidence-grade
 issuedBy: urn:example:issuer
 providedBy: urn:example:provider
@@ -3804,7 +3918,7 @@ expectedSubjects:
     binding: urn:evidence:subject:v1_{binding}
 expectedOutputs:
   - concept: urn:example:concept
-    form: boolean
+    form: {{type: boolean}}
 maximumAssertionLifetimeSeconds: 172800
 revokedKeyIds: []
 keyBindingAudience: {KEY_BINDING_AUDIENCE}
@@ -4274,7 +4388,7 @@ impl Deployment {
 
     fn runtime_document(&self) -> String {
         format!(
-            "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+            "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: {bundle}
@@ -4290,7 +4404,7 @@ secretProviders:
   file:
     root: {secrets}
 signer:
-  kind: local-jwk
+  type: local-jwk
   privateKeyRef: secret:file/signing-key
 audit:
   path: {audit}

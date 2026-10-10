@@ -1,3 +1,5 @@
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: consent-person-registry-core
 version: 0.1.0
 entities:
@@ -7,8 +9,8 @@ entities:
     mutationMode: mutable
     classification: restricted
     fields:
-      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
-      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
-      - {id: district, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
+      - {id: district, type: string, required: true, maximumLength: 80, classification: internal}
     constraints:
-      - {kind: unique, fields: [person-code]}
+      - {type: unique, fields: [person-code]}

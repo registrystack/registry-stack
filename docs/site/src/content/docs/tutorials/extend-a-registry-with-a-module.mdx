@@ -65,10 +65,10 @@ bregctl check tutorial-work/project
 
 ```text test-expect
 Authoring check passed; registry revision sha256:<digest>.
-warning[breg.access.profile-unrestricted-collection] tutorial-work/project/registry.yaml:141:24 /accessProfiles/0/permissions/1/rowBoundaries
+warning[breg.access.profile-unrestricted-collection] tutorial-work/project/registry.yaml:143:26 /accessProfiles/0/permissions/entities/1/rowBoundaries
   this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-rows] tutorial-work/project/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
+warning[breg.access.profile-unrestricted-rows] tutorial-work/project/registry.yaml:191:26 /accessProfiles/2/permissions/entities/0/rowBoundaries
   this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
 0 errors, 2 warnings in 4 files
@@ -101,7 +101,7 @@ version: 0.1.0
 ```
 
 ```yaml test-excerpt="tutorial-work/project/modules/record-notes/module.yaml"
-      - {id: internal-note, type: string, maxLength: 500, classification: internal}
+      - {id: internal-note, type: string, maximumLength: 500, classification: internal}
 ```
 
 A field without `required: true` is optional, so existing records stay valid and a create may omit it.
@@ -157,12 +157,12 @@ In `module.yaml`, raise `version` to `0.2.0`:
 +version: 0.2.0
 ```
 
-and raise the field's `maxLength` to `1000`:
+and raise the field's `maximumLength` to `1000`:
 
 ```diff lang="yaml" title="tutorial-work/project/modules/record-notes/module.yaml" test-edit
  fields:
--  - {id: internal-note, type: string, maxLength: 500, classification: internal}
-+  - {id: internal-note, type: string, maxLength: 1000, classification: internal}
+-  - {id: internal-note, type: string, maximumLength: 500, classification: internal}
++  - {id: internal-note, type: string, maximumLength: 1000, classification: internal}
 ```
 
 Then run the check again:
@@ -173,10 +173,10 @@ bregctl check tutorial-work/project
 
 ```text test-expect
 bregctl check refused the project.
-error[breg.module.lock-digest-mismatch] tutorial-work/project/registry.yaml:200:13 /modules/0/digest
+error[breg.module.lock-digest-mismatch] tutorial-work/project/registry.yaml:204:13 /modules/0/digest
   an authored module does not match its locked digest
   next: Run bregctl project lock against this project, then review the module lock change it records.
-error[breg.module.lock-version-mismatch] tutorial-work/project/registry.yaml:199:14 /modules/0/version
+error[breg.module.lock-version-mismatch] tutorial-work/project/registry.yaml:203:14 /modules/0/version
   an authored module does not match its locked version
   next: Run bregctl project lock against this project, then review the module lock change it records.
 2 errors, 0 warnings in 4 files
@@ -233,8 +233,8 @@ In `records.record.operator.list`, the operator's list operation over `record`, 
   "apiName": "internalNote",
   "field": "internal-note",
   "fieldType": {
-    "maxLength": 1000,
-    "minLength": 0,
+    "maximumLength": 1000,
+    "minimumLength": 0,
     "type": "string"
   },
   "sourceKind": "stored"

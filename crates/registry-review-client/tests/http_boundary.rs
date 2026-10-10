@@ -641,7 +641,7 @@ async fn result_by_id(Path(id): Path<Uuid>) -> Response<Body> {
         }
         210 => {
             let mut value = result_json(id);
-            value["status"] = json!("changes_requested");
+            value["status"] = json!("changes-requested");
             value["outcome"] = json!("needs-correction");
             value["result"] = json!("not-an-object");
             json_response(StatusCode::OK, value)
@@ -810,7 +810,7 @@ async fn valid_problem() -> Response<Body> {
     );
     response.headers_mut().insert(
         "registry-casework-validation-reason",
-        HeaderValue::from_static("schema_mismatch"),
+        HeaderValue::from_static("schema-mismatch"),
     );
     response
 }

@@ -3,10 +3,10 @@ classification: compatibility-shaped-local-mock
 synthetic_only: true
 server: {base_url: 'http://127.0.0.1:18081', bind: '127.0.0.1:18081'}
 validated_source_definition:
-  transport: http-json
+  type: http-json
   baseUrl: http://127.0.0.1:18081
   posture: source-derived
-  authentication: {kind: static-authorization, tokenRef: secret:file/fixture-flat-rest-token}
+  authentication: {type: static-authorization, tokenRef: secret:file/fixture-flat-rest-token}
   request:
     method: POST
     path: /v1/lookup
@@ -27,9 +27,9 @@ validated_source_definition:
       maximumNormalizedBytes: 4096
     projection: [/total, /result, /results]
     redirects: deny
-    timeoutMilliseconds: 3000
+    attemptTimeoutMilliseconds: 3000
     maximumResponseBytes: 65536
-    concurrencyLimit: 4
+    maximumConcurrency: 4
   responseSchema: schemas/response.schema.yaml
   extractScript: adapters/flat-rest.rhai
   factSchema: schemas/facts.schema.yaml

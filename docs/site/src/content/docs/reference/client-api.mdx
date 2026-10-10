@@ -355,9 +355,9 @@ Three local operations act on a stored selection in Python and Node:
   kept for compatibility; the operation is structural, not trust.
 - `accept_selection` and `acceptSelection` apply an adopter-owned local policy callback and return
   an `AcceptedServiceSelection` carrying `endpoint_url` or `endpointUrl`. A callback that returns
-  false raises kind `local_acceptance_refused`.
+  false raises kind `local-acceptance-refused`.
 - `renew_unchanged_selection` and `renewUnchangedSelection` return a freshly reselected service only
-  when its trust-relevant semantics are unchanged, and raise kind `selection_changed` otherwise. The
+  when its trust-relevant semantics are unchanged, and raise kind `selection-changed` otherwise. The
   current selection must come from a new online lookup.
 
 Rust names the same three `validate_service_selection_structure`, `accept_service_selection`, and
@@ -368,9 +368,12 @@ Rust names the same three `validate_service_selection_structure`, `accept_servic
 Python raises `discovery.DiscoveryClientError` and Node throws the same named class. Both carry
 `kind` plus `status`, `problem`, and the transport subcategory (`transport_kind` in Python,
 `transportKind` in Node) when the failure carries them. `kind` is one of `configuration`, `query`,
-`no_matching_service`, `ambiguous_selection`, `no_matching_alternative`, `ambiguous_alternative`,
-`capability_mismatch`, `local_acceptance_refused`, `selection_changed`, `transport`, `problem`,
+`no-matching-service`, `ambiguous-selection`, `no-matching-alternative`, `ambiguous-alternative`,
+`capability-mismatch`, `local-acceptance-refused`, `selection-changed`, `transport`, `problem`,
 `protocol`, and `client`. Rust returns the matching `DiscoveryClientError` variants.
+
+For kind `problem`, `problem` is one of `invalid-request`, `not-found`, `result-bound-exceeded`,
+`unavailable`, or `unknown`.
 
 {/* Evidence: crates/registry-stack-client-node/discovery/client.d.ts,
     crates/registry-discovery-client-py/python/registry_discovery_client/__init__.pyi,
@@ -589,14 +592,14 @@ the category it handles and let the rest propagate. Node throws `evidence.Eviden
 | `token` | `TokenError` | The configured credential source could not supply a bearer |
 | `transport` | `TransportError` | The exchange failed below HTTP |
 | `denied` | `DeniedError` | Evidence refused the request |
-| `not_available` | `NotAvailableError` | The source could not answer the request |
+| `not-available` | `NotAvailableError` | The source could not answer the request |
 | `protocol` | `ProtocolError` | The response violated the contract |
 | `verification` | `VerificationError` | The response did not satisfy the pinned verification |
 
 `kind` is always present. The rest are present only when the underlying failure carries them:
 `status` on `denied`, `protocol`, and a `token` failure whose token subcategory is `protocol`;
 `code` on `denied`, `protocol`, `verification`, and a `token` failure whose token subcategory is
-`refused`; the trace identifier on `denied`, `not_available`, and `protocol`; the retry delay on
+`refused`; the trace identifier on `denied`, `not-available`, and `protocol`; the retry delay on
 `denied` and `protocol`; the transport subcategory on `transport` and a `token` failure whose token
 subcategory is `transport`; and the token subcategory on every `token` failure. Python spells them
 `status`, `code`, `trace_id`, `retry_after_seconds`, `transport_kind`, and `token_kind`; Node spells
@@ -741,8 +744,8 @@ async function receiveWebhook(request, response, key, eventStore) {
 Keep the key in server-side secret storage and never log the input or a failed delivery. Body and
 key buffers with shared backing stores are refused; accepted buffers are copied before entering the
 native verifier so another worker cannot change the bytes being authenticated. The helper
-throws `BaseRegistryClientError` with kind `webhook_verification` and code `missing_header`,
-`malformed_signature`, `signature_mismatch`, or `unsupported_version`. Generation and attempt are
+throws `BaseRegistryClientError` with kind `webhook-verification` and code `missing-header`,
+`malformed-signature`, `signature-mismatch`, or `unsupported-version`. Generation and attempt are
 authenticated decimal strings, which avoids rounding a signed 64-bit generation at the JavaScript
 number boundary. A delivery outside the receiver's skew bound can still have a valid signature, so
 reject it before the deduplication transaction and effect. `idempotencyKey` identifies one delivery
@@ -814,8 +817,8 @@ The bindings split the direct write selection by operation.
 `select_patch(operation_identifier, expected_profile)` returns a `BRegPatchBinding`, and
 `select_lifecycle(entity_identifier, expected_profile)` returns a `BRegLifecycleAuthority` (Node:
 `selectCreate`, `selectPatch`, `selectLifecycle`). A mismatch raises the client error with kind
-`metadata_selection` and a code from `not_found`, `unbound_source`, `profile_mismatch`,
-`unsupported_operation`, `required_capability`, and `contract_mismatch`.
+`metadata-selection` and a code from `not-found`, `unbound-source`, `profile-mismatch`,
+`unsupported-operation`, `required-capability`, and `contract-mismatch`.
 
 ### Writes
 
@@ -849,7 +852,7 @@ field names to I-JSON values. Each patch operation is `{"op": "add" | "replace" 
 ..., "value": ...}` or `{"op": "remove", "field": ...}`. Node checks every input before conversion:
 plain objects and arrays only, at most 128 levels, 100,000 nodes, and 4 MiB of string data. Python
 converts dicts, lists, tuples, and JSON scalars. An input either binding cannot convert, and any
-value the Rust validation refuses, raises kind `invalid_request` before an exchange.
+value the Rust validation refuses, raises kind `invalid-request` before an exchange.
 
 ### Lifecycle actions
 
@@ -864,9 +867,9 @@ success or refusal before choosing the next operation. Lifecycle ETags are not r
 Python `lifecycle_actions(authority, record, *, format="json")` returns a sequence of
 `BRegLifecycleAction`; Node `lifecycleActions(authority, record, format)` returns an array and
 performs no exchange. `record` is the `value` of a fresh record read. An action's `operation` is the
-snake case operation name, such as `submit_request`; `stage` and `review` are `None` or `null` when
+kebab-case operation name, such as `submit-request`; `stage` and `review` are `None` or `null` when
 absent. A promotion whose authority does not conform, or whose action is not bound to that authority
-and record, raises kind `lifecycle_promotion` with code `authority` or `binding`.
+and record, raises kind `lifecycle-promotion` with code `authority` or `binding`.
 `execute_lifecycle_action(action, idempotency_key)` and
 `executeLifecycleAction(action, idempotencyKey)` return the receipt as an outcome.
 
@@ -876,7 +879,7 @@ A change-request entity can declare governed attachment slots. Slot content is e
 create body, a patch operation, and a request effect never set it, and only the served attachment
 routes move the bytes. `select_attachments(entity_identifier, expected_profile)` returns every slot
 the caller-filtered metadata advertises for that entity and profile, bound to the client's origin
-(Node: `selectAttachments`). A mismatch raises kind `metadata_selection` with a code from the same
+(Node: `selectAttachments`). A mismatch raises kind `metadata-selection` with a code from the same
 closed list as the other selections.
 
 A `BRegAttachmentSlot` exposes `slot_identifier`, `entity_identifier`, `access_profile`,
@@ -887,7 +890,7 @@ A `BRegAttachmentSlot` exposes `slot_identifier`, `entity_identifier`, `access_p
 
 `prepare_upload(content_type, body)` and `prepareUpload(contentType, body)` check the bytes against
 that served policy before any I/O and return an opaque `BRegAttachmentUpload` carrying `content_type`
-and `byte_size`. They raise kind `invalid_request` when the slot advertises no upload route, when the
+and `byte_size`. They raise kind `invalid-request` when the slot advertises no upload route, when the
 body is empty, when the body exceeds `maximum_bytes`, when the content type is not a lowercase
 `type/subtype`, and when that media type is outside `content_types`. A parameter, a wildcard, and an
 uppercase spelling all refuse, since a served type is matched exactly.
@@ -909,12 +912,12 @@ document, and reads its body under the client's maximum response bytes, 8 MiB by
 that bound before fetching a slot that serves more.
 
 `value_in` and `valueIn` read one slot's state out of the `domainData` of a fresh record read rather
-than from the wire. The result carries `kind`, one of `not_selected`, `empty`, and `filled`, and a
+than from the wire. The result carries `kind`, one of `not-selected`, `empty`, and `filled`, and a
 `value` present only when filled. A filled value carries `slot_identifier`, `proposal_version`,
 `erased`, `byte_size`, `sha256`, `content_type`, `uploaded_at`, `uploaded_by`, and
 `verification_status`, camel case in Node. `verification_status` is `notRequired`, `pending`,
 `approved`, or `rejected` when the record carries one. A record whose slot value does not match the
-served shape raises kind `invalid_request`.
+served shape raises kind `invalid-request`.
 
 ### Exact JSON in Node
 
@@ -931,7 +934,7 @@ as JSON text, not an arbitrary HTTP body. The client refuses duplicate members, 
 violations, and numeric literals whose value would change during decoding, among them
 `0.10000000000000001`, `1e9999`, and `9007199254740993.0`. BReg's numeric model still governs a
 write: `9007199254740992` is a supported write, and `9007199254740993` is refused with kind
-`invalid_request` before any exchange. Do not round a refused input to make it pass.
+`invalid-request` before any exchange. Do not round a refused input to make it pass.
 
 ```js
 const result = await client.createRecordJson(
@@ -978,13 +981,13 @@ and the optional `code`, `planRefusal`, `refusalCode`, `fieldPath`, `status`, `t
 | Kind | Meaning | Members set |
 | --- | --- | --- |
 | `configuration` | The construction inputs were refused | none |
-| `invalid_request` | An input was refused before any exchange | none |
+| `invalid-request` | An input was refused before any exchange | none |
 | `token` | The private-key JWT provider could not supply a bearer | `token_kind`, plus `transport_kind`, `code`, or `status` depending on how the token endpoint failed |
 | `transport` | The exchange failed below HTTP | `transport_kind` |
 | `problem` | The registry answered with an accepted Problem | `status`, `code`, `trace_id`, `field_path` when the Problem names a validated location, `plan_refusal` when the code is a request-plan refusal, and `refusal_code` when the code is an immediate-action refusal |
-| `protocol` | The response violated the contract | `status`, `code` (`header_bounds`, `trace_context`, `media_type`, `body`, `problem`, `entity_tag`, `profile_link`, `location`, `cache_policy`, `status`, or `protocol`), and `trace_id` when one was validated |
-| `metadata_selection` | A binding could not be selected from the metadata | `code` |
-| `lifecycle_promotion` | The authority did not conform, or an action was not bound to it and the record | `code` (`authority` or `binding`) |
+| `protocol` | The response violated the contract | `status`, `code` (`header-bounds`, `trace-context`, `media-type`, `body`, `problem`, `entity-tag`, `profile-link`, `location`, `cache-policy`, `status`, or `protocol`), and `trace_id` when one was validated |
+| `metadata-selection` | A binding could not be selected from the metadata | `code` |
+| `lifecycle-promotion` | The authority did not conform, or an action was not bound to it and the record | `code` (`authority` or `binding`) |
 | `client` | Any other client-side failure | none |
 
 {/* Evidence: crates/registry-stack-client-node/breg/client.d.ts,
@@ -1028,7 +1031,7 @@ const { casework } = require('@registrystack/client');
 const client = new casework.CaseworkClient({
   baseUrl: 'https://casework.example.invalid/',
 });
-const page = await client.listWorkItems(token, 'staff', 'reviewer', { view: 'my_teams', limit: 25 });
+const page = await client.listWorkItems(token, 'staff', 'reviewer', { view: 'my-teams', limit: 25 });
 ```
 
 `CaseworkClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
@@ -1123,10 +1126,10 @@ A successful call returns `CaseworkComplete<T>` in Rust, a dict carrying `kind` 
 `value`, and `trace_id` in Python, and an object carrying `kind`, `value`, and `traceId` in Node. The
 value is the camel case wire DTO the service returned.
 
-A paged read returns `items`, a `status` of `complete`, `budget_exhausted`, or `source_unavailable`,
+A paged read returns `items`, a `status` of `complete`, `budget-exhausted`, or `source-unavailable`,
 and `nextCursor` when another page exists. An empty page and an exhausted budget are both successful
 answers; pass the cursor back through the same method to continue. Source discovery alone does not
-issue a cursor. If a source-backed page reports `budget_exhausted` without a cursor, retry the read
+issue a cursor. If a source-backed page reports `budget-exhausted` without a cursor, retry the read
 without a cursor after reconciliation. The retried walk starts from the first position and can
 return items earlier pages already returned: deduplicate work items by `itemId`, and replace
 holdings totals instead of adding to them.
@@ -1135,7 +1138,7 @@ holdings totals instead of adding to them.
     crates/registry-casework-client-node/client.d.ts, CaseworkOutcome and PageStatus,
     crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi,
     crates/registry-casework-client-py/README.md,
-    products/casework/README.md, budget_exhausted without a cursor,
+    products/casework/README.md, budget-exhausted without a cursor,
     crates/registry-casework/tests/inbox_ordering_postgres.rs,
     a_discovery_wait_ends_the_walk_and_a_restart_repeats_earlier_results */}
 
@@ -1165,25 +1168,25 @@ and `protocolFailure`; an absent member is undefined.
 | Kind | Meaning | Members set |
 | --- | --- | --- |
 | `configuration` | The construction inputs were refused | none |
-| `invalid_request` | An input was refused before any exchange | none |
+| `invalid-request` | An input was refused before any exchange | none |
 | `transport` | The exchange failed below HTTP | `transport_kind` |
 | `problem` | Casework answered with an accepted problem | `status`, `code`, `detail`, `trace_id`, plus `original_attempt_id` on a recoverable attempt and `validation` on a refused review submission |
 | `protocol` | The response violated the contract | `status`, `protocol_failure`, and `trace_id` when one was validated |
 
 A validation member carries the bounded `path` of the refused field and one `reason` from a closed
-set: `kind_not_allowed`, `reference_invalid`, `object_required`, `maximum_bytes_exceeded`,
-`maximum_depth_exceeded`, `schema_mismatch`, `outcome_not_declared`, `reason_required`,
-`text_invalid`, `result_not_declared`, `result_required`, `field_not_declared`,
-`constraint_invalid`, and `constraint_violated`. Neither member repeats a submitted value.
+set: `kind-not-allowed`, `reference-invalid`, `object-required`, `maximum-bytes-exceeded`,
+`maximum-depth-exceeded`, `schema-mismatch`, `outcome-not-declared`, `reason-required`,
+`text-invalid`, `result-not-declared`, `result-required`, `field-not-declared`,
+`constraint-invalid`, and `constraint-violated`. Neither member repeats a submitted value.
 
-The five result reasons govern a review request's structured result. `result_not_declared` refuses a
-result or a result constraint when the review kind declares no `resultSchema`. `result_required`
+The five result reasons govern a review request's structured result. `result-not-declared` refuses a
+result or a result constraint when the review kind declares no `resultSchema`. `result-required`
 refuses a decision for an outcome whose `resultRequired` is set when the body carries none.
-`field_not_declared` refuses a result constraint that names a property the kind's schema does not
-declare. `constraint_invalid` refuses a constraint that is not a narrowing of the schema: an
+`field-not-declared` refuses a result constraint that names a property the kind's schema does not
+declare. `constraint-invalid` refuses a constraint that is not a narrowing of the schema: an
 unknown keyword, a bound outside the declared one or on a property whose type the schema does not
-declare inline, or a choice value the schema refuses. `constraint_violated` refuses a submitted
-result that passes the schema but falls outside the item's constraints. `schema_mismatch` covers a
+declare inline, or a choice value the schema refuses. `constraint-violated` refuses a submitted
+result that passes the schema but falls outside the item's constraints. `schema-mismatch` covers a
 value outside the schema itself, and both reasons carry the instance path of the offending field.
 
 {/* Evidence: crates/registry-casework-client/src/error.rs, CaseworkClientError,
@@ -1365,7 +1368,7 @@ optional `code`, `title`, `detail`, `status`, `traceId`, `retryAfterSeconds`, `t
 | Kind | Meaning | Members set |
 | --- | --- | --- |
 | `configuration` | The construction inputs were refused | none |
-| `invalid_request` | An input was refused before any exchange | none |
+| `invalid-request` | An input was refused before any exchange | none |
 | `transport` | The exchange failed below HTTP | `transport_kind` |
 | `problem` | Messaging answered with an accepted problem | `status`, `code`, `title`, `detail`, and `trace_id`, plus `retry_after_seconds` on a 429 that named a wait |
 | `protocol` | The response violated the contract | `status`, `protocol_failure`, and `trace_id` when one was validated |

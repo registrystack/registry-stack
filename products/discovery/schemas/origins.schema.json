@@ -39,18 +39,11 @@
       ],
       "type": "string"
     },
-    "OriginsSchemaVersion": {
-      "description": "The header an origins file carries.",
-      "enum": [
-        "registry-discovery/origins/v1alpha1"
-      ],
-      "type": "string"
-    },
     "Url": {
-      "description": "An absolute http or https URL with a host and no user information.",
+      "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
       "format": "uri",
       "maxLength": 2048,
-      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
     }
   },
@@ -59,6 +52,16 @@
   "additionalProperties": false,
   "description": "The origins the operator approves for one index.",
   "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/discovery/origins/v1alpha1",
+      "description": "The format and version of this file.",
+      "type": "string"
+    },
+    "kind": {
+      "const": "DiscoveryOrigins",
+      "description": "The kind of this file.",
+      "type": "string"
+    },
     "origins": {
       "description": "One to 128 approved origins.",
       "items": {
@@ -67,13 +70,11 @@
       "maxItems": 128,
       "minItems": 1,
       "type": "array"
-    },
-    "schemaVersion": {
-      "$ref": "#/$defs/OriginsSchemaVersion"
     }
   },
   "required": [
-    "schemaVersion",
+    "apiVersion",
+    "kind",
     "origins"
   ],
   "title": "Registry Discovery approved origins",

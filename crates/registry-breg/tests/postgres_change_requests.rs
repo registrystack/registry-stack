@@ -122,7 +122,7 @@ async fn reviewed_application_guard_rejects_changed_target_without_partial_effec
         applier.clone(),
     )
     .await;
-    let apply = action(&before.body, "apply_request", None);
+    let apply = action(&before.body, "apply-request", None);
     let response = send_action(
         &app,
         &apply,
@@ -160,7 +160,7 @@ async fn cached_review_result_cannot_authorize_fresh_apply_but_committed_receipt
     let database = TestDatabase::create(8).await;
     let mut source = serde_json::to_value(two_stage_project()).unwrap();
     source["entities"][2]["changeRequest"]["review"] =
-        json!({"authority":"casework-a","policyId":"correction-review"});
+        json!({"type":"required","authority":"casework-a","policyId":"correction-review"});
     let registry = Arc::new(
         compile_project(
             &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
@@ -207,7 +207,7 @@ async fn cached_review_result_cannot_authorize_fresh_apply_but_committed_receipt
         applier.clone(),
     )
     .await;
-    let apply = action(&before.body, "apply_request", None);
+    let apply = action(&before.body, "apply-request", None);
 
     let entries_before = database.audit_entries().len();
     let unavailable = send_action(
@@ -296,7 +296,7 @@ async fn review_submissions_bind_the_subject_to_the_registrys_request_entity() {
     let database = TestDatabase::create(8).await;
     let mut source = serde_json::to_value(two_stage_project()).unwrap();
     source["entities"][2]["changeRequest"]["review"] =
-        json!({"authority":"casework-a","policyId":"correction-review"});
+        json!({"type":"required","authority":"casework-a","policyId":"correction-review"});
     let registry = Arc::new(
         compile_project(
             &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
@@ -354,7 +354,7 @@ async fn an_operator_resubmits_or_closes_a_review_its_authority_lost() {
     let database = TestDatabase::create(8).await;
     let mut source = serde_json::to_value(two_stage_project()).unwrap();
     source["entities"][2]["changeRequest"]["review"] =
-        json!({"authority":"casework-a","policyId":"correction-review"});
+        json!({"type":"required","authority":"casework-a","policyId":"correction-review"});
     let registry = Arc::new(
         compile_project(
             &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
@@ -587,11 +587,11 @@ async fn denied_automatic_application_recovers_only_its_current_approved_proposa
     let mut database = TestDatabase::create(8).await;
     let mut source = serde_json::to_value(two_stage_project()).unwrap();
     source["entities"][2]["changeRequest"]["review"] =
-        json!({"authority":"casework-a","policyId":"correction-review"});
+        json!({"type":"required","authority":"casework-a","policyId":"correction-review"});
     source["entities"][2]["changeRequest"]["onApproved"] =
         json!({"mode":"automatic","executor":"registry-automatic"});
-    source["accessProfiles"][4]["permissions"][0]["readableRequestFields"] =
-        json!(["reason", "review_state"]);
+    source["accessProfiles"][4]["permissions"]["entities"][0]["readableRequestFields"] =
+        json!(["reason", "review-state"]);
     let registry = Arc::new(
         compile_project(
             &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
@@ -805,11 +805,11 @@ async fn expired_online_review_blocks_final_automatic_attempt_until_authorized_r
     let mut database = TestDatabase::create(8).await;
     let mut source = serde_json::to_value(two_stage_project()).unwrap();
     source["entities"][2]["changeRequest"]["review"] =
-        json!({"authority":"casework-a","policyId":"correction-review"});
+        json!({"type":"required","authority":"casework-a","policyId":"correction-review"});
     source["entities"][2]["changeRequest"]["onApproved"] =
         json!({"mode":"automatic","executor":"registry-automatic"});
-    source["accessProfiles"][4]["permissions"][0]["readableRequestFields"] =
-        json!(["reason", "review_state"]);
+    source["accessProfiles"][4]["permissions"]["entities"][0]["readableRequestFields"] =
+        json!(["reason", "review-state"]);
     let registry = Arc::new(
         compile_project(
             &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
@@ -957,7 +957,7 @@ async fn expired_online_review_blocks_final_automatic_attempt_until_authorized_r
 
     authority_state.result.lock().unwrap()["availableUntil"] = json!("2099-09-20T00:00:00Z");
     authority_state.mode.store(2, Ordering::SeqCst);
-    let apply = action(&blocked.body, "apply_request", None);
+    let apply = action(&blocked.body, "apply-request", None);
     let recovered = send_action(
         &app,
         &apply,
@@ -1013,11 +1013,11 @@ async fn expired_automatic_approval_projects_expired_until_an_apply_is_in_flight
     let database = TestDatabase::create(8).await;
     let mut source = serde_json::to_value(two_stage_project()).unwrap();
     source["entities"][2]["changeRequest"]["review"] =
-        json!({"authority":"casework-a","policyId":"correction-review"});
+        json!({"type":"required","authority":"casework-a","policyId":"correction-review"});
     source["entities"][2]["changeRequest"]["onApproved"] =
         json!({"mode":"automatic","executor":"registry-automatic"});
-    source["accessProfiles"][4]["permissions"][0]["readableRequestFields"] =
-        json!(["reason", "review_state"]);
+    source["accessProfiles"][4]["permissions"]["entities"][0]["readableRequestFields"] =
+        json!(["reason", "review-state"]);
     let registry = Arc::new(
         compile_project(
             &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
@@ -1068,7 +1068,7 @@ async fn expired_automatic_approval_projects_expired_until_an_apply_is_in_flight
         .get("nextAttemptAt")
         .is_none());
     assert!(
-        !offered_operations(&queued.body).contains(&"apply_request".to_owned()),
+        !offered_operations(&queued.body).contains(&"apply-request".to_owned()),
         "an expired approval must not advertise apply: {}",
         queued.body
     );
@@ -1101,9 +1101,9 @@ async fn withdrawn_approval_blocks_the_manual_application_projection() {
     let database = TestDatabase::create(8).await;
     let mut source = serde_json::to_value(two_stage_project()).unwrap();
     source["entities"][2]["changeRequest"]["review"] =
-        json!({"authority":"casework-a","policyId":"correction-review"});
-    source["accessProfiles"][4]["permissions"][0]["readableRequestFields"] =
-        json!(["reason", "review_state"]);
+        json!({"type":"required","authority":"casework-a","policyId":"correction-review"});
+    source["accessProfiles"][4]["permissions"]["entities"][0]["readableRequestFields"] =
+        json!(["reason", "review-state"]);
     let registry = Arc::new(
         compile_project(
             &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
@@ -1184,17 +1184,17 @@ impl ReviewOutcomeFixture {
         let database = TestDatabase::create(8).await;
         let mut source = serde_json::to_value(two_stage_project()).unwrap();
         source["entities"][2]["changeRequest"]["review"] =
-            json!({"authority":"casework-a","policyId":"correction-review"});
+            json!({"type":"required","authority":"casework-a","policyId":"correction-review"});
         // Every revise or rebase is captured so the recorded draft reason is
         // observable in the lifecycle event it emits.
         source["entities"][2]["hooks"] = json!([{
-            "phase":"after","id":"request-returned-to-draft","trigger":"request_lifecycle",
+            "phase":"after","id":"request-returned-to-draft","trigger":"request-lifecycle",
             "projection":["reason"],
-            "when":{"kind":"request_lifecycle","transitions":["revise","rebase"],"toStates":["draft"]}
+            "when":{"type":"request-lifecycle","transitions":["revise","rebase"],"toStates":["draft"]}
         }]);
         for profile in [1, 4] {
-            source["accessProfiles"][profile]["permissions"][0]["readableRequestFields"] =
-                json!(["reason", "review_state"]);
+            source["accessProfiles"][profile]["permissions"]["entities"][0]
+                ["readableRequestFields"] = json!(["reason", "review-state"]);
         }
         let registry = Arc::new(
             compile_project(
@@ -1300,7 +1300,7 @@ fn offered_rebase(body: &Value) -> Value {
         .and_then(|actions| {
             actions
                 .iter()
-                .find(|action| action["operation"] == "revise_request")
+                .find(|action| action["operation"] == "revise-request")
         })
         .map(|action| action["rebase"].clone())
         .unwrap_or(Value::Null)
@@ -1334,19 +1334,19 @@ async fn rejected_review_offers_only_cancel_and_refuses_revise_and_apply() {
     let (request, digest) = submit_two_stage_correction(&fixture.app).await;
     let revise = action(
         &fixture.owner_view(&request.id).await,
-        "revise_request",
+        "revise-request",
         None,
     );
     let apply = action(
         &fixture.applier_view(&request.id).await,
-        "apply_request",
+        "apply-request",
         None,
     );
 
     fixture.settle(&request.id, "rejected").await;
     let owner = fixture.owner_view(&request.id).await;
     assert_eq!(owner["request"]["review"]["result"]["state"], "rejected");
-    assert_eq!(offered_operations(&owner), ["cancel_request"]);
+    assert_eq!(offered_operations(&owner), ["cancel-request"]);
     let applier = fixture.applier_view(&request.id).await;
     assert_eq!(
         applier["request"]["review"]["application"]["state"],
@@ -1397,7 +1397,7 @@ async fn rejected_review_offers_only_cancel_and_refuses_revise_and_apply() {
         "submitter",
         claims("submitter", SUBMITTER, None),
         "rejected-cancel",
-        "cancel_request",
+        "cancel-request",
         None,
         |_| json!({}),
     )
@@ -1412,11 +1412,11 @@ async fn changes_requested_review_offers_revision_and_cancel_and_refuses_rebase_
     let (request, digest) = submit_two_stage_correction(&fixture.app).await;
     let apply = action(
         &fixture.applier_view(&request.id).await,
-        "apply_request",
+        "apply-request",
         None,
     );
 
-    fixture.settle(&request.id, "changes_requested").await;
+    fixture.settle(&request.id, "changes-requested").await;
     let owner = fixture.owner_view(&request.id).await;
     assert_eq!(
         owner["request"]["review"]["result"]["state"],
@@ -1424,7 +1424,7 @@ async fn changes_requested_review_offers_revision_and_cancel_and_refuses_rebase_
     );
     assert_eq!(
         offered_operations(&owner),
-        ["cancel_request", "revise_request"]
+        ["cancel-request", "revise-request"]
     );
     assert_eq!(
         offered_rebase(&owner),
@@ -1437,7 +1437,7 @@ async fn changes_requested_review_offers_revision_and_cancel_and_refuses_rebase_
         "a sent-back proposal must not advertise apply: {applier}"
     );
 
-    let revise = action(&owner, "revise_request", None);
+    let revise = action(&owner, "revise-request", None);
     let refused_rebase = send_action(
         &fixture.app,
         &revise,
@@ -1488,9 +1488,9 @@ async fn changes_requested_review_offers_revision_and_cancel_and_refuses_rebase_
 async fn revision_after_changes_requested_records_revision_not_rebase() {
     let fixture = ReviewOutcomeFixture::start("changes-requested-revision-reason").await;
     let (request, _digest) = submit_two_stage_correction(&fixture.app).await;
-    fixture.settle(&request.id, "changes_requested").await;
+    fixture.settle(&request.id, "changes-requested").await;
     let owner = fixture.owner_view(&request.id).await;
-    let revise = action(&owner, "revise_request", None);
+    let revise = action(&owner, "revise-request", None);
     let revised = send_action(
         &fixture.app,
         &revise,
@@ -1514,7 +1514,7 @@ async fn answered_review_hides_apply_and_keeps_revise_and_cancel() {
     let (request, digest) = submit_two_stage_correction(&fixture.app).await;
     let apply = action(
         &fixture.applier_view(&request.id).await,
-        "apply_request",
+        "apply-request",
         None,
     );
 
@@ -1522,7 +1522,7 @@ async fn answered_review_hides_apply_and_keeps_revise_and_cancel() {
     let owner = fixture.owner_view(&request.id).await;
     assert_eq!(
         offered_operations(&owner),
-        ["cancel_request", "revise_request"]
+        ["cancel-request", "revise-request"]
     );
     assert_eq!(offered_rebase(&owner), true);
     let applier = fixture.applier_view(&request.id).await;
@@ -1558,16 +1558,16 @@ async fn unexpired_approval_offers_apply_and_the_apply_succeeds() {
     assert_eq!(owner["request"]["review"]["result"]["state"], "approved");
     assert_eq!(
         offered_operations(&owner),
-        ["cancel_request", "revise_request"]
+        ["cancel-request", "revise-request"]
     );
     assert_eq!(offered_rebase(&owner), true);
     let applier = fixture.applier_view(&request.id).await;
-    assert_eq!(offered_operations(&applier), ["apply_request"]);
+    assert_eq!(offered_operations(&applier), ["apply-request"]);
     assert_eq!(
         applier["request"]["review"]["application"]["state"],
         "ready"
     );
-    let apply = action(&applier, "apply_request", None);
+    let apply = action(&applier, "apply-request", None);
     let applied = send_action(
         &fixture.app,
         &apply,
@@ -1592,12 +1592,12 @@ async fn expired_approval_hides_apply_and_is_answered_by_a_revision() {
     fixture.settle(&request.id, "approved").await;
     let apply = action(
         &fixture.applier_view(&request.id).await,
-        "apply_request",
+        "apply-request",
         None,
     );
     let revise = action(
         &fixture.owner_view(&request.id).await,
-        "revise_request",
+        "revise-request",
         None,
     );
 
@@ -1609,7 +1609,7 @@ async fn expired_approval_hides_apply_and_is_answered_by_a_revision() {
     );
     assert_eq!(
         offered_operations(&owner),
-        ["cancel_request", "revise_request"]
+        ["cancel-request", "revise-request"]
     );
     assert_eq!(
         offered_rebase(&owner),
@@ -1761,7 +1761,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     let mut source = serde_json::to_value(two_stage_project()).unwrap();
     // This guard has no mutation effect or ordinary UPDATE privilege. It must
     // still be lockable during apply without becoming writable.
-    source["accessProfiles"][4]["permissions"][0]["applyTargets"]
+    source["accessProfiles"][4]["permissions"]["entities"][0]["applyTargets"]
         .as_array_mut().unwrap().push(json!({
             "entity":"asset-site", "rowBoundaries":[{"field":"tenant","claim":"guard_tenant_claim","operator":"equals"}]
         }));
@@ -1781,9 +1781,9 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
             "subjects":{"farmer":{
                 "profile":"farmer-number-v1",
                 "selectors":{"farmer-number":{
-                    "source":"request_field", "field":"tenant"
+                    "type":"request-field", "field":"tenant"
                 },"placement-site":{
-                    "source":"target_field", "target":"site-guard", "field":"name"
+                    "type":"target-field", "target":"site-guard", "field":"name"
                 }}
             }},
             "requires":[{"output":"active", "equals":true}],
@@ -2025,7 +2025,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         applier.clone(),
     )
     .await;
-    let apply = action(&before.body, "apply_request", None);
+    let apply = action(&before.body, "apply-request", None);
     let wrong_guard_before = get_record(
         &replay_app,
         &format!(
@@ -2035,7 +2035,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         applier_claims("tenant-b"),
     )
     .await;
-    let wrong_guard_apply = action(&wrong_guard_before.body, "apply_request", None);
+    let wrong_guard_apply = action(&wrong_guard_before.body, "apply-request", None);
     // Each fresh acquisition must pass both cryptographic verification and the
     // frozen application policy. None of these failures may leave a partial
     // application, retained Evidence use, result, or idempotency receipt.
@@ -2258,7 +2258,7 @@ async fn retained_attachment_apply_access_checks_frozen_guard_row_boundaries() {
         .iter_mut()
         .find(|profile| profile["id"] == "applier")
         .unwrap();
-    applier["permissions"][0]["applyTargets"]
+    applier["permissions"]["entities"][0]["applyTargets"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -2335,7 +2335,7 @@ async fn retained_attachment_apply_access_checks_frozen_guard_row_boundaries() {
         "submitter",
         submitter,
         "guard-attachment-submit",
-        "submit_request",
+        "submit-request",
         None,
         |_| json!({}),
     )
@@ -2563,7 +2563,7 @@ async fn real_postgres_attachment_verification_worker_records_its_last_success_w
     .unwrap();
     // No job is queued, so the worker never contacts this endpoint.
     let mut raw = attachment_runtime_config(&root);
-    raw["attachmentVerification"] = json!({"kind":"http","endpoint":"http://127.0.0.1:9/verify","authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","timeoutMilliseconds":5000});
+    raw["attachmentVerification"] = json!({"type":"http","endpoint":"http://127.0.0.1:9/verify","authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","attemptTimeoutMilliseconds":5000});
     let verification = registry_breg::runtime_config::parse_runtime_config(&raw.to_string())
         .unwrap()
         .activate_attachment_verification()
@@ -2637,7 +2637,7 @@ async fn real_postgres_attachment_verification_worker_records_no_success_while_t
     )
     .unwrap();
     let mut raw = attachment_runtime_config(&root);
-    raw["attachmentVerification"] = json!({"kind":"http","endpoint":endpoint,"authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","timeoutMilliseconds":5000});
+    raw["attachmentVerification"] = json!({"type":"http","endpoint":endpoint,"authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","attemptTimeoutMilliseconds":5000});
     let verification = registry_breg::runtime_config::parse_runtime_config(&raw.to_string())
         .unwrap()
         .activate_attachment_verification()
@@ -2804,7 +2804,7 @@ async fn real_postgres_attachment_verification_worker_claims_the_next_due_job_wi
     )
     .unwrap();
     let mut raw = attachment_runtime_config(&root);
-    raw["attachmentVerification"] = json!({"kind":"http","endpoint":endpoint,"authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","timeoutMilliseconds":5000});
+    raw["attachmentVerification"] = json!({"type":"http","endpoint":endpoint,"authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","attemptTimeoutMilliseconds":5000});
     let verification = registry_breg::runtime_config::parse_runtime_config(&raw.to_string())
         .unwrap()
         .activate_attachment_verification()
@@ -2993,7 +2993,7 @@ async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survi
     )
     .unwrap();
     let mut raw = attachment_runtime_config(&root);
-    raw["attachmentVerification"] = json!({"kind":"http","endpoint":endpoint,"authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","timeoutMilliseconds":5000});
+    raw["attachmentVerification"] = json!({"type":"http","endpoint":endpoint,"authorizationRef":"secret:file/verifier","policyId":"synthetic-policy-v1","attemptTimeoutMilliseconds":5000});
     let verification = registry_breg::runtime_config::parse_runtime_config(&raw.to_string())
         .unwrap()
         .activate_attachment_verification()
@@ -3133,7 +3133,7 @@ async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survi
         .status(),
         StatusCode::NOT_FOUND
     );
-    let submit_action = action(&pending.body, "submit_request", None);
+    let submit_action = action(&pending.body, "submit-request", None);
     assert_eq!(
         send(
             &app,
@@ -3233,7 +3233,7 @@ async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survi
         .status(),
         StatusCode::NOT_FOUND
     );
-    let submit_action = action(&rejected.body, "submit_request", None);
+    let submit_action = action(&rejected.body, "submit-request", None);
     assert_eq!(
         send(
             &app,
@@ -3370,7 +3370,7 @@ async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survi
         "submitter",
         submitter.clone(),
         "verification-cancel",
-        "cancel_request",
+        "cancel-request",
         None,
         |_| json!({}),
     )
@@ -3774,7 +3774,7 @@ async fn attachment_s3_storage() -> (
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
     let mut raw = attachment_runtime_config(&root);
-    raw["attachmentStorage"] = json!({"kind":"s3","endpoint":std::env::var("BREG_TEST_S3_ENDPOINT").expect("disposable S3 endpoint required"),"bucket":std::env::var("BREG_TEST_S3_BUCKET").expect("precreated disposable unversioned S3 bucket required"),"region":"us-east-1","accessKeyIdRef":"secret:file/access","secretAccessKeyRef":"secret:file/secret"});
+    raw["attachmentStorage"] = json!({"type":"s3","endpoint":std::env::var("BREG_TEST_S3_ENDPOINT").expect("disposable S3 endpoint required"),"bucket":std::env::var("BREG_TEST_S3_BUCKET").expect("precreated disposable unversioned S3 bucket required"),"region":"us-east-1","accessKeyIdRef":"secret:file/access","secretAccessKeyRef":"secret:file/secret"});
     let config = registry_breg::runtime_config::parse_runtime_config(&raw.to_string())
         .expect("operator S3 runtime configuration validates");
     let storage = config
@@ -3791,11 +3791,11 @@ fn attachment_runtime_config(root: &std::path::Path) -> Value {
         "listener":{"bind":"127.0.0.1:8080"},
         "identity":{"environment":"local","instanceId":"attachment-http-test","databaseId":Uuid::new_v4().to_string(),"databaseInitializationEnvironment":"local"},
         "secretProviders":{"file":{"root":root}},
-        "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/migration","pool":{"maxSize":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
+        "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/migration","pool":{"maximumConnections":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
         "package":{"root":root},
-        "authentication":{"oidc":{"issuer":"https://issuer.example","audience":"urn:breg:test","allowedAlgorithm":"EdDSA","accessTokenType":"JWT","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["registry-client"],"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":60000,"jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maxDocumentBytes":65536,"requestTimeoutMilliseconds":5000,"outageToleranceSeconds":900}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
+        "authentication":{"oidc":{"issuer":"https://issuer.example","audience":"urn:breg:test","allowedAlgorithm":"EdDSA","accessTokenType":"JWT","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["registry-client"],"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":60000,"jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maximumDocumentBytes":65536,"attemptTimeoutMilliseconds":5000,"outageToleranceSeconds":900}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
         "audit":{"hashKeyRef":"secret:file/audit","path":root.join("audit").join("audit.jsonl")},
-        "cursor":{"secretRef":"secret:file/cursor","maxAgeSeconds":300},
+        "cursor":{"secretRef":"secret:file/cursor","maximumAgeSeconds":300},
         "eventDestinations":{},
         "operationalTimeouts":{"httpRequestMilliseconds":10000,"shutdownGraceMilliseconds":30000,"recordLockMilliseconds":5000,"migrationLockMilliseconds":30000,"migrationStatementMilliseconds":60000}
     })
@@ -3830,6 +3830,7 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
     for profile in &mut project.access_profiles {
         for grant in profile
             .permissions
+            .entities
             .iter_mut()
             .filter(|grant| grant.entity == "correction-request")
         {
@@ -3848,8 +3849,12 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
         .unwrap()
         .clone();
     hidden.id = "hidden-owner".to_owned();
-    hidden.permissions[0].readable_fields.remove("evidence");
-    hidden.permissions[0].writable_fields.remove("evidence");
+    hidden.permissions.entities[0]
+        .readable_fields
+        .remove("evidence");
+    hidden.permissions.entities[0]
+        .writable_fields
+        .remove("evidence");
     project.access_profiles.push(hidden);
     let mut other_target = project
         .access_profiles
@@ -3859,7 +3864,7 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
         .clone();
     other_target.id = "other-target-reviewer".to_owned();
     other_target.default = false;
-    other_target.permissions[0].row_boundaries[0].claim = "target_tenant_claim".to_owned();
+    other_target.permissions.entities[0].row_boundaries[0].claim = "target_tenant_claim".to_owned();
     project.access_profiles.push(other_target);
 
     for variant in [
@@ -3876,7 +3881,7 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
             .clone();
         profile.id = variant.to_owned();
         profile.default = false;
-        let grant = &mut profile.permissions[0];
+        let grant = &mut profile.permissions.entities[0];
         match variant {
             "reviewer-no-slot" | "reviewer-empty-slot" | "reviewer-other-stage" => {
                 grant.readable_fields.remove("evidence");
@@ -3899,7 +3904,7 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
         .clone();
     self_applier.id = "applier-self-reason".to_owned();
     self_applier.default = false;
-    self_applier.permissions[0].apply_targets.push(
+    self_applier.permissions.entities[0].apply_targets.push(
         registry_breg::contract::ApplyTargetPermissionSource {
             entity: "correction-request".to_owned(),
             row_boundaries: vec![registry_breg::contract::RowBoundarySource {
@@ -4026,7 +4031,7 @@ async fn attachment_download_journey(
     );
     let before = get_record(&app, &record_uri, submitter.clone()).await;
     assert!(before.body["data"]["evidence"].is_null());
-    let submit_action = action(&before.body, "submit_request", None);
+    let submit_action = action(&before.body, "submit-request", None);
     let incomplete = send(
         &app,
         Method::POST,
@@ -4569,7 +4574,7 @@ async fn attachment_download_journey(
         "submitter",
         submitter.clone(),
         "attachment-submit",
-        "submit_request",
+        "submit-request",
         None,
         |_| json!({}),
     )
@@ -4708,7 +4713,7 @@ async fn attachment_download_journey(
         "submitter",
         submitter.clone(),
         "attachment-revise",
-        "revise_request",
+        "revise-request",
         None,
         |_| json!({"rebase":true}),
     )
@@ -4776,7 +4781,7 @@ async fn attachment_download_journey(
         "submitter",
         submitter.clone(),
         "attachment-resubmit",
-        "submit_request",
+        "submit-request",
         None,
         |_| json!({}),
     )
@@ -4895,7 +4900,7 @@ async fn attachment_download_journey(
         "submitter",
         submitter.clone(),
         "attachment-cancel",
-        "cancel_request",
+        "cancel-request",
         None,
         |_| json!({}),
     )
@@ -5206,7 +5211,7 @@ async fn real_postgres_http_change_request_correction_uses_frozen_review_and_app
     assert_eq!(before_submit.body["request"]["bregState"], "draft");
     assert_eq!(before_submit.body["request"]["proposalVersion"], 1);
     assert_eq!(before_submit.body["request"]["effectDigest"], Value::Null);
-    let submit_action = action(&before_submit.body, "submit_request", None);
+    let submit_action = action(&before_submit.body, "submit-request", None);
 
     let submitted = action_response(
         &app,
@@ -5251,7 +5256,7 @@ async fn real_postgres_http_change_request_correction_uses_frozen_review_and_app
     )
     .await;
     assert_eq!(before_apply.body["request"]["bregState"], "submitted");
-    let apply_action = action(&before_apply.body, "apply_request", None);
+    let apply_action = action(&before_apply.body, "apply-request", None);
     assert_eq!(apply_action.proposal_version, Some(1));
 
     let applied = action_response(
@@ -5422,7 +5427,7 @@ async fn real_postgres_http_change_request_apply_lost_response_replays_same_and_
         "submitter",
         submitter,
         "lost-submit-correction-request",
-        "submit_request",
+        "submit-request",
         None,
         |_| json!({}),
     )
@@ -5438,7 +5443,7 @@ async fn real_postgres_http_change_request_apply_lost_response_replays_same_and_
         applier.clone(),
     )
     .await;
-    let apply = action(&before_apply.body, "apply_request", None);
+    let apply = action(&before_apply.body, "apply-request", None);
     let apply_body = json!({
         "proposalVersion": apply.proposal_version,
         "effectDigest": apply.effect_digest.clone()
@@ -5656,7 +5661,7 @@ async fn real_postgres_http_change_request_apply_concurrent_same_and_different_k
         applier.clone(),
     )
     .await;
-    let apply = action(&before_apply.body, "apply_request", None);
+    let apply = action(&before_apply.body, "apply-request", None);
     let apply_body = json!({
         "proposalVersion": apply.proposal_version,
         "effectDigest": apply.effect_digest.clone()
@@ -5764,7 +5769,7 @@ async fn real_postgres_http_change_request_apply_terminal_fault_rolls_back_reque
         applier.clone(),
     )
     .await;
-    let apply = action(&before_apply.body, "apply_request", None);
+    let apply = action(&before_apply.body, "apply-request", None);
     let failed = send_action(
         &terminal_fault_app,
         &apply,
@@ -5885,7 +5890,7 @@ async fn real_postgres_http_change_request_oversized_prepared_packet_refuses_bef
         submitter.clone(),
     )
     .await;
-    let submit = action(&before_submit.body, "submit_request", None);
+    let submit = action(&before_submit.body, "submit-request", None);
 
     let lock_transaction = database
         .admin
@@ -5999,7 +6004,7 @@ async fn real_postgres_http_change_request_registration_applies_reserved_creates
         "operator",
         operator.clone(),
         "submit-registration-request",
-        "submit_request",
+        "submit-request",
         None,
         |_| json!({}),
     )
@@ -6030,7 +6035,7 @@ async fn real_postgres_http_change_request_registration_applies_reserved_creates
         "operator",
         operator.clone(),
         "apply-registration-request",
-        "apply_request",
+        "apply-request",
         None,
         |apply| {
             json!({
@@ -6416,7 +6421,7 @@ async fn real_postgres_http_change_request_registration_rolls_back_after_partial
         "operator",
         operator.clone(),
         "fault-submit-registration-request",
-        "submit_request",
+        "submit-request",
         None,
         |_| json!({}),
     )
@@ -6435,7 +6440,7 @@ async fn real_postgres_http_change_request_registration_rolls_back_after_partial
         operator.clone(),
     )
     .await;
-    let apply = action(&before_apply.body, "apply_request", None);
+    let apply = action(&before_apply.body, "apply-request", None);
     let failed = send(
         &fault_app,
         Method::POST,
@@ -6870,7 +6875,7 @@ async fn real_postgres_http_change_request_cancel_belongs_to_the_request_owner()
     );
 
     let owner_draft = get_record(&app, &uri, owner.clone()).await;
-    let draft_cancel = action(&owner_draft.body, "cancel_request", None);
+    let draft_cancel = action(&owner_draft.body, "cancel-request", None);
 
     // A missing required header names itself so the fix does not require
     // reading the generated OpenAPI: the header name is fixed, known
@@ -6895,7 +6900,7 @@ async fn real_postgres_http_change_request_cancel_belongs_to_the_request_owner()
     assert_eq!(missing_idempotency.body["fieldPath"], "Idempotency-Key");
     let still_draft_before_cancel = get_record(&app, &uri, owner.clone()).await;
     assert_eq!(
-        action(&still_draft_before_cancel.body, "cancel_request", None).if_match,
+        action(&still_draft_before_cancel.body, "cancel-request", None).if_match,
         draft_cancel.if_match,
         "a header refusal leaves the record and workflow revisions where they were"
     );
@@ -6921,7 +6926,7 @@ async fn real_postgres_http_change_request_cancel_belongs_to_the_request_owner()
     let still_draft = get_record(&app, &uri, owner.clone()).await;
     assert_eq!(still_draft.body["request"]["bregState"], "draft");
     assert_eq!(
-        action(&still_draft.body, "cancel_request", None).if_match,
+        action(&still_draft.body, "cancel-request", None).if_match,
         draft_cancel.if_match,
         "a refused cancel leaves the record and workflow revisions where they were"
     );
@@ -6933,7 +6938,7 @@ async fn real_postgres_http_change_request_cancel_belongs_to_the_request_owner()
         "submitter",
         owner.clone(),
         "owner-cancel-submit",
-        "submit_request",
+        "submit-request",
         None,
         |_| json!({}),
     )
@@ -6941,7 +6946,7 @@ async fn real_postgres_http_change_request_cancel_belongs_to_the_request_owner()
     assert_eq!(submitted["request"]["bregState"], "submitted");
 
     let owner_submitted = get_record(&app, &uri, owner.clone()).await;
-    let submitted_cancel = action(&owner_submitted.body, "cancel_request", None);
+    let submitted_cancel = action(&owner_submitted.body, "cancel-request", None);
 
     let other_submitted = get_record(&app, &uri, other.clone()).await;
     assert_cancel_is_not_offered(&other_submitted.body);
@@ -6960,7 +6965,7 @@ async fn real_postgres_http_change_request_cancel_belongs_to_the_request_owner()
     let still_submitted = get_record(&app, &uri, owner.clone()).await;
     assert_eq!(still_submitted.body["request"]["bregState"], "submitted");
     assert_eq!(
-        action(&still_submitted.body, "cancel_request", None).if_match,
+        action(&still_submitted.body, "cancel-request", None).if_match,
         submitted_cancel.if_match,
         "a refused cancel leaves the record and workflow revisions where they were"
     );
@@ -6983,7 +6988,7 @@ fn assert_cancel_is_not_offered(body: &Value) {
     assert!(
         actions.as_array().is_none_or(|actions| actions
             .iter()
-            .all(|action| action["operation"] != "cancel_request")),
+            .all(|action| action["operation"] != "cancel-request")),
         "cancel is the owner's withdrawal and must not be offered to another principal: {actions}"
     );
 }
@@ -7448,7 +7453,7 @@ async fn submit_keyed_two_stage_correction(
         "submitter",
         submitter,
         &format!("{prefix}-submit-correction-request"),
-        "submit_request",
+        "submit-request",
         None,
         |_| json!({}),
     )
@@ -7512,7 +7517,7 @@ async fn reconcile_cached_external_result(
         "completedAt": "2026-09-01T00:00:00Z",
         "availableUntil": authority_until
     });
-    if matches!(status, "rejected" | "changes_requested" | "answered") {
+    if matches!(status, "rejected" | "changes-requested" | "answered") {
         // The review protocol requires a terminal outcome for these statuses.
         result["outcome"] = json!(status);
     }
@@ -7611,7 +7616,7 @@ async fn create_approved_correction(
         "submitter",
         submitter,
         &format!("{key_prefix}-submit-correction-request"),
-        "submit_request",
+        "submit-request",
         None,
         |_| json!({}),
     )
@@ -7654,7 +7659,7 @@ async fn create_approved_registration(
         "operator",
         operator.clone(),
         &format!("{key_prefix}-submit-registration-request"),
-        "submit_request",
+        "submit-request",
         None,
         |_| json!({}),
     )
@@ -7682,7 +7687,7 @@ async fn send_registration_apply(
         operator.clone(),
     )
     .await;
-    let apply = action(&before_apply.body, "apply_request", None);
+    let apply = action(&before_apply.body, "apply-request", None);
     send_action(
         app,
         &apply,
@@ -7954,7 +7959,7 @@ async fn assert_served_action_openapi_refs(app: &axum::Router, applier: Verified
     assert_action_input_component(
         &applier_openapi.body,
         "/v1/records/correction-requests/{record_id}/actions/apply",
-        "apply_request",
+        "apply-request",
     );
 }
 
@@ -8543,33 +8548,33 @@ async fn request_targets(
 fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"bounded-snapshot-change-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"bounded-snapshot-change-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only","classification":"internal",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-                {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+                {"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
               "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
-                {"id":"note","type":"text","maxLength":2000000,"classification":"internal"}
+                {"id":"note","type":"text","maximumLength":2000000,"classification":"internal"}
               ]
             },
             {
               "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
                 {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
-                {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}
+                {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
               ],
               "changeRequest":{
                 "effects":[{
@@ -8577,7 +8582,7 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
                   "operation":"patch",
                   "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"mode":"none"},
+                "review":{"type":"none"},
                 "onApproved":{"mode":"manual"}
               }
             }
@@ -8585,7 +8590,7 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[
             {
               "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
                 "readableFields":["tenant","name"],
@@ -8598,37 +8603,37 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
                 "writableFields":["tenant","site","note"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "requestPresence":[{"requestType":"correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-              }]
+              }]}
             },
             {
               "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
-                "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
+                "operations":["create","get","list","revisions","patch","submit-request","revise-request","cancel-request"],
                 "revisionAccess":true,
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "writableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-              }]
+              }]}
             },
             {
               "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-              }]
+              }]}
             },
             {
               "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
-                "operations":["get","apply_request"],
+                "operations":["get","apply-request"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "applyTargets":[{"entity":"asset-placement","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-              }]
+              }]}
             }
           ]
         }"#,
@@ -8641,32 +8646,32 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
 fn long_logical_id_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"long-logical-change-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"long-logical-change-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only","classification":"internal",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-                {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+                {"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
               "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}
               ]
             },
             {
               "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
                 {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
-                {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}
+                {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
               ],
               "changeRequest":{
                 "effects":[{
@@ -8674,19 +8679,19 @@ fn long_logical_id_registry() -> registry_breg::CompiledRegistry {
                   "operation":"patch",
                   "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"mode":"none"},
+                "review":{"type":"none"},
                 "onApproved":{"mode":"manual"}
               }
             }
           ],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement-correction-request",
-              "operations":["get","list","submit_request","apply_request"],
+              "operations":["get","list","submit-request","apply-request"],
               "readableFields":["tenant","placement","proposed-site","reason"],
               "applyTargets":[{"entity":"asset-placement", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -8702,23 +8707,23 @@ fn registration_registry() -> registry_breg::CompiledRegistry {
 fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::CompiledRegistry {
     let mut project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"registration-change-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"registration-change-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
               "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["create"]},
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-                {"id":"display-name","type":"string","maxLength":200,"required":true,"classification":"internal"}
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+                {"id":"display-name","type":"string","maximumLength":200,"required":true,"classification":"internal"}
               ]
             },
             {
               "id":"membership","primaryDataset":"test-dataset","route":"memberships","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["create"]},
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"person","type":"reference","target":"person","required":true,"classification":"internal"},
                 {"id":"household","type":"reference","target":"household","required":true,"classification":"internal"}
               ]
@@ -8727,17 +8732,17 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
               "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-                {"id":"label","type":"string","maxLength":200,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+                {"id":"label","type":"string","maximumLength":200,"required":true,"classification":"internal"},
                 {"id":"contact-person","type":"reference","target":"person","classification":"internal"}
               ]
             },
             {
               "id":"registration-request","primaryDataset":"test-dataset","route":"registration-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"household","type":"reference","target":"household","required":true,"classification":"internal"},
-                {"id":"name","type":"string","maxLength":200,"required":true,"classification":"internal"}
+                {"id":"name","type":"string","maximumLength":200,"required":true,"classification":"internal"}
               ],
               "changeRequest":{
                 "effects":[
@@ -8745,7 +8750,7 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
                   {"id":"membership","target":{"entity":"membership"},"operation":"create","set":{"tenant":{"fromField":"tenant"},"person":{"fromEffect":"person"},"household":{"fromField":"household"}}},
                   {"target":{"fromField":"household"},"operation":"patch","set":{"contact-person":{"fromEffect":"person"}}}
                 ],
-                "review":{"mode":"none"},
+                "review":{"type":"none"},
                 "onApproved":{"mode":"manual"}
               }
             }
@@ -8753,55 +8758,57 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
           "accessProfiles":[
             {
               "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"household",
                 "operations":["create"],
                 "readableFields":["tenant","label","contact-person"],
                 "writableFields":["tenant","label","contact-person"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "requestPresence":[{"requestType":"registration-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-              }]
+              }]}
             },
             {
               "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[
-                {
-                  "entity":"registration-request",
-                  "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request","apply_request"],
-                  "revisionAccess":true,
-                  "readableFields":["tenant","household","name"],
-                  "writableFields":["tenant","household","name"],
-                  "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-                  "applyTargets":[
-                    {"entity":"person","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]},
-                    {"entity":"membership","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]},
-                    {"entity":"household","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}
-                  ]
-                },
-                {
-                  "entity":"person",
-                  "operations":["get","list","revisions","patch"],
-                  "revisionAccess":true,
-                  "readableFields":["tenant","display-name"],
-                  "writableFields":["display-name"],
-                  "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-                },
-                {
-                  "entity":"membership",
-                  "operations":["get","list","revisions"],
-                  "revisionAccess":true,
-                  "readableFields":["tenant","person","household"],
-                  "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-                },
-                {
-                  "entity":"household",
-                  "operations":["get","list","revisions"],
-                  "revisionAccess":true,
-                  "readableFields":["tenant","label","contact-person"],
-                  "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
-                  "requestPresence":[{"requestType":"registration-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-                }
-              ]
+              "permissions":{
+                "entities":[
+                  {
+                    "entity":"registration-request",
+                    "operations":["create","get","list","revisions","patch","submit-request","revise-request","cancel-request","apply-request"],
+                    "revisionAccess":true,
+                    "readableFields":["tenant","household","name"],
+                    "writableFields":["tenant","household","name"],
+                    "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
+                    "applyTargets":[
+                      {"entity":"person","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]},
+                      {"entity":"membership","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]},
+                      {"entity":"household","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}
+                    ]
+                  },
+                  {
+                    "entity":"person",
+                    "operations":["get","list","revisions","patch"],
+                    "revisionAccess":true,
+                    "readableFields":["tenant","display-name"],
+                    "writableFields":["display-name"],
+                    "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+                  },
+                  {
+                    "entity":"membership",
+                    "operations":["get","list","revisions"],
+                    "revisionAccess":true,
+                    "readableFields":["tenant","person","household"],
+                    "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+                  },
+                  {
+                    "entity":"household",
+                    "operations":["get","list","revisions"],
+                    "revisionAccess":true,
+                    "readableFields":["tenant","label","contact-person"],
+                    "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
+                    "requestPresence":[{"requestType":"registration-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
+                  }
+                ]
+              }
             }
           ]
         }"#,
@@ -8828,12 +8835,14 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
         applier.default = false;
         applier
             .permissions
+            .entities
             .retain(|grant| grant.entity == "registration-request");
-        let grant = &mut applier.permissions[0];
-        grant.operations = BTreeSet::from([
+        let grant = &mut applier.permissions.entities[0];
+        grant.operations = [
             registry_breg::contract::Operation::Get,
             registry_breg::contract::Operation::ApplyRequest,
-        ]);
+        ]
+        .into();
         grant.writable_fields.clear();
         grant.revision_access = false;
         project.access_profiles.push(applier);
@@ -8850,32 +8859,32 @@ fn two_stage_registry() -> registry_breg::CompiledRegistry {
 fn two_stage_project() -> registry_breg::contract::RegistryProject {
     parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"two-stage-change-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"two-stage-change-request","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only","classification":"internal",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-                {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+                {"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
               "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}
               ]
             },
             {
               "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
                 {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
-                {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}
+                {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
               ],
               "changeRequest":{
                 "effects":[{
@@ -8883,7 +8892,7 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
                   "operation":"patch",
                   "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"mode":"none"},
+                "review":{"type":"none"},
                 "onApproved":{"mode":"manual"}
               }
             }
@@ -8891,7 +8900,7 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
           "accessProfiles":[
             {
               "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
                 "readableFields":["tenant","name"],
@@ -8904,46 +8913,46 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
                 "writableFields":["tenant","site"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "requestPresence":[{"requestType":"correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-              }]
+              }]}
             },
             {
               "id":"submitter","principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
-                "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
+                "operations":["create","get","list","revisions","patch","submit-request","revise-request","cancel-request"],
                 "revisionAccess":true,
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "writableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-              }]
+              }]}
             },
             {
               "id":"reviewer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-              }]
+              }]}
             },
             {
               "id":"final-reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["final"],
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-              }]
+              }]}
             },
             {
               "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
-                "operations":["get","apply_request"],
+                "operations":["get","apply-request"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "applyTargets":[{"entity":"asset-placement","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-              }]
+              }]}
             }
           ]
         }"#,
@@ -8954,15 +8963,15 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"change-request-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"change-request-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only","classification":"internal",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-                {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+                {"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
@@ -8970,13 +8979,13 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "changeControl":{"requiredFor":["patch"]},
               "temporal":{"startField":"valid-from","endField":"valid-to","scopeFields":["site"]},
               "constraints":[{
-                "kind":"temporal-non-overlap",
+                "type":"temporal-non-overlap",
                 "scopeFields":["site"],
                 "startField":"valid-from",
                 "endField":"valid-to"
               }],
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
                 {"id":"valid-from","type":"date","required":true,"classification":"internal"},
                 {"id":"valid-to","type":"date","classification":"internal"}
@@ -8985,10 +8994,10 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             {
               "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
                 {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
-                {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}
+                {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
               ],
               "changeRequest":{
                 "effects":[{
@@ -8996,7 +9005,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                   "operation":"patch",
                   "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"mode":"none"},
+                "review":{"type":"none"},
                 "onApproved":{"mode":"manual"}
               }
             }
@@ -9004,7 +9013,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[
             {
               "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
                 "readableFields":["tenant","name"],
@@ -9018,40 +9027,40 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "writableFields":["tenant","site","valid-from","valid-to"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "requestPresence":[{"requestType":"correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-              }]
+              }]}
             },
             {
               "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
-                "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
+                "operations":["create","get","list","revisions","patch","submit-request","revise-request","cancel-request"],
                 "revisionAccess":true,
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "writableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-              }]
+              }]}
             },
             {
               "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-              }]
+              }]}
             },
             {
               "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
-                "operations":["get","apply_request"],
+                "operations":["get","apply-request"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "applyTargets":[{
                   "entity":"asset-placement",
                   "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
                 }]
-              }]
+              }]}
             }
           ]
         }"#,
@@ -9126,7 +9135,7 @@ async fn reviewed_native_pattern_failure_rolls_back_prior_effect_and_preserves_f
         blind_applier.clone(),
     )
     .await;
-    let apply = action(&blind_request.body, "apply_request", None);
+    let apply = action(&blind_request.body, "apply-request", None);
     let blind_response = send_action(
         &app,
         &apply,

@@ -12,7 +12,8 @@ use serde_json::{json, Value};
 
 fn contracts() -> Value {
     json!({
-        "schema": "registry.evidence-client-contracts/v1",
+        "apiVersion": "id.registrystack.org/formats/evidence/client-contracts/v1",
+        "kind": "EvidenceClientContracts",
         "assuranceProfile": "local",
         "audience": "urn:example:seed-registry",
         "issuedBy": "urn:example:laboratory",
@@ -37,8 +38,8 @@ fn contracts() -> Value {
                 }
             }],
             "concepts": [
-                {"handle":"report-reference", "concept":"urn:example:concept:report", "required":true, "form":"string"},
-                {"handle":"germination", "concept":"urn:example:concept:germination", "required":true, "form":"integer"}
+                {"handle":"report-reference", "concept":"urn:example:concept:report", "required":true, "form":{"type":"string"}},
+                {"handle":"germination", "concept":"urn:example:concept:germination", "required":true, "form":{"type":"integer"}}
             ]
         }]
     })
@@ -46,36 +47,36 @@ fn contracts() -> Value {
 
 fn project() -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"request-preconditions", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"request-preconditions", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://example.test"},
         "evidenceProviders":[{"id":"laboratory", "contracts":"evidence/contracts.json", "subjectResolution":"trusted-provider-exact-selector"}],
         "entities":[{
             "id":"lot", "primaryDataset":"test-dataset", "route":"lots", "mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
-                {"id":"owner-reference", "type":"string", "maxLength":64, "required":true, "classification":"restricted"},
-                {"id":"lot-reference", "type":"string", "maxLength":64, "required":true, "classification":"restricted"},
+                {"id":"owner-reference", "type":"string", "maximumLength":64, "required":true, "classification":"restricted"},
+                {"id":"lot-reference", "type":"string", "maximumLength":64, "required":true, "classification":"restricted"},
                 {"id":"active", "type":"boolean", "required":true, "classification":"restricted"},
-                {"id":"release-state", "type":"string", "maxLength":16, "required":true, "classification":"restricted"}
+                {"id":"release-state", "type":"string", "maximumLength":16, "required":true, "classification":"restricted"}
             ]
         },{
             "id":"release-request", "primaryDataset":"test-dataset", "route":"release-requests", "mutationMode":"mutable",
             "fields":[
                 {"id":"lot", "type":"reference", "target":"lot", "required":true, "classification":"restricted"},
-                {"id":"owner-reference", "type":"string", "maxLength":64, "required":true, "classification":"restricted"},
-                {"id":"report-reference", "type":"string", "maxLength":64, "required":true, "classification":"restricted"},
-                {"id":"release-state", "type":"string", "maxLength":16, "required":true, "classification":"restricted"},
+                {"id":"owner-reference", "type":"string", "maximumLength":64, "required":true, "classification":"restricted"},
+                {"id":"report-reference", "type":"string", "maximumLength":64, "required":true, "classification":"restricted"},
+                {"id":"release-state", "type":"string", "maximumLength":16, "required":true, "classification":"restricted"},
                 {"id":"valid-from", "type":"date", "required":true, "classification":"restricted"},
                 {"id":"valid-through", "type":"date", "required":true, "classification":"restricted"}
             ],
             "changeRequest":{
                 "effects":[{"id":"release", "target":{"fromField":"lot"}, "operation":"patch", "set":{"release-state":{"fromField":"release-state"}}}],
-                "review":{"authority":"casework-main", "policyId":"lot-release"},
+                "review":{"type":"required","authority":"casework-main", "policyId":"lot-release"},
                 "onApproved":{"mode":"manual"},
                 "application":{"preconditions":{
                     "request":[
-                        {"field":"valid-from", "currentDate":"on_or_before"},
-                        {"field":"valid-through", "currentDate":"on_or_after"}
+                        {"field":"valid-from", "currentDate":"on-or-before"},
+                        {"field":"valid-through", "currentDate":"on-or-after"}
                     ],
                     "targets":[{"id":"lot", "entity":"lot", "fromField":"lot", "requires":[
                         {"field":"owner-reference", "equalsFromRequestField":"owner-reference"},
@@ -84,8 +85,8 @@ fn project() -> Value {
                     "evidence":[{
                         "id":"release-check", "provider":"laboratory", "requirement":"urn:example:requirement:lot-release:v1",
                         "subjects":{"subject":{"profile":"lot-owner-v1", "selectors":{
-                            "lot-reference":{"source":"target_field", "target":"lot", "field":"lot-reference"},
-                            "owner-reference":{"source":"request_field", "field":"owner-reference"}
+                            "lot-reference":{"type":"target-field", "target":"lot", "field":"lot-reference"},
+                            "owner-reference":{"type":"request-field", "field":"owner-reference"}
                         }}},
                         "requires":[
                             {"output":"report-reference", "equalsFromRequestField":"report-reference"},
@@ -96,12 +97,12 @@ fn project() -> Value {
                 }}
             }
         }],
-        "accessProfiles":[{"id":"reviewer", "default":true, "principalClaim":"principal","requiredScopes":"unrestricted", "permissions":[{
+        "accessProfiles":[{"id":"reviewer", "default":true, "principalClaim":"principal","requiredScopes":"unrestricted", "permissions":{"entities":[{
             "entity":"release-request",
-            "operations":["get","submit_request","apply_request"],
+            "operations":["get","submit-request","apply-request"],
             "readableFields":["lot","owner-reference","report-reference","release-state","valid-from","valid-through"],
             "applyTargets":[{"entity":"lot", "rowBoundaries":"unrestricted"}], "rowBoundaries":"unrestricted"
-        }]}]
+        }]}}]
     })
 }
 
@@ -138,7 +139,7 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
         source["entities"][0]["fields"][1]
             .as_object_mut()
             .unwrap()
-            .retain(|key, _| key != "maxLength" && key != "minLength");
+            .retain(|key, _| key != "maximumLength" && key != "minimumLength");
         for (key, value) in field_type.as_object().unwrap() {
             source["entities"][0]["fields"][1][key] = value.clone();
         }
@@ -163,7 +164,7 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
     source["entities"][0]["fields"][1]
         .as_object_mut()
         .unwrap()
-        .remove("maxLength");
+        .remove("maximumLength");
     source["entities"][0]["fields"][1]["type"] = json!("timestamp");
     let mut contract = contracts();
     contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(24);
@@ -179,7 +180,7 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
     source["entities"][0]["fields"][1]
         .as_object_mut()
         .unwrap()
-        .remove("maxLength");
+        .remove("maximumLength");
     source["entities"][0]["fields"][1]["type"] = json!("timestamp");
     let mut contract = contracts();
     contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["minimumBytes"] = json!(36);
@@ -197,7 +198,7 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
     source["entities"][0]["fields"][1]
         .as_object_mut()
         .unwrap()
-        .remove("maxLength");
+        .remove("maximumLength");
     source["entities"][0]["fields"][1]["type"] = json!("vocabulary-code");
     source["entities"][0]["fields"][1]["vocabulary"] = json!("lot-reference");
     source["entities"][0]["fields"][1]["values"] = json!(["active", "inactive"]);
@@ -215,7 +216,7 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
     compile_with_contract(source, contract).unwrap();
 
     let mut source = project();
-    source["entities"][0]["fields"][1]["minLength"] = json!(8);
+    source["entities"][0]["fields"][1]["minimumLength"] = json!(8);
     let mut contract = contracts();
     contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(7);
     assert!(
@@ -285,7 +286,7 @@ fn evidence_string_literals_fit_verified_public_value_bounds() {
 fn evidence_bucket_literals_fit_the_verified_value_schema() {
     let mut source = project();
     let mut contract = contracts();
-    contract["definitions"][0]["concepts"][0]["form"] = json!("date-bucket");
+    contract["definitions"][0]["concepts"][0]["form"] = json!({"type":"date-bucket"});
     {
         let requirement = &mut source["entities"][1]["changeRequest"]["application"]
             ["preconditions"]["evidence"][0]["requires"][0];
@@ -330,12 +331,12 @@ fn guard_predicates_and_target_selectors_share_the_context_field_ceiling() {
                 source["entities"][0]["fields"]
                     .as_array_mut()
                     .unwrap()
-                    .push(json!({"id":field,"type":"string","maxLength":64,"required":true,"classification":"restricted"}));
+                    .push(json!({"id":field,"type":"string","maximumLength":64,"required":true,"classification":"restricted"}));
             }
             fields.push(json!({"type":"string","name":field,"minimumBytes":1,"maximumBytes":64}));
             selectors.insert(
                 field.clone(),
-                json!({"source":"target_field","target":"lot","field":field}),
+                json!({"type":"target-field","target":"lot","field":field}),
             );
         }
         subjects.push(json!({"role":role,"cardinality":"one","selector":{
@@ -452,11 +453,11 @@ fn preconditions_refuse_incomplete_profiles_and_wrong_types() {
 fn evidence_string_equality_requires_a_reachable_request_length() {
     let mut source = project();
     let report_reference = &mut source["entities"][1]["fields"][2];
-    report_reference["minLength"] = json!(1024);
-    report_reference["maxLength"] = json!(2048);
+    report_reference["minimumLength"] = json!(1024);
+    report_reference["maximumLength"] = json!(2048);
     compile(source.clone()).expect("the public Evidence string limit remains reachable");
 
-    source["entities"][1]["fields"][2]["minLength"] = json!(1025);
+    source["entities"][1]["fields"][2]["minimumLength"] = json!(1025);
     let report = format!("{:?}", compile(source).unwrap_err());
     assert!(
         report.contains("breg.change-request.preconditions-evidence-requirement-invalid"),
@@ -507,17 +508,30 @@ fn request_fields_can_narrow_a_target_vocabulary_for_effects_and_guards() {
 fn request_predicates_distinguish_explicit_null_from_an_absent_equality() {
     let mut source = project();
     source["entities"][1]["fields"].as_array_mut().unwrap().push(json!({
-        "id":"optional-note", "type":"string", "maxLength":32, "required":false, "classification":"restricted"
+        "id":"optional-note", "type":"string", "maximumLength":32, "required":false, "classification":"restricted"
     }));
     source["entities"][1]["changeRequest"]["application"]["preconditions"]["request"]
         .as_array_mut()
         .unwrap()
-        .push(json!({"field":"optional-note", "equals":null}));
-    // The shared reader reads `null` here as a comparison literal (CFG-EMPTY-1).
+        .push(json!({"field":"optional-note", "isNull":true}));
+    // An unset value is stated with `isNull`; `null` is never a comparison
+    // literal (CFG-EMPTY-1).
     let bytes = serde_json::to_vec(&source).unwrap();
     assert_eq!(
-        parse_project_yaml(&bytes).expect("the reader accepts a null equality literal"),
+        parse_project_yaml(&bytes).expect("the reader accepts isNull"),
         parse_project_json(&bytes).unwrap()
+    );
+    let mut null_literal = source.clone();
+    *null_literal["entities"][1]["changeRequest"]["application"]["preconditions"]["request"]
+        .as_array_mut()
+        .unwrap()
+        .last_mut()
+        .unwrap() = json!({"field":"optional-note", "equals":null});
+    let refused = parse_project_yaml(&serde_json::to_vec(&null_literal).unwrap())
+        .expect_err("a null equality literal is refused");
+    assert!(
+        format!("{refused:?}").contains("config.null-value"),
+        "{refused:?}"
     );
     let registry = compile(source.clone()).unwrap();
     let preconditions = &registry.entities()["release-request"]
@@ -534,7 +548,7 @@ fn request_predicates_distinguish_explicit_null_from_an_absent_equality() {
         .unwrap()
         .as_object_mut()
         .unwrap()
-        .remove("equals");
+        .remove("isNull");
     assert!(format!("{:?}", compile(source).unwrap_err())
         .contains("breg.change-request.preconditions-predicate-operator-invalid"));
 }
@@ -546,7 +560,7 @@ fn request_field_equality_requires_a_present_stored_value() {
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "id":"optional-owner", "type":"string", "maxLength":64,
+            "id":"optional-owner", "type":"string", "maximumLength":64,
             "required":false, "classification":"restricted"
         }));
     source["entities"][1]["changeRequest"]["application"]["preconditions"]["targets"][0]
@@ -570,7 +584,7 @@ fn frozen_guard_values_are_counted_with_the_original_proposal_snapshot() {
         .iter_mut()
         .find(|field| field["id"] == "report-reference")
         .unwrap();
-    field["maxLength"] = json!(200_000);
+    field["maximumLength"] = json!(200_000);
     let failure = format!("{:?}", compile(source).unwrap_err());
     assert!(
         failure.contains("breg.change-request.preconditions-bounds"),
@@ -586,7 +600,7 @@ fn duplicated_reviewed_evidence_definitions_count_toward_the_snapshot_ceiling() 
         .unwrap()
         .iter_mut()
         .find(|field| field["id"] == "report-reference")
-        .unwrap()["maxLength"] = json!(174_350);
+        .unwrap()["maximumLength"] = json!(174_350);
     compile(source.clone()).unwrap();
 
     let mut second = source["entities"][1]["changeRequest"]["application"]["preconditions"]

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::compiler::{AUTHORING_API_VERSION, AUTHORING_KIND};
-use crate::contract::{RegistryModule, RegistryProject};
+use crate::contract::{RegistryModule, RegistryProject, MODULE_API_VERSION, MODULE_KIND};
 #[cfg(feature = "runtime")]
 use crate::runtime_config::runtime_config_schema;
 
@@ -37,7 +37,7 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
             REGISTRY_MODULE_SCHEMA_FILE,
             "Base Registry Engine authored module",
             REGISTRY_MODULE_SCHEMA_ID,
-            serde_json::to_value(schemars::schema_for!(RegistryModule))?,
+            module_schema()?,
         ),
     ];
     entries
@@ -81,6 +81,28 @@ fn project_schema() -> Result<Value, serde_json::Error> {
     Ok(derived)
 }
 
+/// The module schema with the header every `module.yaml` opens with. The
+/// header is checked by the reader and is not a member of the module the
+/// compiler reads, so the derived schema gains it here.
+fn module_schema() -> Result<Value, serde_json::Error> {
+    let mut derived = serde_json::to_value(schemars::schema_for!(RegistryModule))?;
+    let Some(object) = derived.as_object_mut() else {
+        return Ok(derived);
+    };
+    for (property, expected) in [("apiVersion", MODULE_API_VERSION), ("kind", MODULE_KIND)] {
+        if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+            properties.insert(
+                property.to_owned(),
+                serde_json::json!({"type": "string", "const": expected}),
+            );
+        }
+        if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
+            required.push(Value::String(property.to_owned()));
+        }
+    }
+    Ok(derived)
+}
+
 fn published(mut derived: Value, title: &str, identifier: &str) -> Value {
     refuse_null(&mut derived, "");
     let mut object = match derived {
@@ -100,17 +122,13 @@ fn published(mut derived: Value, title: &str, identifier: &str) -> Value {
     Value::Object(object)
 }
 
-/// The reader refuses `null` in every member but a comparison literal
-/// (CFG-EMPTY-1), so an optional member is written by leaving it out. This
-/// drops the `null` schemars adds to an `Option` and the `default: null` it
-/// declares for one, everywhere except `$defs/DataLiteral`, the record value
-/// in which `null` means the stored value is null. Instance values under
-/// `default`, `const`, `enum`, and `examples` are left as written. `pointer`
-/// is the schema node's JSON pointer; a caller passes `""` for a document root.
+/// The reader refuses `null` in every member (CFG-EMPTY-1), so an optional
+/// member is written by leaving it out and an unset record value is stated
+/// with `isNull`. This drops the `null` schemars adds to an `Option` and the
+/// `default: null` it declares for one. Instance values under `default`,
+/// `const`, `enum`, and `examples` are left as written. `pointer` is the
+/// schema node's JSON pointer; a caller passes `""` for a document root.
 pub fn refuse_null(schema: &mut Value, pointer: &str) {
-    if pointer == "/$defs/DataLiteral" {
-        return;
-    }
     match schema {
         Value::Object(object) => {
             if object.get("default") == Some(&Value::Null) {
@@ -168,8 +186,8 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        documents, REGISTRY_MODULE_SCHEMA_FILE, REGISTRY_MODULE_SCHEMA_ID,
-        REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_PROJECT_SCHEMA_ID,
+        documents, MODULE_API_VERSION, MODULE_KIND, REGISTRY_MODULE_SCHEMA_FILE,
+        REGISTRY_MODULE_SCHEMA_ID, REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_PROJECT_SCHEMA_ID,
     };
     #[cfg(feature = "runtime")]
     use super::{runtime_documents, RUNTIME_CONFIG_SCHEMA_FILE, RUNTIME_CONFIG_SCHEMA_ID};
@@ -233,7 +251,7 @@ mod tests {
                 "runtimeUrlRef": "secret:env/BREG_DATABASE_URL",
                 "migrationUrlRef": "secret:env/BREG_MIGRATION_DATABASE_URL",
                 "pool": {
-                    "maxSize": 4
+                    "maximumConnections": 4
                 },
                 "roles": {
                     "migration": "registry_migration",
@@ -252,7 +270,7 @@ mod tests {
                     "scopeClaim": "scope",
                     "scopeSeparator": " ",
                     "allowedClients": "unrestricted",
-                    "maxTokenLifetimeSeconds": 300,
+                    "maximumTokenLifetimeSeconds": 300,
                     "leewayMilliseconds": 60000
                 },
                 "authorityClaims": {
@@ -274,8 +292,8 @@ mod tests {
         serde_json::json!({
             "origin": "https://webhook.example",
             "path": "/events",
-            "networkProfile": "productionHttps",
-            "dnsFamily": "dualStackStrict",
+            "networkProfile": "production-https",
+            "dnsFamily": "dual-stack-strict",
             "allowedPrivateCidrs": [],
             "hmacSha256KeyRef": "secret:file/webhook-hmac",
             "classificationCeiling": "public",
@@ -331,12 +349,8 @@ mod tests {
             .collect()
     }
 
-    /// Collects the pointer of every place a schema admits `null`, outside
-    /// `$defs/DataLiteral`, the one member that holds a record value.
+    /// Collects the pointer of every place a schema admits `null`.
     fn null_admissions(node: &Value, pointer: &str, found: &mut Vec<String>) {
-        if pointer == "/$defs/DataLiteral" {
-            return;
-        }
         match node {
             Value::Object(object) => {
                 if object.get("default") == Some(&Value::Null) {
@@ -378,19 +392,18 @@ mod tests {
     }
 
     #[test]
-    fn generated_schemas_admit_null_only_as_a_data_literal() {
+    fn generated_schemas_admit_null_nowhere() {
         for (file, document) in every_document() {
             let mut found = Vec::new();
             null_admissions(&document, "", &mut found);
             assert!(found.is_empty(), "{file} admits null at {found:#?}");
         }
         let project: Value = serde_json::from_str(&schema_document()).expect("the schema is JSON");
-        let literal = &project["$defs"]["DataLiteral"];
-        let mut found = Vec::new();
-        null_admissions(literal, "/literal", &mut found);
-        assert!(
-            !found.is_empty(),
-            "a comparison literal still admits null as a record value"
+        let literal = &project["$defs"]["ScalarLiteral"];
+        assert_eq!(
+            literal["type"],
+            serde_json::json!(["boolean", "number", "string"]),
+            "a comparison literal is a boolean, a number, or text"
         );
     }
 
@@ -401,11 +414,11 @@ mod tests {
             project["properties"]["apiVersion"]["const"],
             crate::compiler::AUTHORING_API_VERSION
         );
-        assert_eq!(project["properties"]["kind"]["const"], "RegistryProject");
+        assert_eq!(project["properties"]["kind"]["const"], "BRegProject");
         let schema = compile(&schema_document());
         let mut instance = fixture("business");
         assert!(schema.is_valid(&instance));
-        instance["kind"] = Value::String("RegistryModule".to_owned());
+        instance["kind"] = Value::String("BRegModule".to_owned());
         assert!(!schema.is_valid(&instance));
     }
 
@@ -464,6 +477,39 @@ mod tests {
     }
 
     #[test]
+    fn module_schema_states_its_envelope_values() {
+        let document = documents()
+            .expect("authoring schemas generate")
+            .remove(REGISTRY_MODULE_SCHEMA_FILE)
+            .expect("the module schema is generated");
+        let module: Value = serde_json::from_str(&document).expect("the schema is JSON");
+        assert_eq!(
+            module["properties"]["apiVersion"]["const"],
+            MODULE_API_VERSION
+        );
+        assert_eq!(module["properties"]["kind"]["const"], MODULE_KIND);
+        let schema = compile(&document);
+        let mut instance = serde_json::json!({
+            "apiVersion": MODULE_API_VERSION, "kind": MODULE_KIND,
+            "id": "records", "version": "1"
+        });
+        assert!(schema.is_valid(&instance));
+        instance["kind"] = Value::String("BRegProject".to_owned());
+        assert!(!schema.is_valid(&instance));
+        for member in ["apiVersion", "kind"] {
+            let mut headless = serde_json::json!({
+                "apiVersion": MODULE_API_VERSION, "kind": MODULE_KIND,
+                "id": "records", "version": "1"
+            });
+            headless
+                .as_object_mut()
+                .expect("the module is an object")
+                .remove(member);
+            assert!(!schema.is_valid(&headless), "{member}");
+        }
+    }
+
+    #[test]
     fn module_schema_accepts_shipped_modules_and_rejects_unknown_fields() {
         let document = documents()
             .expect("authoring schemas generate")
@@ -491,12 +537,13 @@ mod tests {
             }
         }
         let mut extension = serde_json::json!({
+            "apiVersion": MODULE_API_VERSION, "kind": MODULE_KIND,
             "id": "notifications", "version": "1.0.0",
             "extendEntities": [{"entity": "record", "hooks": [{
                 "phase": "after",
                 "id": "record-labelled-v1", "trigger": "patched", "projection": ["label"],
-                "when": {"kind": "fields", "changed": ["label"]},
-                "handler": {"kind":"url","destinationId": "receiver"}
+                "when": {"type": "fields", "changed": ["label"]},
+                "handler": {"type":"url","destinationId": "receiver"}
             }]}]
         });
         assert!(schema.is_valid(&extension));
@@ -505,10 +552,11 @@ mod tests {
         assert!(!schema.is_valid(&extension));
 
         let mut module_with_entity = serde_json::json!({
+            "apiVersion": MODULE_API_VERSION, "kind": MODULE_KIND,
             "id": "records", "version": "1",
             "entities": [{
                 "id": "record", "primaryDataset": "records",
-                "route": "records", "mutationMode": "create_only"
+                "route": "records", "mutationMode": "create-only"
             }]
         });
         assert!(schema.is_valid(&module_with_entity));
@@ -602,9 +650,9 @@ mod tests {
 
         let schema = compile(&document);
         let mut missing_iri = fixture("asset-site-placement");
-        missing_iri["registry"]
+        missing_iri["project"]
             .as_object_mut()
-            .expect("registry is an object")
+            .expect("project is an object")
             .remove("canonicalBaseIri");
         assert!(!schema.is_valid(&missing_iri));
 
@@ -630,12 +678,12 @@ mod tests {
         assert!(!schema.is_valid(&old_purposes));
 
         let mut old_actions = fixture("asset-site-placement");
-        let operations = old_actions["accessProfiles"][0]["permissions"][0]
+        let operations = old_actions["accessProfiles"][0]["permissions"]["entities"][0]
             .as_object_mut()
             .expect("access permission is an object")
             .remove("operations")
             .expect("fixture uses canonical operations");
-        old_actions["accessProfiles"][0]["permissions"][0]["actions"] = operations;
+        old_actions["accessProfiles"][0]["permissions"]["entities"][0]["actions"] = operations;
         assert!(!schema.is_valid(&old_actions));
     }
 
@@ -656,6 +704,22 @@ mod tests {
     }
 
     #[test]
+    fn schema_requires_a_principal_claim_on_every_access_profile() {
+        let document = schema_document();
+        let schema = compile(&document);
+        let written = fixture("business");
+        assert!(written["accessProfiles"][0]["principalClaim"].is_string());
+        assert!(schema.is_valid(&written));
+
+        let mut unnamed = written;
+        unnamed["accessProfiles"][0]
+            .as_object_mut()
+            .expect("access profile is an object")
+            .remove("principalClaim");
+        assert!(!schema.is_valid(&unnamed));
+    }
+
+    #[test]
     fn schema_states_a_dataset_permission_as_dataset_and_operations_only() {
         let document = schema_document();
         let schema = compile(&document);
@@ -666,7 +730,9 @@ mod tests {
             .iter()
             .position(|profile| profile["id"] == "statistics-reader")
             .expect("the fixture declares statistics-reader");
-        assert!(facility["accessProfiles"][reader]["permissions"][0]["dataset"].is_string());
+        assert!(
+            facility["accessProfiles"][reader]["permissions"]["datasets"][0]["dataset"].is_string()
+        );
         assert!(schema.is_valid(&facility));
 
         for (member, written) in [
@@ -677,7 +743,8 @@ mod tests {
             ("entity", serde_json::json!("permit")),
         ] {
             let mut instance = facility.clone();
-            instance["accessProfiles"][reader]["permissions"][0][member] = written.clone();
+            instance["accessProfiles"][reader]["permissions"]["datasets"][0][member] =
+                written.clone();
             assert!(
                 !schema.is_valid(&instance),
                 "a dataset permission with {member}: {written}"
@@ -685,7 +752,7 @@ mod tests {
         }
 
         let mut entity_permission = facility.clone();
-        entity_permission["accessProfiles"][0]["permissions"][0]["operations"] =
+        entity_permission["accessProfiles"][0]["permissions"]["entities"][0]["operations"] =
             serde_json::json!(["list", "read-live"]);
         assert!(
             !schema.is_valid(&entity_permission),
@@ -709,6 +776,61 @@ mod tests {
     }
 
     #[test]
+    fn schema_states_permissions_as_one_list_per_kind() {
+        let document = schema_document();
+        let schema = compile(&document);
+        let facility = fixture("facility");
+        let parsed: Value = serde_json::from_str(&document).expect("the schema is JSON");
+        assert!(parsed["$defs"].get("AccessPermissionSource").is_none());
+        for (group, item) in [
+            ("entities", "EntityPermissionSource"),
+            ("actions", "ActionPermissionSource"),
+            ("datasets", "DatasetPermissionSource"),
+        ] {
+            assert_eq!(
+                parsed["$defs"]["PermissionsSource"]["properties"][group]["items"],
+                serde_json::json!({"$ref": format!("#/$defs/{item}")}),
+                "{group} lists one kind of permission"
+            );
+        }
+
+        let permissions = &facility["accessProfiles"][0]["permissions"];
+        let entity = permissions["entities"][0].clone();
+        let dataset = permissions["datasets"][0].clone();
+
+        let mut one_list = facility.clone();
+        one_list["accessProfiles"][0]["permissions"] =
+            serde_json::json!([entity.clone(), dataset.clone()]);
+        assert!(
+            !schema.is_valid(&one_list),
+            "permissions written as one list"
+        );
+
+        for (group, misplaced) in [
+            ("actions", &entity),
+            ("datasets", &entity),
+            ("entities", &dataset),
+            ("actions", &dataset),
+        ] {
+            let mut instance = facility.clone();
+            instance["accessProfiles"][0]["permissions"][group] =
+                serde_json::json!([misplaced.clone()]);
+            assert!(
+                !schema.is_valid(&instance),
+                "a permission of another kind under {group}"
+            );
+        }
+
+        let mut unknown_group = facility.clone();
+        unknown_group["accessProfiles"][0]["permissions"]["records"] = serde_json::json!([]);
+        assert!(!schema.is_valid(&unknown_group), "an unknown group");
+
+        let mut none = facility;
+        none["accessProfiles"][0]["permissions"] = serde_json::json!({});
+        assert!(schema.is_valid(&none), "a profile that grants nothing");
+    }
+
+    #[test]
     fn schema_accepts_geojson_and_bbox_authoring_and_rejects_duplicate_bbox_geometry() {
         let document = schema_document();
         let schema = compile(&document);
@@ -723,11 +845,11 @@ mod tests {
                 "classification":"internal"
             }));
         instance["entities"][0]["geojson"] = serde_json::json!({"geometryField":"location"});
-        instance["accessProfiles"][0]["permissions"][0]["readableFields"]
+        instance["accessProfiles"][0]["permissions"]["entities"][0]["readableFields"]
             .as_array_mut()
             .unwrap()
             .push(Value::String("location".to_owned()));
-        instance["accessProfiles"][0]["permissions"][0]["spatialQueries"] = serde_json::json!({
+        instance["accessProfiles"][0]["permissions"]["entities"][0]["spatialQueries"] = serde_json::json!({
             "bbox":{
                 "maximumLongitudeSpanDegrees":0.25,
                 "maximumLatitudeSpanDegrees":1.5
@@ -735,7 +857,7 @@ mod tests {
         });
         assert!(schema.is_valid(&instance));
 
-        instance["accessProfiles"][0]["permissions"][0]["spatialQueries"]["bbox"]
+        instance["accessProfiles"][0]["permissions"]["entities"][0]["spatialQueries"]["bbox"]
             ["geometryField"] = Value::String("location".to_owned());
         assert!(!schema.is_valid(&instance));
     }
@@ -758,7 +880,7 @@ mod tests {
         instance["entities"][0]["fields"][0]
             .as_object_mut()
             .expect("the field is an object")
-            .remove("maxLength");
+            .remove("maximumLength");
 
         assert!(!schema.is_valid(&instance));
     }
@@ -783,10 +905,10 @@ mod tests {
             "trigger": "created",
             "projection": ["asset-code", "label"],
             "when": {
-                "kind": "fields",
+                "type": "fields",
                 "afterEquals": {"asset-class": "equipment"}
             },
-            "handler": {"kind":"url","destinationId": "asset-operations"}
+            "handler": {"type":"url","destinationId": "asset-operations"}
         }]);
 
         assert!(schema.is_valid(&instance));
@@ -802,9 +924,9 @@ mod tests {
             "trigger": "created",
             "projection": ["asset-code"],
             "handler": {
-                "kind": "url",
+                "type": "url",
                 "destinationId": "asset-operations",
-                "authenticationProfile": "hmac_sha256_v1"
+                "authenticationProfile": "hmac-sha256-v1"
             }
         }]);
 
@@ -910,7 +1032,7 @@ mod tests {
                 Value::from(30_000_u64),
             ),
             (
-                "/$defs/RawOidcVerifierConfig/properties/jwksCache/default/requestTimeoutMilliseconds",
+                "/$defs/RawOidcVerifierConfig/properties/jwksCache/default/attemptTimeoutMilliseconds",
                 Value::from(5_000_u64),
             ),
             (
@@ -926,11 +1048,11 @@ mod tests {
                 Value::from(30_u64),
             ),
             (
-                "/$defs/RawJwksCacheConfig/properties/maxDocumentBytes/default",
+                "/$defs/RawJwksCacheConfig/properties/maximumDocumentBytes/default",
                 Value::from(65_536_u64),
             ),
             (
-                "/$defs/RawJwksCacheConfig/properties/requestTimeoutMilliseconds/default",
+                "/$defs/RawJwksCacheConfig/properties/attemptTimeoutMilliseconds/default",
                 Value::from(5_000_u64),
             ),
             (
@@ -938,7 +1060,7 @@ mod tests {
                 Value::from(900_u64),
             ),
             (
-                "/$defs/RawCursorConfig/properties/maxAgeSeconds/default",
+                "/$defs/RawCursorConfig/properties/maximumAgeSeconds/default",
                 Value::from(300_u64),
             ),
             (
@@ -1065,7 +1187,7 @@ mod tests {
             &schema,
             "pool size above runtime maximum",
             |instance| {
-                instance["database"]["pool"]["maxSize"] = Value::from(129_u64);
+                instance["database"]["pool"]["maximumConnections"] = Value::from(129_u64);
             },
         );
         assert_schema_rejects_parser_refused_runtime(
@@ -1094,7 +1216,7 @@ mod tests {
             &schema,
             "OIDC maximum token lifetime",
             |instance| {
-                instance["authentication"]["oidc"]["maxTokenLifetimeSeconds"] =
+                instance["authentication"]["oidc"]["maximumTokenLifetimeSeconds"] =
                     Value::from(7_201_u64);
             },
         );
@@ -1150,6 +1272,23 @@ mod tests {
         );
         assert_schema_rejects_parser_refused_runtime(
             &schema,
+            "OIDC denied key list that names no key",
+            |instance| {
+                instance["authentication"]["oidc"]["deniedKids"] = serde_json::json!([]);
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "OIDC assertion issuer client listed with no issuer",
+            |instance| {
+                instance["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+                    "registry-client": [],
+                    "other-client": ["https://issuer.example"]
+                });
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
             "OIDC assertion issuer list uniqueness",
             |instance| {
                 instance["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
@@ -1182,7 +1321,7 @@ mod tests {
             "JWKS cache document size",
             |instance| {
                 instance["authentication"]["oidc"]["jwksCache"] =
-                    serde_json::json!({"maxDocumentBytes": 1_048_577});
+                    serde_json::json!({"maximumDocumentBytes": 1_048_577});
             },
         );
         assert_schema_rejects_parser_refused_runtime(
@@ -1194,7 +1333,7 @@ mod tests {
             },
         );
         assert_schema_rejects_parser_refused_runtime(&schema, "cursor maximum age", |instance| {
-            instance["cursor"]["maxAgeSeconds"] = Value::from(86_401_u64);
+            instance["cursor"]["maximumAgeSeconds"] = Value::from(86_401_u64);
         });
         assert_schema_rejects_parser_refused_runtime(
             &schema,

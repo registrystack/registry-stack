@@ -25,7 +25,7 @@ class ConstructionTests(unittest.TestCase):
         client = CaseworkClient("https://casework.example.invalid/")
         with self.assertRaises(CaseworkClientError) as raised:
             client.description(secret, "requester")
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertNotIn(secret, str(raised.exception))
         self.assertNotIn(secret, repr(raised.exception))
 
@@ -46,20 +46,23 @@ class ConstructionTests(unittest.TestCase):
                 },
                 f"sha256:{'b' * 64}",
             )
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
     def test_review_task_discovery_keeps_ownership_closed_and_scoped(self) -> None:
         client = CaseworkClient("https://casework.example.invalid/")
         calls = (
             lambda: client.review_tasks(
-                "valid-token", "staff", {"ownership": "someone_elses"}
+                "valid-token", "staff", {"ownership": "someone-elses"}
+            ),
+            lambda: client.review_tasks(
+                "valid-token", "staff", {"ownership": "assigned_to_me"}
             ),
             lambda: client.supervisory_review_tasks(
                 "valid-token", "supervisor", {"ownership": "unclaimed"}
             ),
             *(lambda query=query: client.own_review_decisions(
                 "valid-token", "staff", query
-            ) for query in ({"author": "colleague"}, {"ownership": "assigned_to_me"},
+            ) for query in ({"author": "colleague"}, {"ownership": "assigned-to-me"},
                             {"cursor": "not-a-uuid"}, {"limit": 0}, {"limit": 101})),
             *(lambda request_id=request_id: client.supervisory_review_tasks(
                 "valid-token", "supervisor", {"requestId": request_id}
@@ -69,7 +72,7 @@ class ConstructionTests(unittest.TestCase):
             with self.subTest(call=call):
                 with self.assertRaises(CaseworkClientError) as raised:
                     call()
-                self.assertEqual(raised.exception.kind, "invalid_request")
+                self.assertEqual(raised.exception.kind, "invalid-request")
 
 
 if __name__ == "__main__":

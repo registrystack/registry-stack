@@ -237,7 +237,7 @@ impl Deployment {
             "authentication": {"oidc": {
                 "issuer": "https://identity.example.test",
                 "audience": "urn:example:messaging",
-                "jwksSource": {"kind": "static", "documentRef": format!("secret:env/{jwks_name}")},
+                "jwksSource": {"type": "static", "documentRef": format!("secret:env/{jwks_name}")},
                 "allowedClients": ["case-system", "operations-console"]
             }},
             "audit": {

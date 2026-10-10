@@ -2287,8 +2287,8 @@ mod tests {
                     .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
                     .set_body_raw(
                         request_batch_envelope(vec![
-                            serde_json::json!({"result": "evidence_not_available"}),
-                            serde_json::json!({"result": "evidence_not_available"}),
+                            serde_json::json!({"result": "evidence-not-available"}),
+                            serde_json::json!({"result": "evidence-not-available"}),
                         ]),
                         EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
                     ),
@@ -2327,7 +2327,7 @@ mod tests {
                     .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
                     .set_body_raw(
                         request_batch_envelope(vec![
-                            serde_json::json!({"result": "evidence_not_available"}),
+                            serde_json::json!({"result": "evidence-not-available"}),
                         ]),
                         EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
                     ),
@@ -2355,7 +2355,7 @@ mod tests {
             .expect("the request batch is prepared");
         let response = raw_request_batch(vec![
             available_batch_item(fixture.sign(prepared.request_nonce(0).expect("the first nonce"))),
-            serde_json::json!({"result": "evidence_not_available"}),
+            serde_json::json!({"result": "evidence-not-available"}),
         ]);
 
         let verified = client
@@ -2429,7 +2429,7 @@ mod tests {
         let prepared = client
             .prepare_batch(request_batch_spec(2))
             .expect("the request batch is prepared");
-        let unavailable = || serde_json::json!({"result": "evidence_not_available"});
+        let unavailable = || serde_json::json!({"result": "evidence-not-available"});
         let responses = [
             RawEvidenceRequestBatchResponse {
                 body: b"not json".to_vec(),
@@ -2437,6 +2437,10 @@ mod tests {
             },
             raw_request_batch(vec![unavailable()]),
             raw_request_batch(vec![unavailable(), unavailable(), unavailable()]),
+            raw_request_batch(vec![
+                unavailable(),
+                serde_json::json!({"result": "evidence_not_available"}),
+            ]),
             RawEvidenceRequestBatchResponse {
                 body: serde_json::to_vec(&serde_json::json!({
                     "schema": "registry.other/v1",
@@ -2805,7 +2809,7 @@ mod tests {
     fn definitions_json_with_batch_maximum(value: u16) -> String {
         definitions_json(EVIDENCE_DEFINITIONS_SCHEMA_V1).replace(
             r#","definitions"#,
-            &format!(r#", "holderBoundBatchMaxSize":{value},"definitions"#),
+            &format!(r#", "maximumHolderBoundBatchSize":{value},"definitions"#),
         )
     }
 
@@ -2983,7 +2987,7 @@ mod tests {
                         .insert_header(RETRY_AFTER.as_str(), header)
                         .set_body_raw(
                             format!(
-                                r#"{{"type":"https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited","title":"Evidence request rate is exhausted","status":429,"detail":"the Evidence request rate is exhausted","code":"evidence.rate_limited","traceId":"{TRACE_ID}"}}"#
+                                r#"{{"type":"https://id.registrystack.org/problems/registry-evidence/evidence/rate-limited","title":"Evidence request rate is exhausted","status":429,"detail":"the Evidence request rate is exhausted","code":"evidence.rate-limited","traceId":"{TRACE_ID}"}}"#
                             )
                             .into_bytes(),
                             "application/problem+json",
@@ -2999,7 +3003,7 @@ mod tests {
                     .expect_err("the deployment refused the request"),
                 EvidenceClientError::Denied {
                     status: 429,
-                    code: "evidence.rate_limited".to_owned(),
+                    code: "evidence.rate-limited".to_owned(),
                     trace_id: Some(TRACE_ID.to_owned()),
                     retry_after_seconds: expected_wait,
                 },
@@ -3425,11 +3429,12 @@ mod tests {
             .await;
         let profile = EvidenceClientProfile::from_slice(
             serde_json::json!({
-                "schema": crate::EVIDENCE_CLIENT_PROFILE_SCHEMA_V1,
+                "apiVersion": crate::EVIDENCE_CLIENT_PROFILE_API_VERSION,
+                "kind": crate::EVIDENCE_CLIENT_PROFILE_KIND,
                 "baseUrl": server.uri(),
                 "clientId": "progressive-test-client",
                 "privateKey": {
-                    "source": "environment",
+                    "type": "environment",
                     "variable": "UNUSED_PROGRESSIVE_TEST_KEY"
                 },
                 "trust": {"type": "local-loopback-discovery"}

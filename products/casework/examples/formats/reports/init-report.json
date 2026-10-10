@@ -2,7 +2,7 @@
   "ok": true,
   "command": "init",
   "status": "complete",
-  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "apiVersion": "id.registrystack.org/formats/casework/init-report/v1alpha3",
   "created": [
     "casework.yaml",
     "runtime.example.yaml",
@@ -15,7 +15,7 @@
     ".casework/schemas/dev-clients.schema.json",
     ".vscode/settings.json"
   ],
-  "kind": "InitReport",
+  "kind": "CaseworkInitReport",
   "next": [
     "Run caseworkctl check and test, then caseworkctl dev to start a local Casework runtime, its database and its token issuer, with the directory in dev-clients.yaml already seeded."
   ],

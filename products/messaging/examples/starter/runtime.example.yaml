@@ -77,7 +77,7 @@ authentication:
     # alternative when the runtime cannot reach the issuer's discovery
     # document.
     # jwksSource:
-    #   kind: static
+    #   type: static
     #   documentRef: secret:file/jwks.json
 audit:
   destination: file

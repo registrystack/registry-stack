@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use registry_casework::{AuthenticationError, CaseworkAuthenticator, HumanIdentityConfig};
 use registry_casework_core::{
-    AccessProfile, CaseworkIdentity, CaseworkProject, CaseworkRole, InboxPolicy, QueuePolicy,
+    AccessProfile, CaseworkProject, CaseworkRole, InboxPolicy, ProjectIdentity, QueuePolicy,
     SourcePolicy, SourceRequestPolicy, CASEWORK_API_VERSION, CASEWORK_KIND,
 };
 use registry_platform_httputil::FetchUrlPolicy;
@@ -353,8 +353,8 @@ fn project() -> CaseworkProject {
         task_templates: Vec::new(),
         api_version: CASEWORK_API_VERSION.to_owned(),
         kind: CASEWORK_KIND.to_owned(),
-        casework: CaseworkIdentity {
-            id: "human-identity-auth-test".to_owned(),
+        project: ProjectIdentity {
+            id: "human-identity-auth-test".parse().unwrap(),
             version: "1".to_owned(),
         },
         access_profiles: vec![

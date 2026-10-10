@@ -75,7 +75,7 @@ async fn plan_apply_and_status_are_one_operator_journey() {
     assert_eq!(plan["packageDigest"], digest);
     assert_eq!(plan["activeDigest"], Value::Null);
     assert_eq!(plan["change"], "activate");
-    assert_eq!(plan["databaseId"], "notRecorded");
+    assert_eq!(plan["databaseId"], "not-recorded");
 
     let (code, status) = json(&runtime, &["status"]);
     assert_eq!(code, 0, "{status}");
@@ -164,7 +164,7 @@ async fn three_messages(harness: &Harness) -> (Uuid, Uuid, Uuid) {
     );
 
     let queued = harness.accepted(&email_submission()).await;
-    assert_eq!(harness.state(failed).await, "dead_lettered");
+    assert_eq!(harness.state(failed).await, "dead-lettered");
     assert_eq!(harness.state(unknown).await, "unknown");
     assert_eq!(harness.state(queued).await, "pending");
     (failed, unknown, queued)
@@ -266,7 +266,7 @@ async fn actions_preview_by_default_and_change_the_message_only_with_apply() {
     assert_eq!(report["eligible"], true);
     assert_eq!(report["applied"], false);
     assert_eq!(report["nextStatus"], "queued");
-    assert_eq!(harness.state(failed).await, "dead_lettered");
+    assert_eq!(harness.state(failed).await, "dead-lettered");
     let (_, stdout, _) = messagingctl(&runtime, &["messages", "retry", &failed_id]);
     assert!(stdout.contains("run again with --apply"), "{stdout}");
 

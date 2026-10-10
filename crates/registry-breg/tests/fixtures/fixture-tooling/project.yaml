@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: fixture-registry
   canonicalBaseIri: https://fixture.invalid
   version: 1.0.0
@@ -40,12 +40,12 @@ entities:
       maximumItems: 4
       maximumBytes: 16384
     fields:
-      - {id: jurisdiction, type: string, maxLength: 32, required: true, classification: public}
-      - {id: label, type: string, maxLength: 128, required: true, classification: public}
-      - {id: note, type: string, maxLength: 128, classification: public}
+      - {id: jurisdiction, type: string, maximumLength: 32, required: true, classification: public}
+      - {id: label, type: string, maximumLength: 128, required: true, classification: public}
+      - {id: note, type: string, maximumLength: 128, classification: public}
       - {id: quantity, type: int64, required: true, classification: public}
     constraints:
-      - {kind: unique, fields: [label]}
+      - {type: unique, fields: [label]}
 accessProfiles:
   - id: operator
     default: true
@@ -53,9 +53,10 @@ accessProfiles:
     requiredScopes: unrestricted
     requiredPurposes: [case-management]
     permissions:
-      - entity: widget
-        operations: [create, get, list, patch, batch]
-        readableFields: [jurisdiction, label, note, quantity]
-        writableFields: [jurisdiction, label, note, quantity]
-        rowBoundaries:
-          - {field: jurisdiction, claim: jurisdiction, operator: equals}
+      entities:
+        - entity: widget
+          operations: [create, get, list, patch, batch]
+          readableFields: [jurisdiction, label, note, quantity]
+          writableFields: [jurisdiction, label, note, quantity]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}

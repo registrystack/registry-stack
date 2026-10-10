@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: inspection
   canonicalBaseIri: "https://inspection-registry.example.gov"
   version: 0.1.0
@@ -39,7 +39,7 @@ manifestProjection:
 modules:
   - id: "inspection-core"
     version: "0.1.0"
-    digest: "sha256:ea6e1c8a4a03bffd649e13656cab8135f4269115402e0fcc6b468d24da9aff0f"
+    digest: "sha256:5322fc6c339e745b49a6432001b6779dd670277a37171ab127ee80ec7bb44adc"
 
 entities:
   - id: inspection
@@ -51,12 +51,12 @@ entities:
       - id: inspection-code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: restricted
       - id: facility-code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: restricted
       - id: opened-on
         type: date
@@ -69,10 +69,10 @@ entities:
       - id: inspection-authority
         type: string
         required: true
-        maxLength: 80
+        maximumLength: 80
         classification: restricted
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - inspection-code
     indexes:
@@ -82,7 +82,7 @@ entities:
   - id: inspection-observation
     primaryDataset: "inspection"
     route: inspection-observations
-    mutationMode: create_only
+    mutationMode: create-only
     classification: restricted
     fields:
       - id: inspection
@@ -106,7 +106,7 @@ entities:
       - id: observation-schema-metadata
         type: structured
         required: true
-        maxBytes: 2048
+        maximumBytes: 2048
         classification: restricted
         schema:
           type: object
@@ -131,10 +131,10 @@ entities:
       - id: observation-note
         type: text
         required: false
-        maxLength: 4000
+        maximumLength: 4000
         classification: restricted
     constraints:
-      - kind: int_range
+      - type: int-range
         field: finding-grade
         minimum: 0
         maximum: 4
@@ -145,13 +145,13 @@ entities:
   - id: permit
     primaryDataset: "inspection"
     route: permits
-    mutationMode: create_only
+    mutationMode: create-only
     classification: restricted
     fields:
       - id: permit-code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: restricted
       - id: inspection
         type: reference
@@ -179,17 +179,17 @@ entities:
       - id: correction-reason
         type: text
         required: false
-        maxLength: 2000
+        maximumLength: 2000
         classification: restricted
       - id: validity-source
         type: string
         required: true
-        maxLength: 120
+        maximumLength: 120
         classification: restricted
       - id: provenance-note
         type: text
         required: false
-        maxLength: 4000
+        maximumLength: 4000
         classification: restricted
       - id: issuing-authority
         type: reference
@@ -197,7 +197,7 @@ entities:
         required: true
         classification: restricted
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - permit-code
     indexes:
@@ -215,99 +215,100 @@ accessProfiles:
     requiredPurposes:
       - facility-inspection
     permissions:
-      - entity: inspection
-        rowBoundaries: unrestricted
-        operations:
-          - create
-          - get
-          - list
-          - patch
-        readableFields:
-          - inspection-code
-          - facility-code
-          - opened-on
-          - closed-on
-          - inspection-authority
-        writableFields:
-          - inspection-code
-          - facility-code
-          - opened-on
-          - closed-on
-          - inspection-authority
-        filterableFields:
-          - inspection-code
-          - facility-code
-      - entity: inspection-observation
-        rowBoundaries: unrestricted
-        operations:
-          - create
-          - get
-          - list
-        readableFields:
-          - inspection
-          - observed-at
-          - inspection-domain
-          - finding-grade
-          - observation-schema-metadata
-          - observation-note
-        writableFields:
-          - inspection
-          - observed-at
-          - inspection-domain
-          - finding-grade
-          - observation-schema-metadata
-          - observation-note
-        filterableFields:
-          - inspection
-          - inspection-domain
-      - entity: permit
-        rowBoundaries: unrestricted
-        operations:
-          - create
-          - get
-          - list
-        readableFields:
-          - permit-code
-          - inspection
-          - permit-status
-          - valid-from
-          - valid-to
-          - corrected-permit
-          - correction-reason
-          - validity-source
-          - provenance-note
-          - issuing-authority
-        writableFields:
-          - permit-code
-          - inspection
-          - permit-status
-          - valid-from
-          - valid-to
-          - corrected-permit
-          - correction-reason
-          - validity-source
-          - provenance-note
-          - issuing-authority
-        filterableFields:
-          - inspection
-          - permit-status
-          - valid-from
-      - entity: public-authority
-        rowBoundaries: unrestricted
-        operations:
-          - create
-          - get
-          - list
-        readableFields:
-          - authority-code
-          - name
-          - jurisdiction
-        writableFields:
-          - authority-code
-          - name
-          - jurisdiction
-        filterableFields:
-          - authority-code
+      entities:
+        - entity: inspection
+          rowBoundaries: unrestricted
+          operations:
+            - create
+            - get
+            - list
+            - patch
+          readableFields:
+            - inspection-code
+            - facility-code
+            - opened-on
+            - closed-on
+            - inspection-authority
+          writableFields:
+            - inspection-code
+            - facility-code
+            - opened-on
+            - closed-on
+            - inspection-authority
+          filterableFields:
+            - inspection-code
+            - facility-code
+        - entity: inspection-observation
+          rowBoundaries: unrestricted
+          operations:
+            - create
+            - get
+            - list
+          readableFields:
+            - inspection
+            - observed-at
+            - inspection-domain
+            - finding-grade
+            - observation-schema-metadata
+            - observation-note
+          writableFields:
+            - inspection
+            - observed-at
+            - inspection-domain
+            - finding-grade
+            - observation-schema-metadata
+            - observation-note
+          filterableFields:
+            - inspection
+            - inspection-domain
+        - entity: permit
+          rowBoundaries: unrestricted
+          operations:
+            - create
+            - get
+            - list
+          readableFields:
+            - permit-code
+            - inspection
+            - permit-status
+            - valid-from
+            - valid-to
+            - corrected-permit
+            - correction-reason
+            - validity-source
+            - provenance-note
+            - issuing-authority
+          writableFields:
+            - permit-code
+            - inspection
+            - permit-status
+            - valid-from
+            - valid-to
+            - corrected-permit
+            - correction-reason
+            - validity-source
+            - provenance-note
+            - issuing-authority
+          filterableFields:
+            - inspection
+            - permit-status
+            - valid-from
+        - entity: public-authority
+          rowBoundaries: unrestricted
+          operations:
+            - create
+            - get
+            - list
+          readableFields:
+            - authority-code
+            - name
+            - jurisdiction
+          writableFields:
+            - authority-code
+            - name
+            - jurisdiction
+          filterableFields:
+            - authority-code
 vocabularies:
   - id: inspection-domain
     values:

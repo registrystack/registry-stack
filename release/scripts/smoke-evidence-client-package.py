@@ -28,7 +28,7 @@ SPEC = {
     "expected_assurance_profile": "local",
     "subjects": [{"role": "subject", "selector_profile": "national-id"}],
     "expected_outputs": [
-        {"concept": "urn:example:concept:status-holds", "form": "boolean"}
+        {"concept": "urn:example:concept:status-holds", "form": {"type": "boolean"}}
     ],
     "maximum_assertion_lifetime_seconds": 300,
     "clock_skew_seconds": 60,

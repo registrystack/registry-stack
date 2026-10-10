@@ -2863,27 +2863,27 @@ pub(crate) fn authorize_profile_claims(
     profile: &AccessProfileSource,
     claims: &VerifiedRequestClaims,
 ) -> Result<Vec<VerifiedRowBoundary>, &'static str> {
-    if profile.principal_claim.as_deref() != claims.principal_claim()
+    if Some(profile.principal_claim.as_str()) != claims.principal_claim()
         || claims.principal().is_none()
     {
-        return Err("principal_missing_or_mismatched");
+        return Err("principal-missing-or-mismatched");
     }
     if !profile
         .required_scopes
         .iter()
         .all(|scope| claims.has_scope(scope))
     {
-        return Err("required_scope_missing");
+        return Err("required-scope-missing");
     }
     if !profile.required_purposes.is_empty()
         && !claims
             .purpose()
             .is_some_and(|purpose| profile.required_purposes.contains(purpose))
     {
-        return Err("purpose_missing_or_not_allowed");
+        return Err("purpose-missing-or-not-allowed");
     }
     if let Some(expected) = profile.actor_kind {
-        let actual = claims.actor_kind().ok_or("actor_kind_missing")?;
+        let actual = claims.actor_kind().ok_or("actor-kind-missing")?;
         let matches = matches!(
             (expected, actual),
             (
@@ -2898,7 +2898,7 @@ pub(crate) fn authorize_profile_claims(
             )
         );
         if !matches {
-            return Err("actor_kind_mismatched");
+            return Err("actor-kind-mismatched");
         }
     }
     // A delegated token acts for its principal; only a profile written for
@@ -2913,7 +2913,7 @@ pub(crate) fn authorize_profile_claims(
             .requester_client()
             .is_some_and(|client| profile.requester_clients.contains(client))
     {
-        return Err("requester_client_missing_or_mismatched");
+        return Err("requester-client-missing-or-mismatched");
     }
     match (&profile.task_grant, claims.grant()) {
         (Some(_), None) => return Err("task_grant_missing"),
@@ -2926,7 +2926,7 @@ pub(crate) fn authorize_profile_claims(
         }
         _ => {}
     }
-    verified_row_boundaries(profile, claims).ok_or("row_claim_missing_or_wrong_cardinality")
+    verified_row_boundaries(profile, claims).ok_or("row-claim-missing-or-wrong-cardinality")
 }
 
 fn task_grant_binding(
@@ -4898,10 +4898,10 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Tombstone => "tombstone",
         Operation::Batch => "batch",
         Operation::Revisions => "revisions",
-        Operation::SubmitRequest => "submit_request",
-        Operation::ReviseRequest => "revise_request",
-        Operation::CancelRequest => "cancel_request",
-        Operation::ApplyRequest => "apply_request",
+        Operation::SubmitRequest => "submit-request",
+        Operation::ReviseRequest => "revise-request",
+        Operation::CancelRequest => "cancel-request",
+        Operation::ApplyRequest => "apply-request",
         Operation::Snapshot => "snapshot",
         Operation::Import => "import",
     }
@@ -5764,26 +5764,26 @@ mod held_body_encryption_tests {
 
     fn registry(encrypted: bool) -> CompiledRegistry {
         let mut secret = json!({
-            "id":"secret","type":"string","maxLength":MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
+            "id":"secret","type":"string","maximumLength":MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
             "classification":"restricted"
         });
         if encrypted {
             secret["encrypted"] = json!(true);
         }
         let source = json!({
-            "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-            "registry":{"id":"held-encryption","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://held.example.test"},
+            "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+            "project":{"id":"held-encryption","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://held.example.test"},
             "entities":[{
                 "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"mutable",
                 "fields":[
-                    {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
+                    {"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"},
                     secret
                 ]
             }],
-            "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
                 "entity":"case","rowBoundaries":"unrestricted","operations":["get","list","create","patch"],
                 "readableFields":["label","secret"],"writableFields":["label","secret"]
-            }]}]
+            }]}}]
         });
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         compile_project(&project, &[], CompileProfile::Authoring).unwrap()

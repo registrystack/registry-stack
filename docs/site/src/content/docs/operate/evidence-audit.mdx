@@ -79,17 +79,17 @@ audit:
   destination: file
   path: /var/lib/registry-evidence/audit/evidence.jsonl
   rotateBytes: 104857600
-  retainDays: 90
+  retentionDays: 90
 ```
 
 - **`file`**, the default, returns from each append only after the entry is synced to disk. When
   the active file would pass `rotateBytes` (100 MiB by default), the writer renames it to
   `<path>.<sequence>` with an eight-digit sequence and opens a fresh file at `path`. When it opens
-  and each time it rotates, it deletes sealed files last modified more than `retainDays` ago (90
+  and each time it rotates, it deletes sealed files last modified more than `retentionDays` ago (90
   by default); it never deletes the active file.
 - **`stdout`** writes each entry as one flushed line on standard output. The process writes its
   operational records to standard error, so the stream carries audit entries alone. Durability, rotation, and
-  retention belong to your log collector, and `path`, `rotateBytes`, and `retainDays` are refused.
+  retention belong to your log collector, and `path`, `rotateBytes`, and `retentionDays` are refused.
   `evidence check --require-audit-under` refuses this destination, because it has no local file to
   contain.
 
@@ -111,7 +111,7 @@ Copying a sealed file is safe at any time.
 
 Ship sealed files, or the `stdout` stream, to storage the Evidence Gateway host cannot rewrite:
 object storage with an object lock, a write-once archive, or a log pipeline whose retention the
-Evidence operator account cannot change. Ship each sealed file before `retainDays` deletes it.
+Evidence operator account cannot change. Ship each sealed file before `retentionDays` deletes it.
 The writer records the next sequence in `<path>.seq` at every start and before every rotation, so
 numbering continues after retention or a shipper removed every sealed file. It restarts only in a
 directory that lost `<path>.seq`, such as a fresh or restored one, and every replica's stream uses
@@ -132,7 +132,7 @@ Restore audit history into that store, never back into the live audit directory.
 
 :::caution[Archive chained logs before switching]
 A runtime that wrote the older chained audit format left `<path>.<sequence>` segments behind.
-Retention deletes sealed files under the same name once they are older than `retainDays`. Before
+Retention deletes sealed files under the same name once they are older than `retentionDays`. Before
 the first start with the `audit` block, archive every old segment and the old active file to
 append-only storage, and point `path` at a fresh file in a directory that holds no old segments.
 :::
@@ -153,13 +153,13 @@ DISCLOSURE RELEASED age_bracket
 A standalone authorization refusal produces a one-event view:
 
 ```text
-ACCESS REFUSED requester=<pseudonym> reason=not_authorized
+ACCESS REFUSED requester=<pseudonym> reason=not-authorized
 ```
 
 An operation that ended after its access without a release prints the decision instead of a
-release line: `DISCLOSURE DENIED reason=no_match` (or `ambiguous`, `unresolved`, `fact_missing`)
-for a denial the evaluation decided, and `TRANSIENT FAILURE reason=dependency_failure` (or
-`evaluation_failure`, `signing_failure`) for a failure a retry may clear.
+release line: `DISCLOSURE DENIED reason=no-match` (or `ambiguous`, `unresolved`, `fact-missing`)
+for a denial the evaluation decided, and `TRANSIENT FAILURE reason=dependency-failure` (or
+`evaluation-failure`, `signing-failure`) for a failure a retry may clear.
 
 The command takes the writer's lock, so it refuses while Evidence Gateway still runs. It reads the
 retained local audit files in order, checks that every entry is well formed and that each

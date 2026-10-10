@@ -9,7 +9,7 @@ First author the source description, queues, access profiles, and governed
 `taskTemplates` in `casework.yaml`. Include each template subject field in the
 source request's explicit `projection`, and grant the reader and approving human
 profile disclosure of that field. The source reader must also disclose
-`review_state` so Casework can observe the source-owned review stage. Import the source description for the current
+`review-state` so Casework can observe the source-owned review stage. Import the source description for the current
 compiled registry revision. For a standalone Casework issuer, discover each task
 client's stable native subject before authoring its `agent.subject`:
 
@@ -182,7 +182,7 @@ the booking request.
 An automatically applied BReg request keeps two source grants separate. Give
 staff and supervisor clients a human `get` profile on the request so Casework
 can display source context. Give the named executor its own service
-`apply_request` profile. `caseworkctl source add` does not add executor scopes
+`apply-request` profile. `caseworkctl source add` does not add executor scopes
 or client admission to the human profiles. For manual application, the apply
 profile must still admit the human reviewers.
 
@@ -204,8 +204,8 @@ an exact loopback HTTP URL with an explicit nonzero port, the shape
 An existing entry that differs only in its endpoint is refused with a message
 naming the option, so repeat the pairing with the endpoint that entry names.
 
-`caseworkctl check` reports each request's `applicationMode` from its imported
-BReg description, and `caseworkctl test` checks the fixture against that mode.
+`caseworkctl check --format json` reports each request's `applicationMode`
+from its imported BReg description, and `caseworkctl test` checks the fixture against that mode.
 Before the description is imported, the mode is `null`; a local fixture never
 establishes that automatic application succeeded against a running source.
 The starter fixture checks its authored queue and target without assuming a

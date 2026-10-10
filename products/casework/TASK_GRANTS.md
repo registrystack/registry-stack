@@ -26,6 +26,12 @@ Add `taskTemplates` to the Casework project. Each template declares:
 Scopes are immutable approved authorization, not inferred from product operations.
 The assertion includes those scopes, and stock token exchange only accepts a
 requested subset. Use exact product operation names. Wildcards and duplicate bounds are refused.
+A registry operation under `bounds.permissions[].operations` is a local
+identifier: a lowercase letter, then at most 63 lowercase letters, digits,
+underscores, or hyphens, so `apply-request` and `apply_request` are both
+well formed and the registry decides which one it knows. Any other value is
+refused as `casework.task-template.invalid-operation` at the operation's own
+pointer.
 Required source fields must be disclosed to the approving human and exposed to
 the configured service reader for later checks. Callers cannot supply subject
 values. Changing a template requires a new version. Retiring a version

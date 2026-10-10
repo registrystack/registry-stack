@@ -20,7 +20,7 @@ use registry_platform_config::{
 };
 use registry_platform_yaml::{
     BoundedU32, BoundedU64, Document, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Refusal,
-    Report, ScalarHook, ScalarSite, Severity, UniqueList,
+    Related, Report, RetiredApiVersion, ScalarHook, ScalarSite, Severity, UniqueList,
 };
 use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
@@ -42,7 +42,7 @@ pub const MAXIMUM_SOURCE_BATCH_ITEMS: u16 = 16;
 /// a `remote = "Self"` union produces the externally tagged form
 /// `{variant: {members}}`; this helper flattens that single entry so the
 /// serialized document, and every digest computed over it, is unchanged.
-fn serialize_tagged<S: Serializer>(
+pub(crate) fn serialize_tagged<S: Serializer>(
     external: Result<serde_json::Value, serde_json::Error>,
     tag: &'static str,
     serializer: S,
@@ -381,24 +381,37 @@ pub const EVIDENCE_BUNDLE_KIND: &str = "EvidenceBundle";
 /// the file renames it to the path it was given.
 const BUNDLE_DOCUMENT_NAME: &str = "evidence.yaml";
 
-/// The Evidence bundle format. The frozen Version 1 grammar declares
-/// `version: 1` and neither `apiVersion` nor `kind`; the envelope arrives
-/// with the move to the stable format line.
+/// The `apiVersion` an Evidence bundle declares.
+pub const EVIDENCE_BUNDLE_API_VERSION: &str = "id.registrystack.org/formats/evidence/bundle/v1";
+
+/// The Evidence bundle format. The reader checks the envelope before it
+/// decodes the grammar, so `apiVersion` and `kind` are not members of
+/// [`EvidenceConfig`] and stay out of the projected configuration.
 pub const EVIDENCE_BUNDLE_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: EVIDENCE_BUNDLE_KIND,
-    envelope: EnvelopeRule::Exempt {
-        reason: "the frozen Version 1 bundle grammar declares version: 1 and no apiVersion or kind",
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[registry_platform_yaml::ApiVersion::current(
+            EVIDENCE_BUNDLE_API_VERSION,
+        )],
+        retired_api_versions: &[],
     },
     removed_keys: EVIDENCE_BUNDLE_REMOVED_KEYS,
 };
 
 /// Bundle keys an earlier grammar accepted, each refused with the key that
-/// replaced it. The access-token rules moved under `authentication.oidc`.
+/// replaced it. The envelope replaced the `version` member, the access-token
+/// rules moved under `authentication.oidc`, a request's bounds took the
+/// names the shared concept table gives them, the union tags took the name
+/// `type`, and the issuer, each requirement, and each concept name their URI
+/// as `uri`. A `*` segment matches any key.
 pub const EVIDENCE_BUNDLE_REMOVED_KEYS: &[registry_platform_yaml::RemovedKey<'static>] = &[
     registry_platform_yaml::RemovedKey {
+        pointer: "/version",
+        replacement: "The grammar version is replaced by the envelope: remove `version` and declare `apiVersion: id.registrystack.org/formats/evidence/bundle/v1` and `kind: EvidenceBundle`.",
+    },
+    registry_platform_yaml::RemovedKey {
         pointer: "/authentication/kind",
-        replacement:
-            "Evidence accepts OIDC access tokens only; declare the rules under authentication.oidc.",
+        replacement: "Evidence accepts OIDC access tokens only; declare the rules under authentication.oidc.",
     },
     registry_platform_yaml::RemovedKey {
         pointer: "/authentication/issuer",
@@ -410,7 +423,7 @@ pub const EVIDENCE_BUNDLE_REMOVED_KEYS: &[registry_platform_yaml::RemovedKey<'st
     },
     registry_platform_yaml::RemovedKey {
         pointer: "/authentication/jwksUri",
-        replacement: "Declare authentication.oidc.jwksSource with kind: uri and uri: <JWKS URL>.",
+        replacement: "Declare authentication.oidc.jwksSource with type: uri and uri: <JWKS URL>.",
     },
     registry_platform_yaml::RemovedKey {
         pointer: "/authentication/tokenTypes",
@@ -474,11 +487,83 @@ pub const EVIDENCE_BUNDLE_REMOVED_KEYS: &[registry_platform_yaml::RemovedKey<'st
     },
     registry_platform_yaml::RemovedKey {
         pointer: "/authentication/oidc/jwksUri",
-        replacement: "Declare authentication.oidc.jwksSource with kind: uri and uri: <JWKS URL>.",
+        replacement: "Declare authentication.oidc.jwksSource with type: uri and uri: <JWKS URL>.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/authentication/oidc/jwksSource/kind",
+        replacement: "Declare type instead; keep the value.",
     },
     registry_platform_yaml::RemovedKey {
         pointer: "/audit/hashSecretRef",
         replacement: "Declare audit.hashKeyRef instead.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/request/timeoutMilliseconds",
+        replacement: "Declare attemptTimeoutMilliseconds instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/request/concurrencyLimit",
+        replacement: "Declare maximumConcurrency instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sourceConnections/*/concurrencyLimit",
+        replacement: "Declare maximumConcurrency instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/request/pathTemplate",
+        replacement: "Declare path instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/transport",
+        replacement: "Declare type instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/authentication/kind",
+        replacement: "Declare type instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sourceConnections/*/authentication/kind",
+        replacement: "Declare type instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/request/pathBindings/*/from",
+        replacement: "Declare type instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/request/parameterBindings/*/kind",
+        replacement: "Declare type instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/requirements/*/acquisition/kind",
+        replacement: "Declare type instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/issuer/id",
+        replacement: "Declare uri instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/requirements/*/id",
+        replacement: "Declare uri instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/requirements/*/concepts/*/id",
+        replacement: "Declare uri instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/requirements/*/concepts/*/form",
+        replacement: "Declare type instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/holderBoundBatchMaxSize",
+        replacement: "Declare maximumHolderBoundBatchSize instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/evidence/contract/holderBoundBatchMaxSize",
+        replacement: "Declare maximumHolderBoundBatchSize instead; keep the value.",
+    },
+    registry_platform_yaml::RemovedKey {
+        pointer: "/sources/*/evidence/contract/definitions/*/concepts/*/form/list",
+        replacement: "A form is a mapping named by `type`: write `type: list` and the list's members beside it.",
     },
 ];
 
@@ -512,6 +597,9 @@ impl Violation {
     /// concerns that is not written, such as a missing optional block, is
     /// placed at the nearest member that is.
     fn diagnostic(&self, document: &Document) -> registry_platform_yaml::Diagnostic {
+        if let Concern::RepeatedId { first } = self.concern {
+            return self.repeated_id(document, first);
+        }
         let fault = self.error.fault();
         let message = match fault.field() {
             Some(field) => format!("{} ({field})", fault.cause()),
@@ -523,13 +611,48 @@ impl Violation {
         while document.span_of(written).is_none() {
             written = written.rsplit_once('/').map_or("", |(parent, _)| parent);
         }
-        let mut diagnostic = if self.at_key && written == self.pointer {
+        let mut diagnostic = if self.concern == Concern::Key && written == self.pointer {
             document.diagnostic_at_key(Severity::Error, code, written, &message, action)
         } else {
             document.diagnostic_at_value(Severity::Error, code, written, &message, action)
         };
         diagnostic.path.clone_from(&self.pointer);
         diagnostic
+    }
+
+    /// The shared refusal of a list item whose identifying member repeats the
+    /// one of the item at index `first` (CFG-DIAG-3): placed at the copy, with
+    /// the first item as a related position. Neither names the identifier.
+    fn repeated_id(&self, document: &Document, first: u32) -> registry_platform_yaml::Diagnostic {
+        let mut parts = self.pointer.rsplitn(3, '/');
+        let member = parts.next().unwrap_or_default();
+        let list = parts.last().unwrap_or_default();
+        let mut diagnostic = document.diagnostic_at_value(
+            Severity::Error,
+            "config.duplicate-id",
+            &self.pointer,
+            &format!(
+                "this `{member}` repeats the `{member}` of the item at index {first}; it is unique in this list"
+            ),
+            &format!("Give each item its own `{member}`."),
+        );
+        let path = format!("{list}/{first}/{member}");
+        let position = document.span_of(&path).map(|span| span.start);
+        diagnostic.related.push(Related {
+            file: document.file().to_owned(),
+            line: position.map(|position| position.line),
+            column: position.map(|position| position.column),
+            path,
+            message: "the first item with this id".to_owned(),
+        });
+        diagnostic
+    }
+
+    /// Marks the rule as an identifying member that repeats the one of the
+    /// item at index `first` in the same list.
+    fn repeating(mut self, first: u32) -> Self {
+        self.concern = Concern::RepeatedId { first };
+        self
     }
 }
 
@@ -687,7 +810,6 @@ impl<T: Serialize> Serialize for OrderedMap<T> {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceConfig {
-    pub version: BoundedU32<1, 1>,
     /// The governed assurance boundary for this immutable bundle.
     pub assurance_profile: AssuranceProfile,
     pub service: ServiceConfig,
@@ -723,7 +845,7 @@ pub struct EvidenceConfig {
     /// serve a batch, and the key is omitted when absent because the projected
     /// configuration is what a requirement's `configurationRevision` digests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub holder_bound_batch_max_size:
+    pub maximum_holder_bound_batch_size:
         Option<BoundedU32<1, { MAXIMUM_HOLDER_BOUND_BATCH_SIZE as u32 }>>,
     pub requirements: Vec<RequirementConfig>,
 }
@@ -796,14 +918,14 @@ pub enum BurstShortfall {
     /// The request-batch route's item ceiling, a product constant, sets the
     /// cost.
     RequestBatch,
-    /// The declared `holderBoundBatchMaxSize` sets the cost.
+    /// The declared `maximumHolderBoundBatchSize` sets the cost.
     HolderBoundBatch,
 }
 
 impl EvidenceConfig {
     /// The declared holder-bound batch ceiling, or one when none is declared.
     pub fn holder_bound_batch_ceiling(&self) -> u16 {
-        self.holder_bound_batch_max_size
+        self.maximum_holder_bound_batch_size
             .map_or(DEFAULT_HOLDER_BOUND_BATCH_SIZE, |size| {
                 u16::try_from(size.get()).unwrap_or(MAXIMUM_HOLDER_BOUND_BATCH_SIZE)
             })
@@ -923,13 +1045,26 @@ impl EvidenceConfig {
         let decoded = Reader::new(BUNDLE_DOCUMENT_NAME)
             .with_hook(&mut hook)
             .decode::<Self>(bytes, &Expect::one(&EVIDENCE_BUNDLE_FORMAT))
-            .map_err(|report| ConfigError::Refused(Box::new(report)))?;
+            .map_err(|report| ConfigError::Refused(Box::new(name_the_assertion_type(report))))?;
         if let Err(violation) = decoded.value.check_rules() {
             return Err(ConfigError::Refused(Box::new(Report::new(vec![
                 violation.diagnostic(&decoded.document)
             ]))));
         }
         Ok(decoded.value)
+    }
+
+    /// Read a bundle from the JSON form of a decoded configuration. That form
+    /// carries no envelope, because the reader checks and removes it before
+    /// it decodes the grammar, so this declares the current one and then
+    /// applies everything [`Self::parse_yaml`] applies to a bundle file.
+    pub fn parse_projection(projection: &serde_json::Value) -> Result<Self, ConfigError> {
+        let mut document = projection.clone();
+        if let Some(members) = document.as_object_mut() {
+            members.insert("apiVersion".to_owned(), EVIDENCE_BUNDLE_API_VERSION.into());
+            members.insert("kind".to_owned(), EVIDENCE_BUNDLE_KIND.into());
+        }
+        Self::parse_yaml(document.to_string().as_bytes())
     }
 
     /// Refuse the bundle with the first rule it breaks, as startup does.
@@ -944,7 +1079,7 @@ impl EvidenceConfig {
         validate_uri(&self.service.trust_domain).at("/service/trustDomain")?;
         validate_public_origin(&self.service.public_origin, self.assurance_profile)
             .at("/service/publicOrigin")?;
-        validate_uri(&self.issuer.id).at("/issuer/id")?;
+        validate_uri(&self.issuer.id).at("/issuer/uri")?;
         if let Some(publication) = &self.publication {
             publication
                 .validate(self.assurance_profile)
@@ -1020,9 +1155,9 @@ impl EvidenceConfig {
                 .authentication
                 .oidc
                 .allowed_clients
-                .as_ref()
+                .listed_values()
                 .ok_or(ConfigError::Invalid(
-                    "task-grant authority profiles require authentication allowedClients",
+                    "task-grant authority profiles require a list of authentication allowedClients",
                 ))
                 .at("/authentication/oidc/allowedClients")?;
             if let Some((profile_id, _)) = task_grant_profiles.iter().find(|(_, profile)| {
@@ -1042,7 +1177,7 @@ impl EvidenceConfig {
         }
         validate_len(self.requirements.len(), 1, 128, "requirements").at("/requirements")?;
 
-        let mut requirement_ids = BTreeSet::new();
+        let mut requirement_ids = BTreeMap::new();
         let mut requirement_handles = BTreeSet::new();
         let mut evidence_types = BTreeSet::new();
         let mut concept_ids = BTreeSet::new();
@@ -1074,15 +1209,17 @@ impl EvidenceConfig {
         {
             return invalid("source schema roles must not overlap across sources").at("/sources");
         }
-        for (index, requirement) in self.requirements.iter().enumerate() {
+        for (index, requirement) in (0_u32..).zip(&self.requirements) {
             let at = format!("/requirements/{index}");
             requirement.validate().at(&at)?;
             if self.assurance_profile.requires_fixtures() && requirement.fixtures.is_none() {
                 return invalid("production and evidence-grade requirements must declare fixtures")
                     .at(at);
             }
-            if !requirement_ids.insert(requirement.id.as_str()) {
-                return invalid("requirement identifiers must be unique").at(format!("{at}/id"));
+            if let Some(first) = requirement_ids.insert(requirement.id.as_str(), index) {
+                return invalid("requirement identifiers must be unique")
+                    .at(format!("{at}/uri"))
+                    .map_err(|violation| violation.repeating(first));
             }
             if !requirement_handles.insert(requirement.handle.as_str()) {
                 return invalid("requirement handles must be unique").at(format!("{at}/handle"));
@@ -1094,7 +1231,7 @@ impl EvidenceConfig {
             for (concept_index, concept) in requirement.concepts.iter().enumerate() {
                 if !concept_ids.insert(concept.id.as_str()) {
                     return invalid("concept identifiers must be unique")
-                        .at(format!("{at}/concepts/{concept_index}/id"));
+                        .at(format!("{at}/concepts/{concept_index}/uri"));
                 }
             }
             for (family_index, family) in requirement.disclosure_guard.families.iter().enumerate() {
@@ -1295,8 +1432,7 @@ impl EvidenceConfig {
         let Some(batch) = batch else {
             return SourceBatchPlan::Sequential;
         };
-        if request.path.is_none()
-            || request.path_template.is_some()
+        if request.path_is_template()
             || u64::try_from(item_count)
                 .map_or(true, |count| count > u64::from(batch.maximum_items.get()))
         {
@@ -1652,6 +1788,9 @@ pub struct ServiceConfig {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct IssuerConfig {
+    /// The issuer's URI, written `uri`: `id` is the name of a local
+    /// identifier (CFG-ID-1).
+    #[serde(rename = "uri")]
     pub id: String,
 }
 
@@ -1723,9 +1862,22 @@ fn validate_publication_identifier(value: &str) -> Result<(), ConfigError> {
 
 /// The `apiVersion` every Evidence runtime file declares.
 pub const EVIDENCE_RUNTIME_API_VERSION: &str =
-    "registry.registrystack.org/evidence-runtime/v1alpha1";
+    "id.registrystack.org/formats/evidence/runtime/v1alpha1";
 /// The `kind` every Evidence runtime file declares.
 pub const EVIDENCE_RUNTIME_KIND: &str = "EvidenceRuntimeConfig";
+
+/// The `apiVersion` an Evidence runtime file declared before the format
+/// took its identifier under `id.registrystack.org/formats`.
+pub const RETIRED_EVIDENCE_RUNTIME_API_VERSION: &str =
+    "registry.registrystack.org/evidence-runtime/v1alpha1";
+
+/// The apiVersions an earlier Evidence runtime file carried, each refused
+/// with the one that replaced it.
+pub const EVIDENCE_RETIRED_RUNTIME_API_VERSIONS: &[RetiredApiVersion<'static>] =
+    &[RetiredApiVersion {
+        api_version: RETIRED_EVIDENCE_RUNTIME_API_VERSION,
+        replacement: "Write apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1.",
+    }];
 
 /// The envelope every Evidence runtime file carries.
 pub const EVIDENCE_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
@@ -1751,7 +1903,7 @@ fn unreadable_document(file: &str, bytes: &[u8]) -> ConfigError {
 pub const EVIDENCE_RUNTIME_REMOVED_KEYS: &[RemovedKey] = &[
     RemovedKey {
         path: "version",
-        replacement: "Declare apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1 \
+        replacement: "Declare apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1 \
              and kind: EvidenceRuntimeConfig.",
     },
     RemovedKey {
@@ -1774,6 +1926,18 @@ pub const EVIDENCE_RUNTIME_REMOVED_KEYS: &[RemovedKey] = &[
         path: "metricsListener.port",
         replacement: "Declare metricsListener.bind as host:port, such as 127.0.0.1:9090.",
     },
+    RemovedKey {
+        path: "audit.retainDays",
+        replacement: "Declare audit.retentionDays instead; keep the value.",
+    },
+    RemovedKey {
+        path: "signer.timeoutMilliseconds",
+        replacement: "Declare signer.attemptTimeoutMilliseconds instead; keep the value.",
+    },
+    RemovedKey {
+        path: "signer.kind",
+        replacement: "Declare signer.type instead; keep the value.",
+    },
 ];
 
 /// The codes a runtime file's semantic findings carry (CFG-DIAG-3), one per
@@ -1791,7 +1955,8 @@ pub const RUNTIME_ACQUISITION_CAPABILITIES_CODE: &str =
 
 const ABSOLUTE_PATH_ACTION: &str =
     "Write an absolute path of at most 512 bytes, without . or .. segments.";
-const LOCAL_ID_ACTION: &str = "Write a local identifier of at most 128 bytes: a lowercase ASCII letter, then lowercase letters, digits, dots, underscores, or hyphens.";
+const LOCAL_ID_ACTION: &str = "Write a local identifier of at most 64 characters: a lowercase letter, then lowercase letters, digits, underscores, or hyphens.";
+const SIGNER_NAME_ACTION: &str = "Write a name of at most 128 bytes: a lowercase ASCII letter, then lowercase letters, digits, dots, underscores, or hyphens.";
 const LISTENER_PORT_ACTION: &str = "Name a port from 1 to 65535 after the host.";
 
 /// One rule a decoded runtime document breaks, naming the member it
@@ -1856,7 +2021,7 @@ fn absolute_path_map_findings<T>(
             "{pointer}/{}",
             registry_platform_yaml::escape_pointer_segment(name)
         );
-        if !valid_local_id(name) {
+        if !valid_shared_local_id(name) {
             findings.push(RuntimeFinding::at_key(
                 code,
                 &entry,
@@ -1914,6 +2079,7 @@ impl RuntimeConfig {
     pub fn loader() -> RuntimeConfigLoader {
         RuntimeConfigLoader::new(EVIDENCE_RUNTIME_ENVELOPE)
             .removed_keys(EVIDENCE_RUNTIME_REMOVED_KEYS)
+            .retired_api_versions(EVIDENCE_RETIRED_RUNTIME_API_VERSIONS)
     }
 
     /// Parse and validate one runtime document with no environment: an
@@ -2085,19 +2251,19 @@ pub enum RuntimeSignerConfig {
         mount: String,
         key_name: String,
         key_version: BoundedU32<1, { u32::MAX }>,
-        timeout_milliseconds: BoundedU64<1, 30_000>,
+        attempt_timeout_milliseconds: BoundedU64<1, 30_000>,
     },
 }
-registry_platform_yaml::tagged_union!(RuntimeSignerConfig, tag = "kind");
+registry_platform_yaml::tagged_union!(RuntimeSignerConfig);
 
-/// The tagged form the file is written in: `kind` beside the variant's
+/// The tagged form the file is written in: `type` beside the variant's
 /// members.
 impl Serialize for RuntimeSignerConfig {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
         match self {
             Self::LocalJwk { private_key_ref } => {
-                map.serialize_entry("kind", "local-jwk")?;
+                map.serialize_entry("type", "local-jwk")?;
                 map.serialize_entry("privateKeyRef", private_key_ref)?;
             }
             Self::Transit {
@@ -2105,14 +2271,14 @@ impl Serialize for RuntimeSignerConfig {
                 mount,
                 key_name,
                 key_version,
-                timeout_milliseconds,
+                attempt_timeout_milliseconds,
             } => {
-                map.serialize_entry("kind", "transit")?;
+                map.serialize_entry("type", "transit")?;
                 map.serialize_entry("unixSocketPath", unix_socket_path)?;
                 map.serialize_entry("mount", mount)?;
                 map.serialize_entry("keyName", key_name)?;
                 map.serialize_entry("keyVersion", key_version)?;
-                map.serialize_entry("timeoutMilliseconds", timeout_milliseconds)?;
+                map.serialize_entry("attemptTimeoutMilliseconds", attempt_timeout_milliseconds)?;
             }
         }
         map.end()
@@ -2169,7 +2335,7 @@ impl RuntimeSignerConfig {
                             ConfigError::Invalid(
                                 "Transit signer mount and keyName must be local identifiers",
                             ),
-                            LOCAL_ID_ACTION,
+                            SIGNER_NAME_ACTION,
                         ));
                     }
                 }
@@ -2208,7 +2374,7 @@ pub struct RuntimeAuditConfig {
         BoundedU64<{ registry_platform_audit::MIN_AUDIT_ROTATE_BYTES }, { u32::MAX as u64 }>,
     >,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retain_days: Option<BoundedU32<1, { registry_platform_audit::MAX_AUDIT_RETAIN_DAYS }>>,
+    pub retention_days: Option<BoundedU32<1, { registry_platform_audit::MAX_AUDIT_RETAIN_DAYS }>>,
 }
 
 impl RuntimeAuditConfig {
@@ -2239,7 +2405,7 @@ impl RuntimeAuditConfig {
             self.destination,
             self.path.as_deref().map(PathBuf::from),
             self.rotate_bytes.map(BoundedU64::get),
-            self.retain_days.map(BoundedU32::get),
+            self.retention_days.map(BoundedU32::get),
         )
     }
 
@@ -2248,6 +2414,16 @@ impl RuntimeAuditConfig {
     pub fn destination(&self) -> Result<AuditDestination, ConfigError> {
         self.settings()
             .map_err(|error| ConfigError::Invalid(audit_refusal(&error).cause))
+    }
+}
+
+/// The key the runtime file writes for a file-only setting the audit writer
+/// names. The writer's own name for the retention period differs from the
+/// key.
+fn audit_member(field: &str) -> &str {
+    match field {
+        "retainDays" => "retentionDays",
+        other => other,
     }
 }
 
@@ -2281,8 +2457,8 @@ fn audit_refusal(error: &AuditDestinationError) -> AuditRefusal {
             ABSOLUTE_PATH_ACTION,
         ),
         AuditDestinationError::FileOnlyField { field } => refusal(
-            "audit path, rotateBytes, and retainDays apply only when audit destination is file",
-            &format!("/audit/{field}"),
+            "audit path, rotateBytes, and retentionDays apply only when audit destination is file",
+            &format!("/audit/{}", audit_member(field)),
             true,
             "Remove the key, or write destination: file.",
         ),
@@ -2298,8 +2474,8 @@ fn audit_refusal(error: &AuditDestinationError) -> AuditRefusal {
         AuditDestinationError::RetainDaysOutOfRange { maximum } => AuditRefusal {
             action: format!("Write a whole number of days from 1 to {maximum}."),
             ..refusal(
-                "audit retainDays is outside the platform bounds",
-                "/audit/retainDays",
+                "audit retentionDays is outside the platform bounds",
+                "/audit/retentionDays",
                 false,
                 "",
             )
@@ -2552,6 +2728,92 @@ impl AuthenticationConfig {
     }
 }
 
+/// What an admission gate reads: the keyword, or a list that names something.
+const ADMISSION_GATE_FORM: &str = "unrestricted, or a list of at least one value";
+const ADMISSION_GATE_ACTION: &str =
+    "Write unrestricted to admit any value, or list the admitted values.";
+
+/// The keyword `unrestricted`.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct UnrestrictedKeyword;
+
+impl<'de> Deserialize<'de> for UnrestrictedKeyword {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if String::deserialize(deserializer)? == "unrestricted" {
+            Ok(Self)
+        } else {
+            Err(Invalid::expected(ADMISSION_GATE_FORM, ADMISSION_GATE_ACTION).into_error())
+        }
+    }
+}
+
+/// A nonempty list of distinct values.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ListedValues(UniqueList<String>);
+
+impl<'de> Deserialize<'de> for ListedValues {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let values = UniqueList::<String>::deserialize(deserializer)?;
+        if values.is_empty() {
+            return Err(Invalid::expected(ADMISSION_GATE_FORM, ADMISSION_GATE_ACTION).into_error());
+        }
+        Ok(Self(values))
+    }
+}
+
+/// Which values an admission gate admits: the keyword `unrestricted`, or a
+/// nonempty list of the admitted values (CFG-EMPTY-2). An omitted gate and an
+/// empty list are refused while the bundle is read, because either would read
+/// as both "nothing" and "anything" (CFG-EMPTY-3).
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum AdmissionGate {
+    Unrestricted(UnrestrictedKeyword),
+    Listed(ListedValues),
+}
+
+registry_platform_yaml::shape_union!(AdmissionGate {
+    scalar => Unrestricted,
+    list => Listed,
+});
+
+impl Serialize for AdmissionGate {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Unrestricted(_) => serializer.serialize_str("unrestricted"),
+            Self::Listed(values) => values.0.serialize(serializer),
+        }
+    }
+}
+
+impl AdmissionGate {
+    /// The gate that admits any value.
+    pub fn unrestricted() -> Self {
+        Self::Unrestricted(UnrestrictedKeyword)
+    }
+
+    /// The gate that admits exactly `values`. Validation refuses an empty
+    /// list built this way, as the reader refuses one a file writes.
+    pub fn listed(values: UniqueList<String>) -> Self {
+        Self::Listed(ListedValues(values))
+    }
+
+    /// The listed values, or `None` when the gate is unrestricted.
+    pub fn listed_values(&self) -> Option<&UniqueList<String>> {
+        match self {
+            Self::Unrestricted(_) => None,
+            Self::Listed(values) => Some(&values.0),
+        }
+    }
+
+    /// The values the token verifier is given: the list, or none for an
+    /// unrestricted gate, which is how the verifier spells "no gate".
+    pub fn admitted(&self) -> Vec<String> {
+        self.listed_values()
+            .map(|values| values.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(remote = "Self", rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcAuthenticationConfig {
@@ -2574,18 +2836,17 @@ pub struct OidcAuthenticationConfig {
     pub maximum_token_lifetime_seconds: BoundedU64<1, 86_400>,
     /// Emergency denylist applied before JWKS cache selection.
     pub revoked_key_ids: UniqueList<String>,
-    /// Explicit machine-client admission, matched against the token's
-    /// `client_id`/`azp` the platform verifier already reads. Absent keeps
-    /// the issuer-vouched-client behavior; present requires a nonempty,
-    /// bounded, unique list and admits exactly those clients.
+    /// Machine-client admission every bundle decides, matched against the
+    /// token's `client_id`/`azp` the platform verifier already reads.
+    /// `unrestricted` admits every client the issuer vouched for; a list is
+    /// nonempty, bounded, and unique and admits exactly those clients.
     ///
     /// Audience plus static issuer-governed attributes alone cannot establish
     /// that the client was granted this resource's permission: an issuer may
     /// issue a correctly signed token for a known resource with zero scopes
     /// while still emitting the client's attributes. `required_scopes` closes
     /// that gap.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allowed_clients: Option<UniqueList<String>>,
+    pub allowed_clients: AdmissionGate,
     /// Per-client assertion-authority admission for a token that carries the
     /// platform verifier's `registry_assertion_issuer` claim, keyed by the
     /// client (matched against the token's `azp`, falling back to
@@ -2598,12 +2859,12 @@ pub struct OidcAuthenticationConfig {
     /// affected by this admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assertion_issuers: Option<BTreeMap<String, UniqueList<String>>>,
-    /// Scopes every inbound token must carry, checked against the verified
+    /// The scope gate every bundle decides, checked against the verified
     /// token's scope set after signature verification and before any authority
-    /// claim is read. Absent keeps the no-scope-gate behavior; present
-    /// requires a nonempty, bounded, unique list of RFC 6749 scope-tokens.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub required_scopes: Option<UniqueList<String>>,
+    /// claim is read. `unrestricted` applies no scope gate; a list is a
+    /// nonempty, bounded, unique list of RFC 6749 scope-tokens every inbound
+    /// token must carry.
+    pub required_scopes: AdmissionGate,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_claim: Option<String>,
     /// Logical name of the private certificate authority the runtime file
@@ -2636,7 +2897,7 @@ impl OidcAuthenticationConfig {
     fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
         let JwksSource::Uri { .. } = &self.provider.jwks_source else {
             return Err(ConfigError::InvalidField(
-                "Evidence reads access-token keys only from jwksSource kind uri",
+                "Evidence reads access-token keys only from jwksSource type uri",
                 "authentication.oidc.jwksSource",
             ));
         };
@@ -2705,21 +2966,29 @@ impl OidcAuthenticationConfig {
             256,
             "authentication revokedKeyIds",
         )?;
-        // Admission lists are optional, but a present list is a statement the
-        // deployment means: an empty allowlist admits nothing and an empty
-        // scope requirement gates nothing, and both are almost certainly a
-        // mis-authored key rather than a deliberate posture.
-        if let Some(clients) = &self.allowed_clients {
+        // A listed gate is a statement the deployment means: an empty
+        // allowlist admits nothing and an empty scope requirement gates
+        // nothing, and both are almost certainly a mis-authored key rather
+        // than a deliberate posture. `unrestricted` is the deliberate one.
+        if let Some(clients) = self.allowed_clients.listed_values() {
             validate_strings(clients, 1, 32, 1, 128, "authentication allowedClients")?;
         }
         if let Some(assertion_issuers) = &self.assertion_issuers {
             let clients: Vec<String> = assertion_issuers.keys().cloned().collect();
             validate_strings(&clients, 1, 32, 1, 128, "authentication assertionIssuers")?;
+            // A client identifier is its issuer's spelling, kept as written
+            // (CFG-ID-2): any text without a control character.
+            if clients
+                .iter()
+                .any(|client| registry_platform_yaml::ExternalId::new(client.as_str()).is_err())
+            {
+                return invalid("authentication assertionIssuers client identifier is invalid");
+            }
             for issuers in assertion_issuers.values() {
                 validate_strings(issuers, 1, 8, 1, 512, "authentication assertionIssuers")?;
             }
         }
-        if let Some(scopes) = &self.required_scopes {
+        if let Some(scopes) = self.required_scopes.listed_values() {
             validate_strings(scopes, 1, 32, 1, 256, "authentication requiredScopes")?;
             if scopes
                 .iter()
@@ -3033,8 +3302,8 @@ impl SelectorProfile {
     fn validate(&self) -> Result<(), ConfigError> {
         validate_len(self.fields.len(), 1, 16, "selector fields")?;
         for (name, field) in self.fields.iter() {
-            if !valid_field_name(name) {
-                return invalid("selector field name is invalid");
+            if !valid_shared_local_id(name) {
+                return not_a_local_id("selector field name");
             }
             field.validate(self.maximum_aggregate_bytes.get())?;
         }
@@ -3184,7 +3453,7 @@ pub struct SourceConnectionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_trust_profile: Option<String>,
     #[serde(default = "default_connection_concurrency")]
-    pub concurrency_limit: BoundedU32<1, 256>,
+    pub maximum_concurrency: BoundedU32<1, 256>,
     #[serde(default = "default_connection_timeout")]
     pub admission_timeout_milliseconds: BoundedU64<1, 30_000>,
     #[serde(default = "default_connection_timeout")]
@@ -3226,7 +3495,7 @@ impl SourceConnectionConfig {
     pub(crate) fn matches_source(&self, source: &SourceConfig) -> bool {
         matches!(source, SourceConfig::HttpJson { base_url, authentication, tls_trust_profile, request, .. }
             if base_url == &self.base_url && authentication == &self.authentication
-                && tls_trust_profile == &self.tls_trust_profile && request.concurrency_limit == self.concurrency_limit)
+                && tls_trust_profile == &self.tls_trust_profile && request.maximum_concurrency == self.maximum_concurrency)
     }
 }
 
@@ -3241,7 +3510,7 @@ impl SourceConnectionConfig {
 /// `adapter_parameters_schema`, `selector_inputs`, `selector_bindings`,
 /// `prior_fact_bindings`, `fixed_headers`, `projection`,
 /// `forwards_access_attribution`,
-/// `timeout_milliseconds`, `maximum_response_bytes`, and `concurrency_limit`.
+/// `attempt_timeout_milliseconds`, `maximum_response_bytes`, and `maximum_concurrency`.
 ///
 /// The tag is internal, so a field belonging to one transport is an unknown
 /// field of the other and the closed schema rejects it. Request and credential
@@ -3313,8 +3582,8 @@ pub enum SourceConfig {
     },
 }
 
-registry_platform_yaml::tagged_union!(SourceConfig, tag = "transport");
-serialize_tagged_union!(SourceConfig, tag = "transport");
+registry_platform_yaml::tagged_union!(SourceConfig);
+serialize_tagged_union!(SourceConfig, tag = "type");
 
 impl SourceConfig {
     fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
@@ -3373,13 +3642,19 @@ impl SourceConfig {
                 if let Some(evidence) = evidence {
                     evidence.validate(request)?;
                     if batch.is_some() || unresolved_problem.is_some() {
-                        return invalid("signed Evidence sources cannot declare source batching or unresolved Problem Details");
+                        return invalid(
+                            "signed Evidence sources cannot declare source batching or unresolved Problem Details",
+                        );
                     }
                     if *forward_access_attribution {
-                        return invalid("a signed Evidence source cannot set forwardAccessAttribution, because the upstream authorizes and audits this service's own source credential");
+                        return invalid(
+                            "a signed Evidence source cannot set forwardAccessAttribution, because the upstream authorizes and audits this service's own source credential",
+                        );
                     }
                     if matches!(**authentication, SourceAuthentication::None {}) {
-                        return invalid("a signed Evidence source requires source authentication, because the upstream authorizes and audits this service's own source credential");
+                        return invalid(
+                            "a signed Evidence source requires source authentication, because the upstream authorizes and audits this service's own source credential",
+                        );
                     }
                 }
                 if let Some(problem) = unresolved_problem {
@@ -3391,7 +3666,7 @@ impl SourceConfig {
                     }
                 }
                 if let Some(batch) = batch {
-                    if request.path.is_none() || request.path_template.is_some() {
+                    if request.path_is_template() {
                         return invalid("source batch optimization requires a fixed request path");
                     }
                     batch.validate()?;
@@ -3651,10 +3926,10 @@ impl SourceConfig {
         }
     }
 
-    pub fn timeout_milliseconds(&self) -> u64 {
+    pub fn attempt_timeout_milliseconds(&self) -> u64 {
         match self {
-            Self::HttpJson { request, .. } => request.timeout_milliseconds.get(),
-            Self::SqliteExtract { request, .. } => request.timeout_milliseconds.get(),
+            Self::HttpJson { request, .. } => request.attempt_timeout_milliseconds.get(),
+            Self::SqliteExtract { request, .. } => request.attempt_timeout_milliseconds.get(),
         }
     }
 
@@ -3665,10 +3940,10 @@ impl SourceConfig {
         }
     }
 
-    pub fn concurrency_limit(&self) -> u32 {
+    pub fn maximum_concurrency(&self) -> u32 {
         match self {
-            Self::HttpJson { request, .. } => request.concurrency_limit.get(),
-            Self::SqliteExtract { request, .. } => request.concurrency_limit.get(),
+            Self::HttpJson { request, .. } => request.maximum_concurrency.get(),
+            Self::SqliteExtract { request, .. } => request.maximum_concurrency.get(),
         }
     }
 }
@@ -3775,34 +4050,61 @@ pub enum SourceAuthentication {
         #[serde(rename = "valueRef")]
         value_ref: SecretReference,
     },
+    /// The client-credentials grant with a shared client secret, the RFC
+    /// 6749 section 2.3.1 form.
     Oauth2ClientCredentials {
         #[serde(rename = "tokenEndpoint")]
         token_endpoint: String,
         #[serde(rename = "clientIdRef")]
         client_id_ref: SecretReference,
-        /// Shared client secret, for the RFC 6749 section 2.3.1 form.
+        /// Shared client secret.
+        #[serde(rename = "clientSecretRef")]
+        client_secret_ref: SecretReference,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        /// Fixed `audience` form parameter.
         ///
-        /// Present with `credentialPlacement` and without
-        /// `clientAssertionKeyRef`, or absent with both.
+        /// An authorization server may key the issued token to an audience the
+        /// scope cannot express and return a token usable against nothing when
+        /// it is absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audience: Option<String>,
+        /// RFC 8707 resource indicator sent as a token-request form parameter.
+        /// Unlike the assertion audience, this names the intended resource server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource: Option<String>,
+        /// Where the shared client secret travels.
+        #[serde(rename = "credentialPlacement")]
+        credential_placement: CredentialPlacement,
+        #[serde(rename = "maximumCacheSeconds")]
+        maximum_cache_seconds: BoundedU64<0, 86_400>,
+        /// Lifetime assumed when the provider omits `expires_in`.
+        ///
+        /// RFC 6749 section 5.1 makes `expires_in` recommended rather than
+        /// required, so a compliant provider may return only `access_token`
+        /// and `token_type`. The operator states the lifetime here rather than
+        /// the runtime inferring one from the token, and the cache is still
+        /// clamped to `maximumCacheSeconds`.
         #[serde(
-            rename = "clientSecretRef",
+            rename = "assumedLifetimeSeconds",
             default,
             skip_serializing_if = "Option::is_none"
         )]
-        client_secret_ref: Option<SecretReference>,
-        /// Private JWK the client assertion is signed with, for the RFC 7523
-        /// section 2.2 form.
-        ///
-        /// Its presence selects assertion authentication, which is the form
-        /// SMART on FHIR Backend Services requires.
-        #[serde(
-            rename = "clientAssertionKeyRef",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
-        client_assertion_key_ref: Option<SecretReference>,
-        /// Audience claim of the signed assertion; set only with
-        /// `clientAssertionKeyRef`, and defaulting to `tokenEndpoint`.
+        assumed_lifetime_seconds: Option<BoundedU64<1, 86_400>>,
+    },
+    /// The client-credentials grant with a signed client assertion, the RFC
+    /// 7523 section 2.2 form, which is the client authentication SMART on
+    /// FHIR Backend Services requires.
+    Oauth2PrivateKeyJwt {
+        #[serde(rename = "tokenEndpoint")]
+        token_endpoint: String,
+        #[serde(rename = "clientIdRef")]
+        client_id_ref: SecretReference,
+        /// Private JWK the client assertion is signed with.
+        #[serde(rename = "clientAssertionKeyRef")]
+        client_assertion_key_ref: SecretReference,
+        /// Audience claim of the signed assertion, defaulting to
+        /// `tokenEndpoint`.
         ///
         /// RFC 7523 section 3 asks only that the value identify the
         /// authorization server and leaves the exact string to out-of-band
@@ -3829,14 +4131,6 @@ pub enum SourceAuthentication {
         /// Unlike the assertion audience, this names the intended resource server.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resource: Option<String>,
-        /// Where the shared client secret travels; set only with
-        /// `clientSecretRef`.
-        #[serde(
-            rename = "credentialPlacement",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
-        credential_placement: Option<CredentialPlacement>,
         #[serde(rename = "maximumCacheSeconds")]
         maximum_cache_seconds: BoundedU64<0, 86_400>,
         /// Lifetime assumed when the provider omits `expires_in`.
@@ -3855,8 +4149,8 @@ pub enum SourceAuthentication {
     },
 }
 
-registry_platform_yaml::tagged_union!(SourceAuthentication, tag = "kind");
-serialize_tagged_union!(SourceAuthentication, tag = "kind");
+registry_platform_yaml::tagged_union!(SourceAuthentication);
+serialize_tagged_union!(SourceAuthentication, tag = "type");
 
 impl SourceAuthentication {
     fn validate(&self) -> Result<(), ConfigError> {
@@ -3881,34 +4175,30 @@ impl SourceAuthentication {
             } => validate_configurable_header_name(header_name),
             Self::Oauth2ClientCredentials {
                 token_endpoint,
-                client_secret_ref,
-                client_assertion_key_ref,
+                scope,
+                audience,
+                resource,
+                ..
+            } => validate_token_request(
+                token_endpoint,
+                scope.as_deref(),
+                audience.as_deref(),
+                resource.as_deref(),
+            ),
+            Self::Oauth2PrivateKeyJwt {
+                token_endpoint,
                 client_assertion_audience,
                 scope,
                 audience,
                 resource,
-                credential_placement,
                 ..
             } => {
-                let token_endpoint = validate_source_url(token_endpoint, false)?;
-                if token_endpoint.query().is_some() {
-                    return invalid("OAuth token endpoint must not contain a query");
-                }
-                if client_secret_ref.is_some() == client_assertion_key_ref.is_some() {
-                    return invalid(
-                        "OAuth client authentication must declare either a client secret or a client assertion key",
-                    );
-                }
-                if credential_placement.is_some() != client_secret_ref.is_some() {
-                    return invalid(
-                        "OAuth credential placement is required with a client secret and forbidden without one",
-                    );
-                }
-                if client_assertion_audience.is_some() && client_assertion_key_ref.is_none() {
-                    return invalid(
-                        "OAuth client assertion audience is set without a client assertion key",
-                    );
-                }
+                validate_token_request(
+                    token_endpoint,
+                    scope.as_deref(),
+                    audience.as_deref(),
+                    resource.as_deref(),
+                )?;
                 if let Some(client_assertion_audience) = client_assertion_audience {
                     validate_string(
                         client_assertion_audience,
@@ -3923,23 +4213,6 @@ impl SourceAuthentication {
                     if client_assertion_audience.trim().is_empty() {
                         return invalid("OAuth client assertion audience is blank");
                     }
-                }
-                if let Some(scope) = scope {
-                    validate_string(scope, 1, 512, "OAuth scope")?;
-                }
-                if let Some(audience) = audience {
-                    validate_string(audience, 1, 512, "OAuth audience")?;
-                    // The token request sends this value as it stands, with no
-                    // fallback, so a blank one asks the authorization server
-                    // for an audience named by spaces. Refusing it here names
-                    // the key the operator must correct; the server's refusal
-                    // arrives at readiness and names nothing.
-                    if audience.trim().is_empty() {
-                        return invalid("OAuth audience is blank");
-                    }
-                }
-                if let Some(resource) = resource {
-                    validate_oauth_resource(resource)?;
                 }
                 Ok(())
             }
@@ -3958,18 +4231,79 @@ impl SourceAuthentication {
             Self::Oauth2ClientCredentials {
                 client_id_ref,
                 client_secret_ref,
+                ..
+            } => vec![client_id_ref, client_secret_ref],
+            Self::Oauth2PrivateKeyJwt {
+                client_id_ref,
                 client_assertion_key_ref,
                 ..
-            } => [
-                Some(client_id_ref),
-                client_secret_ref.as_ref(),
-                client_assertion_key_ref.as_ref(),
-            ]
-            .into_iter()
-            .flatten()
-            .collect(),
+            } => vec![client_id_ref, client_assertion_key_ref],
         }
     }
+}
+
+/// An assertion member under another authentication type is refused by the
+/// reader as an unknown key. Its fix names the one type that carries the
+/// member, which the list of the written type's own keys cannot.
+fn name_the_assertion_type(report: Report) -> Report {
+    let files_checked = report.files_checked();
+    let mut named = Report::new(
+        report
+            .into_diagnostics()
+            .into_iter()
+            .map(|mut diagnostic| {
+                let assertion_member = ["clientAssertionKeyRef", "clientAssertionAudience"]
+                    .iter()
+                    .any(|member| {
+                        diagnostic
+                            .path
+                            .strip_suffix(member)
+                            .is_some_and(|parent| parent.ends_with("/authentication/"))
+                    });
+                if diagnostic.code == "config.unknown-key" && assertion_member {
+                    diagnostic.suggested_action =
+                        "Declare type: oauth2-private-key-jwt to authenticate with a client assertion key; no other authentication type carries this member."
+                            .to_owned();
+                }
+                diagnostic
+            })
+            .collect(),
+    );
+    if let Some(files_checked) = files_checked {
+        named.set_files_checked(files_checked);
+    }
+    named
+}
+
+/// The members both client-credentials forms send in the token request.
+fn validate_token_request(
+    token_endpoint: &str,
+    scope: Option<&str>,
+    audience: Option<&str>,
+    resource: Option<&str>,
+) -> Result<(), ConfigError> {
+    let token_endpoint = validate_source_url(token_endpoint, false)?;
+    if token_endpoint.query().is_some() {
+        return invalid("OAuth token endpoint must not contain a query");
+    }
+    if let Some(scope) = scope {
+        validate_string(scope, 1, 512, "OAuth scope")?;
+    }
+    if let Some(audience) = audience {
+        validate_string(audience, 1, 512, "OAuth audience")?;
+        // The token request sends this value as it stands, with no
+        // fallback, so a blank one asks the authorization server
+        // for an audience named by spaces. Refusing it here names
+        // the key the operator must correct; the server's refusal
+        // arrives at readiness and names nothing.
+        if audience.trim().is_empty() {
+            return invalid("OAuth audience is blank");
+        }
+    }
+    if let Some(resource) = resource {
+        validate_oauth_resource(resource)?;
+    }
+    Ok(())
 }
 
 /// Accept an authentication scheme the runtime may prefix to a static token.
@@ -4002,10 +4336,9 @@ pub enum CredentialPlacement {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FixedRequest {
     pub method: HttpMethod,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path_template: Option<String>,
+    /// The request path: a literal, or a template when it names
+    /// placeholders, which `path_bindings` then fills.
+    pub path: String,
     #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
     pub path_bindings: OrderedMap<PathBindingConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -4017,9 +4350,9 @@ pub struct FixedRequest {
     pub preparation_limits: PreparationLimits,
     pub projection: UniqueList<String>,
     pub redirects: RedirectPolicy,
-    pub timeout_milliseconds: BoundedU64<1, 30_000>,
+    pub attempt_timeout_milliseconds: BoundedU64<1, 30_000>,
     pub maximum_response_bytes: BoundedU64<1, 1_048_576>,
-    pub concurrency_limit: BoundedU32<1, 256>,
+    pub maximum_concurrency: BoundedU32<1, 256>,
 }
 
 /// Reviewed scripts and response contract for one physical HTTP call serving
@@ -4058,16 +4391,21 @@ impl HttpBatchConfig {
 }
 
 impl FixedRequest {
+    /// Whether `path` names placeholders. A literal path admits neither
+    /// brace, so one brace is enough to read the member as a template.
+    pub fn path_is_template(&self) -> bool {
+        self.path.contains(['{', '}'])
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
-        match (&self.path, &self.path_template) {
-            (Some(path), None) => {
-                validate_normalized_request_path(path)?;
-                if !self.path_bindings.is_empty() {
-                    return invalid("fixed source path must not define pathBindings");
-                }
+        validate_string(&self.path, 2, 2_048, "source request path")?;
+        if self.path_is_template() {
+            validate_path_template(&self.path, &self.path_bindings)?;
+        } else {
+            validate_normalized_request_path(&self.path)?;
+            if !self.path_bindings.is_empty() {
+                return invalid("a source path without placeholders must not define pathBindings");
             }
-            (None, Some(template)) => validate_path_template(template, &self.path_bindings)?,
-            _ => return invalid("source request must define exactly one of path or pathTemplate"),
         }
         validate_fixed_headers(&self.fixed_headers)?;
         validate_selector_inputs(&self.selector_inputs)?;
@@ -4145,9 +4483,9 @@ pub struct SqliteRequest {
     pub maximum_cell_bytes: BoundedU64<1, 65_536>,
     pub maximum_statement_steps: BoundedU64<1, 1_000_000>,
     pub projection: UniqueList<String>,
-    pub timeout_milliseconds: BoundedU64<1, 30_000>,
+    pub attempt_timeout_milliseconds: BoundedU64<1, 30_000>,
     pub maximum_response_bytes: BoundedU64<1, 1_048_576>,
-    pub concurrency_limit: BoundedU32<1, 256>,
+    pub maximum_concurrency: BoundedU32<1, 256>,
 }
 
 impl SqliteRequest {
@@ -4207,7 +4545,7 @@ impl SqliteRequest {
             // Parameters a reviewer cannot check against a closed schema are
             // parameters the extraction script reads unchecked.
             None if !self.adapter_parameters.is_empty() => {
-                return invalid("adapter parameters require their closed schema")
+                return invalid("adapter parameters require their closed schema");
             }
             None => {}
         }
@@ -4239,10 +4577,10 @@ impl SqliteRequest {
                 }
             }
             (Some(_), None) => {
-                return invalid("statement preparation requires its preparation limits")
+                return invalid("statement preparation requires its preparation limits");
             }
             (None, Some(_)) => {
-                return invalid("statement preparation limits require a preparation script")
+                return invalid("statement preparation limits require a preparation script");
             }
             (None, None) => {}
         }
@@ -4292,12 +4630,12 @@ pub enum SqliteParameterBinding {
     /// Written as a braced variant with no fields rather than a unit variant,
     /// because serde applies `deny_unknown_fields` to an internally tagged unit
     /// variant's siblings and not to the variant itself, so a unit variant would
-    /// silently accept `{kind: prepared, role: subject}`.
+    /// silently accept `{type: prepared, role: subject}`.
     Prepared {},
 }
 
-registry_platform_yaml::tagged_union!(SqliteParameterBinding, tag = "kind");
-serialize_tagged_union!(SqliteParameterBinding, tag = "kind");
+registry_platform_yaml::tagged_union!(SqliteParameterBinding);
+serialize_tagged_union!(SqliteParameterBinding, tag = "type");
 
 impl SqliteParameterBinding {
     fn validate(&self) -> Result<(), ConfigError> {
@@ -4388,8 +4726,8 @@ pub enum PathBindingConfig {
     },
 }
 
-registry_platform_yaml::tagged_union!(PathBindingConfig, tag = "from");
-serialize_tagged_union!(PathBindingConfig, tag = "from");
+registry_platform_yaml::tagged_union!(PathBindingConfig);
+serialize_tagged_union!(PathBindingConfig, tag = "type");
 
 impl PathBindingConfig {
     fn validate(&self) -> Result<(), ConfigError> {
@@ -4887,8 +5225,8 @@ pub enum AcquisitionConfig {
     },
 }
 
-registry_platform_yaml::tagged_union!(AcquisitionConfig, tag = "kind");
-serialize_tagged_union!(AcquisitionConfig, tag = "kind");
+registry_platform_yaml::tagged_union!(AcquisitionConfig);
+serialize_tagged_union!(AcquisitionConfig, tag = "type");
 
 impl AcquisitionConfig {
     fn validate(&self) -> Result<(), ConfigError> {
@@ -5122,6 +5460,9 @@ pub struct RequirementConfig {
     /// definition. It is explicit rather than inferred from the requirement
     /// URI so URI revisions cannot silently rename application code.
     pub handle: String,
+    /// The requirement's URI, written `uri`: `id` is the name of a local
+    /// identifier (CFG-ID-1).
+    #[serde(rename = "uri")]
     pub id: String,
     pub kind: RequirementKind,
     /// What the subject bindings in this requirement's assertions are derived
@@ -5285,8 +5626,8 @@ impl DerivationConfig {
         validate_derivation_input_shape(&self.selector_inputs)?;
         validate_len(self.parameters.len(), 0, 32, "derivation parameters")?;
         for (name, value) in self.parameters.iter() {
-            if !valid_field_name(name) {
-                return invalid("derivation parameter name is invalid");
+            if !valid_shared_local_id(name) {
+                return not_a_local_id("derivation parameter name");
             }
             value.validate()?;
         }
@@ -5298,7 +5639,7 @@ impl DerivationConfig {
 /// bucket boundaries, chosen by the node's kind (CFG-SCHEMA-8).
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ParameterValue {
-    Scalar(ScalarParameter),
+    Scalar(DerivationScalar),
     Decimal(DecimalValue),
     BucketBoundaries(Vec<BucketBoundary>),
 }
@@ -5312,7 +5653,7 @@ registry_platform_yaml::shape_union!(ParameterValue {
 impl Serialize for ParameterValue {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            Self::Scalar(value) => value.serialize(serializer),
+            Self::Scalar(value) => value.0.serialize(serializer),
             Self::Decimal(value) => value.serialize(serializer),
             Self::BucketBoundaries(boundaries) => boundaries.serialize(serializer),
         }
@@ -5322,20 +5663,40 @@ impl Serialize for ParameterValue {
 impl ParameterValue {
     fn validate(&self) -> Result<(), ConfigError> {
         match self {
-            Self::Scalar(ScalarParameter::String(value)) => {
+            Self::Scalar(DerivationScalar(ScalarParameter::String(value))) => {
                 validate_string(value, 0, 1_024, "derivation string parameter")
             }
-            Self::Scalar(ScalarParameter::Integer(value)) => {
+            Self::Scalar(DerivationScalar(ScalarParameter::Integer(value))) => {
                 if value.unsigned_abs() > MAX_SAFE_INTEGER as u64 {
                     invalid("derivation integer parameter exceeds safe bounds")
                 } else {
                     Ok(())
                 }
             }
-            Self::Scalar(ScalarParameter::Boolean(_)) => Ok(()),
+            Self::Scalar(DerivationScalar(ScalarParameter::Boolean(_))) => Ok(()),
             Self::Decimal(value) => value.validate(),
             Self::BucketBoundaries(boundaries) => validate_bucket_boundaries(boundaries),
         }
+    }
+}
+
+/// One scalar derivation parameter: text, a safe integer, or a boolean. An
+/// integer outside the safe integers is refused at the value while the bundle
+/// is read (CFG-QTY-4).
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct DerivationScalar(pub ScalarParameter);
+
+impl<'de> Deserialize<'de> for DerivationScalar {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let scalar = ScalarParameter::deserialize(deserializer)?;
+        if matches!(scalar, ScalarParameter::Integer(value) if value.unsigned_abs() > MAX_SAFE_INTEGER as u64)
+        {
+            return Err(de::Error::custom(Invalid::out_of_range(
+                -MAX_SAFE_INTEGER,
+                MAX_SAFE_INTEGER,
+            )));
+        }
+        Ok(Self(scalar))
     }
 }
 
@@ -5372,13 +5733,82 @@ pub struct BucketBoundary {
 pub struct ConceptConfig {
     /// Stable key used in high-level client result maps.
     pub handle: String,
+    /// The concept's URI, written `uri`: `id` is the name of a local
+    /// identifier (CFG-ID-1).
+    #[serde(rename = "uri")]
     pub id: String,
+    /// The concept's value form, written `type`: the tag that fixes the
+    /// shape of `constraints` (CFG-ID-7).
+    #[serde(rename = "type")]
     pub form: ConceptForm,
     pub required: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "concept_constraints")]
     pub constraints: OrderedMap<YamlValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sd_jwt_vc: Option<SdJwtVcConceptProjection>,
+}
+
+/// The fewest and the most items a list concept may declare.
+const MINIMUM_CONCEPT_ITEMS: u64 = 1;
+const MAXIMUM_CONCEPT_ITEMS: u64 = 64;
+
+/// Reads a concept's constraints, refusing an item count outside its bounds
+/// at the value (CFG-QTY-4). `minimumItems` and `maximumItems` carry the same
+/// bounds in every list form; each other constraint depends on the concept's
+/// form and is checked with it.
+fn concept_constraints<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<OrderedMap<YamlValue>, D::Error> {
+    struct ItemCount(YamlValue);
+
+    impl<'de> Deserialize<'de> for ItemCount {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let value = YamlValue::deserialize(deserializer)?;
+            let integer = value.is_i64() || value.is_u64();
+            let bounded = value.as_u64().is_some_and(|count| {
+                (MINIMUM_CONCEPT_ITEMS..=MAXIMUM_CONCEPT_ITEMS).contains(&count)
+            });
+            if integer && !bounded {
+                return Err(de::Error::custom(Invalid::out_of_range(
+                    MINIMUM_CONCEPT_ITEMS,
+                    MAXIMUM_CONCEPT_ITEMS,
+                )));
+            }
+            Ok(Self(value))
+        }
+    }
+
+    struct ConstraintsVisitor;
+
+    impl<'de> Visitor<'de> for ConstraintsVisitor {
+        type Value = OrderedMap<YamlValue>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a mapping with unique string keys")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut entries: Vec<(String, YamlValue)> = Vec::new();
+            while let Some(key) = map.next_key::<String>()? {
+                if entries.iter().any(|(seen, _)| *seen == key) {
+                    return Err(Invalid::expected(
+                        "a mapping that names each key once",
+                        "Remove the repeated key.",
+                    )
+                    .into_error());
+                }
+                let value = if matches!(key.as_str(), "minimumItems" | "maximumItems") {
+                    map.next_value::<ItemCount>()?.0
+                } else {
+                    map.next_value::<YamlValue>()?
+                };
+                entries.push((key, value));
+            }
+            Ok(OrderedMap(entries))
+        }
+    }
+
+    deserializer.deserialize_map(ConstraintsVisitor)
 }
 
 impl ConceptConfig {
@@ -5472,8 +5902,8 @@ fn validate_named_map<T>(
     validate_len(map.len(), minimum, maximum, "named configuration map").at(pointer)?;
     for (name, value) in map.iter() {
         let at = named(pointer, name);
-        if !valid_local_id(name) {
-            return invalid("local identifier is invalid").at_key(at);
+        if !valid_shared_local_id(name) {
+            return not_a_local_id("map key").at_key(at);
         }
         validate(value).at(at)?;
     }
@@ -5494,10 +5924,20 @@ fn named(pointer: &str, name: &str) -> String {
 #[derive(Debug)]
 pub(crate) struct Violation {
     pub(crate) pointer: String,
-    /// Whether the rule concerns the member's key, as a malformed item name
-    /// does, rather than its value.
-    pub(crate) at_key: bool,
+    pub(crate) concern: Concern,
     pub(crate) error: ConfigError,
+}
+
+/// What a failed rule concerns in the member a [`Violation`] names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Concern {
+    /// The member's value.
+    Value,
+    /// The member's key, as a malformed item name does.
+    Key,
+    /// The member identifies a list item, and it repeats the same member of
+    /// the item at index `first` in the same list.
+    RepeatedId { first: u32 },
 }
 
 /// Names the member a failed check concerns.
@@ -5510,7 +5950,7 @@ impl<T> At<T> for Result<T, ConfigError> {
     fn at(self, pointer: impl Into<String>) -> Result<T, Violation> {
         self.map_err(|error| Violation {
             pointer: pointer.into(),
-            at_key: false,
+            concern: Concern::Value,
             error,
         })
     }
@@ -5518,7 +5958,7 @@ impl<T> At<T> for Result<T, ConfigError> {
     fn at_key(self, pointer: impl Into<String>) -> Result<T, Violation> {
         self.map_err(|error| Violation {
             pointer: pointer.into(),
-            at_key: true,
+            concern: Concern::Key,
             error,
         })
     }
@@ -5800,7 +6240,6 @@ fn validate_path_template(
     template: &str,
     bindings: &OrderedMap<PathBindingConfig>,
 ) -> Result<(), ConfigError> {
-    validate_string(template, 2, 2_048, "source path template")?;
     if !template.starts_with('/')
         || template.starts_with("//")
         || template.contains(['?', '#', '\\'])
@@ -5819,8 +6258,11 @@ fn validate_path_template(
             .strip_prefix('{')
             .and_then(|segment| segment.strip_suffix('}'))
         {
-            if !valid_field_name(name) || !placeholders.insert(name) {
-                return invalid("source path-template placeholders must be valid and unique");
+            if !valid_shared_local_id(name) {
+                return not_a_local_id("source path-template placeholder");
+            }
+            if !placeholders.insert(name) {
+                return invalid("source path-template placeholders must be unique");
             }
             normalized.push('x');
         } else {
@@ -5930,7 +6372,7 @@ pub(crate) fn validate_local_unauthenticated_source_origin(value: &str) -> Resul
         _ => {
             return invalid(
                 "unauthenticated local source origin must use a numeric loopback HTTP host",
-            )
+            );
         }
     };
     if url.scheme() != "http" || value != canonical {
@@ -6316,8 +6758,18 @@ fn validate_codelist_constraints(
 }
 
 fn validate_collection_constraints(constraints: &OrderedMap<YamlValue>) -> Result<(), ConfigError> {
-    let minimum = validate_constraint_u64(constraints, "minimumItems", 1, 64)?;
-    let maximum = validate_constraint_u64(constraints, "maximumItems", 1, 64)?;
+    let minimum = validate_constraint_u64(
+        constraints,
+        "minimumItems",
+        MINIMUM_CONCEPT_ITEMS,
+        MAXIMUM_CONCEPT_ITEMS,
+    )?;
+    let maximum = validate_constraint_u64(
+        constraints,
+        "maximumItems",
+        MINIMUM_CONCEPT_ITEMS,
+        MAXIMUM_CONCEPT_ITEMS,
+    )?;
     if minimum > maximum || !yaml_bool(constraints, "unique")? {
         return invalid("collection constraints are invalid");
     }
@@ -6525,6 +6977,20 @@ fn validate_purpose(value: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// Whether `value` is a local identifier as every Registry Stack format
+/// writes one (CFG-ID-1): the grammar of the key of an id-keyed map.
+fn valid_shared_local_id(value: &str) -> bool {
+    registry_platform_yaml::LocalId::new(value).is_ok()
+}
+
+/// What the refusal of a name outside that grammar states.
+const LOCAL_ID_RULE: &str = "the name is not a local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`";
+
+/// Refuses the name `label` stands for as no local identifier.
+fn not_a_local_id<T>(label: &'static str) -> Result<T, ConfigError> {
+    Err(ConfigError::InvalidField(LOCAL_ID_RULE, label))
+}
+
 fn valid_local_id(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
@@ -6717,7 +7183,7 @@ mod tests {
         let connection: SourceConnectionConfig = serde_json::from_value(serde_json::json!({
             "baseUrl": "https://source.example",
             "authentication": {
-                "kind": "oauth2-client-credentials",
+                "type": "oauth2-private-key-jwt",
                 "tokenEndpoint": "https://issuer.example/token",
                 "clientIdRef": "secret:file/client-id",
                 "clientAssertionKeyRef": "secret:file/client-key",
@@ -6729,7 +7195,7 @@ mod tests {
             "tlsTrustProfile": "private-ca"
         }))
         .expect("the complete authentication union parses");
-        assert_eq!(connection.concurrency_limit.get(), 4);
+        assert_eq!(connection.maximum_concurrency.get(), 4);
         assert_eq!(connection.admission_timeout_milliseconds.get(), 5000);
         assert_eq!(connection.token_timeout_milliseconds.get(), 5000);
         if let SourceConfig::HttpJson {
@@ -6745,7 +7211,7 @@ mod tests {
             *base_url = connection.base_url.clone();
             *authentication = connection.authentication.clone();
             *tls_trust_profile = connection.tls_trust_profile.clone();
-            request.concurrency_limit = connection.concurrency_limit;
+            request.maximum_concurrency = connection.maximum_concurrency;
         }
         config.source_connections = OrderedMap(vec![("shared".to_owned(), connection)]);
         config.validate().expect("the resolved candidate validates");
@@ -6759,7 +7225,7 @@ mod tests {
         );
         config = before.clone();
         if let SourceConfig::HttpJson { authentication, .. } = &mut config.sources.0[0].1 {
-            if let SourceAuthentication::Oauth2ClientCredentials { resource, .. } =
+            if let SourceAuthentication::Oauth2PrivateKeyJwt { resource, .. } =
                 authentication.as_mut()
             {
                 *resource = Some("https://other.example/records".to_owned());
@@ -6771,7 +7237,7 @@ mod tests {
             config.validate().is_err(),
             "a source cannot retarget its named connection's OAuth resource"
         );
-        for field in ["authentication", "tlsTrustProfile", "concurrencyLimit"] {
+        for field in ["authentication", "tlsTrustProfile", "maximumConcurrency"] {
             config = before.clone();
             if let SourceConfig::HttpJson {
                 authentication,
@@ -6790,7 +7256,7 @@ mod tests {
                     }
                     "tlsTrustProfile" => *tls_trust_profile = None,
                     _ => {
-                        request.concurrency_limit =
+                        request.maximum_concurrency =
                             BoundedU32::new(2).expect("two is a valid concurrency limit");
                     }
                 }
@@ -7204,22 +7670,24 @@ mod tests {
         ));
     }
 
-    /// The admission fields are optional, but a present list must be a
-    /// nonempty, bounded, unique list — and required scopes must be scope
-    /// tokens, because they are compared against verified token scopes.
+    /// The admission gates are stated, and a listed gate must be a nonempty,
+    /// bounded, unique list; required scopes must also be scope tokens,
+    /// because they are compared against verified token scopes.
     #[test]
-    fn admission_lists_are_optional_but_present_means_nonempty_and_bounded() {
+    fn admission_gates_are_stated_and_a_list_is_nonempty_and_bounded() {
         let mut config = EvidenceConfig::parse_yaml(include_bytes!(
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         ))
         .expect("strict fixture validates");
         config
             .validate()
-            .expect("absent admission fields keep the existing behavior");
+            .expect("unrestricted admission gates validate");
 
-        config.authentication.oidc.allowed_clients = Some(set(["records-reader".to_owned()]));
-        config.authentication.oidc.required_scopes = Some(set(["evidence:invoke".to_owned()]));
-        config.validate().expect("stated admission validates");
+        config.authentication.oidc.allowed_clients =
+            AdmissionGate::listed(set(["records-reader".to_owned()]));
+        config.authentication.oidc.required_scopes =
+            AdmissionGate::listed(set(["evidence:invoke".to_owned()]));
+        config.validate().expect("listed admission validates");
 
         for clients in [
             Vec::new(),
@@ -7228,7 +7696,8 @@ mod tests {
             (0..33).map(|index| format!("reader-{index}")).collect(),
         ] {
             let mut candidate = config.clone();
-            candidate.authentication.oidc.allowed_clients = Some(set(clients.clone()));
+            candidate.authentication.oidc.allowed_clients =
+                AdmissionGate::listed(set(clients.clone()));
             assert!(
                 candidate.validate().is_err(),
                 "accepted allowedClients {clients:?}"
@@ -7242,7 +7711,8 @@ mod tests {
             (0..33).map(|index| format!("scope:{index}")).collect(),
         ] {
             let mut candidate = config.clone();
-            candidate.authentication.oidc.required_scopes = Some(set(scopes.clone()));
+            candidate.authentication.oidc.required_scopes =
+                AdmissionGate::listed(set(scopes.clone()));
             assert!(
                 candidate.validate().is_err(),
                 "accepted requiredScopes {scopes:?}"
@@ -7318,6 +7788,27 @@ mod tests {
                 "accepted assertionIssuers issuer list {issuers:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_assertion_issuers_client_identifier_carries_no_control_character() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        let issuers = || set(vec!["https://issuer.invalid".to_owned()]);
+        // An external identifier is not reshaped: a case, a dot, and a colon
+        // are its issuer's to choose.
+        config.authentication.oidc.assertion_issuers = Some(BTreeMap::from([(
+            "urn:Example.Client:1".to_owned(),
+            issuers(),
+        )]));
+        config
+            .validate()
+            .expect("an external identifier is kept as written");
+        config.authentication.oidc.assertion_issuers =
+            Some(BTreeMap::from([("client\u{7}one".to_owned(), issuers())]));
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -7671,15 +8162,17 @@ mod tests {
         );
 
         let mut no_global_admission = config.clone();
-        no_global_admission.authentication.oidc.allowed_clients = None;
+        no_global_admission.authentication.oidc.allowed_clients = AdmissionGate::unrestricted();
         assert_eq!(
             no_global_admission.validate(),
-            invalid("task-grant authority profiles require authentication allowedClients")
+            invalid(
+                "task-grant authority profiles require a list of authentication allowedClients"
+            )
         );
 
         let mut client_not_admitted = config;
         client_not_admitted.authentication.oidc.allowed_clients =
-            Some(set(["other-client".to_owned()]));
+            AdmissionGate::listed(set(["other-client".to_owned()]));
         assert_eq!(
             client_not_admitted.validate(),
             invalid(
@@ -7700,7 +8193,7 @@ mod tests {
 
         let mut requester_clients = config.clone();
         requester_clients.authentication.oidc.allowed_clients =
-            Some(set(["evidence-cli".to_owned()]));
+            AdmissionGate::listed(set(["evidence-cli".to_owned()]));
         requester_clients.authority_profiles.0[0]
             .1
             .requester_clients = set(["evidence-cli".to_owned()]);
@@ -7784,7 +8277,7 @@ mod tests {
         ));
         instance["assuranceProfile"] = serde_json::json!("local");
         instance["sources"]["source-a"]["baseUrl"] = serde_json::json!("http://127.0.0.1:18081");
-        instance["sources"]["source-a"]["authentication"] = serde_json::json!({"kind": "none"});
+        instance["sources"]["source-a"]["authentication"] = serde_json::json!({"type": "none"});
         assert!(
             validator.is_valid(&instance),
             "schema accepts the local form"
@@ -7797,7 +8290,7 @@ mod tests {
 
         assert!(
             serde_json::from_value::<SourceAuthentication>(
-                serde_json::json!({"kind": "none", "tokenRef": "secret:file/unexpected"})
+                serde_json::json!({"type": "none", "tokenRef": "secret:file/unexpected"})
             )
             .is_err(),
             "the none variant is closed"
@@ -7816,14 +8309,14 @@ mod tests {
             acceptance_fixture(),
             concat!(
                 "    baseUrl: https://source.invalid\n",
-                "    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}\n",
-                "    concurrencyLimit: 8\n",
+                "    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}\n",
+                "    maximumConcurrency: 8\n",
             ),
         );
         let owned = edited(
             &owned,
-            "    transport: http-json\n",
-            "    transport: http-json\n    connection: shared\n",
+            "    type: http-json\n",
+            "    type: http-json\n    connection: shared\n",
         );
         EvidenceConfig::parse_yaml(owned.as_bytes())
             .expect("a source resolved to its named connection validates");
@@ -7839,7 +8332,7 @@ mod tests {
         );
         let loopback = source_connection_document(
             &local,
-            "    baseUrl: http://127.0.0.1:18081\n    authentication: {kind: none}\n",
+            "    baseUrl: http://127.0.0.1:18081\n    authentication: {type: none}\n",
         );
         EvidenceConfig::parse_yaml(loopback.as_bytes())
             .expect("an unauthenticated local loopback connection validates");
@@ -7851,14 +8344,14 @@ mod tests {
         let mut refused = vec![
             (
                 "an unauthenticated connection at a public origin",
-                "    baseUrl: https://source.invalid\n    authentication: {kind: none}\n"
+                "    baseUrl: https://source.invalid\n    authentication: {type: none}\n"
                     .to_owned(),
             ),
             (
                 "an unauthenticated loopback connection carrying a private trust profile",
                 concat!(
                     "    baseUrl: http://127.0.0.1:18081\n",
-                    "    authentication: {kind: none}\n",
+                    "    authentication: {type: none}\n",
                     "    tlsTrustProfile: private-ca\n",
                 )
                 .to_owned(),
@@ -7876,7 +8369,7 @@ mod tests {
         ] {
             refused.push((
                 "an unauthenticated connection at a non-canonical loopback origin",
-                format!("    baseUrl: {origin}\n    authentication: {{kind: none}}\n"),
+                format!("    baseUrl: {origin}\n    authentication: {{type: none}}\n"),
             ));
         }
         // The authenticated branch is no looser. The runtime refuses user
@@ -7893,7 +8386,7 @@ mod tests {
             refused.push((
                 "an authenticated connection at a non-canonical origin",
                 format!(
-                    "    baseUrl: {origin}\n    authentication: {{kind: static-authorization, tokenRef: secret:file/source-a-token}}\n"
+                    "    baseUrl: {origin}\n    authentication: {{type: static-authorization, tokenRef: secret:file/source-a-token}}\n"
                 ),
             ));
         }
@@ -7913,7 +8406,7 @@ mod tests {
         // conditional must refuse it the same way it refuses a declared
         // source, regardless of whether any requirement resolves to it.
         let unused_loopback =
-            "    baseUrl: http://127.0.0.1:18081\n    authentication: {kind: none}\n";
+            "    baseUrl: http://127.0.0.1:18081\n    authentication: {type: none}\n";
         let evidence_grade = source_connection_document(acceptance_fixture(), unused_loopback);
         let production = source_connection_document(
             &edited(
@@ -7958,7 +8451,7 @@ mod tests {
     /// The acceptance fixture's one source, restated on the statement
     /// transport, so a whole document exercises it the way a bundle would.
     const SQLITE_SOURCE: &str = r#"  source-a:
-    transport: sqlite-extract
+    type: sqlite-extract
     posture: field-projected
     extractProfile: residence-register
     request:
@@ -7969,14 +8462,14 @@ mod tests {
           alternatives:
             - {profile: person-demographics-v1, fields: [given_name, family_name, birth_date]}
       parameterBindings:
-        record_reference: {kind: selector, role: subject, profile: person-demographics-v1, field: given_name}
+        record_reference: {type: selector, role: subject, profile: person-demographics-v1, field: given_name}
       maximumRows: 2
       maximumCellBytes: 4096
       maximumStatementSteps: 50000
       projection: [/rows/*/id, /rows/*/region, /extract/publishedAt]
-      timeoutMilliseconds: 1000
+      attemptTimeoutMilliseconds: 1000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     maximumExtractAgeSeconds: 86400
     responseSchema: schemas/response.schema.yaml
     extractScript: adapters/source-a.rhai
@@ -7990,8 +8483,8 @@ mod tests {
     fn source_batch_document() -> String {
         let with_capability = edited(
             acceptance_fixture(),
-            "version: 1\n",
-            "version: 1\nacquisitionCapabilities: [source-batch]\n",
+            "kind: EvidenceBundle\n",
+            "kind: EvidenceBundle\nacquisitionCapabilities: [source-batch]\n",
         );
         edited(
             &with_capability,
@@ -8081,7 +8574,7 @@ mod tests {
         assert_eq!(config.sources.0[0].1.prepare_script(), None);
         assert_eq!(config.sources.0[0].1.adapter_parameters_schema(), None);
         assert!(config.sources.0[0].1.fixed_headers().is_empty());
-        assert_eq!(config.sources.0[0].1.concurrency_limit(), 8);
+        assert_eq!(config.sources.0[0].1.maximum_concurrency(), 8);
 
         for (label, candidate) in [
             (
@@ -8131,13 +8624,13 @@ mod tests {
         assert_eq!(
             decode_cause(&edited(
                 &document,
-                "    transport: sqlite-extract\n",
-                "    transport: sqlite-extracts\n",
+                "    type: sqlite-extract\n",
+                "    type: sqlite-extracts\n",
             )),
             "config.unknown-variant",
         );
         assert_eq!(
-            decode_cause(&edited(&document, "    transport: sqlite-extract\n", "")),
+            decode_cause(&edited(&document, "    type: sqlite-extract\n", "")),
             "config.missing-key",
         );
     }
@@ -8201,16 +8694,16 @@ mod tests {
         assert_eq!(
             invalid_reason(&edited(
                 &document,
-                "        record_reference: {kind: selector,",
-                "        evidence_now: {kind: selector,",
+                "        record_reference: {type: selector,",
+                "        evidence_now: {type: selector,",
             )),
             "statement parameter name is reserved by the runtime",
         );
         assert_eq!(
             invalid_reason(&edited(
                 &document,
-                "        record_reference: {kind: selector,",
-                "        record reference: {kind: selector,",
+                "        record_reference: {type: selector,",
+                "        record reference: {type: selector,",
             )),
             "statement parameter name is invalid",
         );
@@ -8225,16 +8718,16 @@ mod tests {
         assert_eq!(
             invalid_reason(&edited(
                 &document,
-                "record_reference: {kind: selector, role: subject,",
-                "record_reference: {kind: selector, role: unbound-role,",
+                "record_reference: {type: selector, role: subject,",
+                "record_reference: {type: selector, role: unbound-role,",
             )),
             "source path binding is not declared as a selector input",
         );
         assert_eq!(
             decode_cause(&edited(
                 &document,
-                "record_reference: {kind: selector,",
-                "record_reference: {kind: prior-fact,",
+                "record_reference: {type: selector,",
+                "record_reference: {type: prior-fact,",
             )),
             "config.unknown-variant",
         );
@@ -8256,7 +8749,7 @@ mod tests {
             edited(
                 &document,
                 PREPARED_BINDING,
-                &format!("        {name}: {{kind: prepared}}\n"),
+                &format!("        {name}: {{type: prepared}}\n"),
             )
         };
         assert_eq!(
@@ -8277,7 +8770,7 @@ mod tests {
             &sqlite_source_document(),
             SELECTOR_BINDING,
             &format!(
-                "        {}: {{kind: selector, role: subject, profile: person-demographics-v1, field: given_name}}\n",
+                "        {}: {{type: selector, role: subject, profile: person-demographics-v1, field: given_name}}\n",
                 overlong_prepared_name(),
             ),
         );
@@ -8329,9 +8822,9 @@ mod tests {
             ("      maximumRows: 2", 256_u64),
             ("      maximumCellBytes: 4096", 65_536),
             ("      maximumStatementSteps: 50000", 1_000_000),
-            ("      timeoutMilliseconds: 1000", 30_000),
+            ("      attemptTimeoutMilliseconds: 1000", 30_000),
             ("      maximumResponseBytes: 65536", 1_048_576),
-            ("      concurrencyLimit: 8", 256),
+            ("      maximumConcurrency: 8", 256),
             ("    maximumExtractAgeSeconds: 86400", 2_592_000),
         ] {
             let (key, _) = declared
@@ -8358,10 +8851,10 @@ mod tests {
 
     /// The selector binding the statement source already declares, restated so
     /// a test can add a second binding beside it as a unique replacement.
-    const SELECTOR_BINDING: &str = "        record_reference: {kind: selector, role: subject, profile: person-demographics-v1, field: given_name}\n";
+    const SELECTOR_BINDING: &str = "        record_reference: {type: selector, role: subject, profile: person-demographics-v1, field: given_name}\n";
 
     /// The prepared parameter a preparation script exists to fill.
-    const PREPARED_BINDING: &str = "        normalized_reference: {kind: prepared}\n";
+    const PREPARED_BINDING: &str = "        normalized_reference: {type: prepared}\n";
 
     /// The statement source with a preparation script, its limits, or neither.
     ///
@@ -8486,7 +8979,7 @@ mod tests {
         let two_origins = edited(
             &document,
             PREPARED_BINDING,
-            "        normalized_reference: {kind: prepared, role: subject}\n",
+            "        normalized_reference: {type: prepared, role: subject}\n",
         );
         assert_eq!(decode_cause(&two_origins), "config.unknown-key");
         assert!(
@@ -8501,7 +8994,7 @@ mod tests {
         let two_prepared = edited(
             &prepared_statement_document(true, Some(&preparation_limits(1, 1_024))),
             PREPARED_BINDING,
-            &format!("{PREPARED_BINDING}        normalized_region: {{kind: prepared}}\n"),
+            &format!("{PREPARED_BINDING}        normalized_region: {{type: prepared}}\n"),
         );
         assert_eq!(
             invalid_reason(&two_prepared),
@@ -8589,10 +9082,12 @@ mod tests {
 
     #[test]
     fn decode_failures_report_a_pointer_a_position_and_no_document_value() {
-        let reference = include_str!("../../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle/evidence.yaml");
+        let reference = include_str!(
+            "../../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle/evidence.yaml"
+        );
         let unknown_nested = reference.replacen(
-            "      timeoutMilliseconds: 3000",
-            "      timeoutMilliseconds: 3000\n      surprise: s3cr3t-selector-value",
+            "      attemptTimeoutMilliseconds: 3000",
+            "      attemptTimeoutMilliseconds: 3000\n      surprise: s3cr3t-selector-value",
             1,
         );
         assert_ne!(unknown_nested, reference, "nested mutation applies");
@@ -8606,26 +9101,26 @@ mod tests {
             Option<usize>,
         );
         let out_of_range = reference.replacen(
-            "      timeoutMilliseconds: 3000",
-            "      timeoutMilliseconds: 987654321",
+            "      attemptTimeoutMilliseconds: 3000",
+            "      attemptTimeoutMilliseconds: 987654321",
             1,
         );
         assert_ne!(out_of_range, reference, "range mutation applies");
-        let out_of_range_line = line_of(&out_of_range, "timeoutMilliseconds: 987654321");
+        let out_of_range_line = line_of(&out_of_range, "attemptTimeoutMilliseconds: 987654321");
         let cases: [Case; 7] = [
             (
                 "malformed YAML",
-                format!("version: 1\nbroken: [{}\n", CANARY_VALUES[0]),
+                format!("{BUNDLE_ENVELOPE}broken: [{}\n", CANARY_VALUES[0]),
                 "yaml.unexpected-end",
                 None,
                 None,
             ),
             (
                 "unknown top-level field",
-                format!("version: 1\nbogusField: {}\n", CANARY_VALUES[1]),
+                format!("{BUNDLE_ENVELOPE}bogusField: {}\n", CANARY_VALUES[1]),
                 "config.unknown-key",
                 Some("/bogusField"),
-                Some(2),
+                Some(3),
             ),
             (
                 // A source is read through its tagged transport with
@@ -8639,10 +9134,13 @@ mod tests {
             ),
             (
                 "wrong type",
-                format!("version: {}\n", CANARY_VALUES[2]),
+                format!(
+                    "{BUNDLE_ENVELOPE}maximumHolderBoundBatchSize: {}\n",
+                    CANARY_VALUES[2]
+                ),
                 "config.expected-integer",
-                Some("/version"),
-                Some(1),
+                Some("/maximumHolderBoundBatchSize"),
+                Some(3),
             ),
             (
                 "integer outside its bound",
@@ -8653,14 +9151,14 @@ mod tests {
             ),
             (
                 "missing field",
-                "version: 1\n".to_owned(),
+                BUNDLE_ENVELOPE.to_owned(),
                 "config.missing-key",
                 Some(""),
                 Some(1),
             ),
             (
                 "more than one document",
-                format!("version: 1\n---\nversion: {}\n", CANARY_VALUES[3]),
+                format!("{BUNDLE_ENVELOPE}---\nkind: {}\n", CANARY_VALUES[3]),
                 "yaml.multiple-documents",
                 None,
                 None,
@@ -8970,52 +9468,47 @@ mod tests {
             .expect("the conformance fixture validates as written");
 
         const INCOHERENT: &str = "collection constraints are invalid";
-        const OUT_OF_BOUNDS: &str = "numeric value is outside Version 1 bounds";
-        for (form, sound, unsound) in [
+        for (form, sound, incoherent, out_of_bounds) in [
             (
                 ConceptForm::ControlledCodeList,
                 "minimumItems: 1, maximumItems: 3, unique: true",
                 [
-                    ("minimumItems: 3, maximumItems: 1, unique: true", INCOHERENT),
-                    (
-                        "minimumItems: 1, maximumItems: 3, unique: false",
-                        INCOHERENT,
-                    ),
-                    (
-                        "minimumItems: 1, maximumItems: 65, unique: true",
-                        OUT_OF_BOUNDS,
-                    ),
-                    (
-                        "minimumItems: 0, maximumItems: 3, unique: true",
-                        OUT_OF_BOUNDS,
-                    ),
+                    "minimumItems: 3, maximumItems: 1, unique: true",
+                    "minimumItems: 1, maximumItems: 3, unique: false",
+                ],
+                [
+                    "minimumItems: 1, maximumItems: 65, unique: true",
+                    "minimumItems: 0, maximumItems: 3, unique: true",
                 ],
             ),
             (
                 ConceptForm::EntityReferenceList,
                 "minimumItems: 1, maximumItems: 2, unique: true",
                 [
-                    ("minimumItems: 2, maximumItems: 1, unique: true", INCOHERENT),
-                    (
-                        "minimumItems: 1, maximumItems: 2, unique: false",
-                        INCOHERENT,
-                    ),
-                    (
-                        "minimumItems: 1, maximumItems: 65, unique: true",
-                        OUT_OF_BOUNDS,
-                    ),
-                    (
-                        "minimumItems: 0, maximumItems: 2, unique: true",
-                        OUT_OF_BOUNDS,
-                    ),
+                    "minimumItems: 2, maximumItems: 1, unique: true",
+                    "minimumItems: 1, maximumItems: 2, unique: false",
+                ],
+                [
+                    "minimumItems: 1, maximumItems: 65, unique: true",
+                    "minimumItems: 0, maximumItems: 2, unique: true",
                 ],
             ),
         ] {
-            for (replacement, cause) in unsound {
+            for replacement in incoherent {
                 let document = edited(SUPPORTED_VALUES, sound, replacement);
                 assert_eq!(
                     invalid_reason(&document),
-                    cause,
+                    INCOHERENT,
+                    "{form:?} accepted {replacement}"
+                );
+            }
+            // A count outside the item bounds is refused by the reader at the
+            // value, as every bounded integer is (CFG-QTY-4).
+            for replacement in out_of_bounds {
+                let document = edited(SUPPORTED_VALUES, sound, replacement);
+                assert_eq!(
+                    decode_cause(&document),
+                    "config.out-of-range",
                     "{form:?} accepted {replacement}"
                 );
             }
@@ -9442,15 +9935,12 @@ mod tests {
                 token_endpoint: format!("https://source.invalid/token{query}"),
                 client_id_ref: SecretReference::parse("secret:file/oauth-client-id")
                     .expect("secret ref"),
-                client_secret_ref: Some(
-                    SecretReference::parse("secret:file/oauth-client-secret").expect("secret ref"),
-                ),
-                client_assertion_key_ref: None,
-                client_assertion_audience: None,
+                client_secret_ref: SecretReference::parse("secret:file/oauth-client-secret")
+                    .expect("secret ref"),
                 scope: None,
                 audience: None,
                 resource: None,
-                credential_placement: Some(CredentialPlacement::FormBody),
+                credential_placement: CredentialPlacement::FormBody,
                 maximum_cache_seconds: BoundedU64::new(60).expect("a valid cache bound"),
                 assumed_lifetime_seconds: None,
             };
@@ -9525,15 +10015,12 @@ mod tests {
                 token_endpoint: "https://source.invalid/token".to_owned(),
                 client_id_ref: SecretReference::parse("secret:file/oauth-client-id")
                     .expect("secret ref"),
-                client_secret_ref: Some(
-                    SecretReference::parse("secret:file/oauth-client-secret").expect("secret ref"),
-                ),
-                client_assertion_key_ref: None,
-                client_assertion_audience: None,
+                client_secret_ref: SecretReference::parse("secret:file/oauth-client-secret")
+                    .expect("secret ref"),
                 scope: None,
                 audience: None,
                 resource: None,
-                credential_placement: Some(CredentialPlacement::FormBody),
+                credential_placement: CredentialPlacement::FormBody,
                 maximum_cache_seconds: BoundedU64::new(60).expect("a valid cache bound"),
                 assumed_lifetime_seconds: assumed,
             };
@@ -9555,7 +10042,7 @@ mod tests {
             ("query-string", false),
         ] {
             let authentication = serde_json::json!({
-                "kind": "oauth2-client-credentials",
+                "type": "oauth2-client-credentials",
                 "tokenEndpoint": "https://source.invalid/token",
                 "clientIdRef": "secret:file/oauth-client-id",
                 "clientSecretRef": "secret:file/oauth-client-secret",
@@ -9601,7 +10088,7 @@ mod tests {
             (Some("https://api.invalid/%GG"), false),
         ] {
             let mut authentication = serde_json::json!({
-                "kind": "oauth2-client-credentials",
+                "type": "oauth2-client-credentials",
                 "tokenEndpoint": "https://issuer.invalid/token",
                 "clientIdRef": "secret:file/oauth-client-id",
                 "clientSecretRef": "secret:file/oauth-client-secret",
@@ -9649,7 +10136,7 @@ mod tests {
             (None, true),
         ] {
             let mut authentication = serde_json::json!({
-                "kind": "static-authorization",
+                "type": "static-authorization",
                 "tokenRef": "secret:file/source-a-token",
             });
             if let Some(scheme) = scheme {
@@ -9680,34 +10167,38 @@ mod tests {
     /// fail closed at startup rather than at the first token request.
     #[test]
     fn oauth_client_authentication_declares_exactly_one_credential_form() {
+        const SECRET: Option<&str> = Some("oauth2-client-credentials");
+        const ASSERTION: Option<&str> = Some("oauth2-private-key-jwt");
         let validator = bundle_contract_validator();
-        for (secret_ref, placement, key_ref, accepted) in [
+        // Each member set is tried under both types; `accepting` names the
+        // one type that takes it, if any.
+        for (secret_ref, placement, key_ref, accepting) in [
             (
                 Some("secret:file/oauth-client-secret"),
                 Some("basic-header"),
                 None,
-                true,
+                SECRET,
             ),
             (
                 Some("secret:file/oauth-client-secret"),
                 Some("form-body"),
                 None,
-                true,
+                SECRET,
             ),
-            (None, None, Some("secret:file/oauth-client-key"), true),
+            (None, None, Some("secret:file/oauth-client-key"), ASSERTION),
             // A secret with no placement leaves the runtime to pick where the
             // credential travels, which RFC 6749 section 2.3.1 makes the
             // operator's decision.
-            (Some("secret:file/oauth-client-secret"), None, None, false),
+            (Some("secret:file/oauth-client-secret"), None, None, None),
             // A placement with no secret names a channel for a credential that
             // does not exist.
             (
                 None,
                 Some("basic-header"),
                 Some("secret:file/oauth-client-key"),
-                false,
+                None,
             ),
-            (None, Some("basic-header"), None, false),
+            (None, Some("basic-header"), None, None),
             // Both forms at once, with and without a placement for the secret.
             // The placement is what makes these two distinct presence shapes
             // rather than one: dropping it must not turn a two-credential
@@ -9716,47 +10207,53 @@ mod tests {
                 Some("secret:file/oauth-client-secret"),
                 Some("basic-header"),
                 Some("secret:file/oauth-client-key"),
-                false,
+                None,
             ),
             (
                 Some("secret:file/oauth-client-secret"),
                 None,
                 Some("secret:file/oauth-client-key"),
-                false,
+                None,
             ),
             // Neither form.
-            (None, None, None, false),
+            (None, None, None, None),
         ] {
-            let mut authentication = serde_json::json!({
-                "kind": "oauth2-client-credentials",
-                "tokenEndpoint": "https://source.invalid/token",
-                "clientIdRef": "secret:file/oauth-client-id",
-                "maximumCacheSeconds": 60,
-            });
-            if let Some(secret_ref) = secret_ref {
-                authentication["clientSecretRef"] = serde_json::json!(secret_ref);
-            }
-            if let Some(placement) = placement {
-                authentication["credentialPlacement"] = serde_json::json!(placement);
-            }
-            if let Some(key_ref) = key_ref {
-                authentication["clientAssertionKeyRef"] = serde_json::json!(key_ref);
-            }
-            let label = format!("{secret_ref:?}/{placement:?}/{key_ref:?}");
+            for written in [SECRET, ASSERTION] {
+                let mut authentication = serde_json::json!({
+                    "type": written,
+                    "tokenEndpoint": "https://source.invalid/token",
+                    "clientIdRef": "secret:file/oauth-client-id",
+                    "maximumCacheSeconds": 60,
+                });
+                if let Some(secret_ref) = secret_ref {
+                    authentication["clientSecretRef"] = serde_json::json!(secret_ref);
+                }
+                if let Some(placement) = placement {
+                    authentication["credentialPlacement"] = serde_json::json!(placement);
+                }
+                if let Some(key_ref) = key_ref {
+                    authentication["clientAssertionKeyRef"] = serde_json::json!(key_ref);
+                }
+                let accepted = written == accepting;
+                let label = format!("{written:?}/{secret_ref:?}/{placement:?}/{key_ref:?}");
 
-            let parsed = serde_json::from_value::<SourceAuthentication>(authentication.clone())
-                .expect("every combination is inside the closed member set");
-            assert_eq!(parsed.validate().is_ok(), accepted, "{label} validation");
+                let parsed = serde_json::from_value::<SourceAuthentication>(authentication.clone());
+                assert_eq!(
+                    parsed.is_ok_and(|parsed| parsed.validate().is_ok()),
+                    accepted,
+                    "{label} validation"
+                );
 
-            let mut instance = bundle_contract_instance(include_bytes!(
-                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-            ));
-            instance["sources"]["source-a"]["authentication"] = authentication;
-            assert_eq!(
-                validator.is_valid(&instance),
-                accepted,
-                "{label} bundle contract"
-            );
+                let mut instance = bundle_contract_instance(include_bytes!(
+                    "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+                ));
+                instance["sources"]["source-a"]["authentication"] = authentication;
+                assert_eq!(
+                    validator.is_valid(&instance),
+                    accepted,
+                    "{label} bundle contract"
+                );
+            }
         }
     }
 
@@ -9767,7 +10264,7 @@ mod tests {
     #[test]
     fn the_client_assertion_key_is_reported_as_a_bundle_secret() {
         let key_form = serde_json::from_value::<SourceAuthentication>(serde_json::json!({
-            "kind": "oauth2-client-credentials",
+            "type": "oauth2-private-key-jwt",
             "tokenEndpoint": "https://source.invalid/token",
             "clientIdRef": "secret:file/oauth-client-id",
             "clientAssertionKeyRef": "secret:file/oauth-client-key",
@@ -9807,7 +10304,7 @@ mod tests {
             (None, true),
         ] {
             let mut authentication = serde_json::json!({
-                "kind": "oauth2-client-credentials",
+                "type": "oauth2-client-credentials",
                 "tokenEndpoint": "https://source.invalid/token",
                 "clientIdRef": "secret:file/oauth-client-id",
                 "clientSecretRef": "secret:file/oauth-client-secret",
@@ -9859,7 +10356,7 @@ mod tests {
             (None, true),
         ] {
             let mut authentication = serde_json::json!({
-                "kind": "oauth2-client-credentials",
+                "type": "oauth2-private-key-jwt",
                 "tokenEndpoint": "https://source.invalid/token",
                 "clientIdRef": "secret:file/oauth-client-id",
                 "clientAssertionKeyRef": "secret:file/oauth-client-key",
@@ -9894,7 +10391,7 @@ mod tests {
     fn a_client_assertion_audience_without_an_assertion_key_is_refused() {
         let validator = bundle_contract_validator();
         let authentication = serde_json::json!({
-            "kind": "oauth2-client-credentials",
+            "type": "oauth2-client-credentials",
             "tokenEndpoint": "https://source.invalid/token",
             "clientIdRef": "secret:file/oauth-client-id",
             "clientSecretRef": "secret:file/oauth-client-secret",
@@ -9903,10 +10400,8 @@ mod tests {
             "maximumCacheSeconds": 60,
         });
 
-        let parsed = serde_json::from_value::<SourceAuthentication>(authentication.clone())
-            .expect("the combination is inside the closed member set");
         assert!(
-            parsed.validate().is_err(),
+            serde_json::from_value::<SourceAuthentication>(authentication.clone()).is_err(),
             "an assertion audience was accepted beside a client secret"
         );
 
@@ -9977,7 +10472,7 @@ mod tests {
     #[test]
     fn runtime_document_is_closed_and_contains_no_governed_override_surface() {
         let valid = br#"
-apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: /etc/registry-evidence/bundle
@@ -9992,12 +10487,12 @@ listener:
 secretProviders:
   file: {root: /run/secrets/registry-evidence}
 signer:
-  kind: transit
+  type: transit
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: 7
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
 audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
 outboundTls:
@@ -10157,7 +10652,9 @@ outboundTls:
         let with_audit = |block: &str| format!("{without_audit}{block}");
         let validator = runtime_contract_validator();
 
-        let file = with_audit("audit:\n  destination: file\n  path: /var/lib/evidence/audit.jsonl\n  rotateBytes: 1048576\n  retainDays: 30\n");
+        let file = with_audit(
+            "audit:\n  destination: file\n  path: /var/lib/evidence/audit.jsonl\n  rotateBytes: 1048576\n  retentionDays: 30\n",
+        );
         let parsed = RuntimeConfig::parse_yaml(file.as_bytes()).expect("file destination parses");
         assert!(matches!(
             parsed.audit.destination().expect("destination builds"),
@@ -10192,7 +10689,7 @@ outboundTls:
             ),
             (
                 "stdout-with-retention",
-                "audit:\n  destination: stdout\n  retainDays: 30\n",
+                "audit:\n  destination: stdout\n  retentionDays: 30\n",
             ),
             (
                 "rotation-below-minimum",
@@ -10200,7 +10697,7 @@ outboundTls:
             ),
             (
                 "retention-zero",
-                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retainDays: 0\n",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retentionDays: 0\n",
             ),
             (
                 "rotation-above-maximum",
@@ -10208,7 +10705,7 @@ outboundTls:
             ),
             (
                 "retention-above-maximum",
-                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retainDays: 36501\n",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retentionDays: 36501\n",
             ),
             ("unknown-destination", "audit:\n  destination: syslog\n"),
             (
@@ -10234,7 +10731,7 @@ outboundTls:
             ),
             (
                 "retention-zero",
-                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retainDays: 0\n",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retentionDays: 0\n",
             ),
             (
                 "rotation-above-maximum",
@@ -10242,7 +10739,7 @@ outboundTls:
             ),
             (
                 "retention-above-maximum",
-                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retainDays: 36501\n",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retentionDays: 36501\n",
             ),
             ("unknown-destination", "audit:\n  destination: syslog\n"),
             (
@@ -10255,7 +10752,9 @@ outboundTls:
                 "runtime schema accepted audit block {name}"
             );
         }
-        let legacy = with_audit("auditStorage:\n  path: /var/lib/evidence/audit.jsonl\n  maximumFileBytes: 1073741824\n");
+        let legacy = with_audit(
+            "auditStorage:\n  path: /var/lib/evidence/audit.jsonl\n  maximumFileBytes: 1073741824\n",
+        );
         assert!(
             RuntimeConfig::parse_yaml(legacy.as_bytes()).is_err(),
             "runtime accepted the retired auditStorage block"
@@ -10269,7 +10768,7 @@ outboundTls:
     #[test]
     fn the_optional_metrics_listener_is_absent_by_default_and_stays_operator_private() {
         let base = r#"
-apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: /etc/registry-evidence/bundle
@@ -10284,12 +10783,12 @@ listener:
 secretProviders:
   file: {root: /run/secrets/registry-evidence}
 signer:
-  kind: transit
+  type: transit
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: 7
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
 audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
 outboundTls:
@@ -10380,7 +10879,7 @@ outboundTls:
     #[test]
     fn the_optional_operator_acquisition_capabilities_enable_nothing_by_default() {
         let base = r#"
-apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: /etc/registry-evidence/bundle
@@ -10395,12 +10894,12 @@ listener:
 secretProviders:
   file: {root: /run/secrets/registry-evidence}
 signer:
-  kind: transit
+  type: transit
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: 7
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
 audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
 outboundTls:
@@ -10555,7 +11054,7 @@ outboundTls:
         let templated = edited(
             &document,
             "      path: /v1/facts\n",
-            "      pathTemplate: /v1/facts/{subject}\n      pathBindings:\n        subject: {from: selector, role: subject, profile: person-demographics-v1, field: given_name}\n",
+            "      path: /v1/facts/{subject}\n      pathBindings:\n        subject: {type: selector, role: subject, profile: person-demographics-v1, field: given_name}\n",
         );
         assert_eq!(
             EvidenceConfig::parse_yaml_reporting_rule(templated.as_bytes()).err(),
@@ -10678,8 +11177,8 @@ outboundTls:
     fn source_batch_optimization_is_silent_without_a_block_and_never_applies_to_multistage() {
         let with_capability = edited(
             acceptance_fixture(),
-            "version: 1\n",
-            "version: 1\nacquisitionCapabilities: [source-batch]\n",
+            "kind: EvidenceBundle\n",
+            "kind: EvidenceBundle\nacquisitionCapabilities: [source-batch]\n",
         );
         let mut config = EvidenceConfig::parse_yaml(with_capability.as_bytes())
             .expect("a capability with no batch block leaves the source unchanged");
@@ -10722,7 +11221,7 @@ outboundTls:
     #[test]
     fn a_listener_port_of_zero_is_refused_on_both_listeners() {
         let base = r#"
-apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: /etc/registry-evidence/bundle
@@ -10737,12 +11236,12 @@ listener:
 secretProviders:
   file: {root: /run/secrets/registry-evidence}
 signer:
-  kind: transit
+  type: transit
   unixSocketPath: /run/registry-evidence/transit-proxy.sock
   mount: transit
   keyName: evidence-signing
   keyVersion: 7
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
 audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
 outboundTls:
@@ -10781,7 +11280,7 @@ outboundTls:
     #[test]
     fn path_templates_headers_and_projection_fail_closed() {
         let bindings: OrderedMap<PathBindingConfig> = serde_norway::from_str(
-            "record_reference: {from: selector, role: subject, profile: record-reference-v1, field: record_reference}\n",
+            "record_reference: {type: selector, role: subject, profile: record-reference-v1, field: record_reference}\n",
         )
         .expect("path binding parses");
         assert!(validate_path_template("/records/{record_reference}", &bindings).is_ok());
@@ -10841,7 +11340,7 @@ outboundTls:
 
     /// A runtime document every refusal test below edits one member of.
     const LOADER_RUNTIME_DOCUMENT: &str =
-        "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+        "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: /etc/registry-evidence/bundle
@@ -10856,7 +11355,7 @@ listener:
 secretProviders:
   file: {root: /run/secrets/registry-evidence}
 signer:
-  kind: local-jwk
+  type: local-jwk
   privateKeyRef: secret:file/signing-key
 audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
@@ -10892,13 +11391,36 @@ outboundTls:
     }
 
     #[test]
+    fn a_runtime_file_with_the_retired_api_version_is_refused_with_the_replacement_named() {
+        let retired = LOADER_RUNTIME_DOCUMENT.replace(
+            EVIDENCE_RUNTIME_API_VERSION,
+            RETIRED_EVIDENCE_RUNTIME_API_VERSION,
+        );
+        assert_ne!(
+            retired, LOADER_RUNTIME_DOCUMENT,
+            "the retired value is written"
+        );
+        let report = runtime_report(&retired);
+        let diagnostic = deciding(&report);
+        assert_eq!(diagnostic.code, "config.retired-api-version");
+        assert_eq!(diagnostic.path, "/apiVersion");
+        assert!(
+            diagnostic
+                .suggested_action
+                .contains(EVIDENCE_RUNTIME_API_VERSION),
+            "the fix names the apiVersion that replaced it: {diagnostic:?}"
+        );
+        assert_eq!(position(diagnostic).0, 1, "the refusal names the line");
+    }
+
+    #[test]
     fn the_runtime_document_declares_the_evidence_envelope() {
         RuntimeConfig::parse_yaml(LOADER_RUNTIME_DOCUMENT.as_bytes())
             .expect("the enveloped document loads");
 
         let unenveloped = LOADER_RUNTIME_DOCUMENT
             .replace(
-                "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\n",
+                "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1\n",
                 "",
             )
             .replace("kind: EvidenceRuntimeConfig\n", "");
@@ -10918,6 +11440,143 @@ outboundTls:
         assert_eq!(deciding(&report).code, "config.wrong-kind");
         assert_eq!(deciding(&report).path, "/kind");
         assert_eq!(position(deciding(&report)), (2, 7));
+    }
+
+    const TRANSIT_SIGNER_BLOCK: &str = "signer:
+  type: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 7
+  attemptTimeoutMilliseconds: 2000
+";
+
+    #[test]
+    fn the_respelled_runtime_keys_are_read_and_the_old_spellings_refused() {
+        let local_signer = "signer:\n  type: local-jwk\n  privateKeyRef: secret:file/signing-key\n";
+        let audit = "audit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n";
+        let respelled = LOADER_RUNTIME_DOCUMENT
+            .replace(local_signer, TRANSIT_SIGNER_BLOCK)
+            .replace(audit, &format!("{audit}  retentionDays: 30\n"));
+        assert!(respelled.contains("attemptTimeoutMilliseconds: 2000\naudit:"));
+        let config =
+            RuntimeConfig::parse_yaml(respelled.as_bytes()).expect("the respelled keys load");
+        assert_eq!(
+            config.audit.retention_days.map(BoundedU32::get),
+            Some(30),
+            "audit.retentionDays is the retention period"
+        );
+        match &config.signer {
+            RuntimeSignerConfig::Transit {
+                attempt_timeout_milliseconds,
+                ..
+            } => assert_eq!(attempt_timeout_milliseconds.get(), 2000),
+            other => panic!("the transit signer was read as {other:?}"),
+        }
+
+        // Each key an earlier runtime file wrote, with the key that replaced
+        // it. The value beside the old key is a canary no diagnostic repeats.
+        let cases = [
+            (
+                respelled.replace("  retentionDays: 30\n", "  retainDays: 31\n"),
+                "/audit/retainDays",
+                "audit.retentionDays",
+                "retainDays: 31",
+            ),
+            (
+                respelled.replace(
+                    "  attemptTimeoutMilliseconds: 2000\n",
+                    "  timeoutMilliseconds: 2001\n",
+                ),
+                "/signer/timeoutMilliseconds",
+                "signer.attemptTimeoutMilliseconds",
+                "timeoutMilliseconds: 2001",
+            ),
+        ];
+        for (document, pointer, replacement, needle) in cases {
+            assert_ne!(document, respelled, "{pointer}: the mutation applies");
+            let line = document
+                .lines()
+                .position(|line| line.contains(needle))
+                .expect("the old key is in the document")
+                + 1;
+            let report = runtime_report(&document);
+            let removed = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == "config.removed-key")
+                .unwrap_or_else(|| panic!("{pointer}: no config.removed-key in {report:?}"));
+            assert_eq!(removed.path, pointer);
+            assert_eq!(position(removed).0, line, "{pointer}");
+            assert!(
+                removed.suggested_action.contains(replacement),
+                "{pointer}: the fix names the replacement: {removed:?}"
+            );
+            let rendered = format!("{report:?}");
+            assert!(
+                !rendered.contains("31") && !rendered.contains("2001"),
+                "{pointer}: a diagnostic repeated a value"
+            );
+        }
+    }
+
+    #[test]
+    fn the_runtime_signer_is_tagged_by_type_and_the_old_tag_is_refused() {
+        assert!(LOADER_RUNTIME_DOCUMENT.contains("signer:\n  type: local-jwk\n"));
+        let config = RuntimeConfig::parse_yaml(LOADER_RUNTIME_DOCUMENT.as_bytes())
+            .expect("the signer tagged by type loads");
+        assert!(matches!(
+            config.signer,
+            RuntimeSignerConfig::LocalJwk { .. }
+        ));
+        let transit = LOADER_RUNTIME_DOCUMENT.replace(
+            "signer:\n  type: local-jwk\n  privateKeyRef: secret:file/signing-key\n",
+            TRANSIT_SIGNER_BLOCK,
+        );
+        let config =
+            RuntimeConfig::parse_yaml(transit.as_bytes()).expect("the transit signer loads");
+        assert!(matches!(config.signer, RuntimeSignerConfig::Transit { .. }));
+
+        let old = LOADER_RUNTIME_DOCUMENT.replace("  type: local-jwk\n", "  kind: local-jwk\n");
+        assert_ne!(old, LOADER_RUNTIME_DOCUMENT, "the mutation applies");
+        let report = runtime_report(&old);
+        let removed = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .unwrap_or_else(|| panic!("no config.removed-key in {report:?}"));
+        assert_eq!(removed.path, "/signer/kind");
+        assert_eq!(
+            position(removed).0,
+            line_of(&old, "  kind: local-jwk"),
+            "the refusal points at the written key"
+        );
+        assert!(
+            removed.suggested_action.contains("signer.type"),
+            "the fix names the replacement: {removed:?}"
+        );
+    }
+
+    #[test]
+    fn a_file_only_audit_member_under_stdout_is_refused_at_its_written_key() {
+        let audit = "audit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n";
+        let document = LOADER_RUNTIME_DOCUMENT.replace(
+            audit,
+            "audit:\n  destination: stdout\n  retentionDays: 30\n",
+        );
+        let error = RuntimeConfig::parse_yaml(document.as_bytes())
+            .expect_err("a retention period under stdout is refused");
+        assert!(
+            error.to_string().contains("retentionDays"),
+            "the cause names the key as written: {error}"
+        );
+        // The audit writer names the setting its own way; the finding points
+        // at the key the file wrote.
+        let refusal = audit_refusal(&AuditDestinationError::FileOnlyField {
+            field: "retainDays",
+        });
+        assert_eq!(refusal.pointer, "/audit/retentionDays");
+        assert!(refusal.at_key);
     }
 
     #[test]
@@ -11087,9 +11746,9 @@ outboundTls:
             ),
             (
                 "unknown signer kind",
-                replaced("kind: local-jwk", &format!("kind: {CANARY}")),
+                replaced("type: local-jwk", &format!("type: {CANARY}")),
                 "config.unknown-variant",
-                "/signer/kind",
+                "/signer/type",
             ),
             (
                 "duplicate key",
@@ -11180,9 +11839,9 @@ outboundTls:
         );
 
         let transit = LOADER_RUNTIME_DOCUMENT.replace(
-            "  kind: local-jwk\n  privateKeyRef: secret:file/signing-key\n",
-            "  kind: transit\n  unixSocketPath: /run/transit.sock\n  mount: transit\n  \
-             keyName: evidence\n  keyVersion: seven\n  timeoutMilliseconds: 2000\n",
+            "  type: local-jwk\n  privateKeyRef: secret:file/signing-key\n",
+            "  type: transit\n  unixSocketPath: /run/transit.sock\n  mount: transit\n  \
+             keyName: evidence\n  keyVersion: seven\n  attemptTimeoutMilliseconds: 2000\n",
         );
         let report = runtime_report(&transit);
         assert_eq!(deciding(&report).path, "/signer/keyVersion");
@@ -11296,6 +11955,70 @@ outboundTls:
         assert!(RuntimeConfig::parse_yaml(malformed.as_bytes()).is_err());
     }
 
+    const BUNDLE_ENVELOPE: &str =
+        "apiVersion: id.registrystack.org/formats/evidence/bundle/v1\nkind: EvidenceBundle\n";
+
+    #[test]
+    fn the_bundle_declares_the_evidence_envelope() {
+        let bundle = acceptance_bundle();
+        assert!(
+            bundle.starts_with(BUNDLE_ENVELOPE),
+            "the fixture is enveloped"
+        );
+        EvidenceConfig::parse_yaml(bundle.as_bytes()).expect("the enveloped bundle loads");
+
+        let unenveloped = bundle.replacen(BUNDLE_ENVELOPE, "", 1);
+        let diagnostics = bundle_refusal(&unenveloped);
+        let missing = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.missing-envelope")
+            .unwrap_or_else(|| panic!("no config.missing-envelope in {diagnostics:?}"));
+        assert!(
+            missing
+                .suggested_action
+                .contains(EVIDENCE_BUNDLE_API_VERSION),
+            "the fix names the apiVersion to write: {missing:?}"
+        );
+
+        let other_kind =
+            bundle.replacen("kind: EvidenceBundle\n", "kind: EvidenceRuntimeConfig\n", 1);
+        let diagnostics = bundle_refusal(&other_kind);
+        assert_eq!(diagnostics[0].code, "config.wrong-kind");
+        assert_eq!(diagnostics[0].path, "/kind");
+    }
+
+    #[test]
+    fn a_bundle_written_with_the_version_member_is_refused_with_the_envelope_named() {
+        // The header an earlier grammar wrote, beside the envelope and in its
+        // place: both are refused at the member, with the envelope named.
+        let beside = acceptance_bundle().replacen(
+            BUNDLE_ENVELOPE,
+            &format!("{BUNDLE_ENVELOPE}version: 1\n"),
+            1,
+        );
+        let instead = acceptance_bundle().replacen(BUNDLE_ENVELOPE, "version: 1\n", 1);
+        for (label, document, line) in [("beside", beside, 3), ("instead", instead, 1)] {
+            let diagnostics = bundle_refusal(&document);
+            let removed = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "config.removed-key")
+                .unwrap_or_else(|| panic!("{label}: no config.removed-key in {diagnostics:?}"));
+            assert_eq!(removed.path, "/version", "{label}");
+            assert_eq!(
+                removed.source.as_ref().and_then(|source| source.line),
+                Some(line),
+                "{label}"
+            );
+            assert!(
+                removed
+                    .suggested_action
+                    .contains(EVIDENCE_BUNDLE_API_VERSION)
+                    && removed.suggested_action.contains(EVIDENCE_BUNDLE_KIND),
+                "{label}: the fix names the envelope: {removed:?}"
+            );
+        }
+    }
+
     /// The adult-status acceptance bundle, which every bundle-reader test
     /// edits into the case it proves.
     fn acceptance_bundle() -> String {
@@ -11326,10 +12049,992 @@ outboundTls:
     }
 
     #[test]
+    fn the_respelled_request_bounds_are_read_and_the_old_spellings_refused() {
+        let valid = acceptance_bundle();
+        let config = EvidenceConfig::parse_yaml(valid.as_bytes())
+            .expect("the bundle with the respelled request bounds loads");
+        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        let request = &projection["sources"]["source-a"]["request"];
+        assert_eq!(request["attemptTimeoutMilliseconds"], 3000);
+        assert_eq!(request["maximumConcurrency"], 8);
+        assert!(request.get("timeoutMilliseconds").is_none());
+        assert!(request.get("concurrencyLimit").is_none());
+
+        let cases = [
+            (
+                "      attemptTimeoutMilliseconds: 3000",
+                "      timeoutMilliseconds: 3001",
+                "/sources/source-a/request/timeoutMilliseconds",
+                "attemptTimeoutMilliseconds",
+            ),
+            (
+                "      maximumConcurrency: 8",
+                "      concurrencyLimit: 9",
+                "/sources/source-a/request/concurrencyLimit",
+                "maximumConcurrency",
+            ),
+        ];
+        for (new, old, pointer, replacement) in cases {
+            let candidate = valid.replacen(new, old, 1);
+            assert_ne!(candidate, valid, "{pointer}: the mutation applies");
+            let diagnostics = bundle_refusal(&candidate);
+            let removed = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "config.removed-key")
+                .unwrap_or_else(|| panic!("{pointer}: no config.removed-key in {diagnostics:?}"));
+            assert_eq!(removed.path, pointer);
+            assert_eq!(
+                removed.source.as_ref().and_then(|source| source.line),
+                Some(line_of(&candidate, old.trim_start())),
+                "{pointer}"
+            );
+            assert!(
+                removed.suggested_action.contains(replacement),
+                "{pointer}: the fix names the replacement: {removed:?}"
+            );
+            let rendered = format!("{diagnostics:?}");
+            assert!(
+                !rendered.contains("3001"),
+                "{pointer}: a diagnostic repeated a value"
+            );
+        }
+    }
+
+    #[test]
+    fn a_requirement_repeating_a_uri_is_refused_with_the_shared_code_at_the_copy() {
+        let valid = acceptance_bundle();
+        let (_, requirement) = valid
+            .split_once("requirements:\n")
+            .expect("the fixture declares its requirements last");
+        let repeated = format!("{valid}{requirement}");
+        let diagnostics = bundle_refusal(&repeated);
+        assert_eq!(diagnostics.len(), 1, "one problem: {diagnostics:?}");
+        let duplicate = &diagnostics[0];
+        assert_eq!(duplicate.code, "config.duplicate-id");
+        assert_eq!(duplicate.path, "/requirements/1/uri");
+        let first_line = line_of(&valid, "    uri: urn:example:fixture:requirement:");
+        let copy_line = valid.lines().count() + first_line - line_of(&valid, "requirements:");
+        assert_eq!(
+            duplicate.source.as_ref().and_then(|source| source.line),
+            Some(copy_line)
+        );
+        assert!(
+            duplicate
+                .source
+                .as_ref()
+                .and_then(|source| source.column)
+                .is_some(),
+            "the copy is positioned by column: {duplicate:?}"
+        );
+        assert_eq!(duplicate.related.len(), 1, "{duplicate:?}");
+        assert_eq!(duplicate.related[0].path, "/requirements/0/uri");
+        assert_eq!(duplicate.related[0].line, Some(first_line));
+        let rendered = format!("{} {}", duplicate.message, duplicate.suggested_action);
+        assert!(
+            rendered.contains("`uri`") && !rendered.contains("`id`"),
+            "the refusal names the member that repeats: {duplicate:?}"
+        );
+        assert!(
+            !format!("{duplicate:?}").contains("urn:example:fixture:requirement"),
+            "the diagnostic repeated the identifier: {duplicate:?}"
+        );
+    }
+
+    /// Every bundle decides its two admission gates (CFG-EMPTY-2): the keyword
+    /// `unrestricted` or a list of at least one value. An omitted gate and an
+    /// empty list would both read as "no gate", so the reader refuses both
+    /// (CFG-EMPTY-3) and never repeats a written value.
+    #[test]
+    fn the_admission_gates_are_required_and_unrestricted_is_explicit() {
+        let valid = acceptance_bundle();
+        let config = EvidenceConfig::parse_yaml(valid.as_bytes())
+            .expect("the bundle that states both gates loads");
+        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        let oidc = &projection["authentication"]["oidc"];
+        assert_eq!(oidc["allowedClients"], "unrestricted");
+        assert_eq!(oidc["requiredScopes"], "unrestricted");
+
+        let listed = edited(
+            &edited(
+                &valid,
+                "    allowedClients: unrestricted\n",
+                "    allowedClients: [records-reader]\n",
+            ),
+            "    requiredScopes: unrestricted\n",
+            "    requiredScopes: [\"evidence:invoke\"]\n",
+        );
+        let config = EvidenceConfig::parse_yaml(listed.as_bytes())
+            .expect("the bundle that lists both gates loads");
+        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        let oidc = &projection["authentication"]["oidc"];
+        assert_eq!(
+            oidc["allowedClients"],
+            serde_json::json!(["records-reader"])
+        );
+        assert_eq!(
+            oidc["requiredScopes"],
+            serde_json::json!(["evidence:invoke"])
+        );
+
+        for member in ["allowedClients", "requiredScopes"] {
+            let stated = format!("    {member}: unrestricted\n");
+            let line = line_of(&valid, stated.trim());
+
+            let omitted = bundle_refusal(&edited(&valid, &stated, ""));
+            assert_eq!(omitted.len(), 1, "one problem: {omitted:?}");
+            assert_eq!(omitted[0].code, "config.missing-key", "{member}");
+            assert!(
+                omitted[0].message.contains(member),
+                "the refusal does not name the member: {:?}",
+                omitted[0]
+            );
+
+            for written in ["[]", "open-to-anyone"] {
+                let document = edited(&valid, &stated, &format!("    {member}: {written}\n"));
+                let diagnostics = bundle_refusal(&document);
+                assert_eq!(diagnostics.len(), 1, "one problem: {diagnostics:?}");
+                let refusal = &diagnostics[0];
+                assert_eq!(refusal.code, "config.invalid-value", "{member} {written}");
+                assert_eq!(refusal.path, format!("/authentication/oidc/{member}"));
+                assert_eq!(
+                    refusal.source.as_ref().expect("a position").line,
+                    Some(line),
+                    "{refusal:?}"
+                );
+                assert!(
+                    refusal.suggested_action.contains("unrestricted"),
+                    "the refusal does not name the keyword: {refusal:?}"
+                );
+                assert!(
+                    !format!("{refusal:?}").contains("open-to-anyone"),
+                    "the diagnostic repeated the value: {refusal:?}"
+                );
+            }
+        }
+    }
+
+    /// An integer the schema bounds on both sides is refused at its value
+    /// with the shared code, and not at the requirement that holds it
+    /// (CFG-QTY-4, CFG-DIAG-1): a derivation parameter outside the safe
+    /// integers, and a list concept's item count outside one to 64.
+    #[test]
+    fn an_integer_outside_its_bounds_is_refused_with_the_shared_code_at_the_value() {
+        let valid = acceptance_bundle();
+        let line = line_of(&valid, "minimum_age_years: 18");
+        for written in ["9007199254740992", "-9007199254740992"] {
+            let document = edited(
+                &valid,
+                "minimum_age_years: 18",
+                &format!("minimum_age_years: {written}"),
+            );
+            let diagnostics = bundle_refusal(&document);
+            assert_eq!(diagnostics.len(), 1, "one problem: {diagnostics:?}");
+            let refusal = &diagnostics[0];
+            assert_eq!(refusal.code, "config.out-of-range", "{written}");
+            assert_eq!(
+                refusal.path,
+                "/requirements/0/derivation/parameters/minimum_age_years"
+            );
+            let source = refusal.source.as_ref().expect("a position");
+            assert_eq!(source.line, Some(line), "{refusal:?}");
+            assert!(source.column.is_some(), "{refusal:?}");
+            assert!(
+                !format!("{refusal:?}").contains(written),
+                "the diagnostic repeated the value: {refusal:?}"
+            );
+        }
+        let safe = edited(
+            &valid,
+            "minimum_age_years: 18",
+            "minimum_age_years: 9007199254740991",
+        );
+        EvidenceConfig::parse_yaml(safe.as_bytes()).expect("the largest safe integer loads");
+
+        const SUPPORTED_VALUES: &str = include_str!(
+            "../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml"
+        );
+        let sound = "constraints: {minimumItems: 1, maximumItems: 2, unique: true}";
+        let line = line_of(SUPPORTED_VALUES, sound);
+        for (replacement, member) in [
+            (
+                "constraints: {minimumItems: 0, maximumItems: 2, unique: true}",
+                "minimumItems",
+            ),
+            (
+                "constraints: {minimumItems: 1, maximumItems: 65, unique: true}",
+                "maximumItems",
+            ),
+        ] {
+            let document = edited(SUPPORTED_VALUES, sound, replacement);
+            let diagnostics = bundle_refusal(&document);
+            assert_eq!(diagnostics.len(), 1, "one problem: {diagnostics:?}");
+            let refusal = &diagnostics[0];
+            assert_eq!(refusal.code, "config.out-of-range", "{member}");
+            assert!(
+                refusal.path.starts_with("/requirements/0/concepts/")
+                    && refusal.path.ends_with(&format!("/constraints/{member}")),
+                "{refusal:?}"
+            );
+            let source = refusal.source.as_ref().expect("a position");
+            assert_eq!(source.line, Some(line), "{refusal:?}");
+            assert!(source.column.is_some(), "{refusal:?}");
+        }
+    }
+
+    #[test]
+    fn a_source_connection_written_with_the_old_concurrency_key_is_refused() {
+        let valid = acceptance_bundle();
+        let connection = "sourceConnections:\n  shared:\n    baseUrl: https://source.invalid\n    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}\n";
+        let respelled = valid.replacen(
+            "sources:\n",
+            &format!("{connection}    maximumConcurrency: 4\nsources:\n"),
+            1,
+        );
+        assert_ne!(respelled, valid, "the connection is staged");
+        let config = EvidenceConfig::parse_yaml(respelled.as_bytes())
+            .expect("the connection with maximumConcurrency loads");
+        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        assert_eq!(
+            projection["sourceConnections"]["shared"]["maximumConcurrency"],
+            4
+        );
+
+        let old = respelled.replacen(
+            "    maximumConcurrency: 4\n",
+            "    concurrencyLimit: 4\n",
+            1,
+        );
+        let diagnostics = bundle_refusal(&old);
+        let removed = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .unwrap_or_else(|| panic!("no config.removed-key in {diagnostics:?}"));
+        assert_eq!(removed.path, "/sourceConnections/shared/concurrencyLimit");
+        assert!(
+            removed.suggested_action.contains("maximumConcurrency"),
+            "the fix names the replacement: {removed:?}"
+        );
+    }
+
+    /// Asserts that `valid` loads, and that writing `old` where it writes
+    /// `new` is refused as a removed key at `pointer` with `type` named.
+    fn assert_union_tag_respelled(valid: &str, new: &str, old: &str, pointer: &str) {
+        EvidenceConfig::parse_yaml(valid.as_bytes())
+            .unwrap_or_else(|error| panic!("{pointer}: the bundle tagged by type loads: {error}"));
+        let candidate = valid.replacen(new, old, 1);
+        assert_ne!(candidate, valid, "{pointer}: the mutation applies");
+        let diagnostics = bundle_refusal(&candidate);
+        let removed = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .unwrap_or_else(|| panic!("{pointer}: no config.removed-key in {diagnostics:?}"));
+        assert_eq!(removed.path, pointer);
+        assert_eq!(
+            removed.source.as_ref().and_then(|source| source.line),
+            Some(line_of(&candidate, old)),
+            "{pointer}"
+        );
+        assert!(
+            removed.suggested_action.contains("type"),
+            "{pointer}: the fix names the replacement: {removed:?}"
+        );
+    }
+
+    /// A client that proves itself with a signed assertion is its own
+    /// authentication type, so `type` alone tells it from the shared-secret
+    /// form and never which members are present (CFG-ID-7).
+    #[test]
+    fn a_request_path_is_a_literal_or_a_template_and_path_template_is_refused() {
+        let valid = acceptance_bundle();
+        let written = "      path: /v1/facts\n";
+        let with = |request: &str| {
+            let candidate = valid.replacen(written, request, 1);
+            assert_ne!(candidate, valid, "the mutation applies");
+            candidate
+        };
+        let bindings = "      pathBindings:\n        given_name: {type: selector, role: subject, profile: person-demographics-v1, field: given_name}\n";
+
+        // The one member carries both forms: a path that names placeholders
+        // is a template, and `pathBindings` fills it.
+        let template = with(&format!("      path: /v1/facts/{{given_name}}\n{bindings}"));
+        let config = EvidenceConfig::parse_yaml(template.as_bytes())
+            .expect("a path that names placeholders loads with its bindings");
+        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        let request = &projection["sources"]["source-a"]["request"];
+        assert_eq!(request["path"], "/v1/facts/{given_name}");
+        assert!(request.get("pathTemplate").is_none());
+        assert!(request["pathBindings"].get("given_name").is_some());
+
+        let literal = EvidenceConfig::parse_yaml(valid.as_bytes()).expect("a literal path loads");
+        let projection = serde_json::to_value(&literal).expect("the bundle projects");
+        let request = &projection["sources"]["source-a"]["request"];
+        assert_eq!(request["path"], "/v1/facts");
+        assert!(request.get("pathBindings").is_none());
+
+        // The removed member is refused by name, with the member that
+        // replaces it and without the written path.
+        let removed_form = with(&format!(
+            "      pathTemplate: /v1/facts/{{given_name}}\n{bindings}"
+        ));
+        let diagnostics = bundle_refusal(&removed_form);
+        let removed = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .unwrap_or_else(|| panic!("no config.removed-key in {diagnostics:?}"));
+        assert_eq!(removed.path, "/sources/source-a/request/pathTemplate");
+        assert_eq!(
+            removed.source.as_ref().and_then(|source| source.line),
+            Some(line_of(&removed_form, "pathTemplate:"))
+        );
+        assert!(
+            removed.suggested_action.contains("path"),
+            "the fix names the replacement: {removed:?}"
+        );
+        assert!(
+            !format!("{diagnostics:?}").contains("/v1/facts"),
+            "a diagnostic repeated the written path"
+        );
+
+        // The member is required: a request without it is refused at the
+        // mapping that lacks it.
+        let diagnostics = bundle_refusal(&valid.replacen(written, "", 1));
+        let missing = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.missing-key")
+            .unwrap_or_else(|| panic!("no config.missing-key in {diagnostics:?}"));
+        assert_eq!(missing.path, "/sources/source-a/request");
+
+        // The bindings are required exactly when the path names placeholders.
+        for (request, reason) in [
+            (
+                "      path: /v1/facts/{given_name}\n".to_owned(),
+                "a template without bindings",
+            ),
+            (
+                format!("      path: /v1/facts\n{bindings}"),
+                "bindings beside a literal path",
+            ),
+            (
+                format!("      path: /v1/facts/{{family_name}}\n{bindings}"),
+                "a placeholder no binding fills",
+            ),
+            (
+                format!("      path: /v1/facts/x-{{given_name}}\n{bindings}"),
+                "a placeholder inside a segment",
+            ),
+        ] {
+            let candidate = with(&request);
+            assert_eq!(
+                EvidenceConfig::parse_yaml_reporting_rule(candidate.as_bytes())
+                    .err()
+                    .map(|error| matches!(error, ConfigError::Invalid(_))),
+                Some(true),
+                "{reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_client_assertion_key_is_its_own_authentication_type() {
+        let valid = acceptance_bundle();
+        let written =
+            "authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}";
+        let with = |authentication: &str| {
+            let candidate = valid.replacen(written, authentication, 1);
+            assert_ne!(candidate, valid, "the mutation applies");
+            candidate
+        };
+        let token = "tokenEndpoint: https://source.invalid/token, clientIdRef: secret:file/oauth-client-id, maximumCacheSeconds: 60";
+
+        let assertion = with(&format!(
+            "authentication: {{type: oauth2-private-key-jwt, {token}, clientAssertionKeyRef: secret:file/oauth-client-key, clientAssertionAudience: https://issuer.invalid/}}"
+        ));
+        let config = EvidenceConfig::parse_yaml(assertion.as_bytes())
+            .expect("the assertion form loads under its own type");
+        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        let authentication = &projection["sources"]["source-a"]["authentication"];
+        assert_eq!(authentication["type"], "oauth2-private-key-jwt");
+        assert_eq!(
+            authentication["clientAssertionKeyRef"],
+            "secret:file/oauth-client-key"
+        );
+
+        let secret = with(&format!(
+            "authentication: {{type: oauth2-client-credentials, {token}, clientSecretRef: secret:file/oauth-client-secret, credentialPlacement: basic-header}}"
+        ));
+        EvidenceConfig::parse_yaml(secret.as_bytes()).expect("the shared-secret form loads");
+
+        // The form a bundle wrote before the split: the assertion members
+        // under the shared-secret type. Each is refused at its key, and the
+        // fix names the type that carries it.
+        for (members, member) in [
+            (
+                "clientAssertionKeyRef: secret:file/oauth-client-key",
+                "clientAssertionKeyRef",
+            ),
+            (
+                "clientSecretRef: secret:file/oauth-client-secret, credentialPlacement: basic-header, clientAssertionAudience: https://issuer.invalid/",
+                "clientAssertionAudience",
+            ),
+        ] {
+            let candidate = with(&format!(
+                "authentication: {{type: oauth2-client-credentials, {token}, {members}}}"
+            ));
+            let diagnostics = bundle_refusal(&candidate);
+            let pointer = format!("/sources/source-a/authentication/{member}");
+            let refused = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.path == pointer)
+                .unwrap_or_else(|| panic!("{member}: no diagnostic at the key in {diagnostics:?}"));
+            assert_eq!(refused.code, "config.unknown-key", "{member}");
+            assert_eq!(
+                refused.source.as_ref().and_then(|source| source.line),
+                Some(line_of(&candidate, member)),
+                "{member}"
+            );
+            assert!(
+                refused.suggested_action.contains("oauth2-private-key-jwt"),
+                "{member}: the fix names the type: {refused:?}"
+            );
+            for diagnostic in &diagnostics {
+                let text = format!("{} {}", diagnostic.message, diagnostic.suggested_action);
+                assert!(
+                    !text.contains("oauth-client-key") && !text.contains("issuer.invalid"),
+                    "{member}: a written value is repeated: {diagnostic:?}"
+                );
+            }
+        }
+
+        // Each type requires its own credential and refuses the other's.
+        for (authentication, code, member) in [
+            (
+                format!("authentication: {{type: oauth2-client-credentials, {token}, clientSecretRef: secret:file/oauth-client-secret}}"),
+                "config.missing-key",
+                "",
+            ),
+            (
+                format!("authentication: {{type: oauth2-private-key-jwt, {token}}}"),
+                "config.missing-key",
+                "",
+            ),
+            (
+                format!("authentication: {{type: oauth2-private-key-jwt, {token}, clientAssertionKeyRef: secret:file/oauth-client-key, credentialPlacement: basic-header}}"),
+                "config.unknown-key",
+                "/credentialPlacement",
+            ),
+        ] {
+            let diagnostics = bundle_refusal(&with(&authentication));
+            let pointer = format!("/sources/source-a/authentication{member}");
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == code && diagnostic.path == pointer),
+                "{code} at {pointer}: {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_issuer_and_a_concept_name_their_uri_and_the_old_id_is_refused() {
+        let adult = acceptance_bundle();
+        let config = EvidenceConfig::parse_yaml(adult.as_bytes()).expect("the bundle loads");
+        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        assert_eq!(
+            projection["issuer"]["uri"],
+            "urn:example:fixture:issuer:authority"
+        );
+        assert!(projection["issuer"].get("id").is_none());
+        let concept = &projection["requirements"][0]["concepts"][0];
+        assert_eq!(concept["uri"], "urn:example:fixture:concept:adult-status");
+        assert!(concept.get("id").is_none());
+
+        for (new, old, pointer) in [
+            ("issuer: {uri: ", "issuer: {id: ", "/issuer/id"),
+            (
+                "{handle: is_adult, uri: ",
+                "{handle: is_adult, id: ",
+                "/requirements/0/concepts/0/id",
+            ),
+        ] {
+            let candidate = adult.replacen(new, old, 1);
+            assert_ne!(candidate, adult, "{pointer}: the mutation applies");
+            let diagnostics = bundle_refusal(&candidate);
+            let removed = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "config.removed-key")
+                .unwrap_or_else(|| panic!("{pointer}: no config.removed-key in {diagnostics:?}"));
+            assert_eq!(removed.path, pointer);
+            assert!(
+                removed.suggested_action.contains("uri"),
+                "{pointer}: the fix names the replacement: {removed:?}"
+            );
+            let rendered = format!("{} {}", removed.message, removed.suggested_action);
+            assert!(
+                !rendered.contains("urn:example"),
+                "{pointer}: the written value is not repeated"
+            );
+        }
+    }
+
+    #[test]
+    fn a_requirement_names_its_uri_and_the_old_id_is_refused() {
+        let adult = acceptance_bundle();
+        let config = EvidenceConfig::parse_yaml(adult.as_bytes()).expect("the bundle loads");
+        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        let requirement = &projection["requirements"][0];
+        assert_eq!(
+            requirement["uri"],
+            "urn:example:fixture:requirement:adult-status:v1"
+        );
+        assert!(requirement.get("id").is_none());
+
+        let candidate = adult.replacen(
+            "    uri: urn:example:fixture:requirement:",
+            "    id: urn:example:fixture:requirement:",
+            1,
+        );
+        assert_ne!(candidate, adult, "the mutation applies");
+        let diagnostics = bundle_refusal(&candidate);
+        let removed = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .unwrap_or_else(|| panic!("no config.removed-key in {diagnostics:?}"));
+        assert_eq!(removed.path, "/requirements/0/id");
+        assert!(
+            removed.suggested_action.contains("uri"),
+            "the fix names the replacement: {removed:?}"
+        );
+        let rendered = format!("{} {}", removed.message, removed.suggested_action);
+        assert!(
+            !rendered.contains("urn:example"),
+            "the written value is not repeated"
+        );
+
+        let absent = adult
+            .lines()
+            .filter(|line| !line.starts_with("    uri: urn:example:fixture:requirement:"))
+            .fold(String::new(), |text, line| text + line + "\n");
+        assert_ne!(absent, adult, "the removal applies");
+        let diagnostics = bundle_refusal(&absent);
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "config.missing-key" && diagnostic.message.contains("uri")
+            }),
+            "a requirement without its URI is refused: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn the_batch_ceiling_is_a_maximum_and_the_old_name_is_refused() {
+        let adult = acceptance_bundle();
+        let declared = adult.replacen(
+            "\nrequirements:\n",
+            "\nmaximumHolderBoundBatchSize: 4\n\nrequirements:\n",
+            1,
+        );
+        assert_ne!(declared, adult, "the declaration applies");
+        let config = EvidenceConfig::parse_yaml(declared.as_bytes()).expect("the bundle loads");
+        assert_eq!(config.holder_bound_batch_ceiling(), 4);
+        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        assert_eq!(projection["maximumHolderBoundBatchSize"], 4);
+        assert!(projection.get("holderBoundBatchMaxSize").is_none());
+
+        let old = declared.replacen(
+            "\nmaximumHolderBoundBatchSize: 4\n",
+            "\nholderBoundBatchMaxSize: 4\n",
+            1,
+        );
+        let diagnostics = bundle_refusal(&old);
+        let removed = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .unwrap_or_else(|| panic!("no config.removed-key in {diagnostics:?}"));
+        assert_eq!(removed.path, "/holderBoundBatchMaxSize");
+        assert!(
+            removed
+                .suggested_action
+                .contains("maximumHolderBoundBatchSize"),
+            "the fix names the replacement: {removed:?}"
+        );
+
+        // An Evidence source pins a definitions document, which names the
+        // ceiling the same way.
+        let mut pinned =
+            serde_norway::from_str::<serde_norway::Value>(&adult).expect("the fixture parses");
+        let source = pinned["sources"]
+            .as_mapping_mut()
+            .expect("the sources are a mapping")
+            .get_mut("source-a")
+            .expect("the fixture declares source-a");
+        source["evidence"] = serde_norway::from_str("contract:\n  holderBoundBatchMaxSize: 4\n")
+            .expect("the pinned contract parses");
+        let pinned = serde_norway::to_string(&pinned).expect("the candidate serializes");
+        let diagnostics = bundle_refusal(&pinned);
+        let removed = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .unwrap_or_else(|| panic!("no config.removed-key in {diagnostics:?}"));
+        assert_eq!(
+            removed.path,
+            "/sources/source-a/evidence/contract/holderBoundBatchMaxSize"
+        );
+        assert!(
+            removed
+                .suggested_action
+                .contains("maximumHolderBoundBatchSize"),
+            "the fix names the replacement: {removed:?}"
+        );
+    }
+
+    /// The definitions document an Evidence source pins names each concept
+    /// form by `type`; the bare name and the `list` member it replaced are
+    /// refused where they are written.
+    #[test]
+    fn a_pinned_concept_form_is_named_by_type_and_the_old_shapes_are_refused() {
+        let adult = acceptance_bundle();
+        let pinned = |form: &str| {
+            let mut pinned =
+                serde_norway::from_str::<serde_norway::Value>(&adult).expect("the fixture parses");
+            let source = pinned["sources"]
+                .as_mapping_mut()
+                .expect("the sources are a mapping")
+                .get_mut("source-a")
+                .expect("the fixture declares source-a");
+            source["evidence"] = serde_norway::from_str(&format!(
+                "contract:\n  definitions:\n    - concepts:\n        - form: {form}\n"
+            ))
+            .expect("the pinned contract parses");
+            serde_norway::to_string(&pinned).expect("the candidate serializes")
+        };
+        let form_path = "/sources/source-a/evidence/contract/definitions/0/concepts/0/form";
+
+        let diagnostics = bundle_refusal(&pinned(
+            "{list: {items: string, minimumItems: 1, maximumItems: 2, unique: true}}",
+        ));
+        let removed = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .unwrap_or_else(|| panic!("no config.removed-key in {diagnostics:?}"));
+        assert_eq!(removed.path, format!("{form_path}/list"));
+        assert!(
+            removed.suggested_action.contains("type: list"),
+            "the fix names the replacement: {removed:?}"
+        );
+
+        let diagnostics = bundle_refusal(&pinned("boolean"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "config.invalid-type"
+                    && diagnostic.path == form_path),
+            "{diagnostics:?}"
+        );
+
+        let diagnostics = bundle_refusal(&pinned("{type: boolean, unique: true}"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "config.unknown-key"
+                    && diagnostic.path == format!("{form_path}/unique")),
+            "{diagnostics:?}"
+        );
+
+        let diagnostics = bundle_refusal(&pinned("{type: decimal}"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "config.unknown-variant"
+                    && diagnostic.path == format!("{form_path}/type")),
+            "{diagnostics:?}"
+        );
+
+        // The tagged form is read: what is refused next is the rest of the
+        // contract this fixture leaves out, never the form.
+        for form in [
+            "{type: boolean}",
+            "{type: list, items: string, minimumItems: 1, maximumItems: 2, unique: true}",
+        ] {
+            let diagnostics = bundle_refusal(&pinned(form));
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|diagnostic| !diagnostic.path.starts_with(form_path)),
+                "{form}: {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_concept_states_its_form_as_type_and_the_old_tag_is_refused() {
+        let adult = acceptance_bundle();
+        let config = EvidenceConfig::parse_yaml(adult.as_bytes()).expect("the bundle loads");
+        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        let concept = &projection["requirements"][0]["concepts"][0];
+        assert_eq!(concept["type"], "boolean");
+        assert!(concept.get("form").is_none());
+
+        assert_union_tag_respelled(
+            &adult,
+            "concept:adult-status, type: boolean",
+            "concept:adult-status, form: boolean",
+            "/requirements/0/concepts/0/form",
+        );
+    }
+
+    #[test]
+    fn a_bundle_union_is_tagged_by_type_and_each_old_tag_is_refused() {
+        let adult = acceptance_bundle();
+        let config = EvidenceConfig::parse_yaml(adult.as_bytes()).expect("the bundle loads");
+        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        let source = &projection["sources"]["source-a"];
+        assert_eq!(source["type"], "http-json");
+        assert_eq!(source["authentication"]["type"], "static-authorization");
+        assert!(source.get("transport").is_none());
+        assert!(source["authentication"].get("kind").is_none());
+        let acquisition = &projection["requirements"][0]["acquisition"];
+        assert_eq!(acquisition["type"], "single");
+        assert!(acquisition.get("kind").is_none());
+
+        assert_union_tag_respelled(
+            &adult,
+            "    type: http-json",
+            "    transport: http-json",
+            "/sources/source-a/transport",
+        );
+        assert_union_tag_respelled(
+            &adult,
+            "authentication: {type: static-authorization,",
+            "authentication: {kind: static-authorization,",
+            "/sources/source-a/authentication/kind",
+        );
+        assert_union_tag_respelled(
+            &adult,
+            "      type: single",
+            "      kind: single",
+            "/requirements/0/acquisition/kind",
+        );
+
+        let chained = String::from_utf8(
+            include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/surviving-spouse-status/evidence.yaml"
+            )
+            .to_vec(),
+        )
+        .expect("fixture is UTF-8");
+        assert_union_tag_respelled(
+            &chained,
+            "pathBindings: {ref: {type: prior-fact,",
+            "pathBindings: {ref: {from: prior-fact,",
+            "/sources/union-register/request/pathBindings/ref/from",
+        );
+
+        let statement = String::from_utf8(
+            include_bytes!(
+                "../../../products/evidence/reference/request-adapter/deployment-projects/sqlite-extract-evidence/bundle/evidence.yaml"
+            )
+            .to_vec(),
+        )
+        .expect("fixture is UTF-8");
+        assert_union_tag_respelled(
+            &statement,
+            "          type: selector",
+            "          kind: selector",
+            "/sources/licence-register/request/parameterBindings/record_reference/kind",
+        );
+    }
+
+    #[test]
+    fn a_source_connection_authentication_tagged_by_kind_is_refused() {
+        let valid = acceptance_bundle();
+        let respelled = valid.replacen(
+            "sources:\n",
+            "sourceConnections:\n  shared:\n    baseUrl: https://source.invalid\n    authentication:\n      type: static-authorization\n      tokenRef: secret:file/source-a-token\nsources:\n",
+            1,
+        );
+        assert_ne!(respelled, valid, "the connection is staged");
+        assert_union_tag_respelled(
+            &respelled,
+            "      type: static-authorization",
+            "      kind: static-authorization",
+            "/sourceConnections/shared/authentication/kind",
+        );
+    }
+
+    #[test]
+    fn the_access_token_key_source_is_tagged_by_type_and_the_old_tag_is_refused() {
+        let valid = acceptance_bundle();
+        let config = EvidenceConfig::parse_yaml(valid.as_bytes()).expect("the bundle loads");
+        let projection = serde_json::to_value(&config).expect("the bundle projects");
+        let key_source = &projection["authentication"]["oidc"]["jwksSource"];
+        assert_eq!(key_source["type"], "uri");
+        assert!(key_source.get("kind").is_none());
+
+        assert_union_tag_respelled(
+            &valid,
+            "      type: uri",
+            "      kind: uri",
+            "/authentication/oidc/jwksSource/kind",
+        );
+    }
+
+    #[test]
+    fn the_keys_of_an_id_keyed_bundle_map_are_shared_local_identifiers() {
+        let valid = acceptance_bundle();
+        EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
+        let overlong = format!("s{}", "a".repeat(64));
+        // Each case respells one definition and every reference to it, so the
+        // grammar of the key is the only rule the candidate breaks. A name of
+        // 65 characters and a name with a dot were both accepted by the
+        // grammar these maps had of their own.
+        let source = |name: &str| {
+            valid
+                .replacen("  source-a:\n", &format!("  {name}:\n"), 1)
+                .replacen("source: source-a\n", &format!("source: {name}\n"), 1)
+        };
+        let cases = [
+            (
+                source("source.a"),
+                "source.a",
+                Some("/sources/source.a"),
+                "evidence.bundle.invalid-source",
+                "map key",
+            ),
+            (
+                source(&overlong),
+                overlong.as_str(),
+                None,
+                "evidence.bundle.invalid-source",
+                "map key",
+            ),
+            (
+                valid.replace("person-demographics-v1", "person.demographics-v1"),
+                "person.demographics-v1",
+                Some("/selectorProfiles/person.demographics-v1"),
+                "evidence.bundle.invalid-selector-profile",
+                "map key",
+            ),
+            (
+                valid.replace("statutory-caseworker-v1", "statutory.caseworker-v1"),
+                "statutory.caseworker-v1",
+                Some("/authorityProfiles/statutory.caseworker-v1"),
+                "evidence.bundle.invalid-authority-profile",
+                "map key",
+            ),
+            (
+                valid.replace("given_name", "given.name"),
+                "given.name",
+                None,
+                "evidence.bundle.invalid-selector-profile",
+                "selector field name",
+            ),
+            (
+                valid.replace("minimum_age_years", "minimum.age.years"),
+                "minimum.age.years",
+                None,
+                "evidence.bundle.invalid-requirement",
+                "derivation parameter name",
+            ),
+        ];
+        for (candidate, name, pointer, code, label) in cases {
+            assert_ne!(candidate, valid, "{label}: the mutation applies");
+            let diagnostics = bundle_refusal(&candidate);
+            let refusal = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.message.contains("local identifier"))
+                .unwrap_or_else(|| panic!("{label}: no identifier refusal in {diagnostics:?}"));
+            assert_eq!(refusal.code, code, "{label}");
+            assert!(refusal.message.contains(label), "{label}: {refusal:?}");
+            assert!(
+                refusal.message.contains("up to 63"),
+                "{label}: the grammar is stated: {refusal:?}"
+            );
+            if let Some(pointer) = pointer {
+                assert_eq!(refusal.path, pointer, "{label}");
+            }
+            let rendered = format!("{} {}", refusal.message, refusal.suggested_action);
+            assert!(
+                !rendered.contains(name),
+                "{label}: the name is not repeated"
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_template_placeholder_is_a_shared_local_identifier() {
+        let binding = |name: &str| -> OrderedMap<PathBindingConfig> {
+            serde_norway::from_str(&format!(
+                "{name}: {{type: prior-fact, field: record_reference}}\n"
+            ))
+            .expect("path binding parses")
+        };
+        assert!(validate_path_template("/records/{record_ref}", &binding("record_ref")).is_ok());
+        let overlong = format!("r{}", "a".repeat(64));
+        for name in ["record.ref", overlong.as_str()] {
+            let refusal = validate_path_template(&format!("/records/{{{name}}}"), &binding(name))
+                .expect_err("the placeholder is not a local identifier");
+            let fault = refusal.fault();
+            assert!(fault.cause().contains("local identifier"), "{fault}");
+            assert_eq!(fault.field(), Some("source path-template placeholder"));
+        }
+    }
+
+    #[test]
+    fn the_keys_of_the_runtime_trust_profile_and_extract_maps_are_shared_local_identifiers() {
+        let overlong = format!("p{}", "a".repeat(64));
+        for name in ["private.ca", overlong.as_str()] {
+            let trust = LOADER_RUNTIME_DOCUMENT.replace(
+                "  trustProfiles: {}\n",
+                &format!("  trustProfiles:\n    {name}: {{caBundleFile: /etc/registry-evidence/ca.pem}}\n"),
+            );
+            let extract = format!(
+                "{LOADER_RUNTIME_DOCUMENT}sourceExtracts:\n  {name}: {{path: /var/lib/registry-evidence/extract.sqlite}}\n"
+            );
+            for (document, code, map) in [
+                (
+                    trust,
+                    RUNTIME_OUTBOUND_TLS_CODE,
+                    "/outboundTls/trustProfiles",
+                ),
+                (extract, RUNTIME_SOURCE_EXTRACT_CODE, "/sourceExtracts"),
+            ] {
+                assert_ne!(
+                    document, LOADER_RUNTIME_DOCUMENT,
+                    "{map}: the mutation applies"
+                );
+                let config = RuntimeConfig::decode_yaml_with(document.as_bytes(), |_| None)
+                    .unwrap_or_else(|error| panic!("{map}: the document decodes: {error:?}"))
+                    .config;
+                let findings = config.findings();
+                let refusal = findings
+                    .iter()
+                    .find(|finding| finding.pointer == format!("{map}/{name}"))
+                    .unwrap_or_else(|| panic!("{map}: the key was not refused"));
+                assert_eq!(refusal.code, code, "{map}");
+                assert!(refusal.at_key, "{map}: the finding points at the key");
+                assert!(
+                    refusal.action.contains("at most 64"),
+                    "{map}: the grammar is stated"
+                );
+                let rendered = format!("{} {}", refusal.message(), refusal.action);
+                assert!(!rendered.contains(name), "{map}: the name is not repeated");
+                assert!(
+                    config.validate().is_err(),
+                    "{map}: startup refuses the document"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_removed_bundle_authentication_and_audit_key_is_refused_with_its_replacement_named() {
         let valid = acceptance_bundle();
         EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
-        for removed in EVIDENCE_BUNDLE_REMOVED_KEYS {
+        // A pointer with a `*` segment names no one member to stage here; the
+        // request-bound tests beside this one cover those entries.
+        for removed in EVIDENCE_BUNDLE_REMOVED_KEYS
+            .iter()
+            .filter(|removed| !removed.pointer.contains('*'))
+        {
             let mut segments = removed.pointer[1..].split('/').collect::<Vec<_>>();
             let leaf = segments.pop().expect("a leaf");
             let mut value =
@@ -11400,8 +13105,8 @@ outboundTls:
     fn a_bad_member_inside_a_tagged_source_reports_its_full_path_and_position() {
         let valid = acceptance_bundle();
         let candidate = valid.replacen(
-            "    transport: http-json",
-            "    transport: http-json\n    unexpectedMember: 1",
+            "    type: http-json",
+            "    type: http-json\n    unexpectedMember: 1",
             1,
         );
         assert_ne!(candidate, valid, "the fixture declares an HTTP source");
@@ -11537,13 +13242,13 @@ outboundTls:
             assert_eq!(
                 candidate.validate(),
                 Err(ConfigError::InvalidField(
-                    "Evidence reads access-token keys only from jwksSource kind uri",
+                    "Evidence reads access-token keys only from jwksSource type uri",
                     "authentication.oidc.jwksSource",
                 ))
             );
         }
         let omitted = valid.replace(
-            &format!("    jwksSource:\n      kind: uri\n      uri: {uri}\n"),
+            &format!("    jwksSource:\n      type: uri\n      uri: {uri}\n"),
             "",
         );
         assert_ne!(omitted, valid, "fixture mutation must remain effective");
@@ -11575,15 +13280,15 @@ outboundTls:
     /// Two declared fetch members, each the ordinary fixed request every
     /// Version 1 source already is, bound to the reference the search resolved.
     const MEMBER_SOURCES: &str = r#"  source-e:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-e-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-e-token}
     request:
       method: GET
-      pathTemplate: /v1/first/{record_id}
+      path: /v1/first/{record_id}
       pathBindings:
-        record_id: {from: prior-fact, field: record_id}
+        record_id: {type: prior-fact, field: record_id}
       fixedHeaders: [{name: Accept, value: application/json}]
       selectorInputs: []
       prepareScript: adapters/first-member-prepare.rhai
@@ -11592,22 +13297,22 @@ outboundTls:
       preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
       projection: [/total]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/first-member-response.schema.yaml
     extractScript: adapters/first-member-source.rhai
     factSchema: schemas/first-member-facts.schema.yaml
   source-f:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-f-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-f-token}
     request:
       method: GET
-      pathTemplate: /v1/second/{record_id}
+      path: /v1/second/{record_id}
       pathBindings:
-        record_id: {from: prior-fact, field: record_id}
+        record_id: {type: prior-fact, field: record_id}
       fixedHeaders: [{name: Accept, value: application/json}]
       selectorInputs: []
       prepareScript: adapters/second-member-prepare.rhai
@@ -11616,16 +13321,16 @@ outboundTls:
       preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
       projection: [/total]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/second-member-response.schema.yaml
     extractScript: adapters/second-member-source.rhai
     factSchema: schemas/second-member-facts.schema.yaml
   source-b:
 "#;
 
-    const DECLARED_ACQUISITION: &str = "    acquisition:\n      kind: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n";
+    const DECLARED_ACQUISITION: &str = "    acquisition:\n      type: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n";
 
     const DECLARED_MEMBERS: &str = "      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n";
 
@@ -11645,7 +13350,7 @@ outboundTls:
         );
         assert_ne!(declared, yaml, "the capability declaration applies");
         let acquired = declared.replace(
-            "    acquisition:\n      kind: single\n      source: source-a\n",
+            "    acquisition:\n      type: single\n      source: source-a\n",
             DECLARED_ACQUISITION,
         );
         assert_ne!(acquired, declared, "the fetch-set acquisition applies");
@@ -11854,19 +13559,19 @@ outboundTls:
         let validator = bundle_contract_validator();
         for (acquisition, reason) in [
             (
-                "    acquisition:\n      kind: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n",
+                "    acquisition:\n      type: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n",
                 "the budget is required",
             ),
             (
-                "    acquisition:\n      kind: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id], order: 1}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n",
+                "    acquisition:\n      type: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id], order: 1}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n",
                 "a member declares only its source and its fact inputs",
             ),
             (
-                "    acquisition:\n      kind: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n      concurrent: true\n",
+                "    acquisition:\n      type: search-then-fetch-set\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n      concurrent: true\n",
                 "the acquisition form is closed",
             ),
             (
-                "    acquisition:\n      kind: search-then-fetch-sets\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n",
+                "    acquisition:\n      type: search-then-fetch-sets\n      search: source-a\n      fetch:\n        - {source: source-e, factInputs: [record_id]}\n        - {source: source-f, factInputs: [record_id]}\n      maximumAcquisitionMilliseconds: 8000\n",
                 "the kind vocabulary is closed",
             ),
         ] {
@@ -11911,7 +13616,7 @@ outboundTls:
         // carry the fetch-source rule rather than escaping it.
         let unfetched = yaml.replace(
             DECLARED_ACQUISITION,
-            "    acquisition:\n      kind: single\n      source: source-a\n",
+            "    acquisition:\n      type: single\n      source: source-a\n",
         );
         assert_ne!(unfetched, yaml, "the single-call rewrite applies");
         assert_eq!(
@@ -12090,8 +13795,8 @@ outboundTls:
             ),
             (
                 "requirement mode",
-                "  - handle: adult-status\n    id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n",
-                "  - handle: adult-status\n    id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound\n",
+                "  - handle: adult-status\n    uri: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n",
+                "  - handle: adult-status\n    uri: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound\n",
             ),
         ] {
             let rewritten = bundle.replace(from, to);
@@ -12107,19 +13812,21 @@ outboundTls:
             "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
         ))
         .expect("the acceptance bundle validates");
-        assert!(config.holder_bound_batch_max_size.is_none());
+        assert!(config.maximum_holder_bound_batch_size.is_none());
         assert!(config
             .requirements
             .iter()
             .all(|requirement| requirement.subject_binding.is_none()));
-        assert!(config.authority_profiles.iter().all(|(_, profile)| profile
-            .grants
-            .iter()
-            .all(|grant| grant.subject_binding_modes.is_empty())));
+        assert!(config.authority_profiles.iter().all(|(_, profile)| {
+            profile
+                .grants
+                .iter()
+                .all(|grant| grant.subject_binding_modes.is_empty())
+        }));
 
         let projected = serde_json::to_value(&config).expect("the configuration projects");
         assert!(
-            projected.get("holderBoundBatchMaxSize").is_none(),
+            projected.get("maximumHolderBoundBatchSize").is_none(),
             "an undeclared batch ceiling moves every existing configuration revision"
         );
         for requirement in projected["requirements"]
@@ -12252,16 +13959,15 @@ outboundTls:
     #[test]
     fn a_holder_bound_requirement_may_not_disclose_an_entity_reference_value_form() {
         let bundle = holder_bound_bundle();
-        let anchor = "      - {handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}\n";
+        let anchor = "      - {handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}\n";
         for form in [
-            "      - {handle: entity_reference, id: urn:example:fixture:concept:audience-scoped-entity-reference, form: audience-scoped-entity-reference, required: false, constraints: {maximumBytes: 160}}\n",
-            "      - {handle: entity_references, id: urn:example:fixture:concept:entity-reference-list, form: entity-reference-list, required: false, constraints: {minimumItems: 1, maximumItems: 2, unique: true}}\n",
+            "      - {handle: entity_reference, uri: urn:example:fixture:concept:audience-scoped-entity-reference, type: audience-scoped-entity-reference, required: false, constraints: {maximumBytes: 160}}\n",
+            "      - {handle: entity_references, uri: urn:example:fixture:concept:entity-reference-list, type: entity-reference-list, required: false, constraints: {minimumItems: 1, maximumItems: 2, unique: true}}\n",
         ] {
             let mutated = bundle.replace(anchor, &format!("{anchor}{form}"));
             assert_ne!(mutated, bundle, "the {form} mutation applies");
-            let refusal = EvidenceConfig::parse_yaml(mutated.as_bytes()).expect_err(
-                "a holder-bound requirement disclosed an entity-reference value form",
-            );
+            let refusal = EvidenceConfig::parse_yaml(mutated.as_bytes())
+                .expect_err("a holder-bound requirement disclosed an entity-reference value form");
 
             // The refusal happens here, in parsing, which the server does
             // before it binds a listener, so no request can reach a deployment
@@ -12341,7 +14047,7 @@ outboundTls:
         for (ceiling, accepted) in [("1", true), ("16", true), ("0", false), ("17", false)] {
             let mutated = bundle.replace(
                 "\nrequirements:\n",
-                &format!("\nholderBoundBatchMaxSize: {ceiling}\n\nrequirements:\n"),
+                &format!("\nmaximumHolderBoundBatchSize: {ceiling}\n\nrequirements:\n"),
             );
             assert_ne!(mutated, bundle, "the ceiling {ceiling} mutation applies");
             let config = EvidenceConfig::parse_yaml(mutated.as_bytes());
@@ -12408,10 +14114,12 @@ outboundTls:
         let config = EvidenceConfig::parse_yaml(holder_bound_bundle().as_bytes())
             .expect("the bundle validates");
         assert!(config.response_formats.contains(&ResponseFormat::SignedJws));
-        assert!(config.authority_profiles.iter().all(|(_, profile)| profile
-            .grants
-            .iter()
-            .all(|grant| grant.response_formats.contains(&ResponseFormat::SignedJws))));
+        assert!(config.authority_profiles.iter().all(|(_, profile)| {
+            profile
+                .grants
+                .iter()
+                .all(|grant| grant.response_formats.contains(&ResponseFormat::SignedJws))
+        }));
         assert!(
             validate_response_formats(&[ResponseFormat::SdJwtVc], "bundle response formats")
                 .is_err()
@@ -12544,14 +14252,10 @@ outboundTls:
             ),
             (
                 "bundle permission and batch ceiling",
-                "\nresponseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nholderBoundBatchMaxSize: 4\n",
+                "\nresponseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nmaximumHolderBoundBatchSize: 4\n",
                 "\nresponseFormats: [signed-jws, unsigned-json]\n",
             ),
-            (
-                "requirement mode",
-                "\n    subjectBinding: holder-bound",
-                "",
-            ),
+            ("requirement mode", "\n    subjectBinding: holder-bound", ""),
             (
                 // Forced by the serialization the mode permits, not chosen:
                 // SD-JWT VC names its issuer by origin outside the local
@@ -12593,8 +14297,8 @@ outboundTls:
             "../../../products/evidence/fixtures/acceptance/holder-bound/evidence.yaml"
         );
         let batch_only = holder_bound.replace(
-            "\nresponseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nholderBoundBatchMaxSize: 4\n",
-            "\nresponseFormats: [signed-jws, sd-jwt-vc-batch]\nholderBoundBatchMaxSize: 4\n",
+            "\nresponseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nmaximumHolderBoundBatchSize: 4\n",
+            "\nresponseFormats: [signed-jws, sd-jwt-vc-batch]\nmaximumHolderBoundBatchSize: 4\n",
         );
         assert_ne!(
             batch_only, holder_bound,

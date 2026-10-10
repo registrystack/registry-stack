@@ -28,10 +28,10 @@ bregctl check ./my-registry
 
 ```text
 Authoring check passed; registry revision sha256:<digest>.
-warning[breg.access.profile-unrestricted-collection] ./my-registry/registry.yaml:141:24 /accessProfiles/0/permissions/1/rowBoundaries
+warning[breg.access.profile-unrestricted-collection] ./my-registry/registry.yaml:143:26 /accessProfiles/0/permissions/entities/1/rowBoundaries
   this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-rows] ./my-registry/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
+warning[breg.access.profile-unrestricted-rows] ./my-registry/registry.yaml:191:26 /accessProfiles/2/permissions/entities/0/rowBoundaries
   this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
 0 errors, 2 warnings in 4 files

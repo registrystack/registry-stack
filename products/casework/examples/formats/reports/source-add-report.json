@@ -2,7 +2,7 @@
   "ok": false,
   "command": "source add",
   "status": "operational-failure",
-  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "apiVersion": "id.registrystack.org/formats/casework/source-add-report/v1alpha3",
   "diagnostics": [
     {
       "artifact": "filesystem",
@@ -13,5 +13,5 @@
       "suggestedAction": "Correct the path or permissions, then retry."
     }
   ],
-  "kind": "SourceAddReport"
+  "kind": "CaseworkSourceAddReport"
 }

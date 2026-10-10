@@ -120,10 +120,10 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                 "effectDigest": digest,
                 "editable": false,
                 "proposal": {
-                    "review": {"authority": "casework-main", "policyId": "request-review"}
+                    "review": {"type": "required", "authority": "casework-main", "policyId": "request-review"}
                 },
                 "actions": [{
-                    "operation": "apply_request",
+                    "operation": "apply-request",
                     "method": "POST",
                     "href": "/v1/records/placement-correction-requests/00000000-0000-4000-8000-000000000001/actions/apply?accessProfile=request-applier",
                     "ifMatch": "\"breg-action\"",
@@ -343,13 +343,13 @@ fn current_proposal_schema_keeps_review_binding_closed() {
     let validator = inline_validator(&request_schema["properties"]["proposal"]);
     assert_valid(
         &validator,
-        &json!({"review": {"authority": "casework-main", "policyId": "request-review"}}),
+        &json!({"review": {"type": "required", "authority": "casework-main", "policyId": "request-review"}}),
     );
-    assert_valid(&validator, &json!({"review": {"mode": "none"}}));
+    assert_valid(&validator, &json!({"review": {"type": "none"}}));
     assert_invalid(
         &validator,
         &json!({
-            "review": {"authority": "casework-main", "policyId": "request-review"},
+            "review": {"type": "required", "authority": "casework-main", "policyId": "request-review"},
             "unexpected": "value"
         }),
     );
@@ -478,7 +478,7 @@ fn generated_request_metadata_exposes_effective_retention_policy() {
     let openapi = generated_openapi(&registry);
     let request = &openapi["components"]["schemas"]["placement-correction-request"]
         ["x-registry-changeRequest"];
-    assert_eq!(request["retention"]["mode"], "operator_erase");
+    assert_eq!(request["retention"]["mode"], "operator-erase");
     assert_eq!(
         request["retention"]["effectivePolicy"]["erasedDetailMarker"],
         "request.detailErased"
@@ -880,18 +880,18 @@ fn snapshot_reference() -> &'static str {
 fn compiled_registry() -> CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"change-request-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://change-request-openapi.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"change-request-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://change-request-openapi.example.test"},
           "entities":[{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
-            "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}]
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
+            "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]
           },{
             "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":64,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":64,"classification":"internal"}
             ]
           },{
             "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
@@ -900,41 +900,41 @@ fn compiled_registry() -> CompiledRegistry {
               {"id":"proposed-site","apiName":"proposedSite","type":"reference","target":"site","required":true,"classification":"internal"}
             ],
             "changeRequest":{
-              "retention":{"mode":"operator_erase"},
+              "retention":{"mode":"operator-erase"},
               "effects":[{
                 "target":{"fromField":"placement"},
                 "operation":"patch",
                 "set":{"site":{"fromField":"proposed-site"}}
               }],
-              "review":{"authority":"casework-main","policyId":"request-review"},
+              "review":{"type":"required","authority":"casework-main","policyId":"request-review"},
               "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement-correction-request",
               "operations":["get"],
               "readableFields":["placement","proposed-site"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"request-submitter","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"request-submitter","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement-correction-request",
-              "operations":["get","create","patch","submit_request"],
+              "operations":["get","create","patch","submit-request"],
               "readableFields":["placement","proposed-site"],
               "writableFields":["placement","proposed-site"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement-correction-request",
-              "operations":["get","apply_request"],
+              "operations":["get","apply-request"],
               "readableFields":["placement"],
               "applyTargets":[{"entity":"placement", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"placement-viewer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"placement-viewer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement",
               "operations":["get"],
               "readableFields":["site"],
@@ -943,7 +943,7 @@ fn compiled_registry() -> CompiledRegistry {
                 "rowBoundaries":[{"field":"placement","claim":"placement_claim","operator":"equals"}]
               }],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -954,23 +954,23 @@ fn compiled_registry() -> CompiledRegistry {
 fn compiled_action_registry() -> CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"action-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://action-openapi.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"action-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://action-openapi.example.test"},
           "entities":[{
             "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
-              {"id":"household-code","apiName":"householdCode","type":"string","maxLength":64,"required":true,"classification":"internal"},
+              {"id":"household-code","apiName":"householdCode","type":"string","maximumLength":64,"required":true,"classification":"internal"},
               {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"}
             ]
           },{
             "id":"person","primaryDataset":"test-dataset","route":"people","mutationMode":"mutable",
             "fields":[
-              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ]
           },{
-            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"create_only",
+            "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"create-only",
             "fields":[
               {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"},
               {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"}
@@ -980,8 +980,8 @@ fn compiled_action_registry() -> CompiledRegistry {
             "id":"register-household-contact",
             "inputs":[
               {"id":"household","apiName":"householdId","type":"reference","target":"household","required":true,"classification":"restricted"},
-              {"id":"person-code","apiName":"personCode","type":"string","maxLength":64,"required":true,"classification":"restricted"},
-              {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"}
+              {"id":"person-code","apiName":"personCode","type":"string","maximumLength":64,"required":true,"classification":"restricted"},
+              {"id":"legal-name","apiName":"legalName","type":"string","maximumLength":160,"required":true,"classification":"restricted"}
             ],
             "effects":[{
               "id":"person",
@@ -1012,7 +1012,7 @@ fn compiled_action_registry() -> CompiledRegistry {
             "principalClaim":"private_claim_name",
             "requiredScopes":["registry:contact:register"],
             "requiredPurposes":["contact-registration"],
-            "permissions":[{
+            "permissions":{"actions":[{
               "action":"register-household-contact",
               "operations":["invoke"],
               "targets":[
@@ -1021,13 +1021,13 @@ fn compiled_action_registry() -> CompiledRegistry {
                 {"entity":"group-membership", "rowBoundaries": "unrestricted"}
               ],
               "results":["person","membership","household"]
-            }]
+            }]}
           },{
             "id":"contact-auditor",
             "principalClaim":"other_private_claim",
             "requiredScopes":["registry:contact:audit"],
             "requiredPurposes":["contact-audit"],
-            "permissions":[{
+            "permissions":{"actions":[{
               "action":"register-household-contact",
               "operations":["invoke"],
               "targets":[
@@ -1036,7 +1036,7 @@ fn compiled_action_registry() -> CompiledRegistry {
                 {"entity":"group-membership", "rowBoundaries": "unrestricted"}
               ],
               "results":["household"]
-            }]
+            }]}
           }]
         }"#,
     )
@@ -1047,16 +1047,16 @@ fn compiled_action_registry() -> CompiledRegistry {
 fn compiled_asset_result_action_registry() -> CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"asset-action-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://asset-action-openapi.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"asset-action-openapi","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://asset-action-openapi.example.test"},
           "entities":[{
-            "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"create_only",
+            "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"create-only",
             "fields":[
-              {"id":"asset-code","apiName":"assetCode","type":"string","maxLength":64,"required":true,"classification":"internal"}
+              {"id":"asset-code","apiName":"assetCode","type":"string","maximumLength":64,"required":true,"classification":"internal"}
             ]
           },{
-            "id":"inspection","primaryDataset":"test-dataset","route":"inspections","mutationMode":"create_only",
+            "id":"inspection","primaryDataset":"test-dataset","route":"inspections","mutationMode":"create-only",
             "fields":[
               {"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"}
             ]
@@ -1064,7 +1064,7 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
           "actions":[{
             "id":"register-asset",
             "inputs":[
-              {"id":"asset-code","apiName":"assetCode","type":"string","maxLength":64,"required":true,"classification":"internal"}
+              {"id":"asset-code","apiName":"assetCode","type":"string","maximumLength":64,"required":true,"classification":"internal"}
             ],
             "effects":[{
               "id":"asset",
@@ -1083,7 +1083,7 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
             "default":true,
             "principalClaim":"principal",
             "requiredScopes":["registry:asset:register"],
-            "permissions":[{
+            "permissions":{"actions":[{
               "action":"register-asset",
               "operations":["invoke"],
               "targets":[
@@ -1091,7 +1091,7 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
                 {"entity":"inspection", "rowBoundaries": "unrestricted"}
               ],
               "results":["asset"]
-            }]
+            }]}
           }]
         }"#,
     )

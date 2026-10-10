@@ -33,7 +33,7 @@ datasets:
       en: Vital Events
     conforms_to:
       - https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/
-    status: under_development
+    status: under-development
     access_rights: restricted
     entities:
       - name: person

@@ -842,37 +842,37 @@ fn json_from_bytes(bytes: &[u8]) -> Value {
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"revision-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"revision-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,
             "classification":"restricted",
             "fields":[
-              {"id":"jurisdiction","type":"string","required":true,"maxLength":32,"classification":"internal"},
-              {"id":"label","type":"string","required":true,"maxLength":100,"classification":"internal"},
-              {"id":"secret","type":"string","required":true,"maxLength":100,"classification":"restricted"}
+              {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
+              {"id":"label","type":"string","required":true,"maximumLength":100,"classification":"internal"},
+              {"id":"secret","type":"string","required":true,"maximumLength":100,"classification":"restricted"}
             ]
           }],
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"widget",
               "operations":["revisions"],"revisionAccess":true,
               "readableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
-            }]
+            }]}
           },{
             "id":"provenance","principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"widget",
               "operations":["revisions"],"revisionAccess":true,
               "readableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],
               "provenanceFields":["kind","reasonCode","sourceReferences"]
-            }]
+            }]}
           }]
         }"#,
     )

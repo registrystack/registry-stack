@@ -477,7 +477,7 @@ fn compile_variant(variant: Variant) -> CompiledRegistry {
 
 fn project_bytes(digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"spatial-migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://spatial-migration.example.test","title":"Spatial Migration Registry","publisher":{{"id":"spatial-migration-registry-authority","name":"Spatial Migration Publisher"}}}},"publicService":{{"id":"spatial-migration-registry-service","title":"Spatial Migration Registry"}},"datasets":[{{"id":"spatial-migration-registry","title":"Spatial Migration Dataset","owner":"Spatial Migration Publisher","status":"active"}}],"dataServices":[{{"id":"spatial-migration-registry-data-service","title":"Spatial Migration Registry","endpointUrl":"https://spatial-migration.example.test","servesDatasets":["spatial-migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"spatial-migration-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial-migration.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://spatial-migration.example.test","title":"Spatial Migration Registry","publisher":{{"id":"spatial-migration-registry-authority","name":"Spatial Migration Publisher"}}}},"publicService":{{"id":"spatial-migration-registry-service","title":"Spatial Migration Registry"}},"datasets":[{{"id":"spatial-migration-registry","title":"Spatial Migration Dataset","owner":"Spatial Migration Publisher","status":"active"}}],"dataServices":[{{"id":"spatial-migration-registry-data-service","title":"Spatial Migration Registry","endpointUrl":"https://spatial-migration.example.test","servesDatasets":["spatial-migration-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
     )
     .into_bytes()
 }
@@ -491,10 +491,10 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
     let legacy = if matches!(variant, Variant::WithBboxLegacyRemoved) {
         ""
     } else {
-        r#",{"id":"legacy","type":"string","maxLength":16,"classification":"internal"}"#
+        r#",{"id":"legacy","type":"string","maximumLength":16,"classification":"internal"}"#
     };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"site","primaryDataset":"spatial-migration-registry","route":"sites","mutationMode":"mutable","classification":"internal","fields":[{{"id":"code","type":"string","maxLength":16,"required":true,"classification":"internal"}},{{"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}}{legacy}],"geojson":{{"geometryField":"location"}},"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list","create","patch"],"readableFields":["code","location"],"writableFields":["code","location"]{spatial_queries}}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"site","primaryDataset":"spatial-migration-registry","route":"sites","mutationMode":"mutable","classification":"internal","fields":[{{"id":"code","type":"string","maximumLength":16,"required":true,"classification":"internal"}},{{"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}}{legacy}],"geojson":{{"geometryField":"location"}},"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list","create","patch"],"readableFields":["code","location"],"writableFields":["code","location"]{spatial_queries}}}]}}]}}"#
     )
     .into_bytes()
 }

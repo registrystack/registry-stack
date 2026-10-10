@@ -208,7 +208,7 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
         .expect("outbox rows read");
     assert_eq!(rows.len(), 1, "request/version identity deduplicates");
     assert_eq!(rows[0].get::<_, String>(1), "request-submitted");
-    assert_eq!(rows[0].get::<_, String>(2), "request_lifecycle");
+    assert_eq!(rows[0].get::<_, String>(2), "request-lifecycle");
     assert_eq!(rows[0].get::<_, String>(3), REQUEST_ENTITY);
     assert_eq!(rows[0].get::<_, i64>(4), 3);
 
@@ -226,7 +226,7 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
         schemas["request-submitted"].as_str()
     );
     let payload = &envelope["data"];
-    assert_eq!(payload["trigger"], "request_lifecycle");
+    assert_eq!(payload["trigger"], "request-lifecycle");
     assert_eq!(
         payload["packageRevision"], PACKAGE_REVISION,
         "event data names the active package by its digest"
@@ -341,7 +341,7 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         .as_str()
         .expect("payload carries consumer deduplication key")
         .to_owned();
-    assert_eq!(payload["trigger"], "request_lifecycle");
+    assert_eq!(payload["trigger"], "request-lifecycle");
     assert_eq!(payload["request"]["transition"], "apply");
     assert_eq!(payload["request"]["reason"], reason);
     assert_eq!(payload["request"]["reasonPresent"], true);
@@ -612,41 +612,41 @@ fn compiled_lifecycle_registry_with_rejection() -> registry_breg::CompiledRegist
 fn lifecycle_project() -> registry_breg::contract::RegistryProject {
     parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"request-event-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"request-event-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
+            "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only","classification":"internal",
             "fields":[
-              {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-              {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+              {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+              {"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
             ]
           },{
             "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
-              {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+              {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
               {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}
             ]
           },{
             "id":"placement-correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
             "fields":[
-              {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+              {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
               {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
               {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
-              {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}
+              {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"}
             ],
             "hooks":[{
               "phase": "after",
               "id":"request-applied",
-              "trigger":"request_lifecycle",
+              "trigger":"request-lifecycle",
               "projection":["reason"],
               "when":{
-                "kind":"request_lifecycle",
+                "type":"request-lifecycle",
                 "transitions":["apply"],
                 "toStates":["applied"]
               },
-              "handler":{"kind":"url","destinationId":"review-operations"}
+              "handler":{"type":"url","destinationId":"review-operations"}
             }],
             "changeRequest":{
               "effects":[{
@@ -654,12 +654,12 @@ fn lifecycle_project() -> registry_breg::contract::RegistryProject {
                 "operation":"patch",
                 "set":{"site":{"fromField":"proposed-site"}}
               }],
-              "review":{"authority":"casework-main","policyId":"placement-correction"},
+              "review":{"type":"required","authority":"casework-main","policyId":"placement-correction"},
               "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
-            "id":"steward","principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"steward","principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"asset-site",
               "operations":["create","get","list"],
               "readableFields":["tenant","name"],
@@ -671,37 +671,37 @@ fn lifecycle_project() -> registry_breg::contract::RegistryProject {
               "readableFields":["tenant","site"],
               "writableFields":["tenant","site"],
               "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-            }]
+            }]}
           },{
-            "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement-correction-request",
-              "operations":["create","get","list","patch","submit_request","revise_request","cancel_request"],
+              "operations":["create","get","list","patch","submit-request","revise-request","cancel-request"],
               "readableFields":["tenant","placement","proposed-site","reason"],
               "writableFields":["tenant","placement","proposed-site","reason"],
               "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-            }]
+            }]}
           },{
-            "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],"permissions":[{
+            "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],"permissions":{"entities":[{
               "entity":"placement-correction-request",
               "operations":["get","list"],
               "readableFields":["tenant","placement","proposed-site","reason"],
               "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-            }]
+            }]}
           },{
-            "id":"service","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["webhook"],"permissions":[{
+            "id":"service","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["webhook"],"permissions":{"entities":[{
               "entity":"placement-correction-request",
               "operations":["get","list"],
               "readableFields":["tenant","placement","proposed-site","reason"],
               "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
-            }]
+            }]}
           },{
-            "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],"permissions":[{
+            "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],"permissions":{"entities":[{
               "entity":"placement-correction-request",
-              "operations":["get","apply_request"],
+              "operations":["get","apply-request"],
               "readableFields":["tenant","placement","proposed-site","reason"],
               "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
               "applyTargets":[{"entity":"asset-placement","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-            }]
+            }]}
           }]
         }"#,
     )
@@ -1088,7 +1088,7 @@ impl DestinationFixture {
             .display()
             .to_string();
         let raw = format!(
-            r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
@@ -1104,7 +1104,7 @@ database:
   runtimeUrlRef: secret:file/database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 8
+    maximumConnections: 8
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -1123,14 +1123,14 @@ authentication:
     scopeSeparator: " "
     allowedClients: [registry-client]
     deniedKids: [denied-kid]
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
@@ -1140,13 +1140,13 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 eventDestinations:
   {DESTINATION_ID}:
     origin: https://localhost:{}/
     path: {DELIVERY_PATH}
-    networkProfile: pinnedLoopbackHttpsTest
-    dnsFamily: ipv4Only
+    networkProfile: pinned-loopback-https-test
+    dnsFamily: ipv4-only
     allowedPrivateCidrs: []
     hmacSha256KeyRef: secret:file/{KEY_REF}
     classificationCeiling: internal

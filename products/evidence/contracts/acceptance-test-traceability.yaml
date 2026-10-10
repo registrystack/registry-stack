@@ -105,7 +105,7 @@ entries:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_credential_redaction_fixture_fails_closed_without_data_requests}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_client_credentials_placements_are_exact_and_cache_reuse_is_bounded}
       - {file: crates/registry-evidence/src/config.rs, name: source_adapter_name_is_audit_safe_and_oauth_endpoint_has_no_query}
-      - {file: crates/registry-evidence/tests/source_contracts.rs, name: compilation_refuses_an_oauth_source_without_exactly_one_credential_form}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: an_oauth_source_without_exactly_one_credential_form_cannot_be_declared}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_secret}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_private_key_jwt_source_signs_the_configured_assertion_audience}
       - {file: crates/registry-evidence/src/config.rs, name: a_client_assertion_audience_without_an_assertion_key_is_refused}
@@ -542,7 +542,7 @@ entries:
       - {file: crates/registry-evidence/src/config.rs, name: source_batch_optimization_is_fixed_route_two_author_and_pre_io_planned}
       - {file: crates/registry-evidence/src/config.rs, name: source_batch_optimization_is_silent_without_a_block_and_never_applies_to_multistage}
   - id: acceptance-row-81
-    summary: The closed ordered response carries flattened signed JWS or evidence_not_available under the existing singular collapse contract; mixed and all-unavailable envelopes return 200, while every other failure aborts without partial release.
+    summary: The closed ordered response carries flattened signed JWS or evidence-not-available under the existing singular collapse contract; mixed and all-unavailable envelopes return 200, while every other failure aborts without partial release.
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_preserves_order_and_independent_ids_nonces_with_mixed_outcomes}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_all_unavailable_is_200_and_records_no_signing_key}

@@ -49,13 +49,13 @@ class ConstructionTests(unittest.TestCase):
         cyclic.append(cyclic)
         with self.assertRaises(BaseRegistryClientError) as raised:
             client.continue_list(cyclic)
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
     def test_mapping_protocol_is_not_accepted_as_a_plain_json_object(self) -> None:
         client = BaseRegistryClient("https://registry.example.invalid/tenant")
         with self.assertRaises(BaseRegistryClientError) as raised:
             client.continue_list(UserDict())
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
     def test_opaque_authority_types_have_no_public_constructor(self) -> None:
         for name in (

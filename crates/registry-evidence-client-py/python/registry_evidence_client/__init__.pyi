@@ -166,7 +166,7 @@ class EvidenceClientError(Exception):
     """Base exception for every mapped failure this client reports.
 
     `kind` is always present, one of "configuration", "nonce", "token",
-    "transport", "denied", "not_available", "protocol", or "verification".
+    "transport", "denied", "not-available", "protocol", or "verification".
     Branch on `kind`, never on the rendered message, which this crate does
     not freeze. `status`, `code`, `trace_id`, `retry_after_seconds`,
     `transport_kind`, and `token_kind` are present only when the underlying

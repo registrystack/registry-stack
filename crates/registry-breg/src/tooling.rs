@@ -10,7 +10,7 @@ use crate::package::{
 };
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum DiffClassification {
     CompatibleAdditive,
     DataBackfillRequired,
@@ -44,7 +44,7 @@ pub struct AccessChangeDetail {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum AccessChangeDirection {
     Widening,
     Narrowing,
@@ -346,7 +346,7 @@ const UNGATED_SCOPE: &str = "removing requireConsent reads without the consent t
 const CLIENT_ADDED: &str = "a new client extends every existing consent given to this organization, and to every group it belongs to, onto the new client";
 const GROUP_MEMBERS_CHANGED: &str = "changing a group's members changes who holds every existing consent given to the group; prefer a new group id with a new notice clause";
 const MAX_DURATION_RAISED: &str =
-    "raising maxDuration makes existing gives last longer than the notice said";
+    "raising maximumDurationDays makes existing gives last longer than the notice said";
 const CODE_REMOVED: &str = "consent vocabulary codes are append-only; retire the code instead (an organization with no clients, or an id in retiredConsentScopes), since the migration also fails against existing rows that carry it";
 const STEWARD_ISSUER: &str = "steward actions create consent without the subject's principal";
 const ACTION_CODES_ADDED: &str = "the action accepts codes new to their vocabulary without review; check that each is one this action may write, such as a recipient or scope its notice names";
@@ -457,7 +457,6 @@ fn consent_record_details(
     before: Option<&crate::model::CompiledConsentRecord>,
     after: Option<&crate::model::CompiledConsentRecord>,
 ) -> Vec<AccessChangeDetail> {
-    use crate::consent::duration_seconds;
     use serde_json::json;
     use AccessChangeDirection::{Narrowing, ReviewRequired};
     let (Some(before), Some(after)) = (before, after) else {
@@ -469,10 +468,10 @@ fn consent_record_details(
             reason: None,
         }];
     };
-    let raised = duration_seconds(&after.max_duration) > duration_seconds(&before.max_duration);
+    let raised = after.maximum_duration_days > before.maximum_duration_days;
     object_details(&json!(before), &json!(after), |field, _, _| match field {
-        "maxDuration" if raised => (ReviewRequired, Some(MAX_DURATION_RAISED)),
-        "maxDuration" => (Narrowing, None),
+        "maximumDurationDays" if raised => (ReviewRequired, Some(MAX_DURATION_RAISED)),
+        "maximumDurationDays" => (Narrowing, None),
         _ => (ReviewRequired, None),
     })
 }
@@ -805,7 +804,7 @@ mod tests {
         let optional = compiled(
             "1",
             "internal",
-            r#",{"id":"optional","type":"string","maxLength":16,"classification":"internal"}"#,
+            r#",{"id":"optional","type":"string","maximumLength":16,"classification":"internal"}"#,
             "",
             "principal",
         );
@@ -819,7 +818,7 @@ mod tests {
         let required = compiled(
             "1",
             "internal",
-            r#",{"id":"required","type":"string","maxLength":16,"required":true,"classification":"internal"}"#,
+            r#",{"id":"required","type":"string","maximumLength":16,"required":true,"classification":"internal"}"#,
             "",
             "principal",
         );
@@ -834,7 +833,7 @@ mod tests {
             "1",
             "internal",
             "",
-            r#", "constraints":[{"kind":"unique","id":"code-unique","fields":["code"]}],"indexes":[{"id":"code-index","fields":["code"]}]"#,
+            r#", "constraints":[{"type":"unique","id":"code-unique","fields":["code"]}],"indexes":[{"id":"code-index","fields":["code"]}]"#,
             "principal",
         );
         assert_class(
@@ -853,14 +852,14 @@ mod tests {
         let short_note = compiled(
             "1",
             "internal",
-            r#",{"id":"note","type":"text","maxLength":80,"classification":"internal"}"#,
+            r#",{"id":"note","type":"text","maximumLength":80,"classification":"internal"}"#,
             "",
             "principal",
         );
         let long_note = compiled(
             "1",
             "internal",
-            r#",{"id":"note","type":"text","maxLength":200,"classification":"internal"}"#,
+            r#",{"id":"note","type":"text","maximumLength":200,"classification":"internal"}"#,
             "",
             "principal",
         );
@@ -954,7 +953,7 @@ mod tests {
         let baseline = compiled_temporal_with_profile(r#""list","snapshot""#, "");
         let candidate = compiled_temporal_with_profile_fields(
             r#""list","snapshot""#,
-            r#",{"id":"label","type":"string","maxLength":32,"classification":"internal"}"#,
+            r#",{"id":"label","type":"string","maximumLength":32,"classification":"internal"}"#,
             r#""readableFields":["subject","valid-from","valid-to","label"],"filterableFields":["subject","valid-from","label"]"#,
             "",
         );
@@ -1045,12 +1044,12 @@ mod tests {
         profile_extra: &str,
     ) -> CompiledRegistry {
         let module_bytes = format!(
-            r#"{{"id":"core","version":"1","entities":[{{"id":"membership","primaryDataset":"temporal-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"subject","type":"string","maxLength":64,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","kind":"temporal-non-overlap","scopeFields":["subject"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"consumer","principalClaim":"principal","operations":[{operations}],{access_fields}{profile_extra}}}]}}]}}"#
+            r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"membership","primaryDataset":"temporal-registry","route":"memberships","mutationMode":"mutable","fields":[{{"id":"subject","type":"string","maximumLength":64,"required":true,"classification":"internal"}},{{"id":"valid-from","type":"date","required":true,"classification":"internal"}},{{"id":"valid-to","type":"date","classification":"internal"}}{extra_fields}],"temporal":{{"startField":"valid-from","endField":"valid-to"}},"constraints":[{{"id":"membership-window","type":"temporal-non-overlap","scopeFields":["subject"],"startField":"valid-from","endField":"valid-to"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"consumer","principalClaim":"principal","operations":[{operations}],{access_fields}{profile_extra}}}]}}]}}"#
         );
         let module = parse_module_json(module_bytes.as_bytes()).expect("module parses");
         let digest = module_digest(&module);
         let project_bytes = format!(
-            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"temporal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"compiler-source-revision"}},"manifestProjection":{{"accessProfile":"consumer","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Temporal Registry Catalog","publisher":{{"id":"temporal-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"temporal-registry-service","title":"Temporal Registry Catalog"}},"datasets":[{{"id":"temporal-registry","title":"Temporal Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"temporal-registry-data-service","title":"Temporal Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["temporal-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+            r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"temporal-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"compiler-source-revision"}},"manifestProjection":{{"accessProfile":"consumer","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Temporal Registry Catalog","publisher":{{"id":"temporal-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"temporal-registry-service","title":"Temporal Registry Catalog"}},"datasets":[{{"id":"temporal-registry","title":"Temporal Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"temporal-registry-data-service","title":"Temporal Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["temporal-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
         );
         let project = parse_project_json(project_bytes.as_bytes()).expect("project parses");
         compile_project(&project, &[module], CompileProfile::Production).expect("fixture compiles")
@@ -1064,12 +1063,12 @@ mod tests {
         principal_claim: &str,
     ) -> CompiledRegistry {
         let module_bytes = format!(
-            r#"{{"id":"core","version":"1","entities":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":16,"classification":"{classification}"}}{extra_fields}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"reader","principalClaim":"{principal_claim}","operations":["get"],"readableFields":["code"]}}]{entity_members}}}]}}"#
+            r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":16,"classification":"{classification}"}}{extra_fields}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"reader","principalClaim":"{principal_claim}","operations":["get"],"readableFields":["code"]}}]{entity_members}}}]}}"#
         );
         let module = parse_module_json(module_bytes.as_bytes()).expect("module parses");
         let digest = module_digest(&module);
         let project_bytes = format!(
-            r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"{version}","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"compiler-source-revision"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
+            r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"{version}","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"compiler-source-revision"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{digest}"}}]}}"#
         );
         let project = parse_project_json(project_bytes.as_bytes()).expect("project parses");
         compile_project(&project, &[module], CompileProfile::Production).expect("fixture compiles")

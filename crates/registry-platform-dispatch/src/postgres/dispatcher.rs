@@ -1710,7 +1710,7 @@ impl<S: DispatchStore> Dispatcher<S> {
                 "delivered_at = transaction_timestamp(),",
             ),
             Next::DeadLettered => (
-                "dead_lettered",
+                "dead-lettered",
                 "NULL",
                 "dead_lettered_at = transaction_timestamp(),",
             ),

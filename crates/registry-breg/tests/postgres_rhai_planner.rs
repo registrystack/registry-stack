@@ -108,7 +108,7 @@ async fn rhai_planner_no_review_manual_application_is_atomic() {
     assert_eq!(before_submit.body["data"]["givenName"], "  Katherine  ");
     assert_eq!(before_submit.body["data"]["familyName"], "  Johnson  ");
     assert_eq!(test_planner_invocation_count(), 0);
-    let submit = action(&before_submit.body, "submit_request");
+    let submit = action(&before_submit.body, "submit-request");
 
     let first = send_action(
         &harness,
@@ -127,7 +127,7 @@ async fn rhai_planner_no_review_manual_application_is_atomic() {
     );
     assert_eq!(first.body["request"]["bregState"], "submitted");
     assert_eq!(first.body["request"]["proposalVersion"], 1);
-    assert_eq!(first.body["request"]["proposal"]["review"]["mode"], "none");
+    assert_eq!(first.body["request"]["proposal"]["review"]["type"], "none");
     assert_eq!(first.body["request"]["application"], Value::Null);
     assert_eq!(test_planner_invocation_count(), 1);
 
@@ -140,7 +140,7 @@ async fn rhai_planner_no_review_manual_application_is_atomic() {
         &submitter,
     )
     .await;
-    let apply = action(&before_apply.body, "apply_request");
+    let apply = action(&before_apply.body, "apply-request");
     let application_body = json!({
         "proposalVersion": first.body["request"]["proposalVersion"],
         "effectDigest": first.body["request"]["effectDigest"]
@@ -242,7 +242,7 @@ async fn rhai_planner_separate_manual_applier_uses_frozen_effects_without_rerun(
         &submitter,
     )
     .await;
-    let submit = action(&before_submit.body, "submit_request");
+    let submit = action(&before_submit.body, "submit-request");
 
     let submitted = send_action(
         &harness,
@@ -255,7 +255,7 @@ async fn rhai_planner_separate_manual_applier_uses_frozen_effects_without_rerun(
     assert_eq!(submitted.status, StatusCode::OK, "{}", submitted.body);
     assert_eq!(submitted.body["request"]["bregState"], "submitted");
     assert_eq!(
-        submitted.body["request"]["proposal"]["review"]["mode"],
+        submitted.body["request"]["proposal"]["review"]["type"],
         "none"
     );
     assert_eq!(submitted.body["request"]["application"], Value::Null);
@@ -272,7 +272,7 @@ async fn rhai_planner_separate_manual_applier_uses_frozen_effects_without_rerun(
     .await;
     assert_eq!(before_apply.body["request"]["bregState"], "submitted");
     assert_eq!(test_planner_invocation_count(), 1);
-    let apply = action(&before_apply.body, "apply_request");
+    let apply = action(&before_apply.body, "apply-request");
     let applied = send_action(
         &harness,
         &apply,
@@ -350,7 +350,7 @@ async fn a_failing_rhai_planner_refuses_the_submission_and_records_its_kind() {
         submitter.clone(),
     )
     .await;
-    let submit = action(&draft.body, "submit_request");
+    let submit = action(&draft.body, "submit-request");
     let refused =
         direct_send_action(&app, &submit, submitter, "refusing-rhai-submit", json!({})).await;
 

@@ -16,7 +16,8 @@ import re
 from pathlib import Path
 
 
-API_VERSION = "registry.registrystack.org/caseworkctl/v1alpha3"
+FORMAT_BASE = "id.registrystack.org/formats/casework/"
+REPORT_VERSION = "v1alpha3"
 OUTPUT = Path(__file__).resolve().parents[1] / "contracts" / "cli"
 SCHEMA_ID_BASE = "https://id.registrystack.org/schemas/"
 # The project schema, relative to a report schema's identifier.
@@ -108,6 +109,7 @@ STRANDED_WORK = {
             "enum": [
                 "queue-removed",
                 "profile-removed",
+                "producer-removed",
                 "review-kind-changed",
                 "source-removed",
                 "context-field-not-displayed",
@@ -116,6 +118,7 @@ STRANDED_WORK = {
         },
         "queue": STRING,
         "profile": STRING,
+        "producer": STRING,
         "reviewKind": STRING,
         "version": STRING,
         "source": STRING,
@@ -199,7 +202,7 @@ PLAN_PROPERTIES = {
     "runtimeConfig": STRING,
     "active": NULLABLE_ACTIVATION,
     "candidatePackageDigest": DIGEST,
-    "databaseIdCheck": {"enum": ["notRecorded", "matches", "differs"]},
+    "databaseIdCheck": {"enum": ["not-recorded", "matches", "differs"]},
     "planKind": PLAN_KIND,
     "schemaVersion": NULLABLE_SCHEMA_VERSION,
     "supportedSchemaVersion": SCHEMA_VERSION,
@@ -212,7 +215,7 @@ PLAN_PROPERTIES = {
 
 
 # What an operator settled or marked about one source attempt. `outcome` is
-# `applied` or `not_applied`; `itemState` is the occurrence state the item
+# `applied` or `not-applied`; `itemState` is the occurrence state the item
 # holds once the decision is applied.
 ATTEMPT_REPORT_PROPERTIES = {
     "attemptId": UUID,
@@ -403,7 +406,7 @@ REPORTS = {
         "defs": {
             # A standalone project reports `mode`, `queues`, and
             # `sourceConnections`; a project with sources reports `sources`,
-            # `sourceDescription` (`checked` or `pending_source_add`), and
+            # `sourceDescription` (`checked` or `pending-source-add`), and
             # `limits`.
             "effective": {
                 "type": "object",
@@ -440,7 +443,7 @@ REPORTS = {
                     "requests": {"type": "array", "items": {"$ref": "#/$defs/checkedRequest"}},
                 },
             },
-            # `queueMode` is `default` or `first_match`. `target` is the
+            # `queueMode` is `default` or `first-match`. `target` is the
             # authored passive target, or null when the request declares none;
             # its `id` is the one `casework.yaml` declares and its `elapsed`
             # the duration it is due after.
@@ -737,7 +740,7 @@ REPORTS = {
                 "additionalProperties": False,
                 "required": ["id", "label", "states", "transitions", "enforcement"],
                 "properties": {
-                    "id": {"enum": ["occurrence", "review_request"]},
+                    "id": {**LOCAL_ID, "enum": ["occurrence", "review-request"]},
                     "label": STRING,
                     "states": {
                         "type": "array",
@@ -768,7 +771,7 @@ REPORTS = {
                     "outgoingTransitions",
                 ],
                 "properties": {
-                    "id": STRING,
+                    "id": LOCAL_ID,
                     "initial": BOOLEAN,
                     "terminal": BOOLEAN,
                     "unreachable": BOOLEAN,
@@ -792,7 +795,7 @@ REPORTS = {
                 "additionalProperties": False,
                 "required": ["id", "description", "events"],
                 "properties": {
-                    "id": STRING,
+                    "id": LOCAL_ID,
                     "description": {"type": "string", "minLength": 1},
                     "events": {
                         "type": "array",
@@ -870,8 +873,8 @@ REPORTS = {
             "subject": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["entity", "id", "version"],
-                "properties": {"entity": STRING, "id": STRING, "version": STRING},
+                "required": ["entity", "recordId", "version"],
+                "properties": {"entity": STRING, "recordId": STRING, "version": STRING},
             },
             "routing": {
                 "type": "object",
@@ -934,7 +937,7 @@ REPORTS = {
             },
             "candidateRuntimeBinding": passthrough("the candidate binding is a Base Registry Engine runtime binding, in its grammar"),
             "diagnostics": WARNINGS,
-            "activation": {"const": "not_performed"},
+            "activation": {"const": "not-performed"},
             "next": STRING_ARRAY,
         },
         "defs": {
@@ -970,7 +973,7 @@ REPORTS = {
                 "minItems": 1,
                 "items": {"$ref": "#/$defs/fixture"},
             },
-            "proofBoundary": {"const": "offline_synthetic"},
+            "proofBoundary": {"const": "offline-synthetic"},
             "productionClosure": {"const": False},
             "networkAccess": {"const": False},
             "databaseAccess": {"const": False},
@@ -1172,8 +1175,8 @@ def object_schema(kind: str, report: dict, ok: bool, carries_report: bool = Fals
         "ok": {"const": ok},
         "command": {"const": report["command"]},
         "status": status_schema(kind, report, ok, carries_report),
-        "apiVersion": {"const": API_VERSION},
-        "kind": {"const": kind},
+        "apiVersion": {"const": api_version(kind)},
+        "kind": {"const": envelope_kind(kind)},
     }
     required = ["ok", "command", "status", "apiVersion", "kind"]
     if ok or carries_report:
@@ -1192,6 +1195,31 @@ def object_schema(kind: str, report: dict, ok: bool, carries_report: bool = Fals
     }
 
 
+def refusal_schema(kind: str, report: dict) -> dict:
+    """The one refusal variant of a command whose refusal may carry its report.
+
+    `status: refused` carries every report member beside the diagnostics; any
+    other status carries none of them. `status` tells the two apart inside the
+    variant, so `ok` alone still tells a report from a refusal.
+    """
+    carried = object_schema(kind, report, False, carries_report=True)
+    bare = object_schema(kind, report, False)
+    members = [name for name in carried["properties"] if name not in bare["properties"]]
+    properties = dict(carried["properties"])
+    properties["status"] = {
+        "enum": [carried["properties"]["status"]["const"], *bare["properties"]["status"]["enum"]]
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": bare["required"],
+        "properties": properties,
+        "if": {"properties": {"status": carried["properties"]["status"]}},
+        "then": {"required": [name for name in carried["required"] if name in members]},
+        "else": {"properties": {name: False for name in members}},
+    }
+
+
 VALUE_DEFS = {
     "Digest": {
         "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
@@ -1204,10 +1232,10 @@ VALUE_DEFS = {
         "type": "string",
     },
     "Url": {
-        "description": "An absolute http or https URL with a host and no user information.",
+        "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
         "format": "uri",
         "maxLength": 2048,
-        "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+        "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
         "type": "string",
     },
 }
@@ -1218,12 +1246,23 @@ def format_name(kind: str) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", "-", kind).lower()
 
 
+def api_version(kind: str) -> str:
+    """Each report is its own format: `CheckReport` is `casework/check-report`."""
+    return f"{FORMAT_BASE}{format_name(kind)}/{REPORT_VERSION}"
+
+
+def envelope_kind(kind: str) -> str:
+    """The `kind` a report carries: the report's name behind the product's."""
+    return f"Casework{kind}"
+
+
 def schema(kind: str, report: dict) -> dict:
-    variants = [object_schema(kind, report, False)]
     if report.get("refusal_carries_report"):
         # A refusal found while planning carries the plan it refused beside
         # its diagnostics; a refusal before the plan exists carries only them.
-        variants.insert(0, object_schema(kind, report, False, carries_report=True))
+        variants = [refusal_schema(kind, report)]
+    else:
+        variants = [object_schema(kind, report, False)]
     if not report.get("failure_only"):
         variants.insert(0, object_schema(kind, report, True))
     defs = dict(DIAGNOSTIC_DEFS)
@@ -1236,11 +1275,11 @@ def schema(kind: str, report: dict) -> dict:
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": SCHEMA_ID_BASE + f"casework/{name}/{name}.v1alpha3.schema.json",
-        "title": kind,
+        "title": envelope_kind(kind),
         "description": f"Versioned JSON report emitted by caseworkctl for {report['command']}.",
         "type": "object",
         "required": ["apiVersion", "kind"],
-        "properties": {"apiVersion": {"const": API_VERSION}, "kind": {"const": kind}},
+        "properties": {"apiVersion": {"const": api_version(kind)}, "kind": {"const": envelope_kind(kind)}},
         "unevaluatedProperties": False,
         "oneOf": variants,
         "$defs": defs,

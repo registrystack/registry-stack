@@ -243,9 +243,9 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     project["accessProfiles"][0]["requesterClients"] = json!(["seed-client"]);
     project["accessProfiles"][0]["requiredScopes"] = json!(["records:get"]);
     project["accessProfiles"][1]["taskGrant"]["sourceIssuer"] = json!(AUTHORITY);
-    project["accessProfiles"][1]["permissions"][0]["operations"] =
-        json!(["create", "get", "patch", "submit_request"]);
-    project["accessProfiles"][1]["permissions"][0]
+    project["accessProfiles"][1]["permissions"]["entities"][0]["operations"] =
+        json!(["create", "get", "patch", "submit-request"]);
+    project["accessProfiles"][1]["permissions"]["entities"][0]
         .as_object_mut()
         .unwrap()
         .remove("revisionAccess");
@@ -259,8 +259,8 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         .as_array_mut()
         .unwrap()
         .push(source_creator);
-    project["accessProfiles"][2]["permissions"][0]["readableRequestFields"] =
-        json!(["reason", "review_state"]);
+    project["accessProfiles"][2]["permissions"]["entities"][0]["readableRequestFields"] =
+        json!(["reason", "review-state"]);
     project["accessProfiles"][2]["id"] = json!("reviewer");
     project["accessProfiles"][2]["actorKind"] = json!("human");
     project["accessProfiles"][2]["requesterClients"] = json!(["staff"]);
@@ -270,12 +270,12 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     reader["id"] = json!("reader");
     reader["actorKind"] = json!("service");
     reader["requesterClients"] = json!(["source-reader"]);
-    reader["permissions"][0]["operations"] = json!(["get", "list"]);
-    reader["permissions"][0]
+    reader["permissions"]["entities"][0]["operations"] = json!(["get", "list"]);
+    reader["permissions"]["entities"][0]
         .as_object_mut()
         .unwrap()
         .remove("reviewStages");
-    reader["permissions"][0]
+    reader["permissions"]["entities"][0]
         .as_object_mut()
         .unwrap()
         .remove("applyTargets");
@@ -301,7 +301,7 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
             .bytes,
     )
     .unwrap();
-    let description = json!({"apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1","kind":"BRegCaseworkSourceDescription","origin":"bregctl explain change-requests","authority":"none","sourceId":"source","sourceRevision":registry.revision(),"request":{"requestEntity":"correction-request","requestRoute":"correction-requests","review":contract.review,"onApproved":contract.on_approved,"application":contract.application,"contractFingerprint":contract.contract_fingerprint,"fields":entity.stored_fields.iter().map(|field|json!({"field":field.logical.id,"apiName":field.logical.api_name,"schema":schema["properties"][&field.logical.api_name]})).collect::<Vec<_>>()}});
+    let description = json!({"apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1","kind":"CaseworkBregSourceDescription","origin":"bregctl explain change-requests","authority":"none","sourceId":"source","sourceRevision":registry.revision(),"requests":[{"requestEntity":"correction-request","requestRoute":"correction-requests","review":contract.review,"onApproved":contract.on_approved,"application":contract.application,"contractFingerprint":contract.contract_fingerprint,"fields":entity.stored_fields.iter().map(|field|json!({"field":field.logical.id,"apiName":field.logical.api_name,"schema":schema["properties"][&field.logical.api_name]})).collect::<Vec<_>>()}]});
     fs::write(
         session.project.join("sources/source.json"),
         serde_json::to_vec(&description).unwrap(),
@@ -314,9 +314,9 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         .success(vec!["dev".into(), "identity".into(), "producer".into()])
         .await;
     let policy = json!({
-        "apiVersion":"registry.registrystack.org/casework/v1alpha1",
+        "apiVersion":"id.registrystack.org/formats/casework/project/v1alpha1",
         "kind":"CaseworkProject",
-        "casework":{"id":"source-local","version":"1"},
+        "project":{"id":"source-local","version":"1"},
         "accessProfiles":[
             {"id":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},
             {"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"},
@@ -327,7 +327,7 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         "sources":[{"id":"source","adapter":"breg","description":"sources/source.json","requests":[{"entity":"correction-request","queue":"review","projection":["tenant"]}]}],
         "reviewKinds":[{"id":"external-review","version":"1","purpose":"approval","contextStrategy":"source","stages":[{"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1}],"retention":{"terminalDays":30,"accountabilityDays":90},"displaySchema":{"type":"object","additionalProperties":false,"properties":{}}}],
         "reviewProducers":[{"id":"breg","profile":"producer","issuer":session.issuer(),"subject":producer["subject"],"sourceNamespaces":["source"],"kinds":["external-review"],"recoveryDays":7}],
-        "taskTemplates":[{"id":"draft","version":"1","label":"Prepare correction","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","reviewKinds":["external-review"],"agent":{"issuer":session.issuer(),"subject":identity["subject"]},"client":"task-agent","resource":AUDIENCE,"scopes":["records:get"],"purpose":"review","bounds":{"type":"breg","permissions":[{"collection":"correction-requests","operations":["create","get","patch","submit_request"]}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900}]
+        "taskTemplates":[{"id":"draft","version":"1","label":"Prepare correction","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","reviewKinds":["external-review"],"agent":{"issuer":session.issuer(),"subject":identity["subject"]},"client":"task-agent","resource":AUDIENCE,"scopes":["records:get"],"purpose":"review","bounds":{"type":"breg","permissions":[{"collection":"correction-requests","operations":["create","get","patch","submit-request"]}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900}]
     });
     fs::write(
         session.project.join("casework.yaml"),
@@ -429,7 +429,7 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|action| action["operation"] == "submit_request")
+        .find(|action| action["operation"] == "submit-request")
         .unwrap();
     let submitted = resource::send(
         &app,

@@ -21,9 +21,9 @@ pub use build::{package_project, package_project_at, BuildError, PackagedDiscove
 pub use index::{inspect_index_file, IndexReport};
 pub use project::{
     check_project, inspect_project, inspect_runtime_file, ApprovedOrigin, AuthoredEvidenceMapping,
-    AuthoredEvidenceTypeAlternative, CheckedProject, MappingSchemaVersion, OriginProfile,
-    OriginsFile, OriginsSchemaVersion, ProjectError, ProjectOptions, ProjectReport,
-    MAPPINGS_DIRECTORY, MAPPING_KIND, MAPPING_SCHEMA, ORIGINS_FILE, ORIGINS_KIND, ORIGINS_SCHEMA,
+    AuthoredEvidenceTypeAlternative, CheckedProject, OriginProfile, OriginsFile, ProjectError,
+    ProjectOptions, ProjectReport, MAPPINGS_DIRECTORY, MAPPING_API_VERSION, MAPPING_KIND,
+    ORIGINS_API_VERSION, ORIGINS_FILE, ORIGINS_KIND,
 };
 
 /// The `apiVersion` every `--format json` report carries.
@@ -475,7 +475,7 @@ mod tests {
         let root = fixture_copy(|root| {
             fs::write(
                 root.join("mappings/adult-status.yaml"),
-                "schemaVersion: registry-discovery/evidence-mapping/v1alpha1\nsurprise: true\n",
+                "apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1\nkind: DiscoveryEvidenceMapping\nsurprise: true\n",
             )
             .unwrap();
         });
@@ -494,7 +494,7 @@ mod tests {
         let mapping = root.path().join("mappings/adult-status.yaml");
         assert!(
             stderr.contains(&format!(
-                "error[config.unknown-key] {}:2:1 /surprise",
+                "error[config.unknown-key] {}:3:1 /surprise",
                 mapping.display()
             )),
             "{stderr}"
@@ -513,7 +513,7 @@ mod tests {
             .find(|diagnostic| diagnostic["code"] == "config.unknown-key")
             .expect("the unknown key is reported");
         assert_eq!(unknown["path"], "/surprise");
-        assert_eq!(unknown["source"]["line"], 2);
+        assert_eq!(unknown["source"]["line"], 3);
         assert_eq!(unknown["source"]["column"], 1);
         assert!(unknown["suggestedAction"].is_string());
     }

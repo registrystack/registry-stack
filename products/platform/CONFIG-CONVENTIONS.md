@@ -311,9 +311,11 @@ RFC 3339 string with an offset (`2026-10-08T09:00:00Z`); a date is
 **CFG-VAL-6 (MUST). Digests are `sha256:` followed by 64 lowercase hex
 digits,** in a member named `digest` or ending in `Digest`.
 
-**CFG-VAL-7 (MUST). URLs are absolute.** Whether a position accepts `http`
-is the owning product's decision, stated in the schema's `description`, and
-the schema and the reader apply the same rule through one shared URL type.
+**CFG-VAL-7 (MUST). URLs are absolute.** A URL holds no whitespace and no
+control character, so the text kept is the URL read. Whether a position
+accepts `http` is the owning product's decision, stated in the schema's
+`description`, and the schema and the reader apply the same rule through one
+shared URL type.
 A member holding a URL is named `url`, `uri`, or `issuer`, or ends in `Url`,
 `Origin`, or `Issuer`. An identifier that is URI-shaped (an Evidence URN, a
 `conceptUri`) is not a URL and keeps its own type.
@@ -358,8 +360,9 @@ declares `propertyNames`, and the lint skips it.
 is lowercase kebab-case** (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`): enum values,
 sentinels, each segment of an `apiVersion` path, and each segment of a
 diagnostic code. A value that names a member of a Registry Stack document or
-wire contract is spelled as the member is (`anchor: stageEnteredAt`), and its
-schema marks the enum with `x-registry-member-names: true`. A value
+wire contract is spelled as the member is (`asOf`, where `explain queries`
+names the request parameter), and its schema marks the enum with
+`x-registry-member-names: true`. A value
 the product's API also returns has one spelling in both: renaming a
 configuration value renames the API value and regenerates the OpenAPI document
 in the same change. A value that names a command is written as the command
@@ -422,11 +425,15 @@ value that states what the operator accepts,** not a boolean:
 every product and every position. A product may refuse identifiers that
 collide after it derives a name from them (`date-of-birth` and
 `date_of_birth` both becoming one column), and says so in the diagnostic.
+An identifier a product derives from local identifiers, such as a compiled
+route or operation id, is a dot-separated path of local identifiers typed
+`$defs/DerivedId`; it is never authored.
 *Why:* the audit found nine identifier grammars, so the same id was valid in
 one file and refused in the next.
 *Enforced by:* the shared `LocalId` type in `registry-platform-yaml` (schema
 name `LocalId`); the convention lint checks definition sites: every member
-named `id` references `$defs/LocalId`, and every id-keyed mapping declares
+named `id` references `$defs/LocalId`, or `$defs/DerivedId` defined with the
+dotted grammar, and every id-keyed mapping declares
 `propertyNames` referencing `$defs/LocalId` or `$defs/ExternalId`, or carries
 the foreign marker (CFG-EMBED-2). A reference position is held by CFG-ID-4:
 the check command resolves it to a definition, so a reference cannot use a

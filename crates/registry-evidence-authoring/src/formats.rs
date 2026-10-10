@@ -207,7 +207,10 @@ pub const SOURCE: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(SOURCE_API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: &[RemovedKey {
+        pointer: "/transport",
+        replacement: "Declare type instead; keep the value.",
+    }],
 };
 
 /// One authored selector under `selectors/`.
@@ -380,7 +383,7 @@ struct SourceMembers {
     response_schema: IgnoredAny,
     #[serde(rename = "tlsTrustProfile")]
     tls_trust_profile: IgnoredAny,
-    transport: IgnoredAny,
+    r#type: IgnoredAny,
     #[serde(rename = "unresolvedProblem")]
     unresolved_problem: IgnoredAny,
 }
@@ -557,6 +560,9 @@ pub fn finding_action(code: &str) -> &'static str {
         | "subject-selector-shape" | "subject-profile-alternatives" | "subject-source-context" => {
             "Declare each subject once, with a unique role and either a selector or profiles, as the message describes."
         }
+        "compiled-name-length" | "compiled-name-dot" => {
+            "Shorten or rename the member: the compiled bundle names a selector profile, a selector field, and a source with a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`."
+        }
         "source-declaration" | "source-reference" => {
             "Name a source under sources/, or an operation of the project's OpenAPI description."
         }
@@ -705,7 +711,7 @@ mod tests {
                 &SOURCE,
                 SOURCE_KIND,
                 SOURCE_API_VERSION,
-                "transport: sqlite-extract\n",
+                "type: sqlite-extract\n",
             ),
             (
                 &SELECTOR,
@@ -741,6 +747,22 @@ mod tests {
             );
             assert!(!format!("{:?}", report.diagnostics()).contains("MARKER"));
         }
+    }
+
+    #[test]
+    fn a_source_tagged_by_transport_is_told_to_declare_type() {
+        let text = format!(
+            "apiVersion: {SOURCE_API_VERSION}\nkind: {SOURCE_KIND}\ntransport: sqlite-extract\n"
+        );
+        let report = read_envelope_body("sources/record.yaml", text.as_bytes(), &SOURCE)
+            .expect_err("the old tag is refused");
+        let found: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(found, [("config.removed-key", "/transport")]);
+        assert!(format!("{:?}", report.diagnostics()).contains("Declare type instead"));
     }
 
     #[test]

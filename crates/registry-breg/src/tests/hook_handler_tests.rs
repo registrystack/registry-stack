@@ -24,14 +24,14 @@ const PACKAGE_REVISION: &str = "hook-handler-tests";
 /// local program at `path`.
 fn project_with_local_hook(kind: &str, path: &str) -> Value {
     let handler = match kind {
-        "rhai" => json!({"kind": "rhai", "script": path, "abi": "registry.hook-handler/v1"}),
-        "wasm" => json!({"kind": "wasm", "module": path, "abi": "registry.hook-handler/v1"}),
+        "rhai" => json!({"type": "rhai", "script": path, "abi": "registry.hook-handler/v1"}),
+        "wasm" => json!({"type": "wasm", "module": path, "abi": "registry.hook-handler/v1"}),
         other => panic!("unknown local handler kind {other}"),
     };
     json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {"id": "hook-handler", "version": "1", "defaultLanguage": "en",
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {"id": "hook-handler", "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://hook-handler.example.test"},
         "entities": [{
             "id": "case",
@@ -41,7 +41,7 @@ fn project_with_local_hook(kind: &str, path: &str) -> Value {
             "tombstone": true,
             "classification": "internal",
             "fields": [
-                {"id": "label", "type": "string", "maxLength": 64, "classification": "public"}
+                {"id": "label", "type": "string", "maximumLength": 64, "classification": "public"}
             ],
             "hooks": [{
                 "id": "case-created",

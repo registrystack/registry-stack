@@ -1689,7 +1689,7 @@ async fn hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_propo
     assert_eq!(pre_answer_audit[0]["schema"], SCHEDULING_AUDIT_SCHEMA);
     let attempted = &pre_answer_audit[0]["record"];
     assert_eq!(attempted["phase"], "attempt");
-    assert_eq!(attempted["outcome"], "attempt_started");
+    assert_eq!(attempted["outcome"], "attempt-started");
     assert_eq!(attempted["disposition"], "leased");
 
     let outcome = running
@@ -1751,7 +1751,7 @@ async fn hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_propo
     assert_eq!(state.get::<_, Option<i64>>(3), None);
     assert_eq!(
         state.get::<_, Option<String>>(4).as_deref(),
-        Some("scheduling.hook.proposal_unsupported")
+        Some("scheduling.hook.proposal-unsupported")
     );
     assert_eq!(
         state.get::<_, Option<String>>(5).as_deref(),

@@ -82,13 +82,13 @@ evidence_data_request:
     required: true
     range: [1, 1000000]
     applied: Inside the engine, by the progress handler, between virtual machine instructions.
-  timeout_milliseconds: {required: true, range: [1, 30000], applied: As one absolute deadline across source-concurrency admission, blocking-worker queueing, and statement execution.}
+  attempt_timeout_milliseconds: {required: true, range: [1, 30000], applied: As one absolute deadline across source-concurrency admission, blocking-worker queueing, and statement execution.}
   maximum_response_bytes:
     required: true
     upper_bound: 1048576
     applied: To the assembled result tree, before projection.
-  engine_allocation_limit: SQLite values are capped at the fixed runtime ceiling before the tighter declared cell and response bounds are applied. maximumCellBytes, maximumResponseBytes, and concurrencyLimit remain one operator capacity decision rather than independent validation knobs.
-  concurrency_limit: {required: true, range: [1, 256]}
+  engine_allocation_limit: SQLite values are capped at the fixed runtime ceiling before the tighter declared cell and response bounds are applied. maximumCellBytes, maximumResponseBytes, and maximumConcurrency remain one operator capacity decision rather than independent validation knobs.
+  maximum_concurrency: {required: true, range: [1, 256]}
   connection_pool: One SQLite connection per concurrency permit, all opened at startup. A permit carries a connection, so no admitted request waits on a connection it was not admitted for, and a connection that cannot be opened is a startup failure rather than a request-time one.
   cancellation:
     mechanism: The progress handler is the only cancellation this transport has. A blocking execution cannot be cancelled from outside by an asynchronous timeout, and SQLite cannot be interrupted from outside a step, so the handler runs on the statement's own thread between instructions and aborts the step. Both the step bound and the time bound are checked there.

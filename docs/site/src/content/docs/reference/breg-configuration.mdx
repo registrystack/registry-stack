@@ -72,11 +72,11 @@ raised when a package is built.
 ## Attachment storage
 
 Portable request entities declare `attachments[]`; deployment storage is selected
-only in `runtime.yaml`. Omit `attachmentStorage` or use `{kind: database}` to keep
-content in PostgreSQL without another service. The optional `kind: s3` binding
+only in `runtime.yaml`. Omit `attachmentStorage` or use `{type: database}` to keep
+content in PostgreSQL without another service. The optional `type: s3` binding
 requires `endpoint`, `bucket`, `region`, `accessKeyIdRef`, and
 `secretAccessKeyRef`. `sessionTokenRef` and `caBundleRef` are optional secret
-references. `pathStyle` defaults to true. `timeoutMilliseconds` defaults to 10,000
+references. `pathStyle` defaults to true. `attemptTimeoutMilliseconds` defaults to 10,000
 and accepts 100 to 60,000. Secret references use the configured file or environment
 provider; inline credentials are refused.
 
@@ -109,10 +109,10 @@ after content erasure; rotating secrets preserves the binding.
 
 ## External attachment verification
 
-`attachmentVerification` is an operator binding. Omit it or use `{kind: disabled}`
-to accept attachments without an external verdict. Use `kind: http` to quarantine
+`attachmentVerification` is an operator binding. Omit it or use `{type: disabled}`
+to accept attachments without an external verdict. Use `type: http` to quarantine
 uploads until a verifier approves them. Configure `endpoint`, `authorizationRef`,
-and `policyId`; `timeoutMilliseconds` defaults to 10,000 and accepts 100 to 60,000.
+and `policyId`; `attemptTimeoutMilliseconds` defaults to 10,000 and accepts 100 to 60,000.
 The endpoint is a full HTTPS URL, with numeric loopback HTTP allowed for local
 verification. A fixed query is allowed; user information and fragments are refused.
 The token referenced by `authorizationRef` is sent as a Bearer credential.
@@ -177,7 +177,7 @@ it generates record schemas for that project's API, not configuration schemas.
 
 ## Statistical dataset declarations
 
-Root `statisticalDatasets` entries name the unit entity, typed population, flow or stock period, closed dimensions, and disclosure parameters. `minimumCount` and `roundingBase` are explicit integers of at least two. Access to a dataset is granted in an access profile's `permissions`, as an entry holding `dataset` and `operations` only, with the operations `read-live`, `publish`, and `read-releases`. Exactly one profile may hold `publish` on a dataset, and the publisher and every `read-live` profile of a published dataset also write `read-releases`. A publisher needs caller-independent read visibility over the unit and every source read by referenced derived fields. A `read-live` or `publish` grant needs a count-capable ordinary list permission; a `read-releases` grant does not add record access.
+Root `statisticalDatasets` entries name the unit entity, typed population, flow or stock period, closed dimensions, and disclosure parameters. `minimumCount` and `roundingBase` are explicit integers of at least two. Access to a dataset is granted under an access profile's `permissions.datasets`, as an entry holding `dataset` and `operations` only, with the operations `read-live`, `publish`, and `read-releases`. Exactly one profile may hold `publish` on a dataset, and the publisher and every `read-live` profile of a published dataset also write `read-releases`. A publisher needs caller-independent read visibility over the unit and every source read by referenced derived fields. A `read-live` or `publish` grant needs a count-capable ordinary list permission; a `read-releases` grant does not add record access.
 
 The generated `registry.yaml` tables include every nested dataset member. Compiler rules additionally reject reserved dimension names and codes, encrypted fields, consent-gated sources, and an unbounded or unauthorized population. See [publish a statistical series](../../configure/breg-statistics/) for the declaration journey.
 

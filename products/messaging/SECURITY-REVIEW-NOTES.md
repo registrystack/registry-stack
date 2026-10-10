@@ -29,10 +29,13 @@ challenge and no detail that distinguishes one cause from another. Refusals
 are counted on the private metrics listener under a closed reason label and
 are not written to the audit journal (recorded decision MESSAGING-DEC-02).
 
-`allowedClients` is required and never empty, unlike the sibling products'
-development default that admits every client the issuer verifies: an access
-profile resolves from the matched client, so an open client list would have
-no profile to resolve to.
+`allowedClients` is required and lists at least one distinct client. The
+shared reader also accepts the keyword `unrestricted`, which admits every
+client the issuer verifies, and each runtime decides whether to take it:
+Base Registry Engine and Evidence accept it, Casework accepts it on
+development loopback only, and Scheduling refuses it in every mode. Messaging
+refuses it in every mode too: an access profile resolves from the matched
+client, so an open client list would have no profile to resolve to.
 
 Tests: `crates/registry-messaging/src/auth.rs` (expired token, wrong token
 type, unadmitted client, undeclared exchange) and
@@ -831,7 +834,7 @@ has not expired, races an operator, or leaves no trace
 years), and `submissionReceiptRetentionDays` (up to the record period) are
 validated and recorded at start. The payload and record periods count from
 the instant the message's dispatch job reached a terminal state,
-`delivered`, `dead_lettered`, `expired`, or `cancelled`, which the job row
+`delivered`, `dead-lettered`, `expired`, or `cancelled`, which the job row
 already holds (MESSAGING-DEC-16). A `pending`, `leased`, or `unknown`
 message is never erased, whatever its age. A submission's `expiresAt` stays
 capped at acceptance plus `payloadRetentionDays`. Past

@@ -7,8 +7,8 @@ use serde_json::json;
 
 fn project(pattern: Option<&str>) -> registry_breg::contract::RegistryProject {
     let mut value = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"native-patterns","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://patterns.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"native-patterns","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://patterns.example.test"},
         "manifestProjection":{
             "accessProfile":"reader","classificationCeiling":"internal",
             "catalog":{"baseUrl":"https://patterns.example.test","title":"Native patterns","publisher":{"id":"authority","name":"Authority"}},
@@ -17,8 +17,8 @@ fn project(pattern: Option<&str>) -> registry_breg::contract::RegistryProject {
             "dataServices":[{"id":"api","title":"API","endpointUrl":"https://patterns.example.test/v1","servesDatasets":["records"]}]
         },
         "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
-            "fields":[{"id":"identifier","type":"string","maxLength":100,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":[{"entity":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":"unrestricted"}]}]
+            "fields":[{"id":"identifier","type":"string","maximumLength":100,"classification":"internal"}]}],
+        "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":"unrestricted"}]}}]
     });
     if let Some(pattern) = pattern {
         value["entities"][0]["fields"][0]["pattern"] = json!(pattern);
@@ -80,7 +80,7 @@ fn patterns_are_rejected_on_derived_and_non_string_fields_and_safely_quoted() {
         )
         .is_err());
     }
-    assert!(serde_json::from_value::<DerivedFieldSource>(json!({"id":"value","type":"string","maxLength":20,"classification":"internal","pattern":"x"})).is_err());
+    assert!(serde_json::from_value::<DerivedFieldSource>(json!({"id":"value","type":"string","maximumLength":20,"classification":"internal","pattern":"x"})).is_err());
     let pattern = "a'\\b";
     let registry =
         compile_project(&project(Some(pattern)), &[], CompileProfile::Authoring).unwrap();

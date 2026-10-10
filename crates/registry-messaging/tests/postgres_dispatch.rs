@@ -899,7 +899,7 @@ async fn a_poisoned_row_is_quarantined_while_a_healthy_one_sends() {
         .collect();
     assert_eq!(quarantined.len(), 1);
     assert_eq!(quarantined[0]["messageId"], poisoned.to_string());
-    assert_eq!(quarantined[0]["disposition"], "dead_lettered");
+    assert_eq!(quarantined[0]["disposition"], "dead-lettered");
 }
 
 /// Start with the SMS sender profile, whose provider declares idempotent

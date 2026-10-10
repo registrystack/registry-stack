@@ -79,7 +79,8 @@ fn project_arguments(command: &str, project: &Path) -> Vec<OsString> {
 
 fn assert_matches_contract(label: &str, kind: &str, report: &Value) {
     assert_eq!(
-        report["apiVersion"], CLI_API_VERSION,
+        report["apiVersion"],
+        cli_api_version(kind),
         "{label}: {report:#?}"
     );
     assert_eq!(report["kind"], kind, "{label}: {report:#?}");
@@ -97,7 +98,7 @@ fn assert_matches_contract(label: &str, kind: &str, report: &Value) {
 fn contract_schema(kind: &str) -> JSONSchema {
     let path = repo_root()
         .join("products/casework/contracts/cli")
-        .join(format!("{kind}.schema.json"));
+        .join(format!("{}.schema.json", report_name(kind)));
     let schema: Value = serde_json::from_slice(
         &std::fs::read(&path).unwrap_or_else(|error| panic!("schema {path:?} reads: {error}")),
     )
@@ -119,6 +120,75 @@ fn contract_schema(kind: &str) -> JSONSchema {
         .with_document(project_id, project_schema)
         .compile(&schema)
         .unwrap_or_else(|error| panic!("schema {path:?} compiles: {error}"))
+}
+
+/// Every conflict the runtime can report is one the plan, apply, and doctor
+/// report contracts admit.
+#[test]
+fn every_stranded_work_conflict_matches_the_three_report_contracts() {
+    use registry_casework::StrandedWork;
+
+    let text = |value: &str| value.to_owned();
+    let conflicts = [
+        StrandedWork::QueueRemoved {
+            queue: text("intake"),
+            reviews: 2,
+            work_items: 1,
+        },
+        StrandedWork::ProfileRemoved {
+            profile: text("clerk"),
+            reviews: 1,
+        },
+        StrandedWork::ProducerRemoved {
+            producer: text("registry"),
+            reviews: 1,
+        },
+        StrandedWork::ReviewKindChanged {
+            review_kind: text("correction"),
+            version: text("1"),
+            reviews: 1,
+        },
+        StrandedWork::SourceRemoved {
+            source: text("registry"),
+            reviews: 1,
+            work_items: 0,
+        },
+        StrandedWork::ContextFieldNotDisplayed {
+            source: text("registry"),
+            entity: text("licence"),
+            review_kind: text("correction"),
+            version: text("1"),
+            field: text("holder"),
+            reviews: 1,
+        },
+        StrandedWork::DisplayedFieldNotProjected {
+            source: text("registry"),
+            entity: text("licence"),
+            review_kind: text("correction"),
+            version: text("1"),
+            field: text("summary"),
+            reviews: 1,
+        },
+    ];
+    for report in ["PlanReport", "ApplyReport", "DoctorReport"] {
+        let path = repo_root()
+            .join("products/casework/contracts/cli")
+            .join(format!("{report}.schema.json"));
+        let schema: Value = serde_json::from_slice(&std::fs::read(&path).unwrap())
+            .unwrap_or_else(|error| panic!("schema {path:?} parses: {error}"));
+        let conflict_schema = json!({
+            "$ref": "#/$defs/strandedWork",
+            "$defs": {"strandedWork": schema["$defs"]["strandedWork"]}
+        });
+        let compiled = JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .compile(&conflict_schema)
+            .unwrap_or_else(|error| panic!("{report} strandedWork compiles: {error}"));
+        for conflict in &conflicts {
+            let value = serde_json::to_value(conflict).expect("a conflict serializes");
+            assert!(compiled.is_valid(&value), "{report} does not admit {value}");
+        }
+    }
 }
 
 #[test]
@@ -160,8 +230,8 @@ fn a_checked_request_target_is_closed_and_names_a_local_id() {
         Some(&json!({"id": "first-review-response", "elapsed": "PT48H"})),
         "{report:#?}"
     );
-    assert_matches_contract("check", "CheckReport", &report);
-    let schema = contract_schema("CheckReport");
+    assert_matches_contract("check", "CaseworkCheckReport", &report);
+    let schema = contract_schema("CaseworkCheckReport");
     for (member, value) in [
         ("note", json!("an unknown member")),
         ("id", json!("First Review")),
@@ -215,12 +285,12 @@ fn every_public_json_report_matches_its_schema() {
         OsString::from("standalone-decision"),
     ]);
     assert_eq!(exit, ExitCode::SUCCESS);
-    reports.push(("init", "InitReport", init));
+    reports.push(("init", "CaseworkInitReport", init));
 
     for (label, kind, command) in [
-        ("check", "CheckReport", "check"),
-        ("explain", "ExplainReport", "explain"),
-        ("test", "TestReport", "test"),
+        ("check", "CaseworkCheckReport", "check"),
+        ("explain", "CaseworkExplainReport", "explain"),
+        ("test", "CaseworkTestReport", "test"),
     ] {
         let (exit, report) = invoke(project_arguments(command, &project));
         assert_eq!(exit, ExitCode::SUCCESS, "{label}: {report:#?}");
@@ -229,7 +299,7 @@ fn every_public_json_report_matches_its_schema() {
 
     let (exit, lifecycle) = invoke(arguments(&["lifecycle"]));
     assert_eq!(exit, ExitCode::SUCCESS);
-    reports.push(("lifecycle", "LifecycleReport", lifecycle));
+    reports.push(("lifecycle", "CaseworkLifecycleReport", lifecycle));
 
     let (exit, package) = invoke(vec![
         OsString::from("package"),
@@ -237,28 +307,28 @@ fn every_public_json_report_matches_its_schema() {
         OsString::from("--dry-run"),
     ]);
     assert_eq!(exit, ExitCode::SUCCESS, "{package:#?}");
-    reports.push(("package", "PackageReport", package));
+    reports.push(("package", "CaseworkPackageReport", package));
 
     let example = repo_root().join("products/casework/examples/multi-stage-routing-clocks");
     let (exit, simulation) = invoke(vec![
         OsString::from("simulate"),
         example.as_os_str().to_owned(),
-        OsString::from("--fixture"),
+        OsString::from("--simulation"),
         example
             .join("simulations/friday-review.yaml")
             .into_os_string(),
     ]);
     assert_eq!(exit, ExitCode::SUCCESS, "{simulation:#?}");
-    reports.push(("simulate", "SimulationReport", simulation));
+    reports.push(("simulate", "CaseworkSimulationReport", simulation));
 
     let (exit, identity) = invoke(arguments(&["dev", "identity", "contract-reader"]));
     assert_eq!(exit, ExitCode::SUCCESS, "{identity:#?}");
-    reports.push(("dev identity", "DevIdentityReport", identity));
+    reports.push(("dev identity", "CaseworkDevIdentityReport", identity));
 
     let failure_commands = [
         (
             "attempt settle",
-            "AttemptSettlementReport",
+            "CaseworkAttemptSettlementReport",
             vec![
                 "attempt",
                 "settle",
@@ -275,7 +345,7 @@ fn every_public_json_report_matches_its_schema() {
         ),
         (
             "attempt mark-uncertain",
-            "AttemptUncertainMarkingReport",
+            "CaseworkAttemptUncertainMarkingReport",
             vec![
                 "attempt",
                 "mark-uncertain",
@@ -290,27 +360,27 @@ fn every_public_json_report_matches_its_schema() {
         ),
         (
             "apply",
-            "ApplyReport",
+            "CaseworkApplyReport",
             vec!["apply", "--runtime-config", missing.to_str().unwrap()],
         ),
         (
             "plan",
-            "PlanReport",
+            "CaseworkPlanReport",
             vec!["plan", "--runtime-config", missing.to_str().unwrap()],
         ),
         (
             "status",
-            "StatusReport",
+            "CaseworkStatusReport",
             vec!["status", "--runtime-config", missing.to_str().unwrap()],
         ),
         (
             "doctor",
-            "DoctorReport",
+            "CaseworkDoctorReport",
             vec!["doctor", "--runtime-config", missing.to_str().unwrap()],
         ),
         (
             "retention erase",
-            "RetentionEraseReport",
+            "CaseworkRetentionEraseReport",
             vec![
                 "retention",
                 "erase",
@@ -325,7 +395,7 @@ fn every_public_json_report_matches_its_schema() {
         ),
         (
             "source add",
-            "SourceAddReport",
+            "CaseworkSourceAddReport",
             vec![
                 "source",
                 "add",
@@ -338,17 +408,17 @@ fn every_public_json_report_matches_its_schema() {
         ),
         (
             "dev",
-            "DevReport",
+            "CaseworkDevReport",
             vec!["dev", "start", missing.to_str().unwrap()],
         ),
         (
             "dev events",
-            "DevEventsReport",
+            "CaseworkDevEventsReport",
             vec!["dev", "events", missing.to_str().unwrap()],
         ),
         (
             "dev grant",
-            "DevGrantReport",
+            "CaseworkDevGrantReport",
             vec![
                 "dev",
                 "grant",
@@ -362,7 +432,7 @@ fn every_public_json_report_matches_its_schema() {
         ),
         (
             "dev token",
-            "DevTokenReport",
+            "CaseworkDevTokenReport",
             vec!["dev", "token", "staff", missing.to_str().unwrap()],
         ),
     ];
@@ -399,15 +469,15 @@ fn every_public_json_report_matches_its_schema() {
         check["diagnostics"][0]["related"][0]["line"].is_u64(),
         "{check:#?}"
     );
-    reports.push(("refused check", "CheckReport", check));
+    reports.push(("refused check", "CaseworkCheckReport", check));
 
     let (exit, usage) = invoke(arguments(&["--not-a-real-argument"]));
     assert_eq!(exit, ExitCode::from(2));
-    reports.push(("usage", "UsageReport", usage));
+    reports.push(("usage", "CaseworkUsageReport", usage));
 
     let (exit, removed) = invoke(arguments(&["db", "migrate", "."]));
     assert_eq!(exit, ExitCode::from(2));
-    reports.push(("removed command", "UsageReport", removed));
+    reports.push(("removed command", "CaseworkUsageReport", removed));
 
     assert_eq!(reports.len(), 23);
     for (label, kind, report) in reports {
@@ -559,7 +629,7 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
     assert_eq!(plan["planKind"], "initial");
     assert_eq!(plan["changesPending"], true);
     assert_eq!(plan["active"], Value::Null);
-    assert_matches_contract("plan", "PlanReport", &plan);
+    assert_matches_contract("plan", "CaseworkPlanReport", &plan);
 
     let raw_reference = "CHANGE-REQUEST-8431";
     let mut apply = command("apply");
@@ -582,7 +652,7 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         !applied.to_string().contains(raw_reference),
         "the raw operator reference is never reported"
     );
-    assert_matches_contract("apply", "ApplyReport", &applied);
+    assert_matches_contract("apply", "CaseworkApplyReport", &applied);
 
     let (exit, status) = invoke(command("status"));
     assert_eq!(exit, ExitCode::SUCCESS, "{status:#?}");
@@ -594,7 +664,7 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         registry_casework::SINGLE_ROLE_STATEMENT
     );
     assert!(!status.to_string().contains(raw_reference));
-    assert_matches_contract("status", "StatusReport", &status);
+    assert_matches_contract("status", "CaseworkStatusReport", &status);
 
     // The active package plans as nothing to do, and applying it again is
     // refused naming the active digest.
@@ -615,7 +685,7 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         .as_str()
         .unwrap()
         .contains(applied["packageDigest"].as_str().unwrap()));
-    assert_matches_contract("apply refusal", "ApplyReport", &reapplied);
+    assert_matches_contract("apply refusal", "CaseworkApplyReport", &reapplied);
 
     let supported = status["supportedSchemaVersion"].as_i64().unwrap();
     execute_in_test_database(
@@ -640,7 +710,7 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
     assert_eq!(report["status"], "domain-refusal");
     assert_eq!(report["diagnostics"][0]["path"], "database");
     assert_eq!(report["diagnostics"][0]["message"], refusal);
-    assert_matches_contract("apply refusal", "ApplyReport", &report);
+    assert_matches_contract("apply refusal", "CaseworkApplyReport", &report);
 
     let (exit, planned) = invoke(command("plan"));
     assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{planned:#?}");
@@ -649,7 +719,7 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         "casework.activation.schema-newer"
     );
     assert_eq!(planned["status"], "refused");
-    assert_matches_contract("plan refusal", "PlanReport", &planned);
+    assert_matches_contract("plan refusal", "CaseworkPlanReport", &planned);
 
     let mut human = vec![OsString::from("caseworkctl")];
     human.extend(apply);
@@ -801,7 +871,11 @@ fn check_against_a_breg_package_reports_a_pin_the_package_rederives_as_current()
             "pin": "current"
         })
     );
-    assert_matches_contract("check against a BReg package", "CheckReport", &report);
+    assert_matches_contract(
+        "check against a BReg package",
+        "CaseworkCheckReport",
+        &report,
+    );
 }
 
 #[cfg(unix)]
@@ -839,7 +913,7 @@ fn check_against_a_breg_package_refuses_a_stale_pin_naming_the_check_and_the_rep
             )),
         "{action}"
     );
-    assert_matches_contract("stale pin refusal", "CheckReport", &report);
+    assert_matches_contract("stale pin refusal", "CaseworkCheckReport", &report);
 }
 
 #[cfg(unix)]
@@ -960,5 +1034,9 @@ fn source_add_refuses_a_casework_endpoint_without_echoing_it() {
     assert!(!text.contains("reader:"), "{text}");
     let message = report["diagnostics"][0]["message"].as_str().unwrap();
     assert!(message.contains("--casework-endpoint"), "{message}");
-    assert_matches_contract("casework endpoint refusal", "SourceAddReport", &report);
+    assert_matches_contract(
+        "casework endpoint refusal",
+        "CaseworkSourceAddReport",
+        &report,
+    );
 }

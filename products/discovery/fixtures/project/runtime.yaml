@@ -1,7 +1,8 @@
-apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1
 kind: DiscoveryRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
+  requestTimeoutMilliseconds: 10000
 package:
   root: /srv/registry-discovery/package
 limits:
@@ -9,6 +10,5 @@ limits:
   maximumResponseBytes: 1048576
   maximumResultRecords: 100
   maximumResultAlternatives: 100
-  requestTimeoutSeconds: 10
-  shutdownTimeoutSeconds: 10
+  shutdownGraceMilliseconds: 10000
 logLevel: info

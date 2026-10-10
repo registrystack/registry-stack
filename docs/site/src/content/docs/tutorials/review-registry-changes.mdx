@@ -51,13 +51,14 @@ will freeze and the logical review authority and policy Casework will evaluate:
 ```yaml test-excerpt="tutorial-work/asset-corrections/registry.yaml"
 changeRequest:
   retention:
-    mode: operator_erase
+    mode: operator-erase
   effects:
     - target: {fromField: placement}
       operation: patch
       set:
         site: {fromField: proposed-site}
   review:
+    type: required
     authority: casework
     policyId: asset-placement-correction
   onApproved:
@@ -65,7 +66,7 @@ changeRequest:
 ```
 
 `review` is part of the immutable proposal binding. It is not a local BReg stage declaration.
-`onApproved.mode: manual` means an ordinary caller must still hold the current `apply_request`
+`onApproved.mode: manual` means an ordinary caller must still hold the current `apply-request`
 grant and every required `applyTargets` grant after BReg has reconciled an exact approved result.
 
 {/* Evidence: products/breg/acceptance/asset-site-placement-change-requests/registry.yaml;
@@ -80,7 +81,7 @@ bregctl --format json explain change-requests tutorial-work/asset-corrections \
 ```
 
 Inspect `tutorial-work/change-requests.json`. The request has only four source lifecycle actions:
-`submit_request`, `revise_request`, `cancel_request`, and `apply_request`. It also carries the
+`submit-request`, `revise-request`, `cancel-request`, and `apply-request`. It also carries the
 frozen review requirement, approved-application mode, effects, target entities, and application
 grants. It has no BReg reviewer action or stage route. The request's entry names the review
 authority and how an approved result is applied:
@@ -89,6 +90,7 @@ authority and how an approved result is applied:
 {
   "requestEntity": "placement-correction-request",
   "review": {
+    "type": "required",
     "authority": "casework",
     "policyId": "asset-placement-correction"
   },
@@ -106,9 +108,9 @@ requirement, and application preconditions. A later package cannot silently chan
 The example separates these BReg roles:
 
 - The submitter creates and edits its own draft, then submits, revises, or cancels it.
-- A request reader may receive `review_state` when its `readableRequestFields` grants that
+- A request reader may receive `review-state` when its `readableRequestFields` grants that
   disclosure. Reading review state does not grant a Casework decision or BReg application.
-- The applier holds `apply_request` and the required `applyTargets`. BReg rechecks both at use.
+- The applier holds `apply-request` and the required `applyTargets`. BReg rechecks both at use.
 
 Casework policy defines reviewer eligibility, stages, approval counts, and independence. Configure
 that policy in Casework rather than adding reviewer operations to BReg access profiles.

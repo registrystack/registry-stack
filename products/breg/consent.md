@@ -64,7 +64,7 @@ A consent record is a create-only entity that declares `consentRecord`:
 
 ```yaml
 - id: person-consent-decision
-  mutationMode: create_only
+  mutationMode: create-only
   fields:
     - {id: subject, type: reference, target: person, required: true}
     - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true}
@@ -86,7 +86,7 @@ A consent record is a create-only entity that declares `consentRecord`:
     validity:
       from: effective-at
       until: expires-at
-      maxDuration: P365D
+      maximumDurationDays: 365
 ```
 
 The field declarations above omit classifications for brevity. The rules the
@@ -99,8 +99,9 @@ compiler holds:
 - `gives` and `revokes` are non-empty, distinct, disjoint codes of the
   decision vocabulary, at most 64 together. `refusals` is a subset of
   `revokes`.
-- `from` is a required timestamp and `until` an optional one. `maxDuration`
-  is a positive ISO 8601 duration of at most ten years.
+- `from` is a required timestamp and `until` an optional one.
+  `maximumDurationDays` is a whole number of days of 24 hours, from 1 to
+  3652, ten years.
 - The key and validity fields are plaintext. The check compares stored
   values, so ciphertext could never match.
 - The record is a leaf: no change request, no `requireConsent` on its own
@@ -143,13 +144,14 @@ Add `requireConsent` to a read permission:
   requiredScopes: [registry:person:read]
   requiredPurposes: [food-assistance]
   permissions:
-    - entity: person
-      operations: [get, list]
-      readableFields: [person-code, legal-name, district]
-      allowCount: true
-      rowBoundaries: unrestricted
-      requireConsent:
-        - {record: person-consent-decision, on: id}
+    entities:
+      - entity: person
+        operations: [get, list]
+        readableFields: [person-code, legal-name, district]
+        allowCount: true
+        rowBoundaries: unrestricted
+        requireConsent:
+          - {record: person-consent-decision, on: id}
 ```
 
 `on: id` gates the row on its own identity and needs a consent subject that
@@ -172,11 +174,12 @@ the reserved `registry:recipients` claim:
   principalClaim: registry_principal
   requiredScopes: ['consent:person:read']
   permissions:
-    - entity: person-consent-decision
-      rowBoundaries:
-        - {field: recipient, claim: 'registry:recipients', operator: in}
-      operations: [get, list]
-      readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
+    entities:
+      - entity: person-consent-decision
+        rowBoundaries:
+          - {field: recipient, claim: 'registry:recipients', operator: in}
+        operations: [get, list]
+        readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
 ```
 
 `registry:recipients` binds only an `in` row boundary on a consent record's
@@ -257,8 +260,9 @@ its capped time is at or after the give's. Consequences:
 ### Validity
 
 A give takes effect at `from` and ends at the earlier of `until` and
-`LEAST(from, created_at) + maxDuration`. `maxDuration` caps every give,
-including one that sets no `until` or a later one. A give with a future
+`LEAST(from, created_at)` plus `maximumDurationDays` days.
+`maximumDurationDays` caps every give, including one that sets no `until` or
+a later one. A give with a future
 `from` is scheduled: it is recorded now and discloses nothing until `from`.
 Expiry is computed at read time; nothing rewrites the row.
 
@@ -352,7 +356,7 @@ codes, so a migration that removes one fails against existing rows and
 Adding a vocabulary code to a field is a compatible additive migration: stored
 codes stay valid and only the check constraint widens. The migration replaces
 that check under an exclusive table lock and validates every stored row, so
-`bregctl diff` classifies the change `lock_or_rewrite_risk`; it still needs
+`bregctl diff` classifies the change `lock-or-rewrite-risk`; it still needs
 no reviewed migration.
 
 An action input that starts accepting more codes is compatible and additive,
@@ -361,7 +365,7 @@ the same revision. Adding a recipient or scope therefore migrates the issuing
 actions that pick it up without a schema change. An input that starts
 accepting a code its vocabulary already had, such as a withdraw action whose
 decision input adds `given`, changes what the action does: it is an
-`action_changed` access change and needs a reviewed migration. `bregctl diff`
+`action-changed` access change and needs a reviewed migration. `bregctl diff`
 still marks new-code input widenings for review, because the action then
 accepts each new code with no further check. A package built before the
 engine recorded each input's vocabulary cannot show a code is new, so every
@@ -377,14 +381,14 @@ an existing consent:
 | `requireConsent` removed | rename the profile and retire the scope instead |
 | a client added to an organization | every existing give to the organization and its groups extends to the client |
 | a group's members change | every existing group give changes holders; prefer a new group id and clause |
-| `maxDuration` raised | existing gives last longer than the notice said |
+| `maximumDurationDays` raised | existing gives last longer than the notice said |
 | a consent vocabulary code removed | codes are append-only; retire the code |
 | an action becomes a steward issuer | steward actions create consent without the subject's principal |
 | an action accepts codes new to their vocabulary | check each code is one the action may write |
 | the consent indexes are rebuilt | the build blocks writes to the consent table until the migration commits |
 
-Removing a client or lowering `maxDuration` narrows access and carries no
-reason. The `reason` is a review aid in tooling output, not a runtime
+Removing a client or lowering `maximumDurationDays` narrows access and
+carries no reason. The `reason` is a review aid in tooling output, not a runtime
 guarantee: the registry enforces what the new package declares.
 
 A consent record change replaces its probe function, so it is an access

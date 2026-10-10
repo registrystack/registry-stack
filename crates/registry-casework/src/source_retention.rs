@@ -26,7 +26,7 @@ impl PostgresStore {
         validate_selector(selector)?;
         let mut audit = self
             .begin_audit(crate::audit::request_record(
-                "source_retention_erased",
+                "source-retention-erased",
                 None,
                 "system:operator",
                 serde_json::json!({}),
@@ -142,7 +142,7 @@ impl PostgresStore {
             .await?;
         let audit_event_id = Uuid::new_v4();
         let audit_record = serde_json::json!({
-            "event": "casework.source_retention_erased",
+            "event": "casework.source-retention-erased",
             "eventId": audit_event_id,
             "selector": &report.selector,
             "counts": {

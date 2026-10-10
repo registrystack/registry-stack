@@ -151,7 +151,7 @@ as a generic protocol failure, or vice versa. See
 `registry-evidence-client`'s `problem.rs` for the authoritative mapping table.
 
 A response that exceeds its size bound maps to `kind: "transport"` with
-`transport_kind: "response_too_large"`, not `kind: "protocol"`, even when the
+`transport_kind: "response-too-large"`, not `kind: "protocol"`, even when the
 response status itself was a plain 200: the size limit is enforced against the
 transport, before any attempt to interpret the body as a problem response.
 

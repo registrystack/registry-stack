@@ -31,9 +31,9 @@ fn hex_lower(bytes: &[u8]) -> String {
 
 fn project_with_hooks(hooks: Value) -> Value {
     json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {"id": "hook-contract", "version": "1", "defaultLanguage": "en",
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {"id": "hook-contract", "version": "1", "defaultLanguage": "en",
                      "canonicalBaseIri": "https://hook-contract.example.test"},
         "entities": [{
             "id": "case",
@@ -43,8 +43,8 @@ fn project_with_hooks(hooks: Value) -> Value {
             "tombstone": true,
             "classification": "internal",
             "fields": [
-                {"id": "label", "type": "string", "maxLength": 64, "classification": "public"},
-                {"id": "region", "type": "string", "maxLength": 32, "classification": "internal"}
+                {"id": "label", "type": "string", "maximumLength": 64, "classification": "public"},
+                {"id": "region", "type": "string", "maximumLength": 32, "classification": "internal"}
             ],
             "hooks": hooks
         }]
@@ -57,8 +57,8 @@ fn url_hook() -> Value {
         "phase": "after",
         "trigger": "created",
         "projection": ["label", "region"],
-        "when": {"kind": "fields", "afterEquals": {"region": "north"}},
-        "handler": {"kind": "url", "destinationId": "case-operations"}
+        "when": {"type": "fields", "afterEquals": {"region": "north"}},
+        "handler": {"type": "url", "destinationId": "case-operations"}
     })
 }
 
@@ -150,6 +150,7 @@ fn an_events_member_is_refused_as_an_unknown_field_in_a_project() {
 #[test]
 fn an_events_member_is_refused_as_an_unknown_field_in_a_module() {
     let module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
         "id": "case-events",
         "version": "1",
         "extendEntities": [{"id": "case", "events": [url_hook()]}]
@@ -182,7 +183,7 @@ fn a_before_phase_hook_still_refuses_the_url_handler_kind() {
 #[test]
 fn an_after_phase_hook_compiles_a_rhai_handler_into_a_local_delivery() {
     let mut hook = url_hook();
-    hook["handler"] = json!({"kind": "rhai", "script": "hooks/case.rhai",
+    hook["handler"] = json!({"type": "rhai", "script": "hooks/case.rhai",
                              "abi": "registry.hook-handler/v1"});
     let compiled = compile_with_assets(
         &project_with_hooks(json!([hook])),
@@ -206,7 +207,7 @@ fn an_after_phase_hook_compiles_a_rhai_handler_into_a_local_delivery() {
 #[test]
 fn an_after_phase_rhai_hook_requires_its_script_asset() {
     let mut hook = url_hook();
-    hook["handler"] = json!({"kind": "rhai", "script": "hooks/case.rhai",
+    hook["handler"] = json!({"type": "rhai", "script": "hooks/case.rhai",
                              "abi": "registry.hook-handler/v1"});
     let failure = compile(&project_with_hooks(json!([hook]))).expect_err("the asset is missing");
     assert_diagnostic(
@@ -219,7 +220,7 @@ fn an_after_phase_rhai_hook_requires_its_script_asset() {
 #[test]
 fn an_after_phase_rhai_hook_requires_a_handle_entry_point() {
     let mut hook = url_hook();
-    hook["handler"] = json!({"kind": "rhai", "script": "hooks/case.rhai",
+    hook["handler"] = json!({"type": "rhai", "script": "hooks/case.rhai",
                              "abi": "registry.hook-handler/v1"});
     let failure = compile_with_assets(
         &project_with_hooks(json!([hook])),
@@ -232,7 +233,7 @@ fn an_after_phase_rhai_hook_requires_a_handle_entry_point() {
 #[test]
 fn an_after_phase_rhai_hook_refuses_a_handler_abi_version_one_does_not_define() {
     let mut hook = url_hook();
-    hook["handler"] = json!({"kind": "rhai", "script": "hooks/case.rhai",
+    hook["handler"] = json!({"type": "rhai", "script": "hooks/case.rhai",
                              "abi": "registry.hook-handler/v2"});
     let failure = compile_with_assets(
         &project_with_hooks(json!([hook])),
@@ -267,7 +268,7 @@ fn wasm_guest_module() -> Vec<u8> {
 #[cfg(feature = "wasm")]
 fn an_after_phase_wasm_hook_compiles_into_a_local_delivery() {
     let mut hook = url_hook();
-    hook["handler"] = json!({"kind": "wasm", "module": "hooks/case.wasm",
+    hook["handler"] = json!({"type": "wasm", "module": "hooks/case.wasm",
                              "abi": "registry.hook-handler/v1"});
     let module = wasm_guest_module();
     let compiled = compile_with_assets(
@@ -297,7 +298,7 @@ fn an_after_phase_wasm_hook_compiles_into_a_local_delivery() {
 #[cfg(feature = "wasm")]
 fn an_after_phase_wasm_hook_requires_its_module_asset() {
     let mut hook = url_hook();
-    hook["handler"] = json!({"kind": "wasm", "module": "hooks/case.wasm",
+    hook["handler"] = json!({"type": "wasm", "module": "hooks/case.wasm",
                              "abi": "registry.hook-handler/v1"});
     let failure = compile(&project_with_hooks(json!([hook]))).expect_err("the asset is missing");
     assert_diagnostic(
@@ -311,7 +312,7 @@ fn an_after_phase_wasm_hook_requires_its_module_asset() {
 #[cfg(feature = "wasm")]
 fn an_after_phase_wasm_hook_refuses_module_text() {
     let mut hook = url_hook();
-    hook["handler"] = json!({"kind": "wasm", "module": "hooks/case.wasm",
+    hook["handler"] = json!({"type": "wasm", "module": "hooks/case.wasm",
                              "abi": "registry.hook-handler/v1"});
     let failure = compile_with_assets(
         &project_with_hooks(json!([hook])),
@@ -340,7 +341,7 @@ fn an_after_phase_wasm_hook_refuses_module_text() {
 #[cfg(not(feature = "wasm"))]
 fn a_wasm_hook_is_refused_by_a_build_without_wasm_support() {
     let mut hook = url_hook();
-    hook["handler"] = json!({"kind": "wasm", "module": "hooks/case.wasm",
+    hook["handler"] = json!({"type": "wasm", "module": "hooks/case.wasm",
                              "abi": "registry.hook-handler/v1"});
     let failure = compile_with_assets(
         &project_with_hooks(json!([hook])),
@@ -361,7 +362,7 @@ fn a_wasm_hook_is_refused_by_a_build_without_wasm_support() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.hook.handler-wasm-build-unsupported")
         .expect("the build refusal is reported");
-    assert_eq!("entities[].hooks[].handler.kind", refusal.path);
+    assert_eq!("entities[].hooks[].handler.type", refusal.path);
     assert!(
         !failure
             .diagnostics()

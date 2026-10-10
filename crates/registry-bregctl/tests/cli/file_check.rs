@@ -161,10 +161,7 @@ fn a_refusal_is_positioned_and_named_in_both_output_forms() {
     );
     let report = json_report(&output);
     assert_eq!(output.status.code(), Some(1), "{report}");
-    assert_eq!(
-        codes(&report),
-        ["config.retired-api-version", "config.wrong-kind"]
-    );
+    assert_eq!(codes(&report), ["config.wrong-kind"]);
 }
 
 #[test]

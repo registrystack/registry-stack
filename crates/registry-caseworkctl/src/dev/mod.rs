@@ -139,11 +139,11 @@ pub struct DevArgs {
 impl DevArgs {
     pub(super) fn report_kind(&self) -> &'static str {
         match self.action.as_ref() {
-            Some(DevAction::Events(_)) => "DevEventsReport",
-            Some(DevAction::Grant(_)) => "DevGrantReport",
-            Some(DevAction::Identity(_)) => "DevIdentityReport",
-            Some(DevAction::Token(_)) => "DevTokenReport",
-            Some(DevAction::Start(_) | DevAction::Stop(_)) | None => "DevReport",
+            Some(DevAction::Events(_)) => "CaseworkDevEventsReport",
+            Some(DevAction::Grant(_)) => "CaseworkDevGrantReport",
+            Some(DevAction::Identity(_)) => "CaseworkDevIdentityReport",
+            Some(DevAction::Token(_)) => "CaseworkDevTokenReport",
+            Some(DevAction::Start(_) | DevAction::Stop(_)) | None => "CaseworkDevReport",
         }
     }
 }
@@ -1261,16 +1261,16 @@ fn export_client(
 
 /// The event source a local registry session names for itself, from its
 /// authored registry.yaml. A package names no deployment, so `bregctl dev`
-/// serves it with its registry id as the runtime `identity.instanceId`.
+/// serves it with its project id as the runtime `identity.instanceId`.
 fn event_source(registry: &Path) -> Result<String> {
     let authored = Reader::new("registry.yaml")
         .scan(&bounded(&registry.join("registry.yaml"), "registry.yaml")?)
         .map_err(|report| anyhow::anyhow!("registry.yaml must parse: {report}"))?
         .context("registry.yaml is empty")?
         .to_json_value();
-    let id = authored["registry"]["id"]
+    let id = authored["project"]["id"]
         .as_str()
-        .context("registry.yaml declares no registry.id")?;
+        .context("registry.yaml declares no project.id")?;
     Ok(format!("urn:registrystack:registry:{id}:instance:{id}"))
 }
 

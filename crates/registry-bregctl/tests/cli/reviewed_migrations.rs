@@ -28,7 +28,7 @@ impl ReviewFixture {
             .as_array_mut()
             .unwrap()
             .push(json!({
-                "id":"label", "type":"string", "maxLength":32, "classification":"internal"
+                "id":"label", "type":"string", "maximumLength":32, "classification":"internal"
             }));
         module["entities"][0]["accessProfiles"][0]["readableFields"] = json!(["code", "label"]);
         module["entities"][0]["accessProfiles"][0]["filterableFields"] = json!(["label"]);
@@ -229,16 +229,16 @@ fn reviewed_successor_is_shared_by_test_and_package_without_placeholder_fingerpr
         .as_array()
         .unwrap()
         .iter()
-        .find(|change| change["change"]["code"] == "query_inventory_changed")
+        .find(|change| change["change"]["code"] == "query-inventory-changed")
         .unwrap();
-    assert_eq!(query_change["classification"], "access_change");
+    assert_eq!(query_change["classification"], "access-change");
     let profile_change = report["changes"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|change| change["change"]["code"] == "access_profile_changed")
+        .find(|change| change["change"]["code"] == "access-profile-changed")
         .unwrap();
-    assert_eq!(profile_change["classification"], "access_change");
+    assert_eq!(profile_change["classification"], "access-change");
     for command in ["test", "package"] {
         let refused = fixture.run(command, false);
         assert!(!refused.status.success());
@@ -392,8 +392,8 @@ fn migration_explain_names_every_bound_a_reviewed_migration_carries() {
             .map(|value| value.trim().to_owned())
     };
     for (label, value) in [
-        ("change class", "access_or_disclosure_change"),
-        ("recovery", "exact_target_resume"),
+        ("change class", "access-or-disclosure-change"),
+        ("recovery", "exact-target-resume"),
         ("lock timeout ms", "1000"),
         ("statement timeout ms", "5000"),
         ("transactional step count", "0"),
@@ -474,7 +474,7 @@ fn reviewed_successor_refuses_a_baseline_from_another_registry_before_receipt_va
     .unwrap();
     let registry_file = fixture.project.path().join("registry.yaml");
     let mut source: Value = serde_json::from_slice(&fs::read(&registry_file).unwrap()).unwrap();
-    source["registry"]["id"] = json!("another-registry");
+    source["project"]["id"] = json!("another-registry");
     fs::write(&registry_file, canonicalize_json(&source).unwrap()).unwrap();
     let output = fixture.project.path().join("other-registry-build");
     let result = bregctl(&[
@@ -767,7 +767,7 @@ fn a_successor_needing_review_names_every_change_and_its_target() {
                 .push(json!({
                     "id": "label",
                     "type": "string",
-                    "maxLength": 32,
+                    "maximumLength": 32,
                     "required": true,
                     "classification": "internal"
                 }));
@@ -779,7 +779,7 @@ fn a_successor_needing_review_names_every_change_and_its_target() {
     let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
     assert_eq!(diagnostic["code"], "migration.review.required");
     let message = diagnostic["message"].as_str().unwrap().to_owned();
-    assert!(message.contains("field_added_required"), "{message}");
+    assert!(message.contains("field-added-required"), "{message}");
     assert!(message.contains("record.label"), "{message}");
     assert!(message.contains("--reviewed-migrations"), "{message}");
     assert!(!project.path().join("build").exists());
@@ -788,14 +788,14 @@ fn a_successor_needing_review_names_every_change_and_its_target() {
 #[test]
 fn an_unsupported_successor_names_every_change_and_why_it_cannot_be_planned() {
     let (baseline, project) =
-        successor_project(|_| {}, |source| source["registry"]["version"] = json!("2"));
+        successor_project(|_| {}, |source| source["project"]["version"] = json!("2"));
     let output = package_successor(&baseline, &project);
     assert!(!output.status.success(), "{output:?}");
     let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
     assert_eq!(diagnostic["code"], "migration.change.unsupported");
     let message = diagnostic["message"].as_str().unwrap().to_owned();
-    assert!(message.contains("registry_version_changed"), "{message}");
-    assert!(message.contains("registry_identity_changed"), "{message}");
+    assert!(message.contains("registry-version-changed"), "{message}");
+    assert!(message.contains("registry-identity-changed"), "{message}");
     assert!(message.contains("at registry"), "{message}");
     assert!(
         message.contains("bound to the database for its lifetime"),
@@ -812,7 +812,7 @@ fn a_refused_review_names_the_changes_it_has_to_cover() {
     let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
     assert_eq!(diagnostic["code"], "migration.review.descriptor_refused");
     let message = diagnostic["message"].as_str().unwrap().to_owned();
-    assert!(message.contains("access_profile_changed"), "{message}");
+    assert!(message.contains("access-profile-changed"), "{message}");
     assert!(message.contains("at record.reader"), "{message}");
     assert!(!String::from_utf8_lossy(&output.stdout).contains("private-review-value-canary"));
 }

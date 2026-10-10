@@ -209,7 +209,7 @@ pub struct NewActivation<'a> {
 
 /// How a configured deployment identity compares with the ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub enum DatabaseIdCheck {
     NotRecorded,
     Matches,
@@ -944,6 +944,17 @@ mod tests {
             Layout::new("bad-prefix", "a", "b", &[], false),
             Err(Error::InvalidLayout)
         ));
+    }
+
+    #[test]
+    fn database_id_check_is_written_in_kebab_case() {
+        for (check, word) in [
+            (DatabaseIdCheck::NotRecorded, "not-recorded"),
+            (DatabaseIdCheck::Matches, "matches"),
+            (DatabaseIdCheck::Differs, "differs"),
+        ] {
+            assert_eq!(serde_json::to_value(check).expect("serialize"), word);
+        }
     }
 
     #[test]

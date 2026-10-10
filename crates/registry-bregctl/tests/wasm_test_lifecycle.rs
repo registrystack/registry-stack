@@ -275,9 +275,9 @@ bindings:
 }
 
 fn project_source() -> &'static str {
-    r#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+    r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: wasm-schema-test
   canonicalBaseIri: https://wasm-schema-test.invalid
   version: 0.1.0
@@ -301,16 +301,16 @@ entities:
   - id: record
     primaryDataset: wasm-schema-test
     route: records
-    mutationMode: create_only
+    mutationMode: create-only
     classification: public
     fields:
-      - {id: code, type: string, required: true, maxLength: 32, classification: public}
+      - {id: code, type: string, required: true, maximumLength: 32, classification: public}
 actions:
   - id: create-fixed-record
     inputs:
-      - {id: request, type: string, required: true, maxLength: 32, classification: public}
+      - {id: request, type: string, required: true, maximumLength: 32, classification: public}
     handler:
-      kind: wasm
+      type: wasm
       module: handlers/fixed-output.wasm
       abi: registry.action-handler/v1
       writes:
@@ -325,11 +325,13 @@ accessProfiles:
     requiredScopes: [registry:wasm-fixture:invoke]
     requiredPurposes: [fixture-assurance]
     permissions:
-      - action: create-fixed-record
-        operations: [invoke]
-        targets: [{entity: record, rowBoundaries: unrestricted}]
-        results: [record]
-      - {entity: record, operations: [get, list], readableFields: [code], rowBoundaries: unrestricted}
+      entities:
+        - {entity: record, operations: [get, list], readableFields: [code], rowBoundaries: unrestricted}
+      actions:
+        - action: create-fixed-record
+          operations: [invoke]
+          targets: [{entity: record, rowBoundaries: unrestricted}]
+          results: [record]
 "#
 }
 
@@ -370,7 +372,7 @@ fn runtime_source(
         FixtureAudit::Stdout => "destination: stdout".to_owned(),
     };
     format!(
-        r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+        r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener: {{bind: 127.0.0.1:0}}
 identity:
@@ -384,7 +386,7 @@ database:
   runtimeUrlRef: secret:file/runtime-url
   migrationUrlRef: secret:file/migration-url
   pool:
-    maxSize: 4
+    maximumConnections: 4
     waitTimeoutMilliseconds: 2000
     createTimeoutMilliseconds: 2000
     recycleTimeoutMilliseconds: 2000
@@ -402,25 +404,25 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: unrestricted
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
-    jwksSource: {{kind: static, documentRef: secret:file/oidc-jwks}}
+    jwksSource: {{type: static, documentRef: secret:file/oidc-jwks}}
     jwksCache:
       cacheTtlSeconds: 60
       negativeCacheTtlSeconds: 1
       refreshCooldownSeconds: 1
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
 audit: {{hashKeyRef: secret:file/audit-key, {audit_target}}}
-cursor: {{secretRef: secret:file/cursor-key, maxAgeSeconds: 300}}
+cursor: {{secretRef: secret:file/cursor-key, maximumAgeSeconds: 300}}
 wasmExecution:
   backend: pulley
-  maxModuleBytes: 2097152
-  maxGuestMemoryBytes: 33554432
+  maximumModuleBytes: 2097152
+  maximumGuestMemoryBytes: 33554432
 operationalTimeouts:
   httpRequestMilliseconds: 5000
   shutdownGraceMilliseconds: 1000

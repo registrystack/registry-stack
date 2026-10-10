@@ -38,7 +38,7 @@ pub struct AuthorityClaimUse {
 
 /// Value-free failures safe to surface during startup and offline inspection.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum AuthorityInventoryError {
     #[error("a compiled authenticated grant has no principal claim")]
     PrincipalClaimMissing,
@@ -64,7 +64,7 @@ pub fn authority_inventory(
     for entity in registry.entities().values() {
         for profile in entity.access_profiles.values() {
             inventory.profile(
-                profile.principal_claim.as_deref(),
+                Some(profile.principal_claim.as_str()),
                 &profile.required_purposes,
             )?;
             let surface = format!("entities/{}/profiles/{}", entity.id, profile.id);

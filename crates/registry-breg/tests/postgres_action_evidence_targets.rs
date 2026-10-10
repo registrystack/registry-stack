@@ -74,7 +74,7 @@ async fn setup_with_age(
     document["entities"].as_array_mut().unwrap().push(json!({
         "id":"local-register", "route":"local-registers", "primaryDataset":"farmer-landholding-evidence", "mutationMode":"mutable",
         "fields":[
-            {"id":"zone", "type":"string", "maxLength":32,"required":true,"classification":"restricted"},
+            {"id":"zone", "type":"string", "maximumLength":32,"required":true,"classification":"restricted"},
             {"id":"active", "type":"boolean", "required":true,"classification":"restricted"},
             {"id":"checked", "type":"boolean", "required":true,"classification":"restricted"}
         ]
@@ -87,7 +87,7 @@ async fn setup_with_age(
     document["actions"][0]["handler"]["writes"].as_array_mut().unwrap().push(json!({
         "id":"local-register", "target":{"fromField":"local-register"},"operation":"patch","fields":["checked"]
     }));
-    document["accessProfiles"][0]["permissions"][0]["targets"].as_array_mut().unwrap().push(json!({
+    document["accessProfiles"][0]["permissions"]["actions"][0]["targets"].as_array_mut().unwrap().push(json!({
         "entity":"local-register", "rowBoundaries":[{"field":"zone","claim":"zone","operator":"equals"}]
     }));
     project = parse_project_yaml(&serde_json::to_vec(&document).unwrap()).unwrap();

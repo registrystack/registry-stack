@@ -147,7 +147,7 @@ fn subject() -> SubjectRef {
 }
 fn record(state: &str, reason: Option<&str>) -> Value {
     let _ = reason;
-    json!({"data":{"recordIdentifier":ID,"revisionIdentifier":"2","domainData":{"hidden":"SOURCE-CONTENT-CANARY"},"request":{"bregState":state,"proposalVersion":1,"effectDigest":DIGEST,"proposal":{"review":{"authority":"casework-main","policyId":"registry-correction"}},"editable":false,"actions":[]}},"meta":{"registryIdentifier":"test","datasetIdentifier":"primary","entityTypeIdentifier":"correction"}})
+    json!({"data":{"recordIdentifier":ID,"revisionIdentifier":"2","domainData":{"hidden":"SOURCE-CONTENT-CANARY"},"request":{"bregState":state,"proposalVersion":1,"effectDigest":DIGEST,"proposal":{"review":{"type":"required","authority":"casework-main","policyId":"registry-correction"}},"editable":false,"actions":[]}},"meta":{"registryIdentifier":"test","datasetIdentifier":"primary","entityTypeIdentifier":"correction"}})
 }
 fn review_status(application_state: &str) -> Value {
     json!({
@@ -231,7 +231,7 @@ fn diagnostic_operation(kind: &str, path: &str, fields: &[(&str, &str)]) -> Valu
             .map(|(id, api_name)| diagnostic_field(id, api_name))
             .collect::<Vec<_>>(),
         "readableFields": fields.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-        "readableRequestFields": ["reason", "review_state"],
+        "readableRequestFields": ["reason", "review-state"],
         "createWritableFields": [],
         "patchWritableFields": [],
         "selectors": [],

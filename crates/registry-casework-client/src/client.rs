@@ -850,7 +850,7 @@ impl CaseworkClient {
                             registry_casework_core::ReviewDecisionType::Approve => "approve",
                             registry_casework_core::ReviewDecisionType::Reject => "reject",
                             registry_casework_core::ReviewDecisionType::ChangesRequested => {
-                                "changes_requested"
+                                "changes-requested"
                             }
                             registry_casework_core::ReviewDecisionType::Answer => "answer",
                         } != complete.value.decision
@@ -2162,20 +2162,20 @@ fn valid_review_history_page(value: &ReviewHistoryPage, expected_request_id: Uui
 
 fn review_validation_reason(value: &str) -> Option<ReviewValidationReason> {
     Some(match value {
-        "kind_not_allowed" => ReviewValidationReason::KindNotAllowed,
-        "reference_invalid" => ReviewValidationReason::ReferenceInvalid,
-        "object_required" => ReviewValidationReason::ObjectRequired,
-        "maximum_bytes_exceeded" => ReviewValidationReason::MaximumBytesExceeded,
-        "maximum_depth_exceeded" => ReviewValidationReason::MaximumDepthExceeded,
-        "schema_mismatch" => ReviewValidationReason::SchemaMismatch,
-        "outcome_not_declared" => ReviewValidationReason::OutcomeNotDeclared,
-        "reason_required" => ReviewValidationReason::ReasonRequired,
-        "text_invalid" => ReviewValidationReason::TextInvalid,
-        "result_not_declared" => ReviewValidationReason::ResultNotDeclared,
-        "result_required" => ReviewValidationReason::ResultRequired,
-        "field_not_declared" => ReviewValidationReason::FieldNotDeclared,
-        "constraint_invalid" => ReviewValidationReason::ConstraintInvalid,
-        "constraint_violated" => ReviewValidationReason::ConstraintViolated,
+        "kind-not-allowed" => ReviewValidationReason::KindNotAllowed,
+        "reference-invalid" => ReviewValidationReason::ReferenceInvalid,
+        "object-required" => ReviewValidationReason::ObjectRequired,
+        "maximum-bytes-exceeded" => ReviewValidationReason::MaximumBytesExceeded,
+        "maximum-depth-exceeded" => ReviewValidationReason::MaximumDepthExceeded,
+        "schema-mismatch" => ReviewValidationReason::SchemaMismatch,
+        "outcome-not-declared" => ReviewValidationReason::OutcomeNotDeclared,
+        "reason-required" => ReviewValidationReason::ReasonRequired,
+        "text-invalid" => ReviewValidationReason::TextInvalid,
+        "result-not-declared" => ReviewValidationReason::ResultNotDeclared,
+        "result-required" => ReviewValidationReason::ResultRequired,
+        "field-not-declared" => ReviewValidationReason::FieldNotDeclared,
+        "constraint-invalid" => ReviewValidationReason::ConstraintInvalid,
+        "constraint-violated" => ReviewValidationReason::ConstraintViolated,
         _ => return None,
     })
 }
@@ -2535,5 +2535,60 @@ mod tests {
             },
             request_id
         ));
+    }
+
+    /// The client reads the validation reason header in the spelling the
+    /// runtime writes; the previous spelling is an unknown word.
+    #[test]
+    fn every_validation_reason_is_read_in_kebab_case_only() {
+        let reasons = [
+            ("kind-not-allowed", ReviewValidationReason::KindNotAllowed),
+            (
+                "reference-invalid",
+                ReviewValidationReason::ReferenceInvalid,
+            ),
+            ("object-required", ReviewValidationReason::ObjectRequired),
+            (
+                "maximum-bytes-exceeded",
+                ReviewValidationReason::MaximumBytesExceeded,
+            ),
+            (
+                "maximum-depth-exceeded",
+                ReviewValidationReason::MaximumDepthExceeded,
+            ),
+            ("schema-mismatch", ReviewValidationReason::SchemaMismatch),
+            (
+                "outcome-not-declared",
+                ReviewValidationReason::OutcomeNotDeclared,
+            ),
+            ("reason-required", ReviewValidationReason::ReasonRequired),
+            ("text-invalid", ReviewValidationReason::TextInvalid),
+            (
+                "result-not-declared",
+                ReviewValidationReason::ResultNotDeclared,
+            ),
+            ("result-required", ReviewValidationReason::ResultRequired),
+            (
+                "field-not-declared",
+                ReviewValidationReason::FieldNotDeclared,
+            ),
+            (
+                "constraint-invalid",
+                ReviewValidationReason::ConstraintInvalid,
+            ),
+            (
+                "constraint-violated",
+                ReviewValidationReason::ConstraintViolated,
+            ),
+        ];
+        for (word, reason) in reasons {
+            assert_eq!(review_validation_reason(word), Some(reason), "{word}");
+            assert_eq!(serde_json::to_value(reason).expect("reason"), word);
+            assert_eq!(
+                review_validation_reason(&word.replace('-', "_")),
+                None,
+                "{word}"
+            );
+        }
     }
 }

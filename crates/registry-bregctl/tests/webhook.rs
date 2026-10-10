@@ -50,9 +50,9 @@ impl TestProject {
     }
 }
 
-const SAMPLE_EVENT_SOURCE: &str = r#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+const SAMPLE_EVENT_SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: webhook-sample
   version: "1"
   defaultLanguage: en
@@ -83,7 +83,7 @@ entities:
         trigger: created
         projection: [active, count, observed-at, status]
         handler:
-          kind: url
+          type: url
           destinationId: sample-receiver
 "#;
 

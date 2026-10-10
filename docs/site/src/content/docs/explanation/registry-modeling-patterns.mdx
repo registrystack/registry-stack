@@ -95,7 +95,7 @@ entities:
   - id: business-identifier
     route: business-identifiers
     primaryDataset: business-registry
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - id: holder
         type: reference
@@ -104,12 +104,12 @@ entities:
         classification: internal
       - id: namespace
         type: string
-        maxLength: 100
+        maximumLength: 100
         required: true
         classification: internal
       - id: value
         type: string
-        maxLength: 64
+        maximumLength: 64
         required: true
         classification: internal
       - id: replaces
@@ -117,7 +117,7 @@ entities:
         target: business-identifier
         classification: internal
     constraints:
-      - kind: unique
+      - type: unique
         fields: [namespace, value]
 ```
 
@@ -228,7 +228,7 @@ entities:
       startField: valid-from
       endField: valid-to
     constraints:
-      - kind: temporal-non-overlap
+      - type: temporal-non-overlap
         scopeFields: [establishment]
         startField: valid-from
         endField: valid-to
@@ -290,7 +290,7 @@ and permissions. A submitted `verified` value is not evidence that verification 
 The decision process belongs to your application; the registry model records the relevant inputs
 and outcomes.
 
-BReg offers `create_only` entities when an accepted record must not be patched through its API.
+BReg offers `create-only` entities when an accepted record must not be patched through its API.
 This controls mutation; it does not define what a later correction means.
 A correcting declaration can point to an earlier declaration, with your application deciding which
 one is applicable and why.
@@ -315,7 +315,7 @@ entities:
   - id: discharge-declaration
     route: discharge-declarations
     primaryDataset: facility-registry
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - id: facility
         type: reference
@@ -324,17 +324,17 @@ entities:
         classification: internal
       - id: reporting-period
         type: string
-        maxLength: 32
+        maximumLength: 32
         required: true
         classification: internal
       - id: substance
         type: string
-        maxLength: 64
+        maximumLength: 64
         required: true
         classification: internal
       - id: reporter
         type: string
-        maxLength: 100
+        maximumLength: 100
         required: true
         classification: internal
       - id: quantity
@@ -441,7 +441,7 @@ entities:
   - id: facility-source-contribution
     route: facility-sources
     primaryDataset: facility-registry
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - id: facility
         type: reference
@@ -450,26 +450,26 @@ entities:
         classification: internal
       - id: source-system
         type: string
-        maxLength: 64
+        maximumLength: 64
         required: true
         classification: internal
       - id: source-record-id
         type: string
-        maxLength: 100
+        maximumLength: 100
         required: true
         classification: internal
       - id: source-version
         type: string
-        maxLength: 64
+        maximumLength: 64
         required: true
         classification: internal
       - id: mapping-version
         type: string
-        maxLength: 64
+        maximumLength: 64
         required: true
         classification: internal
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - source-system
           - source-record-id
@@ -540,7 +540,7 @@ entities:
   - id: inspection-document
     route: inspection-documents
     primaryDataset: inspection-registry
-    mutationMode: create_only
+    mutationMode: create-only
     fields:
       - id: inspection
         type: reference
@@ -549,22 +549,22 @@ entities:
         classification: internal
       - id: object-key
         type: string
-        maxLength: 256
+        maximumLength: 256
         required: true
         classification: internal
       - id: object-version
         type: string
-        maxLength: 128
+        maximumLength: 128
         required: true
         classification: internal
       - id: media-type
         type: string
-        maxLength: 100
+        maximumLength: 100
         required: true
         classification: internal
       - id: sha256
         type: string
-        maxLength: 64
+        maximumLength: 64
         required: true
         classification: internal
       - id: replaces
@@ -574,7 +574,7 @@ entities:
 ```
 
 Which document versions support this inspection? The example digest is synthetic, not a hash
-of a supplied PDF. A production writer must calculate and validate the digest; `maxLength`
+of a supplied PDF. A production writer must calculate and validate the digest; `maximumLength`
 alone does not enforce 64 hexadecimal characters.
 
 ```http
@@ -700,60 +700,61 @@ accessProfiles:
     requiredScopes: [registry:examples:read]
     requiredPurposes: [registry-operations]
     permissions:
-      - entity: business-identifier
-        rowBoundaries: unrestricted
-        operations: [list]
-        readableFields:
-          - holder
-          - namespace
-          - value
-          - replaces
-        filterableFields: [namespace, value]
-      - entity: operator-assignment
-        rowBoundaries: unrestricted
-        operations: [list]
-        readableFields:
-          - establishment
-          - business
-          - valid-from
-          - valid-to
-        filterableFields: [establishment]
-      - entity: discharge-declaration
-        rowBoundaries: unrestricted
-        operations: [list]
-        readableFields:
-          - facility
-          - reporting-period
-          - substance
-          - reporter
-          - quantity
-          - unit
-          - correction-of
-        filterableFields: [reporting-period]
-      - entity: facility-source-contribution
-        rowBoundaries: unrestricted
-        operations: [list]
-        readableFields:
-          - facility
-          - source-system
-          - source-record-id
-          - source-version
-          - mapping-version
-        filterableFields: [source-system, source-record-id]
-      - entity: inspection-document
-        rowBoundaries: unrestricted
-        operations: [list]
-        readableFields:
-          - inspection
-          - object-key
-          - object-version
-          - media-type
-          - sha256
-          - replaces
-        filterableFields: [inspection]
+      entities:
+        - entity: business-identifier
+          rowBoundaries: unrestricted
+          operations: [list]
+          readableFields:
+            - holder
+            - namespace
+            - value
+            - replaces
+          filterableFields: [namespace, value]
+        - entity: operator-assignment
+          rowBoundaries: unrestricted
+          operations: [list]
+          readableFields:
+            - establishment
+            - business
+            - valid-from
+            - valid-to
+          filterableFields: [establishment]
+        - entity: discharge-declaration
+          rowBoundaries: unrestricted
+          operations: [list]
+          readableFields:
+            - facility
+            - reporting-period
+            - substance
+            - reporter
+            - quantity
+            - unit
+            - correction-of
+          filterableFields: [reporting-period]
+        - entity: facility-source-contribution
+          rowBoundaries: unrestricted
+          operations: [list]
+          readableFields:
+            - facility
+            - source-system
+            - source-record-id
+            - source-version
+            - mapping-version
+          filterableFields: [source-system, source-record-id]
+        - entity: inspection-document
+          rowBoundaries: unrestricted
+          operations: [list]
+          readableFields:
+            - inspection
+            - object-key
+            - object-version
+            - media-type
+            - sha256
+            - replaces
+          filterableFields: [inspection]
 ```
 
-{/* Evidence: crates/registry-breg/src/contract.rs, AccessProfileSource and AccessPermissionSource;
+{/* Evidence: crates/registry-breg/src/contract.rs, AccessProfileSource and EntityPermissionSource;
     crates/registry-breg/src/access.rs, explain_access();
     crates/registry-breg/src/compiler.rs. */}
 

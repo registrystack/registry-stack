@@ -195,7 +195,7 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
     std::env::remove_var(name);
     let template:TaskTemplate=serde_json::from_value(json!({"id":"summary","version":"1","label":"Prepare summary","eligibleTeams":["team"],"eligibleProfiles":[profile_id],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
     let review_template:TaskTemplate=serde_json::from_value(json!({"id":"review-summary","version":"1","label":"Prepare review summary","eligibleTeams":["team"],"eligibleProfiles":[profile_id],"source":"source","reviewKinds":["external-review"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-review-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
-    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"tasks","version":"1"},"accessProfiles":[{"id":profile_id,"principalClaim":"sub","requiredScopes":[scope],"role":profile_id},{"id":"producer","principalClaim":"sub","requiredScopes":["casework:producer"],"role":"requester"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Test source","requests":[{"entity":"request","queue":"review"}]}],"reviewKinds":[{"id":"external-review","version":"1","purpose":"approval","contextStrategy":"source","stages":[{"id":"review","queue":"review","decidingProfiles":[profile_id],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":false}],"retention":{"terminalDays":30,"accountabilityDays":90},"displaySchema":{"type":"object","additionalProperties":false,"properties":{}},"outcomes":[]}],"reviewProducers":[{"id":"producer","profile":"producer","issuer":ISSUER,"subject":"producer","trustedInitiatorIssuer":ISSUER,"sourceNamespaces":["source"],"kinds":["external-review"],"recoveryDays":30}],"taskTemplates":[template,review_template]})).unwrap();
+    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"project":{"id":"tasks","version":"1"},"accessProfiles":[{"id":profile_id,"principalClaim":"sub","requiredScopes":[scope],"role":profile_id},{"id":"producer","principalClaim":"sub","requiredScopes":["casework:producer"],"role":"requester"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Test source","requests":[{"entity":"request","queue":"review"}]}],"reviewKinds":[{"id":"external-review","version":"1","purpose":"approval","contextStrategy":"source","stages":[{"id":"review","queue":"review","decidingProfiles":[profile_id],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":false}],"retention":{"terminalDays":30,"accountabilityDays":90},"displaySchema":{"type":"object","additionalProperties":false,"properties":{}},"outcomes":[]}],"reviewProducers":[{"id":"producer","profile":"producer","issuer":ISSUER,"subject":"producer","trustedInitiatorIssuer":ISSUER,"sourceNamespaces":["source"],"kinds":["external-review"],"recoveryDays":30}],"taskTemplates":[template,review_template]})).unwrap();
     let template = project.task_templates[0].clone();
     store
         .activate_task_templates(&project.task_templates)
@@ -1216,7 +1216,7 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
     let revocations: i64 = db
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE task_id=$1 AND kind='task_grant_revoked'
+             WHERE task_id=$1 AND kind='task-grant-revoked'
                AND detail->>'grantId'=$2 AND detail->>'reason'='revoked'
                AND actor_ref IS NOT NULL",
             &[&f.review_task, &revoked_id],
@@ -1228,7 +1228,7 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
     let grant = f.audit.reference("grantId", revoked_id);
     let audited = f
         .audit
-        .responses("task_grant_revoked")
+        .responses("task-grant-revoked")
         .into_iter()
         .filter(|record| record["grantPseudonym"] == grant.as_str())
         .count();
@@ -1242,7 +1242,7 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
     let repeated: i64 = db
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE kind='task_grant_revoked' AND detail->>'grantId'=$1",
+             WHERE kind='task-grant-revoked' AND detail->>'grantId'=$1",
             &[&revoked_id],
         )
         .await
@@ -1354,7 +1354,7 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
     let eligibility_history: i64 = db
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE task_id=$1 AND kind='task_grant_invalidated'
+             WHERE task_id=$1 AND kind='task-grant-invalidated'
                AND detail->>'grantId'=$2 AND detail->>'reason'='eligibility'
                AND actor_ref IS NULL",
             &[&f.review_task, &first_id],
@@ -1369,7 +1369,7 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
     let grant = f.audit.reference("grantId", first_id);
     let eligibility_audited = f
         .audit
-        .responses("task_grant_invalidated")
+        .responses("task-grant-invalidated")
         .into_iter()
         .filter(|record| {
             record["grantPseudonym"] == grant.as_str()
@@ -1390,7 +1390,7 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
     let eligibility_repeat: i64 = db
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE kind='task_grant_invalidated' AND detail->>'grantId'=$1",
+             WHERE kind='task-grant-invalidated' AND detail->>'grantId'=$1",
             &[&first_id],
         )
         .await
@@ -1557,7 +1557,7 @@ async fn retiring_and_reintroducing_a_review_template_cannot_revive_its_grant() 
     let history_events: i64 = database
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE task_id=$1 AND kind='task_grant_invalidated'
+             WHERE task_id=$1 AND kind='task-grant-invalidated'
                AND detail->>'grantId'=$2 AND detail->>'reason'='template'
                AND actor_ref IS NULL",
             &[&f.review_task, &grant_id.to_string()],
@@ -1569,7 +1569,7 @@ async fn retiring_and_reintroducing_a_review_template_cannot_revive_its_grant() 
     let grant = f.audit.reference("grantId", &grant_id.to_string());
     let audit_events = f
         .audit
-        .responses("task_grant_invalidated")
+        .responses("task-grant-invalidated")
         .into_iter()
         .filter(|record| {
             record["grantPseudonym"] == grant.as_str()
@@ -1607,7 +1607,7 @@ async fn review_task_grant_approval_reaches_history_and_audit() {
     let approvals: i64 = db
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE task_id=$1 AND kind='task_grant_approved'
+             WHERE task_id=$1 AND kind='task-grant-approved'
                AND detail->>'grantId'=$2 AND actor_ref IS NOT NULL",
             &[&f.review_task, &grant_id],
         )
@@ -1622,7 +1622,7 @@ async fn review_task_grant_approval_reaches_history_and_audit() {
     let approver = f.audit.principal(ISSUER, "human");
     let audited = f
         .audit
-        .responses("task_grant_approved")
+        .responses("task-grant-approved")
         .into_iter()
         .filter(|record| {
             record["grantPseudonym"] == grant.as_str()
@@ -1649,7 +1649,7 @@ async fn review_task_grant_approval_reaches_history_and_audit() {
     let replays: i64 = db
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE kind='task_grant_approved' AND detail->>'grantId'=$1",
+             WHERE kind='task-grant-approved' AND detail->>'grantId'=$1",
             &[&grant_id],
         )
         .await
@@ -1855,7 +1855,7 @@ async fn review_task_grants_do_not_survive_an_approver_profile_role_change() {
     let invalidations: i64 = db
         .query_one(
             "SELECT count(*) FROM casework_review_history
-             WHERE task_id=$1 AND kind='task_grant_invalidated'
+             WHERE task_id=$1 AND kind='task-grant-invalidated'
                AND detail->>'grantId'=$2 AND detail->>'reason'='eligibility'",
             &[&f.review_task, &grant_id],
         )

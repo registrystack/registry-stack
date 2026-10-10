@@ -46,7 +46,7 @@ use zeroize::Zeroizing;
 const PACKAGE: &str = "read-cancellation-registry";
 const PURPOSE: &str = "case-review";
 const RECORD_ID: &str = "00000000-0000-4000-8000-0000000000c1";
-/// The runtime pool's `maxSize`.
+/// The runtime pool's `maximumConnections`.
 const POOL_SIZE: usize = 2;
 /// Far below every slow statement the faults run: a record read sleeps 30
 /// seconds, and a history read outruns its 2 second statement budget.
@@ -119,7 +119,7 @@ async fn timed_out_reads_cancel_their_statement_and_stay_within_the_pool_bound()
         );
         assert!(
             peak <= POOL_SIZE as i64,
-            "abandoned {route} reads opened {peak} runtime sessions, beyond the pool maxSize \
+            "abandoned {route} reads opened {peak} runtime sessions, beyond the pool maximumConnections \
              of {POOL_SIZE}"
         );
     }
@@ -434,16 +434,19 @@ fn claims() -> VerifiedRequestClaims {
 
 fn compiled_registry() -> CompiledRegistry {
     let source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":PACKAGE,"version":"1","defaultLanguage":"en","canonicalBaseIri":"https://registry.example.test"},
         "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"restricted",
-            "fields":[{"id":"subject","type":"string","minLength":1,"maxLength":128,"required":true,"classification":"restricted"},
-                {"id":"label","type":"string","maxLength":128,"required":true,"classification":"restricted"}],
+            "fields":[{"id":"subject","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"restricted"},
+                {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"restricted"}],
             "accessLog":{"subjectField":"subject"}}],
         "accessProfiles":[
-            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":[
-                {"entity":"entry","operations":["get","list","snapshot","revisions"],"readableFields":["label"],
-                    "revisionAccess":true,"rowBoundaries":"unrestricted"}]}
+            {"id":"reader","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","requiredPurposes":[PURPOSE],"permissions":{
+                "entities":[
+                    {"entity":"entry","operations":["get","list","snapshot","revisions"],"readableFields":["label"],
+                        "revisionAccess":true,"rowBoundaries":"unrestricted"}
+                ]
+            }}
         ]
     });
     compile_project(

@@ -4,9 +4,9 @@
 # the reasoning behind these choices. canonicalBaseIri below is a
 # reserved example.org name standing in for your registry's real
 # identity; replace it before you build a production package.
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: seed-lots
   canonicalBaseIri: https://seed-lots.example.org
   version: 0.1.0
@@ -84,15 +84,15 @@ entities:
         required: true
         classification: restricted
         apiName: localIdentifier
-        minLength: 1
-        maxLength: 160
+        minimumLength: 1
+        maximumLength: 160
       - id: lot-number
         type: string
         required: true
         classification: restricted
         apiName: lotNumber
-        minLength: 1
-        maxLength: 160
+        minimumLength: 1
+        maximumLength: 160
       - id: quantity-kg
         type: decimal
         required: true
@@ -121,10 +121,10 @@ entities:
       requiredFor:
         - patch
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - local-identifier
-      - kind: unique
+      - type: unique
         fields:
           - lot-number
   - id: plant-variety
@@ -138,17 +138,17 @@ entities:
         required: true
         classification: restricted
         apiName: localIdentifier
-        minLength: 1
-        maxLength: 160
+        minimumLength: 1
+        maximumLength: 160
       - id: variety-denomination
         type: string
         required: true
         classification: restricted
         apiName: varietyDenomination
-        minLength: 1
-        maxLength: 160
+        minimumLength: 1
+        maximumLength: 160
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - local-identifier
   - id: lot-number-correction
@@ -167,21 +167,21 @@ entities:
         required: true
         classification: restricted
         apiName: lotNumber
-        minLength: 1
-        maxLength: 160
+        minimumLength: 1
+        maximumLength: 160
       - id: reason
         type: string
         required: true
         classification: restricted
-        minLength: 1
-        maxLength: 500
+        minimumLength: 1
+        maximumLength: 500
       - id: supporting-reference
         type: string
         required: true
         classification: restricted
         apiName: supportingReference
-        minLength: 1
-        maxLength: 500
+        minimumLength: 1
+        maximumLength: 500
     changeRequest:
       effects:
         - target:
@@ -191,12 +191,13 @@ entities:
             lot-number:
               fromField: lot-number
       review:
+        type: required
         authority: casework
         policyId: lot-number-correction
       onApproved:
         mode: manual
       retention:
-        mode: operator_erase
+        mode: operator-erase
 accessProfiles:
   - id: reader
     default: false
@@ -206,26 +207,27 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: seed-lot
-        operations:
-          - get
-          - list
-        readableFields:
-          - local-identifier
-          - lot-number
-          - quantity-kg
-          - produced-on
-          - variety
-          - source-lot
-        rowBoundaries: unrestricted
-      - entity: plant-variety
-        operations:
-          - get
-          - list
-        readableFields:
-          - local-identifier
-          - variety-denomination
-        rowBoundaries: unrestricted
+      entities:
+        - entity: seed-lot
+          operations:
+            - get
+            - list
+          readableFields:
+            - local-identifier
+            - lot-number
+            - quantity-kg
+            - produced-on
+            - variety
+            - source-lot
+          rowBoundaries: unrestricted
+        - entity: plant-variety
+          operations:
+            - get
+            - list
+          readableFields:
+            - local-identifier
+            - variety-denomination
+          rowBoundaries: unrestricted
   - id: editor
     default: true
     principalClaim: registry_principal
@@ -234,66 +236,67 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: seed-lot
-        operations:
-          - get
-          - list
-          - revisions
-          - create
-        readableFields:
-          - local-identifier
-          - lot-number
-          - quantity-kg
-          - produced-on
-          - variety
-          - source-lot
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        writableFields:
-          - local-identifier
-          - lot-number
-          - quantity-kg
-          - produced-on
-          - variety
-          - source-lot
-      - entity: plant-variety
-        operations:
-          - get
-          - list
-          - revisions
-          - create
-          - patch
-        readableFields:
-          - local-identifier
-          - variety-denomination
-        rowBoundaries: unrestricted
-        revisionAccess: true
-        writableFields:
-          - local-identifier
-          - variety-denomination
-      - entity: lot-number-correction
-        operations:
-          - create
-          - get
-          - patch
-          - submit_request
-          - revise_request
-          - cancel_request
-        readableFields:
-          - record
-          - lot-number
-          - reason
-          - supporting-reference
-        writableFields:
-          - record
-          - lot-number
-          - reason
-          - supporting-reference
-        requestVisibility: owner
-        rowBoundaries: unrestricted
-        readableRequestFields:
-          - reason
-          - review_state
+      entities:
+        - entity: seed-lot
+          operations:
+            - get
+            - list
+            - revisions
+            - create
+          readableFields:
+            - local-identifier
+            - lot-number
+            - quantity-kg
+            - produced-on
+            - variety
+            - source-lot
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          writableFields:
+            - local-identifier
+            - lot-number
+            - quantity-kg
+            - produced-on
+            - variety
+            - source-lot
+        - entity: plant-variety
+          operations:
+            - get
+            - list
+            - revisions
+            - create
+            - patch
+          readableFields:
+            - local-identifier
+            - variety-denomination
+          rowBoundaries: unrestricted
+          revisionAccess: true
+          writableFields:
+            - local-identifier
+            - variety-denomination
+        - entity: lot-number-correction
+          operations:
+            - create
+            - get
+            - patch
+            - submit-request
+            - revise-request
+            - cancel-request
+          readableFields:
+            - record
+            - lot-number
+            - reason
+            - supporting-reference
+          writableFields:
+            - record
+            - lot-number
+            - reason
+            - supporting-reference
+          requestVisibility: owner
+          rowBoundaries: unrestricted
+          readableRequestFields:
+            - reason
+            - review-state
   - id: reviewer
     default: false
     principalClaim: registry_principal
@@ -302,43 +305,44 @@ accessProfiles:
     requiredPurposes:
       - starter-learning
     permissions:
-      - entity: seed-lot
-        operations:
-          - get
-          - list
-          - revisions
-        readableFields:
-          - local-identifier
-          - lot-number
-          - quantity-kg
-          - produced-on
-          - variety
-          - source-lot
-        rowBoundaries: unrestricted
-        revisionAccess: true
-      - entity: plant-variety
-        operations:
-          - get
-          - list
-          - revisions
-        readableFields:
-          - local-identifier
-          - variety-denomination
-        rowBoundaries: unrestricted
-        revisionAccess: true
-      - entity: lot-number-correction
-        operations:
-          - get
-          - apply_request
-        readableFields:
-          - record
-          - lot-number
-          - reason
-          - supporting-reference
-        rowBoundaries: unrestricted
-        applyTargets:
-          - entity: seed-lot
-            rowBoundaries: unrestricted
-        readableRequestFields:
-          - reason
-          - review_state
+      entities:
+        - entity: seed-lot
+          operations:
+            - get
+            - list
+            - revisions
+          readableFields:
+            - local-identifier
+            - lot-number
+            - quantity-kg
+            - produced-on
+            - variety
+            - source-lot
+          rowBoundaries: unrestricted
+          revisionAccess: true
+        - entity: plant-variety
+          operations:
+            - get
+            - list
+            - revisions
+          readableFields:
+            - local-identifier
+            - variety-denomination
+          rowBoundaries: unrestricted
+          revisionAccess: true
+        - entity: lot-number-correction
+          operations:
+            - get
+            - apply-request
+          readableFields:
+            - record
+            - lot-number
+            - reason
+            - supporting-reference
+          rowBoundaries: unrestricted
+          applyTargets:
+            - entity: seed-lot
+              rowBoundaries: unrestricted
+          readableRequestFields:
+            - reason
+            - review-state

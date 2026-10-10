@@ -50,35 +50,35 @@ const PACKAGE_REVISION: &str = "package-import-1";
 const SUCCESSOR_REVISION: &str = "package-import-2";
 
 const FIXTURE: &str = r#"{
-  "apiVersion":"registry.registrystack.org/v1alpha1",
-  "kind":"RegistryProject",
-  "registry":{"id":"import-authority-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind":"BRegProject",
+  "project":{"id":"import-authority-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
   "entities":[{
     "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
-    "constraints":[{"kind":"unique","fields":["label"]}],
+    "constraints":[{"type":"unique","fields":["label"]}],
     "fields":[
-      {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-      {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"}
+      {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+      {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}
     ]
   },{
     "id":"gadget","primaryDataset":"test-dataset","route":"gadgets","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "fields":[
-      {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-      {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"}
+      {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+      {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}
     ]
   },{
     "id":"ledger","primaryDataset":"test-dataset","route":"ledgers","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
     "fields":[
-      {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-      {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"}
+      {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+      {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"}
     ]
   }],
   "accessProfiles":[{
     "id":"loader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-    "permissions":[{
+    "permissions":{"entities":[{
       "entity":"widget","operations":["import"],
       "readableFields":["jurisdiction","label"],"writableFields":["jurisdiction","label"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -90,14 +90,14 @@ const FIXTURE: &str = r#"{
       "entity":"ledger","operations":["create","batch"],
       "readableFields":["jurisdiction","label"],"writableFields":["jurisdiction","label"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-    }]
+    }]}
   },{
     "id":"second-loader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
-    "permissions":[{
+    "permissions":{"entities":[{
       "entity":"widget","operations":["import"],
       "readableFields":["jurisdiction","label"],"writableFields":["jurisdiction","label"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-    }]
+    }]}
   }]
 }"#;
 

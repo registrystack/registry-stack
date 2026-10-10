@@ -12,53 +12,121 @@
         "form": {
           "oneOf": [
             {
-              "enum": [
-                "boolean",
-                "integer",
-                "string",
-                "date-bucket",
-                "time-bucket",
-                "entity-reference",
-                "structured"
-              ]
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "boolean"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
             },
             {
               "additionalProperties": false,
               "properties": {
-                "list": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "items": {
-                      "enum": [
-                        "string",
-                        "entity-reference"
-                      ]
-                    },
-                    "maximumItems": {
-                      "maximum": 64,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "minimumItems": {
-                      "maximum": 64,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "unique": {
-                      "const": true
-                    }
-                  },
-                  "required": [
-                    "items",
-                    "minimumItems",
-                    "maximumItems",
-                    "unique"
-                  ],
-                  "type": "object"
+                "type": {
+                  "const": "integer"
                 }
               },
               "required": [
-                "list"
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "date-bucket"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "time-bucket"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "entity-reference"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "structured"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "enum": [
+                    "string",
+                    "entity-reference"
+                  ]
+                },
+                "maximumItems": {
+                  "maximum": 64,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "minimumItems": {
+                  "maximum": 64,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "list"
+                },
+                "unique": {
+                  "const": true
+                }
+              },
+              "required": [
+                "type",
+                "items",
+                "minimumItems",
+                "maximumItems",
+                "unique"
               ],
               "type": "object"
             }
@@ -385,16 +453,16 @@
       "type": "array",
       "uniqueItems": true
     },
-    "holderBoundBatchMaxSize": {
-      "description": "The effective deployment ceiling for one holder-bound batch. A protocol adapter may advertise no larger batch than this value.",
-      "maximum": 16,
-      "minimum": 1,
-      "type": "integer"
-    },
     "issuedBy": {
       "format": "uri",
       "maxLength": 512,
       "type": "string"
+    },
+    "maximumHolderBoundBatchSize": {
+      "description": "The effective deployment ceiling for one holder-bound batch. A protocol adapter may advertise no larger batch than this value.",
+      "maximum": 16,
+      "minimum": 1,
+      "type": "integer"
     },
     "providedBy": {
       "format": "uri",
@@ -411,7 +479,7 @@
     "audience",
     "issuedBy",
     "providedBy",
-    "holderBoundBatchMaxSize",
+    "maximumHolderBoundBatchSize",
     "definitions"
   ],
   "title": "Requester-scoped Evidence definitions Version 1",

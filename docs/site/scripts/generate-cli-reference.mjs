@@ -125,32 +125,32 @@ function validateConstraint(constraint, label) {
   exactKeys(constraint, new Set(['kind', 'when', 'arguments']), label);
   if (
     ![
-      'required_exactly_one',
-      'required_one_or_more',
-      'requires_all',
-      'mutually_exclusive',
+      'required-exactly-one',
+      'required-one-or-more',
+      'requires-all',
+      'mutually-exclusive',
     ].includes(
       constraint.kind,
     )
   ) {
     throw new Error(
-      `${label}.kind must be required_exactly_one, required_one_or_more, requires_all, or mutually_exclusive`,
+      `${label}.kind must be required-exactly-one, required-one-or-more, requires-all, or mutually-exclusive`,
     );
   }
   if (constraint.when !== null && typeof constraint.when !== 'string') {
     throw new Error(`${label}.when must be a string or null`);
   }
-  if (constraint.kind.startsWith('required_') && constraint.when !== null) {
+  if (constraint.kind.startsWith('required-') && constraint.when !== null) {
     throw new Error(`${label}.when must be null for required groups`);
   }
-  if (constraint.kind === 'requires_all') {
+  if (constraint.kind === 'requires-all') {
     nonempty(constraint.when, `${label}.when`);
   }
   stringArray(constraint.arguments, `${label}.arguments`);
   if (constraint.arguments.length === 0) {
     throw new Error(`${label}.arguments must not be empty`);
   }
-  if (constraint.kind === 'mutually_exclusive') {
+  if (constraint.kind === 'mutually-exclusive') {
     if (constraint.when !== null) {
       throw new Error(`${label}.when must be null for mutually exclusive arguments`);
     }
@@ -494,18 +494,18 @@ ${rows.map((row) => `| ${row} |`).join('\n')}
 function constraintTable(constraints) {
   if (constraints.length === 0) return '';
   const rows = constraints.map((constraint) => {
-    if (constraint.kind === 'mutually_exclusive') {
+    if (constraint.kind === 'mutually-exclusive') {
       const [left, right] = constraint.arguments.map(inlineCode);
       return `| Command invocation | ${left} and ${right} cannot be used together. |`;
     }
-    if (constraint.kind === 'required_exactly_one') {
+    if (constraint.kind === 'required-exactly-one') {
       const requirement =
         constraint.arguments.length === 1
           ? `${inlineCode(constraint.arguments[0])} is required.`
           : `Exactly one of ${values(constraint.arguments)} is required.`;
       return `| Command invocation | ${requirement} |`;
     }
-    if (constraint.kind === 'required_one_or_more') {
+    if (constraint.kind === 'required-one-or-more') {
       const requirement =
         constraint.arguments.length === 1
           ? `${inlineCode(constraint.arguments[0])} is required.`

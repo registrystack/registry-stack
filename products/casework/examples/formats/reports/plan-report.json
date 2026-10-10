@@ -2,7 +2,7 @@
   "ok": false,
   "command": "plan",
   "status": "domain-refusal",
-  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "apiVersion": "id.registrystack.org/formats/casework/plan-report/v1alpha3",
   "diagnostics": [
     {
       "code": "platform.runtime-config.path",
@@ -15,5 +15,5 @@
       "suggestedAction": "Give the absolute path of the runtime configuration file, without . or .. components."
     }
   ],
-  "kind": "PlanReport"
+  "kind": "CaseworkPlanReport"
 }

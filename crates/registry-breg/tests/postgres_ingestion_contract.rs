@@ -533,9 +533,9 @@ fn claims_with(
 /// is a parameter so one variant can sit at the protocol's highest.
 fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegistry> {
     let fixture = json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
             "id": "ingestion-contract-registry", "version": "1", "defaultLanguage": "en",
             "canonicalBaseIri": "https://contract.example.test"
         },
@@ -543,15 +543,15 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
             "id": "widget", "primaryDataset": "test-dataset", "route": "widgets",
             "mutationMode": "mutable", "classification": "public",
             "batch": {"maximumItems": 3, "maximumBytes": batch_maximum_bytes},
-            "constraints": [{"kind": "unique", "fields": ["label"]}],
+            "constraints": [{"type": "unique", "fields": ["label"]}],
             "fields": [
-                {"id": "jurisdiction", "type": "string", "maxLength": 32,
+                {"id": "jurisdiction", "type": "string", "maximumLength": 32,
                  "required": true, "classification": "public"},
-                {"id": "label", "type": "string", "maxLength": 128,
+                {"id": "label", "type": "string", "maximumLength": 128,
                  "required": true, "classification": "public"},
                 {"id": "quantity", "type": "int64", "required": true,
                  "classification": "public"},
-                {"id": "payload", "type": "text", "maxLength": 3_000_000,
+                {"id": "payload", "type": "text", "maximumLength": 3_000_000,
                  "required": false, "classification": "public"}
             ]
         }],
@@ -559,22 +559,22 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
             {
                 "id": "operator", "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "requiredPurposes": ["case-management"],
-                "permissions": [{
+                "permissions": {"entities": [{
                     "entity": "widget", "operations": ["create", "get", "patch", "batch"],
                     "readableFields": ["jurisdiction", "label", "quantity", "payload"],
                     "writableFields": ["jurisdiction", "label", "quantity", "payload"],
                     "rowBoundaries": [
                         {"field": "jurisdiction", "claim": "jurisdiction", "operator": "equals"}
                     ]
-                }]
+                }]}
             },
             {
                 "id": "label-reader", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
-                "permissions": [{
+                "permissions": {"entities": [{
                     "entity": "widget", "operations": ["get", "list"],
                     "readableFields": ["label"],
                     "rowBoundaries": "unrestricted"
-                }]
+                }]}
             }
         ]
     });

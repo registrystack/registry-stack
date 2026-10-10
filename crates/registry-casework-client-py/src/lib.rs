@@ -118,7 +118,7 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
             ..MappedError::default()
         },
         RustClientError::InvalidRequest { .. } => MappedError {
-            kind: "invalid_request",
+            kind: "invalid-request",
             message: "Casework client arguments are invalid".to_owned(),
             ..MappedError::default()
         },
@@ -175,9 +175,9 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
             mapped.status = Some(status);
             mapped.trace_id = trace_id;
             mapped.protocol_failure = Some(match failure {
-                CaseworkProtocolFailure::HeaderBounds => "header_bounds",
-                CaseworkProtocolFailure::TraceContext => "trace_context",
-                CaseworkProtocolFailure::MediaType => "media_type",
+                CaseworkProtocolFailure::HeaderBounds => "header-bounds",
+                CaseworkProtocolFailure::TraceContext => "trace-context",
+                CaseworkProtocolFailure::MediaType => "media-type",
                 CaseworkProtocolFailure::Body => "body",
                 CaseworkProtocolFailure::Problem => "problem",
                 CaseworkProtocolFailure::Status => "status",
@@ -195,14 +195,14 @@ fn input<T: DeserializeOwned>(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyRes
         let _ = error.message();
         binding_error(
             py,
-            "invalid_request",
+            "invalid-request",
             "Casework client arguments are invalid",
         )
     })?;
     serde_json::from_value(value).map_err(|_| {
         binding_error(
             py,
-            "invalid_request",
+            "invalid-request",
             "Casework client arguments are invalid",
         )
     })
@@ -220,11 +220,11 @@ fn optional_input<T: DeserializeOwned + Default>(
 
 fn bearer(py: Python<'_>, value: &str) -> PyResult<BearerToken> {
     BearerToken::new(value.to_owned())
-        .map_err(|_| binding_error(py, "invalid_request", "the bearer token is invalid"))
+        .map_err(|_| binding_error(py, "invalid-request", "the bearer token is invalid"))
 }
 
 fn uuid(py: Python<'_>, value: &str) -> PyResult<Uuid> {
-    Uuid::parse_str(value).map_err(|_| binding_error(py, "invalid_request", "the UUID is invalid"))
+    Uuid::parse_str(value).map_err(|_| binding_error(py, "invalid-request", "the UUID is invalid"))
 }
 
 /// The retry ceiling as a Python integer. Only an `int` in the `u8` range
@@ -359,20 +359,20 @@ const VALIDATION_REASONS: [casework_client_sdk::ReviewValidationReason; 14] = {
 fn validation_reason(value: casework_client_sdk::ReviewValidationReason) -> &'static str {
     use casework_client_sdk::ReviewValidationReason;
     match value {
-        ReviewValidationReason::KindNotAllowed => "kind_not_allowed",
-        ReviewValidationReason::ReferenceInvalid => "reference_invalid",
-        ReviewValidationReason::ObjectRequired => "object_required",
-        ReviewValidationReason::MaximumBytesExceeded => "maximum_bytes_exceeded",
-        ReviewValidationReason::MaximumDepthExceeded => "maximum_depth_exceeded",
-        ReviewValidationReason::SchemaMismatch => "schema_mismatch",
-        ReviewValidationReason::OutcomeNotDeclared => "outcome_not_declared",
-        ReviewValidationReason::ReasonRequired => "reason_required",
-        ReviewValidationReason::TextInvalid => "text_invalid",
-        ReviewValidationReason::ResultNotDeclared => "result_not_declared",
-        ReviewValidationReason::ResultRequired => "result_required",
-        ReviewValidationReason::FieldNotDeclared => "field_not_declared",
-        ReviewValidationReason::ConstraintInvalid => "constraint_invalid",
-        ReviewValidationReason::ConstraintViolated => "constraint_violated",
+        ReviewValidationReason::KindNotAllowed => "kind-not-allowed",
+        ReviewValidationReason::ReferenceInvalid => "reference-invalid",
+        ReviewValidationReason::ObjectRequired => "object-required",
+        ReviewValidationReason::MaximumBytesExceeded => "maximum-bytes-exceeded",
+        ReviewValidationReason::MaximumDepthExceeded => "maximum-depth-exceeded",
+        ReviewValidationReason::SchemaMismatch => "schema-mismatch",
+        ReviewValidationReason::OutcomeNotDeclared => "outcome-not-declared",
+        ReviewValidationReason::ReasonRequired => "reason-required",
+        ReviewValidationReason::TextInvalid => "text-invalid",
+        ReviewValidationReason::ResultNotDeclared => "result-not-declared",
+        ReviewValidationReason::ResultRequired => "result-required",
+        ReviewValidationReason::FieldNotDeclared => "field-not-declared",
+        ReviewValidationReason::ConstraintInvalid => "constraint-invalid",
+        ReviewValidationReason::ConstraintViolated => "constraint-violated",
     }
 }
 
@@ -464,7 +464,7 @@ impl CaseworkClient {
         let token = bearer(py, token)?;
         let request: ReviewCreateRequest = input(py, request)?;
         let digest = SubmissionDigest::parse(expected_submission_digest).map_err(|_| {
-            binding_error(py, "invalid_request", "the submission digest is invalid")
+            binding_error(py, "invalid-request", "the submission digest is invalid")
         })?;
         complete(
             py,

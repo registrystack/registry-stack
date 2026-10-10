@@ -126,7 +126,7 @@ fn examples() -> Vec<(&'static str, Vec<&'static str>)> {
         ),
         (
             "simulation-report",
-            vec!["simulate", MULTI_STAGE, "--fixture", SIMULATION],
+            vec!["simulate", MULTI_STAGE, "--simulation", SIMULATION],
         ),
         (
             "source-add-report",

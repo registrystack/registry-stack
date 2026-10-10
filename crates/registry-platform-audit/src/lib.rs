@@ -425,7 +425,7 @@ pub mod redact {
             self.try_redact_query(query).unwrap_or_else(|error| {
                 json!({
                     "_error": {
-                        "code": "invalid_query_encoding",
+                        "code": "invalid-query-encoding",
                         "detail": error.to_string(),
                     }
                 })
@@ -853,7 +853,7 @@ mod tests {
         assert_eq!(err, redact::QueryRedactionError::InvalidUtf8);
 
         let redacted = redactor.redact_query("email=%FF");
-        assert_eq!(redacted["_error"]["code"], "invalid_query_encoding");
+        assert_eq!(redacted["_error"]["code"], "invalid-query-encoding");
     }
 
     #[test]

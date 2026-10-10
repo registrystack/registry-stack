@@ -1,3 +1,5 @@
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: facility-core
 version: 0.1.0
 extendEntities:

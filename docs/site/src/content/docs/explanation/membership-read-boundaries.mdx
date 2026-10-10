@@ -37,18 +37,19 @@ boundary joins them inside the facility's read grant:
 
 ```yaml
 permissions:
-  - entity: facility
-    rowBoundaries: unrestricted
-    operations: [get, list, lookup, snapshot, revisions]
-    readableFields: [label]
-    allowCount: true
-    revisionAccess: true
-    membershipBoundaries:
-      - field: organization
-        membershipEntity: membership
-        membershipKeyField: organization
-        principalField: principal
-        activeField: active
+  entities:
+    - entity: facility
+      rowBoundaries: unrestricted
+      operations: [get, list, lookup, snapshot, revisions]
+      readableFields: [label]
+      allowCount: true
+      revisionAccess: true
+      membershipBoundaries:
+        - field: organization
+          membershipEntity: membership
+          membershipKeyField: organization
+          principalField: principal
+          activeField: active
 ```
 
 The two organization fields must be stored references to the same entity, `principalField` must be a
@@ -69,7 +70,6 @@ The refusals keep a membership boundary from being read as broader authority tha
 
 | Combination | Diagnostic |
 | --- | --- |
-| A profile without a verified `principalClaim` | `breg.access.membership-authentication` |
 | Writes, actions, reviewed changes, or request lifecycle grants | `breg.access.membership-read-only` |
 | A spatial bbox permission, which uses a separate database authority role | `breg.access.membership-spatial-unsupported` |
 | A membership entity with a change-request lifecycle | `breg.access.membership-request-unsupported` |
@@ -142,7 +142,7 @@ registry recorded them. A withdrawal whose capped time is at or after a give's e
 on a tie the withdrawal wins. So a future-dated give cannot outrank a withdrawal recorded after it,
 and a backdated give recorded after a withdrawal is superseded by it: a renewed give needs a
 current start.
-A give ends at the earlier of its `until` and its capped time plus the record's `maxDuration`.
+A give ends at the earlier of its `until` and its capped time plus the record's `maximumDurationDays` days.
 Expiry is computed at read time, and a withdrawal takes effect for transactions that start after it
 commits, with no token change, cache flush, or restart.
 

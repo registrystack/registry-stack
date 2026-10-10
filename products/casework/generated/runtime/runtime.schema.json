@@ -33,7 +33,7 @@
           "pattern": "^/+(?:(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+)?)/+)*(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+))$",
           "type": "string"
         },
-        "retainDays": {
+        "retentionDays": {
           "description": "Delete rotated files older than this many days. Only allowed with\n`file`; omitted, rotated files are kept 90 days.",
           "format": "uint32",
           "maximum": 36500,
@@ -66,7 +66,7 @@
             },
             {
               "required": [
-                "retainDays"
+                "retentionDays"
               ]
             }
           ]
@@ -105,6 +105,13 @@
       "additionalProperties": false,
       "description": "Launcher-owned BReg connection material for one authored Casework source.",
       "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 30000,
+          "format": "uint64",
+          "maximum": 300000,
+          "minimum": 1,
+          "type": "integer"
+        },
         "baseUrl": {
           "$ref": "#/$defs/Url"
         },
@@ -136,13 +143,6 @@
           "format": "uint64",
           "maximum": 3600000,
           "minimum": 1000,
-          "type": "integer"
-        },
-        "requestTimeoutMilliseconds": {
-          "default": 30000,
-          "format": "uint64",
-          "maximum": 300000,
-          "minimum": 1,
           "type": "integer"
         },
         "resource": {
@@ -274,13 +274,13 @@
           "additionalProperties": false,
           "description": "Read `jwks_uri` from the issuer's OpenID Connect discovery document.",
           "properties": {
-            "kind": {
+            "type": {
               "const": "discovery",
               "type": "string"
             }
           },
           "required": [
-            "kind"
+            "type"
           ],
           "type": "object"
         },
@@ -288,7 +288,7 @@
           "additionalProperties": false,
           "description": "Fetch the key set from this absolute `https` URI, skipping discovery.",
           "properties": {
-            "kind": {
+            "type": {
               "const": "uri",
               "type": "string"
             },
@@ -297,7 +297,7 @@
             }
           },
           "required": [
-            "kind",
+            "type",
             "uri"
           ],
           "type": "object"
@@ -309,13 +309,13 @@
             "documentRef": {
               "$ref": "#/$defs/SecretReference"
             },
-            "kind": {
+            "type": {
               "const": "static",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "documentRef"
           ],
           "type": "object"
@@ -336,6 +336,11 @@
       ],
       "type": "string"
     },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "MetricsListenerConfig": {
       "additionalProperties": false,
       "description": "Operator-private listener for `/metrics` and `/version`.\n\nIt is separate from the API listener so the counters and the active\npackage digest never appear on the surface the public contract describes.",
@@ -349,17 +354,32 @@
       ],
       "type": "object"
     },
+    "OidcAllowedClients": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Admit a token from every client the issuer verifies.",
+          "type": "string"
+        },
+        {
+          "description": "Admit a token only from a listed client.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ],
+      "description": "How `allowedClients` is written (CFG-EMPTY-2): the keyword `unrestricted`,\nor a list of at least one client. An empty list is refused, because it\nreads as both \"none\" and \"any\"."
+    },
     "OidcConfig": {
       "additionalProperties": false,
       "description": "The access tokens this runtime accepts: the issuer and its keys, the\nclients admitted, the scope claim, and the claim that marks a human actor.",
       "properties": {
         "allowedClients": {
-          "default": [],
-          "description": "Client identifiers whose access tokens are admitted. A runtime decides\nwhether an empty list is acceptable in production.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+          "$ref": "#/$defs/OidcAllowedClients",
+          "description": "The OAuth clients whose access tokens are admitted: `unrestricted` to\nadmit a token from every client the issuer verifies, or a list of at\nleast one distinct client. A runtime decides whether `unrestricted`\nis acceptable in production."
         },
         "assertionIssuers": {
           "additionalProperties": {
@@ -369,10 +389,11 @@
               "type": "string"
             },
             "maxItems": 16,
+            "minItems": 1,
             "type": "array",
             "uniqueItems": true
           },
-          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client. Once a client is listed, a\ntoken it exchanged is accepted only for one of that client's declared\nauthorities.",
+          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client, each with at least one\nauthority. Once a client is listed, a token it exchanged is accepted\nonly for one of that client's declared authorities, and a client that\nis not listed may exchange from no authority.",
           "maxProperties": 64,
           "minProperties": 1,
           "propertyNames": {
@@ -397,7 +418,7 @@
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
           "default": {
-            "kind": "discovery"
+            "type": "discovery"
           },
           "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
         },
@@ -408,7 +429,8 @@
       },
       "required": [
         "issuer",
-        "audience"
+        "audience",
+        "allowedClients"
       ],
       "type": "object"
     },
@@ -467,6 +489,13 @@
         }
       ],
       "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 5000,
+          "format": "uint64",
+          "maximum": 30000,
+          "minimum": 100,
+          "type": "integer"
+        },
         "auth": {
           "$ref": "#/$defs/ReviewCompletionAuthConfig"
         },
@@ -481,18 +510,11 @@
           "minimum": 1,
           "type": "integer"
         },
-        "retrySeconds": {
+        "retryDelaySeconds": {
           "default": 30,
           "format": "uint64",
           "maximum": 86400,
           "minimum": 1,
-          "type": "integer"
-        },
-        "timeoutMilliseconds": {
-          "default": 5000,
-          "format": "uint64",
-          "maximum": 30000,
-          "minimum": 100,
           "type": "integer"
         },
         "url": {
@@ -585,6 +607,9 @@
             "type": "string"
           },
           "description": "Service client IDs mapped to their one protected resource audience.",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
           "type": "object"
         }
       },
@@ -605,10 +630,10 @@
       "type": "string"
     },
     "Url": {
-      "description": "An absolute http or https URL with a host and no user information.",
+      "description": "An absolute http or https URL with a host, no user information, and no whitespace or control character.",
       "format": "uri",
       "maxLength": 2048,
-      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
     }
   },
@@ -713,7 +738,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/casework-runtime/v1alpha1",
+      "const": "id.registrystack.org/formats/casework/runtime/v1alpha1",
       "type": "string"
     },
     "audit": {
@@ -745,6 +770,10 @@
       "additionalProperties": {
         "$ref": "#/$defs/ReviewCompletionRuntimeConfig"
       },
+      "description": "Completion destinations keyed by the destination id a review producer\nnames in `casework.yaml`, kept as written.",
+      "propertyNames": {
+        "$ref": "#/$defs/ExternalId"
+      },
       "type": "object"
     },
     "secretProviders": {
@@ -755,8 +784,9 @@
         "$ref": "#/$defs/BregBinding"
       },
       "default": {},
+      "description": "Source bindings keyed by the source id `casework.yaml` declares.",
       "propertyNames": {
-        "minLength": 1
+        "$ref": "#/$defs/LocalId"
       },
       "type": "object"
     },

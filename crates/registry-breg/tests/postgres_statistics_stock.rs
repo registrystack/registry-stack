@@ -302,9 +302,9 @@ async fn partial_vocabulary_population_matches_the_authorized_list_count() {
 
 fn partial_text_registry() -> registry_breg::CompiledRegistry {
     let source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1",
-        "kind":"RegistryProject",
-        "registry":{
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{
             "id":"statistics-partial-text-registry","version":"1","defaultLanguage":"en",
             "canonicalBaseIri":"https://statistics-partial-text.example.test"
         },
@@ -317,13 +317,13 @@ fn partial_text_registry() -> registry_breg::CompiledRegistry {
             ]
         }],
         "accessProfiles":[{
-            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
                 "entity":"permit","operations":["list"],
                 "readableFields":["permit-type","valid-from","administrative-boundary"],
                 "filterableFields":["permit-type","valid-from","administrative-boundary"],
                 "allowCount":true,
                 "rowBoundaries":[{"field":"administrative-boundary","claim":"administrative_boundaries","operator":"in"}]
-            },{"dataset":"monthly-air-permits","operations":["read-live"]}]
+            }],"datasets":[{"dataset":"monthly-air-permits","operations":["read-live"]}]}
         }],
         "vocabularies":[
             {"id":"permit-type","values":["air-emissions","water-discharge"]},

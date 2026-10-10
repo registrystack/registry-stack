@@ -76,7 +76,7 @@ class ConstructionTests(unittest.TestCase):
         ):
             with self.assertRaises(MessagingClientError) as raised:
                 call()
-            self.assertEqual(raised.exception.kind, "invalid_request")
+            self.assertEqual(raised.exception.kind, "invalid-request")
             self.assertNotIn("canary", str(raised.exception))
             self.assertNotIn("canary", repr(raised.exception))
             self.assertNotIn("canary", repr(vars(raised.exception)))
@@ -87,13 +87,13 @@ class ConstructionTests(unittest.TestCase):
         client = MessagingClient("https://messaging.example.invalid/")
         with self.assertRaises(MessagingClientError) as raised:
             client.submit("valid-token", "key-1", {**SUBMISSION, "data": data})
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
     def test_unknown_submission_member_is_rejected_before_io(self) -> None:
         client = MessagingClient("https://messaging.example.invalid/")
         with self.assertRaises(MessagingClientError) as raised:
             client.submit("valid-token", "key-1", {**SUBMISSION, "priority": "high"})
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
 
 if __name__ == "__main__":

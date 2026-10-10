@@ -2,7 +2,7 @@ apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1
 kind: EvidenceTargetGovernance
 assuranceProfile: local
 service: {providerId: urn:example:local:evidence, publicOrigin: http://127.0.0.1:8080, trustDomain: urn:example:local:trust-domain}
-issuer: {id: urn:example:issuer:authority}
+issuer: {uri: urn:example:issuer:authority}
 publication: {serviceId: urn:example:local:evidence-service, title: Local Evidence service, description: Local minimum-disclosure Evidence development service, endpointUrl: http://127.0.0.1:8080, jurisdictions: [urn:example:jurisdiction:local]}
 authentication:
   oidc:
@@ -11,11 +11,13 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [ES256]
     jwksSource:
-      kind: uri
+      type: uri
       uri: http://127.0.0.1:8081/.well-known/jwks.json
     principalClaim: sub
     requesterTagsClaim: evidence_tags
     evidenceAudienceClaim: evidence_audience
+    allowedClients: unrestricted
+    requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
 audit: {hashKeyRef: secret:file/evidence-audit-hmac, hashKeyVersion: 1}

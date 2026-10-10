@@ -40,16 +40,17 @@ test('review task discovery validates selectors before I/O', async () => {
   assert.equal(typeof client.supervisoryReviewTasks, 'function');
   assert.equal(typeof client.ownReviewDecisions, 'function');
   for (const call of [
-    () => client.reviewTasks('one-call-secret', 'staff', { ownership: 'someone_elses' }),
+    () => client.reviewTasks('one-call-secret', 'staff', { ownership: 'someone-elses' }),
+    () => client.reviewTasks('one-call-secret', 'staff', { ownership: 'assigned_to_me' }),
     () => client.supervisoryReviewTasks('one-call-secret', 'supervisor', { ownership: 'unclaimed' }),
-    ...[{ author: 'colleague' }, { ownership: 'assigned_to_me' }, { cursor: 'not-a-uuid' }, { limit: 0 }, { limit: 101 }].map((query) => () =>
+    ...[{ author: 'colleague' }, { ownership: 'assigned-to-me' }, { cursor: 'not-a-uuid' }, { limit: 0 }, { limit: 101 }].map((query) => () =>
       client.ownReviewDecisions('one-call-secret', 'staff', query)),
     ...['', 'not-a-uuid', 42, {}, []].map((requestId) => () =>
       client.supervisoryReviewTasks('one-call-secret', 'supervisor', { requestId })),
   ]) {
     await assert.rejects(call, (error) => {
       assert.ok(error instanceof CaseworkClientError);
-      assert.equal(error.kind, 'invalid_request');
+      assert.equal(error.kind, 'invalid-request');
       return true;
     });
   }
@@ -459,7 +460,7 @@ test('next work item preserves an empty budget-exhausted page and its cursor', a
       response.end(JSON.stringify({
         items: [],
         nextCursor: 'resume-next',
-        status: 'budget_exhausted',
+        status: 'budget-exhausted',
         servedQueues: ['review'],
       }));
     });
@@ -483,7 +484,7 @@ test('next work item preserves an empty budget-exhausted page and its cursor', a
   assert.deepEqual(page.value, {
     items: [],
     nextCursor: 'resume-next',
-    status: 'budget_exhausted',
+    status: 'budget-exhausted',
     servedQueues: ['review'],
   });
   assert.equal(observed.path, '/v1/work-items/next?queue=review&cursor=opaque-next');
@@ -509,7 +510,7 @@ test('source inbox forwards one complete exact subject selector', async (context
   const { CaseworkClient } = require('../client');
   const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
   const page = await client.listWorkItems('one-call-secret', 'staff', 'reviewer', {
-    view: 'my_teams',
+    view: 'my-teams',
     sourceId: 'source-one',
     subjectKind: 'resident-record',
     subjectId: 'human-reference-42',
@@ -547,7 +548,7 @@ test('directory target discovery preserves its exact purpose context without sou
   const { CaseworkClient } = require('../client');
   const client = new CaseworkClient({ baseUrl: `http://127.0.0.1:${server.address().port}/` });
   const page = await client.directoryTargets('one-call-secret', 'supervisor', {
-    purpose: 'absence_cover',
+    purpose: 'absence-cover',
     personIssuer: 'https://id.example',
     personSubject: 'absent-officer',
     cursor: 'opaque-target-cursor',
@@ -555,7 +556,7 @@ test('directory target discovery preserves its exact purpose context without sou
   });
 
   const query = new URL(observed.url, 'http://fixture.invalid').searchParams;
-  assert.equal(query.get('purpose'), 'absence_cover');
+  assert.equal(query.get('purpose'), 'absence-cover');
   assert.equal(query.get('personIssuer'), 'https://id.example');
   assert.equal(query.get('personSubject'), 'absent-officer');
   assert.equal(query.get('cursor'), 'opaque-target-cursor');
@@ -746,7 +747,7 @@ test('absence creation and reviewed caseload selection preserve exact mutation c
   assert.deepEqual(observed[1].body, request);
   await assert.rejects(client.applyCaseloadMove('synthetic-token', 'supervisor', 'duplicate', {
     ...request, items: [request.items[0], request.items[0]],
-  }), (error) => error.kind === 'invalid_request');
+  }), (error) => error.kind === 'invalid-request');
   assert.equal(observed.length, 2, 'ambiguous selections never reach the service');
   const team = { staff: [{ ...person, displayName: 'Staff Officer' }], supervisors: [cover], servedQueues: ['review'] };
   const directory = await client.updateDirectoryTeam('synthetic-token', 'administrator', 'review-team', 3, 'team-update', team);
@@ -852,7 +853,7 @@ test('native client refuses nested unsafe integers before HTTP and preserves saf
   const document = { holidaySet: 'office', revision: Number.MAX_SAFE_INTEGER + 1, dates: [] };
   await assert.rejects(
     client.createHolidayRevision('synthetic-token', 'administrator', 'unsafe-revision', { document }),
-    (error) => JSON.parse(error.message).kind === 'invalid_request',
+    (error) => JSON.parse(error.message).kind === 'invalid-request',
   );
   const digest = `sha256:${'a'.repeat(64)}`;
   const review = {
@@ -864,7 +865,7 @@ test('native client refuses nested unsafe integers before HTTP and preserves saf
   };
   await assert.rejects(
     client.createOrRecoverReviewRequest('synthetic-token', 'requester', 'review-array', review, digest),
-    (error) => JSON.parse(error.message).kind === 'invalid_request',
+    (error) => JSON.parse(error.message).kind === 'invalid-request',
   );
   await assert.rejects(
     client.createOrRecoverReviewRequest(
@@ -874,7 +875,7 @@ test('native client refuses nested unsafe integers before HTTP and preserves saf
       { ...review, resultConstraints: { maximum: Number.MAX_SAFE_INTEGER + 1 } },
       digest,
     ),
-    (error) => JSON.parse(error.message).kind === 'invalid_request',
+    (error) => JSON.parse(error.message).kind === 'invalid-request',
   );
   assert.equal(requests.length, 0);
 });

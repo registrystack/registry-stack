@@ -202,13 +202,13 @@ class IngestionRunTests(unittest.TestCase):
     def test_encode_ingestion_chunk_refuses_broken_planning_inputs(self) -> None:
         with self.assertRaises(BaseRegistryClientError) as raised:
             encode_ingestion_chunk(0, [], PREFIX_DIGEST)
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         with self.assertRaises(BaseRegistryClientError) as raised:
             encode_ingestion_chunk(0, ["not-an-object"], PREFIX_DIGEST)
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         with self.assertRaises(BaseRegistryClientError) as raised:
             encode_ingestion_chunk(0, ITEMS, "not-a-digest")
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertNotIn("not-a-digest", str(raised.exception))
         with self.assertRaises(TypeError):
             encode_ingestion_chunk(1.5, ITEMS, PREFIX_DIGEST)
@@ -244,28 +244,28 @@ class IngestionRunTests(unittest.TestCase):
         extra = dict(REQUEST, extra=1)
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.create_ingestion_run("people", extra)
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
         missing_item_count = dict(REQUEST)
         del missing_item_count["item_count"]
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.create_ingestion_run("people", missing_item_count)
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.create_ingestion_run("people", dict(REQUEST, operation="delete"))
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.create_ingestion_run("people", dict(REQUEST, input_digest="aaaa"))
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.create_ingestion_run(
                 "people",
                 dict(REQUEST, chunk_algorithm_version="greedy-canonical-http-batch-v2"),
             )
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
     def test_list_ingestion_runs_sends_contract_filters_in_order(self) -> None:
         outcome = self.client.list_ingestion_runs(
@@ -291,21 +291,21 @@ class IngestionRunTests(unittest.TestCase):
 
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.list_ingestion_runs("people", status="archived")
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.list_ingestion_runs("people", limit=0)
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.list_ingestion_runs("people", input_digest="xyz")
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         # The engine parses the after pair as a canonical run id, so a cursor
         # it could never issue is refused before it is sent.
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.list_ingestion_runs("people", after="cursor+/=")
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.list_ingestion_runs("people", access_profile="x\n")
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
         unfiltered = self.client.list_ingestion_runs("people")
         self.assertEqual(len(unfiltered["value"]["runs"]), 1)
@@ -326,7 +326,7 @@ class IngestionRunTests(unittest.TestCase):
         )
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.read_ingestion_run("people", "not-a-uuid")
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
         cancelled = self.client.cancel_ingestion_run("people", RUN_ID)
         self.assertEqual(cancelled["value"]["status"], "cancelled")
@@ -369,7 +369,7 @@ class IngestionRunTests(unittest.TestCase):
         )
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.client.submit_ingestion_chunk("people", RUN_ID, chunk, "Invalid Profile")
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
     def test_chunk_receipt_reads_one_retained_and_reports_one_erased(self) -> None:
         retained = self.client.ingestion_chunk_receipt("people", RUN_ID, 0, "importer.v1")

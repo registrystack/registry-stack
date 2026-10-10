@@ -8,9 +8,9 @@ pub(super) fn spec(product: ProductKind) -> Option<ProductSpec> {
     let (marker, discriminator, version_prefix, kind, documents) = match product {
         ProductKind::Discovery => (
             "origins.yaml",
-            "schemaVersion",
-            "registry-discovery/origins/",
-            "",
+            "apiVersion",
+            "id.registrystack.org/formats/discovery/origins/",
+            "DiscoveryOrigins",
             DISCOVERY,
         ),
         ProductKind::Manifest => (

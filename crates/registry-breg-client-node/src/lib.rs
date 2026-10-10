@@ -120,7 +120,7 @@ pub fn verify_webhook_delivery(input: WebhookDeliveryInput) -> Result<VerifiedWe
 
 fn webhook_verification_error(error: BRegWebhookVerificationError) -> NapiError {
     mapped_error(json!({
-        "kind": "webhook_verification",
+        "kind": "webhook-verification",
         "code": error.code(),
         "message": error.to_string(),
     }))
@@ -129,7 +129,7 @@ fn webhook_verification_error(error: BRegWebhookVerificationError) -> NapiError 
 fn exact_input(value: &str) -> Result<Value> {
     registry_breg_client::decode_exact_json(value.as_bytes()).map_err(|_| {
         binding_error(
-            "invalid_request",
+            "invalid-request",
             "JSON value is invalid or cannot be represented exactly",
         )
     })
@@ -313,7 +313,7 @@ impl RetainedRequestHistoryPage {
         proposal_version: u32,
     ) -> Result<Option<RetainedRequestProposal>> {
         let request_identifier = uuid::Uuid::parse_str(&request_identifier)
-            .map_err(|_| binding_error("invalid_request", "requestIdentifier must be a UUID"))?;
+            .map_err(|_| binding_error("invalid-request", "requestIdentifier must be a UUID"))?;
         Ok(self
             .inner
             .proposals()
@@ -337,7 +337,7 @@ impl RetainedRequestHistoryPage {
     ) -> Result<Option<RetainedRequestProposal>> {
         let application_identifier =
             uuid::Uuid::parse_str(&application_identifier).map_err(|_| {
-                binding_error("invalid_request", "applicationIdentifier must be a UUID")
+                binding_error("invalid-request", "applicationIdentifier must be a UUID")
             })?;
         Ok(self
             .find_proposal(
@@ -463,16 +463,16 @@ fn binding_error(kind: &'static str, message: impl Into<String>) -> NapiError {
 
 fn protocol_code(value: BRegProtocolFailure) -> &'static str {
     match value {
-        BRegProtocolFailure::HeaderBounds => "header_bounds",
-        BRegProtocolFailure::TraceContext => "trace_context",
-        BRegProtocolFailure::MediaType => "media_type",
+        BRegProtocolFailure::HeaderBounds => "header-bounds",
+        BRegProtocolFailure::TraceContext => "trace-context",
+        BRegProtocolFailure::MediaType => "media-type",
         BRegProtocolFailure::Body => "body",
         BRegProtocolFailure::Problem => "problem",
-        BRegProtocolFailure::EntityTag => "entity_tag",
-        BRegProtocolFailure::ProfileLink => "profile_link",
+        BRegProtocolFailure::EntityTag => "entity-tag",
+        BRegProtocolFailure::ProfileLink => "profile-link",
         BRegProtocolFailure::Location => "location",
-        BRegProtocolFailure::CachePolicy => "cache_policy",
-        BRegProtocolFailure::RepresentationDigest => "representation_digest",
+        BRegProtocolFailure::CachePolicy => "cache-policy",
+        BRegProtocolFailure::RepresentationDigest => "representation-digest",
         BRegProtocolFailure::Status => "status",
         _ => "protocol",
     }
@@ -507,7 +507,7 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             json!({"kind": "configuration", "message": reason})
         }
         BaseRegistryClientError::InvalidRequest { reason } => {
-            json!({"kind": "invalid_request", "message": reason})
+            json!({"kind": "invalid-request", "message": reason})
         }
         BaseRegistryClientError::Token(error) => token_error_value(error),
         BaseRegistryClientError::Transport { kind } => json!({
@@ -522,10 +522,10 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             field_path,
             refusal_code,
         } => json!({
-            // app-developer-22: a missing resource is its own kind, not_found,
+            // app-developer-22: a missing resource is its own kind, not-found,
             // rather than the generic problem kind every other refusal shares.
             "kind": match code {
-                BRegProblemCode::ResourceNotFound => "not_found",
+                BRegProblemCode::ResourceNotFound => "not-found",
                 _ => "problem",
             },
             "status": status,
@@ -576,15 +576,15 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
 
 fn selection_error(error: BRegMetadataSelectionError) -> NapiError {
     let code = match error.kind() {
-        BRegMetadataSelectionErrorKind::NotFound => "not_found",
-        BRegMetadataSelectionErrorKind::UnboundSource => "unbound_source",
-        BRegMetadataSelectionErrorKind::ProfileMismatch => "profile_mismatch",
-        BRegMetadataSelectionErrorKind::UnsupportedOperation => "unsupported_operation",
-        BRegMetadataSelectionErrorKind::RequiredCapability => "required_capability",
-        BRegMetadataSelectionErrorKind::ContractMismatch => "contract_mismatch",
+        BRegMetadataSelectionErrorKind::NotFound => "not-found",
+        BRegMetadataSelectionErrorKind::UnboundSource => "unbound-source",
+        BRegMetadataSelectionErrorKind::ProfileMismatch => "profile-mismatch",
+        BRegMetadataSelectionErrorKind::UnsupportedOperation => "unsupported-operation",
+        BRegMetadataSelectionErrorKind::RequiredCapability => "required-capability",
+        BRegMetadataSelectionErrorKind::ContractMismatch => "contract-mismatch",
     };
     mapped_error(json!({
-        "kind": "metadata_selection",
+        "kind": "metadata-selection",
         "code": code,
         "message": error.to_string(),
     }))
@@ -1020,7 +1020,7 @@ fn format(value: Option<String>) -> Result<BRegRecordFormat> {
         "json" => Ok(BRegRecordFormat::Json),
         "json-ld" => Ok(BRegRecordFormat::JsonLd),
         _ => Err(binding_error(
-            "invalid_request",
+            "invalid-request",
             "format must be json or json-ld",
         )),
     }
@@ -1031,7 +1031,7 @@ fn statistics_format(value: Option<&str>) -> Result<BRegStatisticsFormat> {
         "json" => Ok(BRegStatisticsFormat::Json),
         "csv" => Ok(BRegStatisticsFormat::Csv),
         _ => Err(binding_error(
-            "invalid_request",
+            "invalid-request",
             "statistics format must be json or csv",
         )),
     }
@@ -1042,7 +1042,7 @@ fn release_selection(value: &str) -> Result<BRegReleaseSelection> {
         "any" => Ok(BRegReleaseSelection::Any),
         "final" => Ok(BRegReleaseSelection::Final),
         _ => Err(binding_error(
-            "invalid_request",
+            "invalid-request",
             "statistics release selection must be any or final",
         )),
     }
@@ -1053,7 +1053,7 @@ fn release_status(value: &str) -> Result<BRegReleaseStatus> {
         "provisional" => Ok(BRegReleaseStatus::Provisional),
         "final" => Ok(BRegReleaseStatus::Final),
         _ => Err(binding_error(
-            "invalid_request",
+            "invalid-request",
             "statistics release status must be provisional or final",
         )),
     }
@@ -1065,7 +1065,7 @@ fn withdrawal_reason(value: &str) -> Result<BRegWithdrawalReason> {
         "source-data-error" => Ok(BRegWithdrawalReason::SourceDataError),
         "disclosure-risk" => Ok(BRegWithdrawalReason::DisclosureRisk),
         _ => Err(binding_error(
-            "invalid_request",
+            "invalid-request",
             "statistics withdrawal reason is invalid",
         )),
     }
@@ -1074,7 +1074,7 @@ fn withdrawal_reason(value: &str) -> Result<BRegWithdrawalReason> {
 fn statistics_version(value: i64) -> Result<u64> {
     if !(1..=MAXIMUM_JAVASCRIPT_SAFE_INTEGER).contains(&value) {
         return Err(binding_error(
-            "invalid_request",
+            "invalid-request",
             "statistics release version must be a positive safe integer",
         ));
     }
@@ -1092,15 +1092,15 @@ fn attachment_preconditions(
     registry_breg_client::BRegIdempotencyKey,
 )> {
     let record_identifier = uuid::Uuid::parse_str(&record_identifier)
-        .map_err(|_| binding_error("invalid_request", "recordIdentifier must be a UUID"))?;
+        .map_err(|_| binding_error("invalid-request", "recordIdentifier must be a UUID"))?;
     let etag = BRegEtag::parse(&etag).map_err(|_| {
         binding_error(
-            "invalid_request",
+            "invalid-request",
             "etag must be a strong Base Registry Engine entity tag",
         )
     })?;
     let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     Ok((record_identifier, etag, key))
 }
 
@@ -1116,13 +1116,13 @@ fn record_options(object: Option<&Map<String, Value>>) -> Result<BRegRecordOptio
             "format",
             "requestHistoryAfterProposalVersion",
         ],
-        "invalid_request",
+        "invalid-request",
         "record options contain an unsupported field",
     )?;
     let mut options = BRegRecordOptions::default().format(format(optional_string(
         object,
         "format",
-        "invalid_request",
+        "invalid-request",
         "format must be a string",
     )?)?);
     match object.get("select") {
@@ -1137,22 +1137,22 @@ fn record_options(object: Option<&Map<String, Value>>) -> Result<BRegRecordOptio
                         .collect::<Option<Vec<_>>>()
                 })
                 .ok_or_else(|| {
-                    binding_error("invalid_request", "select must be an array of strings")
+                    binding_error("invalid-request", "select must be an array of strings")
                 })?;
             options = options
                 .select(fields)
-                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         }
     }
     if let Some(value) = optional_string(
         object,
         "accessProfile",
-        "invalid_request",
+        "invalid-request",
         "accessProfile must be a string",
     )? {
         options = options
             .access_profile(value)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     }
     match object.get("requestHistoryAfterProposalVersion") {
         None | Some(Value::Null) => {}
@@ -1161,12 +1161,12 @@ fn record_options(object: Option<&Map<String, Value>>) -> Result<BRegRecordOptio
                 value,
                 1,
                 i64::from(u32::MAX),
-                "invalid_request",
+                "invalid-request",
                 "requestHistoryAfterProposalVersion must be 1 through 4294967295",
             )?;
             options = options
                 .request_history_after_proposal_version(value as u32)
-                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         }
     }
     Ok(options)
@@ -1179,7 +1179,7 @@ fn options_object(
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Object(value)) => Ok(Some(value)),
-        Some(_) => Err(binding_error("invalid_request", message)),
+        Some(_) => Err(binding_error("invalid-request", message)),
     }
 }
 
@@ -1197,7 +1197,7 @@ fn list_request(value: Option<Value>) -> Result<BRegListRequest> {
             "count",
             "bbox",
         ],
-        "invalid_request",
+        "invalid-request",
         "list options contain an unsupported field",
     )?;
     let base = object
@@ -1213,40 +1213,40 @@ fn list_request(value: Option<Value>) -> Result<BRegListRequest> {
                 value,
                 1,
                 100,
-                "invalid_request",
+                "invalid-request",
                 "top must be 1 through 100",
             )?;
             request = request
                 .top(value as u32)
-                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         }
     }
     if let Some(value) = optional_string(
         &object,
         "filter",
-        "invalid_request",
+        "invalid-request",
         "filter must be a string",
     )? {
         request = request
             .filter(value)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     }
     if let Some(value) = optional_string(
         &object,
         "orderby",
-        "invalid_request",
+        "invalid-request",
         "orderby must be a string",
     )? {
         request = request
             .orderby(value)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     }
     match object.get("count") {
         None | Some(Value::Null) => {}
         Some(value) => {
             let value = value
                 .as_bool()
-                .ok_or_else(|| binding_error("invalid_request", "count must be a boolean"))?;
+                .ok_or_else(|| binding_error("invalid-request", "count must be a boolean"))?;
             request = request.count(value);
         }
     }
@@ -1282,7 +1282,7 @@ fn collection_inputs(
     only_fields(
         &object,
         &allowed,
-        "invalid_request",
+        "invalid-request",
         "list options contain an unsupported field",
     )?;
     let base = object
@@ -1298,7 +1298,7 @@ fn collection_inputs(
                 value,
                 1,
                 100,
-                "invalid_request",
+                "invalid-request",
                 "top must be 1 through 100",
             )
             .map(|value| value as u32)
@@ -1307,13 +1307,13 @@ fn collection_inputs(
     let filter = optional_string(
         &object,
         "filter",
-        "invalid_request",
+        "invalid-request",
         "filter must be a string",
     )?;
     let orderby = optional_string(
         &object,
         "orderby",
-        "invalid_request",
+        "invalid-request",
         "orderby must be a string",
     )?;
     let count = match object.get("count") {
@@ -1321,7 +1321,7 @@ fn collection_inputs(
         Some(value) => Some(
             value
                 .as_bool()
-                .ok_or_else(|| binding_error("invalid_request", "count must be a boolean"))?,
+                .ok_or_else(|| binding_error("invalid-request", "count must be a boolean"))?,
         ),
     };
     Ok((
@@ -1342,17 +1342,17 @@ macro_rules! apply_collection_inputs {
         if let Some(value) = $inputs.top {
             $request = $request
                 .top(value)
-                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         }
         if let Some(value) = $inputs.filter {
             $request = $request
                 .filter(value)
-                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         }
         if let Some(value) = $inputs.orderby {
             $request = $request
                 .orderby(value)
-                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         }
         if let Some(value) = $inputs.count {
             $request = $request.count(value);
@@ -1372,11 +1372,11 @@ fn as_of_list_request(value: Option<Value>) -> Result<BRegAsOfListRequest> {
     let as_of = required_string(
         &object,
         "asOf",
-        "invalid_request",
+        "invalid-request",
         "asOf must be a canonical UTC RFC 3339 string",
     )?;
     let mut request = BRegAsOfListRequest::new(as_of)
-        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     apply_collection_inputs!(request, inputs);
     Ok(request)
 }
@@ -1388,22 +1388,22 @@ fn snapshot_list_request(value: Option<Value>) -> Result<BRegSnapshotListRequest
     if let Some(value) = optional_string(
         &object,
         "snapshot",
-        "invalid_request",
+        "invalid-request",
         "snapshot must be a string",
     )? {
         request = request
             .snapshot(value)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     }
     if let Some(value) = optional_string(
         &object,
         "validAt",
-        "invalid_request",
+        "invalid-request",
         "validAt must be a string",
     )? {
         request = request
             .valid_at(value)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     }
     Ok(request)
 }
@@ -1420,20 +1420,20 @@ fn bounding_box(value: &Value) -> Result<BRegBoundingBox> {
         .as_array()
         .filter(|values| values.len() == 4)
         .ok_or_else(|| {
-            binding_error("invalid_request", "bbox must contain four decimal strings")
+            binding_error("invalid-request", "bbox must contain four decimal strings")
         })?;
     let coordinates = coordinates
         .iter()
         .map(|value| value.as_str())
         .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| binding_error("invalid_request", "bbox must contain decimal strings"))?;
+        .ok_or_else(|| binding_error("invalid-request", "bbox must contain decimal strings"))?;
     BRegBoundingBox::new(
         coordinates[0],
         coordinates[1],
         coordinates[2],
         coordinates[3],
     )
-    .map_err(|error| binding_error("invalid_request", error.to_string()))
+    .map_err(|error| binding_error("invalid-request", error.to_string()))
 }
 
 fn geojson_options(object: &Map<String, Value>) -> Result<BRegGeoJsonOptions> {
@@ -1446,15 +1446,15 @@ fn geojson_options(object: &Map<String, Value>) -> Result<BRegGeoJsonOptions> {
                 .map(|value| value.as_str().map(str::to_owned))
                 .collect::<Option<Vec<_>>>()
                 .ok_or_else(|| {
-                    binding_error("invalid_request", "select must be an array of strings")
+                    binding_error("invalid-request", "select must be an array of strings")
                 })?;
             options = options
                 .select(fields)
-                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         }
         Some(_) => {
             return Err(binding_error(
-                "invalid_request",
+                "invalid-request",
                 "select must be an array of strings",
             ))
         }
@@ -1462,12 +1462,12 @@ fn geojson_options(object: &Map<String, Value>) -> Result<BRegGeoJsonOptions> {
     if let Some(value) = optional_string(
         object,
         "accessProfile",
-        "invalid_request",
+        "invalid-request",
         "accessProfile must be a string",
     )? {
         options = options
             .access_profile(value)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     }
     Ok(options)
 }
@@ -1476,7 +1476,7 @@ fn geojson_list_request(value: Option<Value>) -> Result<BRegGeoJsonListRequest> 
     let (object, inputs) = collection_inputs(value, &["bbox"])?;
     if object.contains_key("format") {
         return Err(binding_error(
-            "invalid_request",
+            "invalid-request",
             "GeoJSON options do not accept a format",
         ));
     }
@@ -1489,17 +1489,17 @@ fn geojson_list_request(value: Option<Value>) -> Result<BRegGeoJsonListRequest> 
     if let Some(value) = inputs.top {
         request = request
             .top(value)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     }
     if let Some(value) = inputs.filter {
         request = request
             .filter(value)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     }
     if let Some(value) = inputs.orderby {
         request = request
             .orderby(value)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     }
     if let Some(value) = inputs.count {
         request = request.count(value);
@@ -1516,7 +1516,7 @@ fn lookup_request(
     options: Option<Value>,
 ) -> Result<BRegLookupRequest> {
     let mut request = BRegLookupRequest::new(selector)
-        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     let options = options_object(options, "record options must be an object")?;
     request = request.options(record_options(options.as_ref())?);
     match values {
@@ -1525,12 +1525,12 @@ fn lookup_request(
             for (name, value) in values {
                 request = request
                     .value(name, value)
-                    .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                    .map_err(|error| binding_error("invalid-request", error.to_string()))?;
             }
         }
         Some(_) => {
             return Err(binding_error(
-                "invalid_request",
+                "invalid-request",
                 "lookup values must be an object",
             ))
         }
@@ -1640,13 +1640,13 @@ fn raw_value(value: BRegComplete<BRegRawDocument>) -> RawOutcome {
 fn patch_request(value: Value) -> Result<BRegPatchRequest> {
     let operations = value
         .as_array()
-        .ok_or_else(|| binding_error("invalid_request", "patch must be an array"))?;
+        .ok_or_else(|| binding_error("invalid-request", "patch must be an array"))?;
     let mut builder = BRegPatchRequest::builder();
     for operation in operations {
         let object = operation.as_object().ok_or_else(|| {
-            binding_error("invalid_request", "every patch operation must be an object")
+            binding_error("invalid-request", "every patch operation must be an object")
         })?;
-        let op = required_string(object, "op", "invalid_request", "patch op must be a string")?;
+        let op = required_string(object, "op", "invalid-request", "patch op must be a string")?;
         let allowed = if op == "remove" {
             &["op", "field"][..]
         } else {
@@ -1655,13 +1655,13 @@ fn patch_request(value: Value) -> Result<BRegPatchRequest> {
         only_fields(
             object,
             allowed,
-            "invalid_request",
+            "invalid-request",
             "patch operation contains an unsupported field",
         )?;
         let field = required_string(
             object,
             "field",
-            "invalid_request",
+            "invalid-request",
             "patch field must be a string",
         )?;
         let result = match op.as_str() {
@@ -1670,14 +1670,14 @@ fn patch_request(value: Value) -> Result<BRegPatchRequest> {
                 object
                     .get("value")
                     .cloned()
-                    .ok_or_else(|| binding_error("invalid_request", "add requires value"))?,
+                    .ok_or_else(|| binding_error("invalid-request", "add requires value"))?,
             ),
             "replace" => builder.replace(
                 field,
                 object
                     .get("value")
                     .cloned()
-                    .ok_or_else(|| binding_error("invalid_request", "replace requires value"))?,
+                    .ok_or_else(|| binding_error("invalid-request", "replace requires value"))?,
             ),
             "remove" => builder.remove(field),
             "test" => builder.test(
@@ -1685,15 +1685,15 @@ fn patch_request(value: Value) -> Result<BRegPatchRequest> {
                 object
                     .get("value")
                     .cloned()
-                    .ok_or_else(|| binding_error("invalid_request", "test requires value"))?,
+                    .ok_or_else(|| binding_error("invalid-request", "test requires value"))?,
             ),
-            _ => return Err(binding_error("invalid_request", "patch op is unsupported")),
+            _ => return Err(binding_error("invalid-request", "patch op is unsupported")),
         };
-        builder = result.map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        builder = result.map_err(|error| binding_error("invalid-request", error.to_string()))?;
     }
     builder
         .build()
-        .map_err(|error| binding_error("invalid_request", error.to_string()))
+        .map_err(|error| binding_error("invalid-request", error.to_string()))
 }
 
 fn action_invocation(
@@ -1702,12 +1702,12 @@ fn action_invocation(
     conditions: Option<&ActionTargetConditions>,
 ) -> Result<BRegActionInvocationRequest> {
     BRegActionInvocationRequest::new(&binding.inner, inputs, conditions.map(|value| &value.inner))
-        .map_err(|error| binding_error("invalid_request", error.to_string()))
+        .map_err(|error| binding_error("invalid-request", error.to_string()))
 }
 
 fn idempotency_key(value: String) -> Result<registry_breg_client::BRegIdempotencyKey> {
     registry_breg_client::BRegIdempotencyKey::parse(value)
-        .map_err(|error| binding_error("invalid_request", error.to_string()))
+        .map_err(|error| binding_error("invalid-request", error.to_string()))
 }
 
 fn prepare_action_evidence(
@@ -1743,7 +1743,7 @@ fn input_object(value: Value, message: &'static str) -> Result<Map<String, Value
     value
         .as_object()
         .cloned()
-        .ok_or_else(|| binding_error("invalid_request", message))
+        .ok_or_else(|| binding_error("invalid-request", message))
 }
 
 fn change_context(value: Value) -> Result<BRegChangeContext> {
@@ -1751,13 +1751,13 @@ fn change_context(value: Value) -> Result<BRegChangeContext> {
     only_fields(
         &object,
         &["kind", "reasonCode", "reasonText", "sourceReferences"],
-        "invalid_request",
+        "invalid-request",
         "changeContext contains an unsupported field",
     )?;
     let kind = required_string(
         &object,
         "kind",
-        "invalid_request",
+        "invalid-request",
         "changeContext.kind must be a string",
     )?;
     let mut context = match kind.as_str() {
@@ -1765,13 +1765,13 @@ fn change_context(value: Value) -> Result<BRegChangeContext> {
         "correction" => BRegChangeContext::correction(required_string(
             &object,
             "reasonCode",
-            "invalid_request",
+            "invalid-request",
             "a correction requires reasonCode",
         )?)
-        .map_err(|error| binding_error("invalid_request", error.to_string()))?,
+        .map_err(|error| binding_error("invalid-request", error.to_string()))?,
         _ => {
             return Err(binding_error(
-                "invalid_request",
+                "invalid-request",
                 "changeContext.kind or reasonCode is invalid",
             ))
         }
@@ -1779,12 +1779,12 @@ fn change_context(value: Value) -> Result<BRegChangeContext> {
     if let Some(value) = optional_string(
         &object,
         "reasonText",
-        "invalid_request",
+        "invalid-request",
         "changeContext.reasonText must be a string",
     )? {
         context = context
             .reason_text(value)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
     }
     match object.get("sourceReferences") {
         None => {}
@@ -1792,18 +1792,18 @@ fn change_context(value: Value) -> Result<BRegChangeContext> {
             for value in values {
                 let value = value.as_str().ok_or_else(|| {
                     binding_error(
-                        "invalid_request",
+                        "invalid-request",
                         "changeContext.sourceReferences must contain strings",
                     )
                 })?;
                 context = context
                     .source_reference(value)
-                    .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                    .map_err(|error| binding_error("invalid-request", error.to_string()))?;
             }
         }
         Some(_) => {
             return Err(binding_error(
-                "invalid_request",
+                "invalid-request",
                 "changeContext.sourceReferences must be an array",
             ))
         }
@@ -1816,22 +1816,22 @@ fn batch_request(binding: &BRegBatchBinding, value: Value) -> Result<BRegBatchRe
     only_fields(
         &object,
         &["items", "changeContext"],
-        "invalid_request",
+        "invalid-request",
         "batch request contains an unsupported field",
     )?;
     let items = object
         .get("items")
         .and_then(Value::as_array)
-        .ok_or_else(|| binding_error("invalid_request", "batch items must be an array"))?;
+        .ok_or_else(|| binding_error("invalid-request", "batch items must be an array"))?;
     let mut builder = BRegBatchBuilder::new(binding);
     for item in items {
         let item = item.as_object().ok_or_else(|| {
-            binding_error("invalid_request", "every batch item must be an object")
+            binding_error("invalid-request", "every batch item must be an object")
         })?;
         let operation = required_string(
             item,
             "operation",
-            "invalid_request",
+            "invalid-request",
             "batch item operation must be a string",
         )?;
         builder = match operation.as_str() {
@@ -1839,7 +1839,7 @@ fn batch_request(binding: &BRegBatchBinding, value: Value) -> Result<BRegBatchRe
                 only_fields(
                     item,
                     &["operation", "data"],
-                    "invalid_request",
+                    "invalid-request",
                     "Create batch item contains an unsupported field",
                 )?;
                 let data = item
@@ -1847,50 +1847,50 @@ fn batch_request(binding: &BRegBatchBinding, value: Value) -> Result<BRegBatchRe
                     .and_then(Value::as_object)
                     .cloned()
                     .ok_or_else(|| {
-                        binding_error("invalid_request", "Create batch data must be an object")
+                        binding_error("invalid-request", "Create batch data must be an object")
                     })?;
                 let request = BRegCreateRequest::new(data)
-                    .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                    .map_err(|error| binding_error("invalid-request", error.to_string()))?;
                 builder
                     .create(&request)
-                    .map_err(|error| binding_error("invalid_request", error.to_string()))?
+                    .map_err(|error| binding_error("invalid-request", error.to_string()))?
             }
             "patch" => {
                 only_fields(
                     item,
                     &["operation", "recordIdentifier", "etag", "operations"],
-                    "invalid_request",
+                    "invalid-request",
                     "Patch batch item contains an unsupported field",
                 )?;
                 let record_identifier = uuid::Uuid::parse_str(&required_string(
                     item,
                     "recordIdentifier",
-                    "invalid_request",
+                    "invalid-request",
                     "Patch batch recordIdentifier must be a UUID",
                 )?)
                 .map_err(|_| {
                     binding_error(
-                        "invalid_request",
+                        "invalid-request",
                         "Patch batch recordIdentifier must be a UUID",
                     )
                 })?;
                 let etag = BRegEtag::parse(&required_string(
                     item,
                     "etag",
-                    "invalid_request",
+                    "invalid-request",
                     "Patch batch etag must be a string",
                 )?)
-                .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+                .map_err(|error| binding_error("invalid-request", error.to_string()))?;
                 let request = patch_request(item.get("operations").cloned().ok_or_else(|| {
-                    binding_error("invalid_request", "Patch batch operations are required")
+                    binding_error("invalid-request", "Patch batch operations are required")
                 })?)?;
                 builder
                     .patch(record_identifier, &etag, &request)
-                    .map_err(|error| binding_error("invalid_request", error.to_string()))?
+                    .map_err(|error| binding_error("invalid-request", error.to_string()))?
             }
             _ => {
                 return Err(binding_error(
-                    "invalid_request",
+                    "invalid-request",
                     "batch item operation is unsupported",
                 ))
             }
@@ -1901,11 +1901,11 @@ fn batch_request(binding: &BRegBatchBinding, value: Value) -> Result<BRegBatchRe
     }
     builder
         .build()
-        .map_err(|error| binding_error("invalid_request", error.to_string()))
+        .map_err(|error| binding_error("invalid-request", error.to_string()))
 }
 
 fn ingestion_error(error: BRegIngestionError) -> NapiError {
-    binding_error("invalid_request", error.to_string())
+    binding_error("invalid-request", error.to_string())
 }
 
 const INGESTION_RUN_REQUEST_FIELDS: [&str; 9] = [
@@ -1925,13 +1925,13 @@ fn ingestion_run_request(value: Value) -> Result<BRegIngestionRunRequest> {
     only_fields(
         &object,
         &INGESTION_RUN_REQUEST_FIELDS,
-        "invalid_request",
+        "invalid-request",
         "run request contains an unsupported field",
     )?;
     let operation = match required_string(
         &object,
         "operation",
-        "invalid_request",
+        "invalid-request",
         "run request requires operation",
     )?
     .as_str()
@@ -1940,7 +1940,7 @@ fn ingestion_run_request(value: Value) -> Result<BRegIngestionRunRequest> {
         "patch" => registry_breg_client::BRegBatchOperation::Patch,
         _ => {
             return Err(binding_error(
-                "invalid_request",
+                "invalid-request",
                 "run request operation must be create or patch",
             ))
         }
@@ -1950,7 +1950,7 @@ fn ingestion_run_request(value: Value) -> Result<BRegIngestionRunRequest> {
         .profile(required_string(
             &object,
             "profileId",
-            "invalid_request",
+            "invalid-request",
             "run request requires profileId",
         )?)
         .map_err(ingestion_error)?;
@@ -1958,7 +1958,7 @@ fn ingestion_run_request(value: Value) -> Result<BRegIngestionRunRequest> {
         .package_revision(required_string(
             &object,
             "packageRevision",
-            "invalid_request",
+            "invalid-request",
             "run request requires packageRevision",
         )?)
         .map_err(ingestion_error)?;
@@ -1966,7 +1966,7 @@ fn ingestion_run_request(value: Value) -> Result<BRegIngestionRunRequest> {
         .schema_fingerprint(required_string(
             &object,
             "schemaFingerprint",
-            "invalid_request",
+            "invalid-request",
             "run request requires schemaFingerprint",
         )?)
         .map_err(ingestion_error)?;
@@ -1974,41 +1974,41 @@ fn ingestion_run_request(value: Value) -> Result<BRegIngestionRunRequest> {
         .input_digest(required_string(
             &object,
             "inputDigest",
-            "invalid_request",
+            "invalid-request",
             "run request requires inputDigest",
         )?)
         .map_err(ingestion_error)?;
     let input_length = safe_integer(
         object
             .get("inputLength")
-            .ok_or_else(|| binding_error("invalid_request", "run request requires inputLength"))?,
+            .ok_or_else(|| binding_error("invalid-request", "run request requires inputLength"))?,
         0,
         MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
-        "invalid_request",
+        "invalid-request",
         "run request inputLength must be a safe integer",
     )?;
     let builder = builder.input_length(u64::try_from(input_length).map_err(|_| {
         binding_error(
-            "invalid_request",
+            "invalid-request",
             "run request inputLength must be a safe integer",
         )
     })?);
     let item_count = safe_integer(
         object
             .get("itemCount")
-            .ok_or_else(|| binding_error("invalid_request", "run request requires itemCount"))?,
+            .ok_or_else(|| binding_error("invalid-request", "run request requires itemCount"))?,
         1,
         MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
-        "invalid_request",
+        "invalid-request",
         "run request itemCount must be a positive safe integer",
     )?;
     let chunk_count = safe_integer(
         object
             .get("chunkCount")
-            .ok_or_else(|| binding_error("invalid_request", "run request requires chunkCount"))?,
+            .ok_or_else(|| binding_error("invalid-request", "run request requires chunkCount"))?,
         1,
         MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
-        "invalid_request",
+        "invalid-request",
         "run request chunkCount must be a positive safe integer",
     )?;
     let builder = builder
@@ -2021,7 +2021,7 @@ fn ingestion_run_request(value: Value) -> Result<BRegIngestionRunRequest> {
         .chunk_algorithm_version(required_string(
             &object,
             "chunkAlgorithmVersion",
-            "invalid_request",
+            "invalid-request",
             "run request requires chunkAlgorithmVersion",
         )?)
         .map_err(ingestion_error)?;
@@ -2036,14 +2036,14 @@ fn ingestion_run_list_query(value: Option<&Value>) -> Result<BRegIngestionRunLis
     only_fields(
         &object,
         &["accessProfile", "limit", "after", "status", "inputDigest"],
-        "invalid_request",
+        "invalid-request",
         "run list query contains an unsupported field",
     )?;
     let mut query = BRegIngestionRunListQuery::default();
     if let Some(access_profile) = optional_string(
         &object,
         "accessProfile",
-        "invalid_request",
+        "invalid-request",
         "run list query accessProfile must be a string",
     )? {
         query = query
@@ -2055,12 +2055,12 @@ fn ingestion_run_list_query(value: Option<&Value>) -> Result<BRegIngestionRunLis
             limit,
             1,
             MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
-            "invalid_request",
+            "invalid-request",
             "run list query limit must be a positive safe integer",
         )?;
         let limit = u32::try_from(limit).map_err(|_| {
             binding_error(
-                "invalid_request",
+                "invalid-request",
                 "run list query limit must be a positive safe integer",
             )
         })?;
@@ -2069,7 +2069,7 @@ fn ingestion_run_list_query(value: Option<&Value>) -> Result<BRegIngestionRunLis
     if let Some(after) = optional_string(
         &object,
         "after",
-        "invalid_request",
+        "invalid-request",
         "run list query after must be a string",
     )? {
         query = query.after(after).map_err(ingestion_error)?;
@@ -2077,7 +2077,7 @@ fn ingestion_run_list_query(value: Option<&Value>) -> Result<BRegIngestionRunLis
     if let Some(status) = optional_string(
         &object,
         "status",
-        "invalid_request",
+        "invalid-request",
         "run list query status must be a string",
     )? {
         let status = match status.as_str() {
@@ -2087,7 +2087,7 @@ fn ingestion_run_list_query(value: Option<&Value>) -> Result<BRegIngestionRunLis
             "blocked" => registry_breg_client::BRegIngestionRunStatus::Blocked,
             _ => {
                 return Err(binding_error(
-                    "invalid_request",
+                    "invalid-request",
                     "run list query status is unsupported",
                 ))
             }
@@ -2097,7 +2097,7 @@ fn ingestion_run_list_query(value: Option<&Value>) -> Result<BRegIngestionRunLis
     if let Some(input_digest) = optional_string(
         &object,
         "inputDigest",
-        "invalid_request",
+        "invalid-request",
         "run list query inputDigest must be a string",
     )? {
         query = query.input_digest(input_digest).map_err(ingestion_error)?;
@@ -2107,12 +2107,12 @@ fn ingestion_run_list_query(value: Option<&Value>) -> Result<BRegIngestionRunLis
 
 fn ingestion_run_identifier(value: String) -> Result<uuid::Uuid> {
     uuid::Uuid::parse_str(&value)
-        .map_err(|_| binding_error("invalid_request", "runId must be a UUID"))
+        .map_err(|_| binding_error("invalid-request", "runId must be a UUID"))
 }
 
 fn ingestion_chunk_index(value: i64, message: &'static str) -> Result<u64> {
     if !(0..=MAXIMUM_JAVASCRIPT_SAFE_INTEGER).contains(&value) {
-        return Err(binding_error("invalid_request", message));
+        return Err(binding_error("invalid-request", message));
     }
     Ok(value as u64)
 }
@@ -2166,7 +2166,7 @@ pub fn encode_ingestion_chunk(
     let items = items
         .as_array()
         .cloned()
-        .ok_or_else(|| binding_error("invalid_request", "items must be an array"))?;
+        .ok_or_else(|| binding_error("invalid-request", "items must be an array"))?;
     CoreIngestionChunk::new(chunk_index, items, prefix_digest)
         .map(|inner| IngestionChunk {
             inner: Arc::new(inner),
@@ -2219,7 +2219,7 @@ fn parse_record(
     match RegistryRecordResponse::from_value(value, representation) {
         Ok(RegistryRecordResponse::Single(value)) => Ok(value),
         _ => Err(binding_error(
-            "invalid_request",
+            "invalid-request",
             "record must be one Registry Record response",
         )),
     }
@@ -2247,7 +2247,7 @@ fn attachment_state_value(value: &BRegAttachmentState) -> Value {
 
 fn attachment_slot_value(value: &BRegAttachmentSlotValue) -> Value {
     match value {
-        BRegAttachmentSlotValue::NotSelected => json!({"kind": "not_selected", "value": null}),
+        BRegAttachmentSlotValue::NotSelected => json!({"kind": "not-selected", "value": null}),
         BRegAttachmentSlotValue::Empty => json!({"kind": "empty", "value": null}),
         BRegAttachmentSlotValue::Filled(state) => json!({
             "kind": "filled",
@@ -2257,7 +2257,7 @@ fn attachment_slot_value(value: &BRegAttachmentSlotValue) -> Value {
 }
 
 fn attachment_error(error: registry_breg_client::BRegAttachmentError) -> NapiError {
-    binding_error("invalid_request", error.reason())
+    binding_error("invalid-request", error.reason())
 }
 
 fn change_request_binding_value(
@@ -2328,10 +2328,10 @@ fn change_request_capability_value(
         })).collect::<Vec<_>>(),
         "review": match value.review() {
             registry_breg_client::BRegChangeRequestReviewRequirement::None => {
-                json!({"mode":"none"})
+                json!({"type":"none"})
             }
             registry_breg_client::BRegChangeRequestReviewRequirement::External(requirement) => {
-                json!({"authority":requirement.authority(),"policyId":requirement.policy_id()})
+                json!({"type":"required","authority":requirement.authority(),"policyId":requirement.policy_id()})
             }
         },
         "onApproved": {
@@ -2577,7 +2577,7 @@ impl LifecycleAction {
         self.inner
             .with_reason(reason)
             .map(|inner| Self { inner })
-            .map_err(|error| binding_error("invalid_request", error.to_string()))
+            .map_err(|error| binding_error("invalid-request", error.to_string()))
     }
 
     #[napi(getter)]
@@ -2733,7 +2733,7 @@ impl Metadata {
         {
             BRegDirectWrite::Create(inner) => Ok(CreateBinding { inner }),
             BRegDirectWrite::Patch(_) => Err(binding_error(
-                "metadata_selection",
+                "metadata-selection",
                 "operation is not a create",
             )),
         }
@@ -2752,7 +2752,7 @@ impl Metadata {
         {
             BRegDirectWrite::Patch(inner) => Ok(PatchBinding { inner }),
             BRegDirectWrite::Create(_) => Err(binding_error(
-                "metadata_selection",
+                "metadata-selection",
                 "operation is not a patch",
             )),
         }
@@ -2900,7 +2900,7 @@ impl BaseRegistryClient {
     ) -> Result<RawOutcome> {
         let top = top
             .map(|value| {
-                u16::try_from(value).map_err(|_| binding_error("invalid_request", "top is invalid"))
+                u16::try_from(value).map_err(|_| binding_error("invalid-request", "top is invalid"))
             })
             .transpose()?;
         self.inner
@@ -2993,7 +2993,7 @@ impl BaseRegistryClient {
         idempotency_key: String,
     ) -> Result<RawOutcome> {
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         self.inner
             .statistics_publish(
                 &dataset,
@@ -3018,7 +3018,7 @@ impl BaseRegistryClient {
         idempotency_key: String,
     ) -> Result<RawOutcome> {
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         self.inner
             .statistics_withdraw(
                 &dataset,
@@ -3087,7 +3087,7 @@ impl BaseRegistryClient {
     ) -> Result<RawOutcome> {
         if !(1..=MAXIMUM_JAVASCRIPT_SAFE_INTEGER).contains(&revision) {
             return Err(binding_error(
-                "invalid_request",
+                "invalid-request",
                 "revision must be a positive safe integer",
             ));
         }
@@ -3140,9 +3140,9 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn continue_list(&self, value: Value) -> Result<PageOutcome> {
         let projection: BRegContinuationProjection = serde_json::from_value(value)
-            .map_err(|_| binding_error("invalid_request", "continuation is invalid"))?;
+            .map_err(|_| binding_error("invalid-request", "continuation is invalid"))?;
         let continuation = BRegContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         self.inner
             .continue_list(&continuation)
             .await
@@ -3162,7 +3162,7 @@ impl BaseRegistryClient {
         only_fields(
             &options,
             &["select", "accessProfile"],
-            "invalid_request",
+            "invalid-request",
             "GeoJSON options contain an unsupported field",
         )?;
         let BRegComplete { value, metadata } = self
@@ -3194,9 +3194,9 @@ impl BaseRegistryClient {
     #[napi(js_name = "continueGeoJsonList")]
     pub async fn continue_geo_json_list(&self, value: Value) -> Result<PageOutcome> {
         let projection: BRegGeoJsonContinuationProjection = serde_json::from_value(value)
-            .map_err(|_| binding_error("invalid_request", "GeoJSON continuation is invalid"))?;
+            .map_err(|_| binding_error("invalid-request", "GeoJSON continuation is invalid"))?;
         let continuation = BRegGeoJsonContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .continue_geojson_list(&continuation)
@@ -3222,9 +3222,9 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn continue_current_list(&self, value: Value) -> Result<PageOutcome> {
         let projection: BRegCurrentContinuationProjection = serde_json::from_value(value)
-            .map_err(|_| binding_error("invalid_request", "current continuation is invalid"))?;
+            .map_err(|_| binding_error("invalid-request", "current continuation is invalid"))?;
         let continuation = BRegCurrentContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .continue_current_list(&continuation)
@@ -3250,9 +3250,9 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn continue_as_of_list(&self, value: Value) -> Result<PageOutcome> {
         let projection: BRegAsOfContinuationProjection = serde_json::from_value(value)
-            .map_err(|_| binding_error("invalid_request", "as-of continuation is invalid"))?;
+            .map_err(|_| binding_error("invalid-request", "as-of continuation is invalid"))?;
         let continuation = BRegAsOfContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .continue_as_of_list(&continuation)
@@ -3284,9 +3284,9 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn continue_snapshot_list(&self, value: Value) -> Result<PageOutcome> {
         let projection: BRegSnapshotContinuationProjection = serde_json::from_value(value)
-            .map_err(|_| binding_error("invalid_request", "snapshot continuation is invalid"))?;
+            .map_err(|_| binding_error("invalid-request", "snapshot continuation is invalid"))?;
         let continuation = BRegSnapshotContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .continue_snapshot_list(&continuation)
@@ -3326,10 +3326,10 @@ impl BaseRegistryClient {
     pub async fn continue_relationship_list(&self, value: Value) -> Result<PageOutcome> {
         let projection: BRegRelationshipContinuationProjection = serde_json::from_value(value)
             .map_err(|_| {
-                binding_error("invalid_request", "relationship continuation is invalid")
+                binding_error("invalid-request", "relationship continuation is invalid")
             })?;
         let continuation = BRegRelationshipContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .continue_relationship_list(&continuation)
@@ -3366,7 +3366,7 @@ impl BaseRegistryClient {
             &binding.inner,
             input_object(inputs, "action inputs must be an object")?,
         )
-        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .action_target_conditions(&binding.inner, &request)
@@ -3394,9 +3394,9 @@ impl BaseRegistryClient {
             input_object(inputs, "action inputs must be an object")?,
             conditions.map(|value| &value.inner),
         )
-        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .invoke_action(&binding.inner, &request, &key)
@@ -3472,11 +3472,11 @@ impl BaseRegistryClient {
         let data = data
             .as_object()
             .cloned()
-            .ok_or_else(|| binding_error("invalid_request", "create data must be an object"))?;
+            .ok_or_else(|| binding_error("invalid-request", "create data must be an object"))?;
         let request = BRegCreateRequest::new(data)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let operation = binding.inner.clone();
         let BRegComplete { value, metadata } = self
             .inner
@@ -3498,11 +3498,11 @@ impl BaseRegistryClient {
         let data = data
             .as_object()
             .cloned()
-            .ok_or_else(|| binding_error("invalid_request", "create data must be an object"))?;
+            .ok_or_else(|| binding_error("invalid-request", "create data must be an object"))?;
         let request = BRegCreateRequest::new(data)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         self.inner
             .prepare_create(&binding.inner, &request, &key, format(format_value)?)
             .map(|inner| PreparedCreate { inner })
@@ -3558,16 +3558,16 @@ impl BaseRegistryClient {
         format_value: Option<String>,
     ) -> Result<CompleteOutcome> {
         let record_identifier = uuid::Uuid::parse_str(&record_identifier)
-            .map_err(|_| binding_error("invalid_request", "recordIdentifier must be a UUID"))?;
+            .map_err(|_| binding_error("invalid-request", "recordIdentifier must be a UUID"))?;
         let etag = BRegEtag::parse(&etag).map_err(|_| {
             binding_error(
-                "invalid_request",
+                "invalid-request",
                 "etag must be a strong Base Registry Engine entity tag",
             )
         })?;
         let request = patch_request(operations)?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let operation = binding.inner.clone();
         let BRegComplete { value, metadata } = self
             .inner
@@ -3596,7 +3596,7 @@ impl BaseRegistryClient {
     ) -> Result<CompleteOutcome> {
         let request = batch_request(&binding.inner, request)?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .batch_records(&binding.inner, &request, &key)
@@ -3729,15 +3729,15 @@ impl BaseRegistryClient {
         format_value: Option<String>,
     ) -> Result<CompleteOutcome> {
         let record_identifier = uuid::Uuid::parse_str(&record_identifier)
-            .map_err(|_| binding_error("invalid_request", "recordIdentifier must be a UUID"))?;
+            .map_err(|_| binding_error("invalid-request", "recordIdentifier must be a UUID"))?;
         let etag = BRegEtag::parse(&etag).map_err(|_| {
             binding_error(
-                "invalid_request",
+                "invalid-request",
                 "etag must be a strong Base Registry Engine entity tag",
             )
         })?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .tombstone_record(
@@ -3791,7 +3791,7 @@ impl BaseRegistryClient {
         proposal_version: u32,
     ) -> Result<RawOutcome> {
         let record_identifier = uuid::Uuid::parse_str(&record_identifier)
-            .map_err(|_| binding_error("invalid_request", "recordIdentifier must be a UUID"))?;
+            .map_err(|_| binding_error("invalid-request", "recordIdentifier must be a UUID"))?;
         let slot = slot.inner.clone();
         self.inner
             .download_attachment(&slot, record_identifier, proposal_version)
@@ -3836,7 +3836,7 @@ impl BaseRegistryClient {
                     BRegLifecyclePromotionError::Authority => "authority",
                     BRegLifecyclePromotionError::Binding => "binding",
                 };
-                mapped_error(json!({"kind": "lifecycle_promotion", "code": code, "message": error.to_string()}))
+                mapped_error(json!({"kind": "lifecycle-promotion", "code": code, "message": error.to_string()}))
             })
     }
 
@@ -3850,7 +3850,7 @@ impl BaseRegistryClient {
     ) -> Result<Option<RetainedRequestHistoryPage>> {
         let record = parse_record(record, format(format_value)?)?;
         let metadata = BRegRequestMetadata::from_record(&record.data).map_err(|_| {
-            binding_error("invalid_request", "record request history does not conform")
+            binding_error("invalid-request", "record request history does not conform")
         })?;
         let Some(metadata) = metadata else {
             return Ok(None);
@@ -3861,7 +3861,7 @@ impl BaseRegistryClient {
             })
         }) {
             return Err(binding_error(
-                "invalid_request",
+                "invalid-request",
                 "record request history does not conform",
             ));
         }
@@ -3878,7 +3878,7 @@ impl BaseRegistryClient {
         idempotency_key: String,
     ) -> Result<CompleteOutcome> {
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let action = action.inner.clone();
         let BRegComplete { value, metadata } = self
             .inner
@@ -3900,7 +3900,7 @@ impl BaseRegistryClient {
     ) -> Result<PreparedLifecycle> {
         let record = parse_record(record, format(format_value)?)?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         self.inner
             .prepare_lifecycle_action(&authority.inner, &record, &action.inner, &key)
             .map(|inner| PreparedLifecycle { inner })
@@ -3970,9 +3970,9 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn continue_list_json(&self, value: Value) -> Result<JsonOutcome> {
         let projection: BRegContinuationProjection = serde_json::from_value(value)
-            .map_err(|_| binding_error("invalid_request", "continuation is invalid"))?;
+            .map_err(|_| binding_error("invalid-request", "continuation is invalid"))?;
         let continuation = BRegContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         self.inner
             .continue_list(&continuation)
             .await
@@ -3992,7 +3992,7 @@ impl BaseRegistryClient {
         only_fields(
             &options,
             &["select", "accessProfile"],
-            "invalid_request",
+            "invalid-request",
             "GeoJSON options contain an unsupported field",
         )?;
         let BRegComplete { value, metadata } = self
@@ -4024,9 +4024,9 @@ impl BaseRegistryClient {
     #[napi(js_name = "continueGeoJsonListJson")]
     pub async fn continue_geo_json_list_json(&self, value: Value) -> Result<JsonOutcome> {
         let projection: BRegGeoJsonContinuationProjection = serde_json::from_value(value)
-            .map_err(|_| binding_error("invalid_request", "GeoJSON continuation is invalid"))?;
+            .map_err(|_| binding_error("invalid-request", "GeoJSON continuation is invalid"))?;
         let continuation = BRegGeoJsonContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .continue_geojson_list(&continuation)
@@ -4052,9 +4052,9 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn continue_current_list_json(&self, value: Value) -> Result<JsonOutcome> {
         let projection: BRegCurrentContinuationProjection = serde_json::from_value(value)
-            .map_err(|_| binding_error("invalid_request", "current continuation is invalid"))?;
+            .map_err(|_| binding_error("invalid-request", "current continuation is invalid"))?;
         let continuation = BRegCurrentContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .continue_current_list(&continuation)
@@ -4080,9 +4080,9 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn continue_as_of_list_json(&self, value: Value) -> Result<JsonOutcome> {
         let projection: BRegAsOfContinuationProjection = serde_json::from_value(value)
-            .map_err(|_| binding_error("invalid_request", "as-of continuation is invalid"))?;
+            .map_err(|_| binding_error("invalid-request", "as-of continuation is invalid"))?;
         let continuation = BRegAsOfContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .continue_as_of_list(&continuation)
@@ -4114,9 +4114,9 @@ impl BaseRegistryClient {
     #[napi]
     pub async fn continue_snapshot_list_json(&self, value: Value) -> Result<JsonOutcome> {
         let projection: BRegSnapshotContinuationProjection = serde_json::from_value(value)
-            .map_err(|_| binding_error("invalid_request", "snapshot continuation is invalid"))?;
+            .map_err(|_| binding_error("invalid-request", "snapshot continuation is invalid"))?;
         let continuation = BRegSnapshotContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .continue_snapshot_list(&continuation)
@@ -4156,10 +4156,10 @@ impl BaseRegistryClient {
     pub async fn continue_relationship_list_json(&self, value: Value) -> Result<JsonOutcome> {
         let projection: BRegRelationshipContinuationProjection = serde_json::from_value(value)
             .map_err(|_| {
-                binding_error("invalid_request", "relationship continuation is invalid")
+                binding_error("invalid-request", "relationship continuation is invalid")
             })?;
         let continuation = BRegRelationshipContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .continue_relationship_list(&continuation)
@@ -4200,7 +4200,7 @@ impl BaseRegistryClient {
                 "action inputs must be an object",
             )?,
         )
-        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .action_target_conditions(&binding.inner, &request)
@@ -4229,9 +4229,9 @@ impl BaseRegistryClient {
             )?,
             conditions.map(|value| &value.inner),
         )
-        .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .invoke_action(&binding.inner, &request, &key)
@@ -4309,11 +4309,11 @@ impl BaseRegistryClient {
         let data = data
             .as_object()
             .cloned()
-            .ok_or_else(|| binding_error("invalid_request", "create data must be an object"))?;
+            .ok_or_else(|| binding_error("invalid-request", "create data must be an object"))?;
         let request = BRegCreateRequest::new(data)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let operation = binding.inner.clone();
         let BRegComplete { value, metadata } = self
             .inner
@@ -4336,11 +4336,11 @@ impl BaseRegistryClient {
         let data = data
             .as_object()
             .cloned()
-            .ok_or_else(|| binding_error("invalid_request", "create data must be an object"))?;
+            .ok_or_else(|| binding_error("invalid-request", "create data must be an object"))?;
         let request = BRegCreateRequest::new(data)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         self.inner
             .prepare_create(&binding.inner, &request, &key, format(format_value)?)
             .map(|inner| PreparedCreate { inner })
@@ -4378,16 +4378,16 @@ impl BaseRegistryClient {
         format_value: Option<String>,
     ) -> Result<JsonOutcome> {
         let record_identifier = uuid::Uuid::parse_str(&record_identifier)
-            .map_err(|_| binding_error("invalid_request", "recordIdentifier must be a UUID"))?;
+            .map_err(|_| binding_error("invalid-request", "recordIdentifier must be a UUID"))?;
         let etag = BRegEtag::parse(&etag).map_err(|_| {
             binding_error(
-                "invalid_request",
+                "invalid-request",
                 "etag must be a strong Base Registry Engine entity tag",
             )
         })?;
         let request = patch_request(exact_input(&operations_json)?)?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let operation = binding.inner.clone();
         let BRegComplete { value, metadata } = self
             .inner
@@ -4414,7 +4414,7 @@ impl BaseRegistryClient {
     ) -> Result<JsonOutcome> {
         let request = batch_request(&binding.inner, exact_input(&request_json)?)?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .batch_records(&binding.inner, &request, &key)
@@ -4434,15 +4434,15 @@ impl BaseRegistryClient {
         format_value: Option<String>,
     ) -> Result<JsonOutcome> {
         let record_identifier = uuid::Uuid::parse_str(&record_identifier)
-            .map_err(|_| binding_error("invalid_request", "recordIdentifier must be a UUID"))?;
+            .map_err(|_| binding_error("invalid-request", "recordIdentifier must be a UUID"))?;
         let etag = BRegEtag::parse(&etag).map_err(|_| {
             binding_error(
-                "invalid_request",
+                "invalid-request",
                 "etag must be a strong Base Registry Engine entity tag",
             )
         })?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let BRegComplete { value, metadata } = self
             .inner
             .tombstone_record(
@@ -4520,7 +4520,7 @@ impl BaseRegistryClient {
                     BRegLifecyclePromotionError::Authority => "authority",
                     BRegLifecyclePromotionError::Binding => "binding",
                 };
-                mapped_error(json!({"kind": "lifecycle_promotion", "code": code, "message": error.to_string()}))
+                mapped_error(json!({"kind": "lifecycle-promotion", "code": code, "message": error.to_string()}))
             })
     }
 
@@ -4536,7 +4536,7 @@ impl BaseRegistryClient {
     ) -> Result<PreparedLifecycle> {
         let record = parse_record(exact_input(&record_json)?, format(format_value)?)?;
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         self.inner
             .prepare_lifecycle_action(&authority.inner, &record, &action.inner, &key)
             .map(|inner| PreparedLifecycle { inner })
@@ -4550,7 +4550,7 @@ impl BaseRegistryClient {
         idempotency_key: String,
     ) -> Result<JsonOutcome> {
         let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
-            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
         let action = action.inner.clone();
         let BRegComplete { value, metadata } = self
             .inner

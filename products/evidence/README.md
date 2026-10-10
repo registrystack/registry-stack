@@ -121,7 +121,8 @@ the shared issuer's other clients are refused where Evidence enforces its own
 boundary rather than left to the issuer that holds them. It admits at most 32
 clients, and a project whose active clients change while that bundle compiles is
 refused rather than started against a boundary the bundle does not carry. A
-session that renders its own issuer names no clients and leaves admission to it.
+session that renders its own issuer writes `allowedClients: unrestricted` and
+leaves admission to it.
 
 `evidencectl init <dir> --transport sqlite-extract --profile local` needs no
 OpenAPI document. It creates a source-neutral synthetic statement source,
@@ -184,8 +185,7 @@ include that target's governance.
 `evidencectl check --file <file>` checks one tooling file on its own, offline:
 a client profile, reviewed contracts, development state, a source-import
 baseline or journal, a source resolution file, or a source export manifest. The
-file's `kind` (or, for a client profile and reviewed contracts, its `schema`)
-names the format. It exits 0 when the file passes, 1 when it is refused, and 3
+file's `kind` names the format. It exits 0 when the file passes, 1 when it is refused, and 3
 when it cannot be read; it cannot be combined with a project or `--target`.
 
 `evidencectl package <editable-project> --target <environment-target> --output <new-package-directory>`

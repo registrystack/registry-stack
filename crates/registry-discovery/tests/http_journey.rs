@@ -96,9 +96,9 @@ async fn verified_package_startup_serves_the_packaged_index_through_the_real_rou
     fs::write(
         &runtime,
         format!(
-            r#"apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1
 kind: DiscoveryRuntimeConfig
-listener: {{ bind: 127.0.0.1:0 }}
+listener: {{ bind: 127.0.0.1:0, requestTimeoutMilliseconds: 10000 }}
 package:
   root: {}
   expectedDigest: {}
@@ -107,8 +107,7 @@ limits:
   maximumResponseBytes: 1048576
   maximumResultRecords: 100
   maximumResultAlternatives: 100
-  requestTimeoutSeconds: 10
-  shutdownTimeoutSeconds: 10
+  shutdownGraceMilliseconds: 10000
 logLevel: info
 "#,
             package_root.display(),

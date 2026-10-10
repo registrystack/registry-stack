@@ -274,7 +274,7 @@ fn a_failure_without_its_own_report_is_named_by_its_exit_class() {
     assert_eq!(report["command"], "usage");
     assert_eq!(report["status"], "usage-error");
     assert_eq!(report["diagnostics"][0]["code"], "usage.invalid");
-    assert_eq!(report["diagnostics"][0]["artifact"], "command_arguments");
+    assert_eq!(report["diagnostics"][0]["artifact"], "command-arguments");
     assert_eq!(report["diagnostics"][0]["path"], "arguments");
 
     let (exit, report) = invoke(path_arguments(
@@ -409,4 +409,94 @@ fn a_validator_reason_survives_as_the_usage_message() {
             format!("error: {message}\n  next: {USAGE_ACTION}\n")
         );
     }
+}
+
+/// CFG-NAME-2: every `artifact` word a refusal names is lowercase kebab-case.
+#[test]
+fn every_artifact_word_a_refusal_names_is_kebab_case() {
+    fn kebab(word: &str) -> bool {
+        word.starts_with(|first: char| first.is_ascii_lowercase())
+            && word.split('-').all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            })
+    }
+
+    // A code whose artifact does not depend on the exit class.
+    let by_code = [
+        ("usage.invalid", "command-arguments"),
+        (
+            "messagingctl.activation.invalid-reference",
+            "command-arguments",
+        ),
+        ("retention.future-cutoff", "command-arguments"),
+        ("init.exists", "filesystem"),
+        ("init.write-failed", "filesystem"),
+        ("package.refused", "package-output"),
+        ("config.refused", "runtime-configuration"),
+        ("data.unreadable", "template-data"),
+        ("data.invalid", "template-data"),
+        ("runtime.unavailable", "runtime-dependency"),
+        ("output.failed", "runtime-dependency"),
+        ("package.outcome-unknown", "database"),
+        ("database.unavailable", "database"),
+        ("retention.outcome-unknown", "database"),
+        ("audit.unconfirmed", "audit"),
+        ("audit.unavailable", "audit"),
+        (
+            "messagingctl.activation.not-activated",
+            "database-activation",
+        ),
+        (
+            "messagingctl.activation.package-not-active",
+            "database-activation",
+        ),
+        (
+            "messagingctl.activation.grants-stale",
+            "database-activation",
+        ),
+        (
+            "messagingctl.activation.database-id-mismatch",
+            "database-activation",
+        ),
+        (
+            "messagingctl.activation.role-mode-weakened",
+            "database-activation",
+        ),
+        (
+            "messagingctl.activation.ledger-unreadable",
+            "database-activation",
+        ),
+        (
+            "messagingctl.activation.schema-newer",
+            "database-activation",
+        ),
+        (
+            "messagingctl.activation.schema-invalid",
+            "database-activation",
+        ),
+        ("message.not-found", "message"),
+        ("message.not-eligible", "message"),
+        ("message.dispatch-started", "message"),
+        ("message.changed", "message"),
+        ("message.outcome-unknown", "message"),
+        ("dev.refused", "dev-session"),
+        ("dev.failed", "dev-session"),
+        ("dev.interrupted", "dev-session"),
+    ];
+    for (code, artifact) in by_code {
+        for exit in [DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT] {
+            let (word, _) = guidance(code, exit);
+            assert_eq!(word, artifact, "{code}");
+            assert!(kebab(word), "{code} names the artifact {word}");
+        }
+    }
+
+    // A code without its own entry is named by its exit class.
+    let (word, _) = guidance("a.code.without.an.entry", OPERATIONAL_FAILURE_EXIT);
+    assert_eq!(word, "runtime-dependency");
+    let (word, _) = guidance("a.code.without.an.entry", DOMAIN_REFUSAL_EXIT);
+    assert_eq!(word, "messaging-package");
 }

@@ -359,7 +359,7 @@ async fn a_tampered_credential_is_refused_without_detail() {
         panic!("the refusal maps onto the denied failure");
     };
     assert_eq!(status, 401);
-    assert_eq!(code, "auth.invalid_credential");
+    assert_eq!(code, "auth.invalid-credential");
     assert!(trace_id.is_some_and(|trace_id| !trace_id.is_empty()));
     assert_eq!(retry_after_seconds, None);
 }
@@ -599,10 +599,11 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
     fs::write(
         &profile_path,
         serde_json::to_vec_pretty(&json!({
-            "schema": "registry.evidence-client-profile/v1",
+            "apiVersion": "id.registrystack.org/formats/evidence/client-profile/v1",
+            "kind": "EvidenceClientProfile",
             "baseUrl": deployment.base_url.as_str().trim_end_matches('/'),
             "clientId": CLIENT_ID,
-            "privateKey": {"source": "file", "path": "unused-by-in-memory-key.jwk"},
+            "privateKey": {"type": "file", "path": "unused-by-in-memory-key.jwk"},
             "trust": {"type": "local-loopback-discovery"},
             "contracts": {"type": "published"},
             "verification": {
@@ -771,10 +772,11 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
     fs::write(
         &reviewed_profile_path,
         serde_json::to_vec(&json!({
-            "schema": "registry.evidence-client-profile/v1",
+            "apiVersion": "id.registrystack.org/formats/evidence/client-profile/v1",
+            "kind": "EvidenceClientProfile",
             "baseUrl": deployment.base_url.as_str().trim_end_matches('/'),
             "clientId": CLIENT_ID,
-            "privateKey": {"source": "file", "path": "unused-by-in-memory-key.jwk"},
+            "privateKey": {"type": "file", "path": "unused-by-in-memory-key.jwk"},
             "trust": {"type": "local-loopback-discovery"},
             "contracts": {"type": "reviewed", "file": "reviewed-contracts.json"},
             "verification": {
@@ -857,10 +859,11 @@ async fn a_pinned_progressive_profile_exchanges_staff_context_before_verified_ev
     let definition = &candidate["definitions"][0];
     let profile = registry_evidence_client::EvidenceClientProfile::from_slice(
         &serde_json::to_vec(&json!({
-            "schema": "registry.evidence-client-profile/v1",
+            "apiVersion": "id.registrystack.org/formats/evidence/client-profile/v1",
+            "kind": "EvidenceClientProfile",
             "baseUrl": deployment.base_url.as_str().trim_end_matches('/'),
             "clientId": CLIENT_ID,
-            "privateKey": {"source":"environment", "variable":"UNUSED_EXCHANGE_PROFILE_KEY"},
+            "privateKey": {"type":"environment", "variable":"UNUSED_EXCHANGE_PROFILE_KEY"},
             "trust": {"type":"local-loopback-discovery"},
             "contracts": {"type":"published"},
             "oauth": {"resource":TOKEN_AUDIENCE, "scopes":["evidence:invoke"]},
@@ -2592,7 +2595,7 @@ async fn stock_issuer_task_grants_are_subject_bound_at_the_evidence_boundary() {
         .json()
         .await
         .expect("the body-retarget refusal is JSON");
-    assert_eq!(retarget_problem["code"], "request.selector_invalid");
+    assert_eq!(retarget_problem["code"], "request.selector-invalid");
 
     let short_deadline = unix_seconds() + 4;
     let short_assertion = authority
@@ -2799,7 +2802,7 @@ async fn an_exchanged_token_carries_the_authority_its_client_is_paired_with() {
     assert_denied(
         crossed_client.discover().await,
         401,
-        "auth.invalid_credential",
+        "auth.invalid-credential",
     );
 
     // A token carrying no assertion authority at all is untouched by the rule,
@@ -3028,10 +3031,8 @@ fn rewrite_for_task_grant_profile(bundle_root: &Path, authority_issuer: &str) {
         fs::read_to_string(&configuration_path).expect("the staged configuration is readable");
     replace_exact(
         &mut document,
-        "  principalClaim: sub\n  requesterTagsClaim: evidence_tags",
-        &format!(
-            "  principalClaim: sub\n  allowedClients: [{CLIENT_ID}, {TASK_CLIENT_ID}]\n  requesterTagsClaim: evidence_tags"
-        ),
+        "    allowedClients: unrestricted\n",
+        &format!("    allowedClients: [{CLIENT_ID}, {TASK_CLIENT_ID}]\n"),
         1,
     );
     replace_exact(
@@ -3065,9 +3066,9 @@ fn rewrite_for_assertion_issuer_pairing(bundle_root: &Path, paired_authority: &s
         fs::read_to_string(&configuration_path).expect("the staged configuration is readable");
     replace_exact(
         &mut document,
-        &format!("  allowedClients: [{CLIENT_ID}, {TASK_CLIENT_ID}]\n"),
+        &format!("    allowedClients: [{CLIENT_ID}, {TASK_CLIENT_ID}]\n"),
         &format!(
-            "  allowedClients: [{CLIENT_ID}, {TASK_CLIENT_ID}]\n  assertionIssuers:\n    {TASK_CLIENT_ID}:\n      - \"{paired_authority}\"\n"
+            "    allowedClients: [{CLIENT_ID}, {TASK_CLIENT_ID}]\n    assertionIssuers:\n      {TASK_CLIENT_ID}:\n        - \"{paired_authority}\"\n"
         ),
         1,
     );
@@ -3095,7 +3096,7 @@ fn runtime_document(
     audit_path: &Path,
 ) -> String {
     format!(
-        r#"apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+        r#"apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 package:
   root: {bundle}
@@ -3111,7 +3112,7 @@ secretProviders:
   file:
     root: {secrets}
 signer:
-  kind: local-jwk
+  type: local-jwk
   privateKeyRef: secret:file/signing-key
 audit:
   path: {audit}

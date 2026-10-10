@@ -8,10 +8,10 @@
   "required": ["apiVersion", "kind", "deliveries"],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/events-explanation/v1alpha4"
     },
     "kind": {
-      "const": "EventsExplanation"
+      "const": "BRegEventsExplanation"
     },
     "deliveries": {
       "type": "array",

@@ -31,13 +31,13 @@ const CANARY: &str = "s3cr3t-canary-value";
 /// parameter beside them is not part of the acquisition, and carries the
 /// canary that proves the projection stays narrow.
 const DECLARED_ACQUISITIONS: &str = r#"requirements:
-  - id: urn:example:doctor:requirement:one-call:v1
-    acquisition: {kind: single, source: registry-lookup}
-  - id: urn:example:doctor:requirement:two-call:v1
-    acquisition: {kind: search-then-fetch, search: person-search, fetch: person-record}
-  - id: urn:example:doctor:requirement:fetch-set:v1
+  - uri: urn:example:doctor:requirement:one-call:v1
+    acquisition: {type: single, source: registry-lookup}
+  - uri: urn:example:doctor:requirement:two-call:v1
+    acquisition: {type: search-then-fetch, search: person-search, fetch: person-record}
+  - uri: urn:example:doctor:requirement:fetch-set:v1
     acquisition:
-      kind: search-then-fetch-set
+      type: search-then-fetch-set
       search: civil-record-search
       fetch:
         - {source: union-register, factInputs: [civil_record_reference]}
@@ -210,13 +210,13 @@ fn doctor_refuses_audit_settings_the_service_refuses() {
     for audit in [
         "audit:\n  destination: stdout\n  path: audit/evidence.jsonl\n",
         "audit:\n  destination: stdout\n  rotateBytes: 1048576\n",
-        "audit:\n  destination: stdout\n  retainDays: 1\n",
+        "audit:\n  destination: stdout\n  retentionDays: 1\n",
         "audit:\n  destination: file\n",
         "audit:\n  destination: syslog\n  path: audit/evidence.jsonl\n",
         "audit:\n  path: audit/evidence.jsonl\n  rotateBytes: 1024\n",
         "audit:\n  path: audit/evidence.jsonl\n  rotateBytes: 4294967296\n",
-        "audit:\n  path: audit/evidence.jsonl\n  retainDays: 0\n",
-        "audit:\n  path: audit/evidence.jsonl\n  retainDays: 36501\n",
+        "audit:\n  path: audit/evidence.jsonl\n  retentionDays: 0\n",
+        "audit:\n  path: audit/evidence.jsonl\n  retentionDays: 36501\n",
     ] {
         let workspace = tempfile::tempdir().expect("tempdir");
         let project = workspace.path().join("project");
@@ -359,9 +359,9 @@ fn declare_rate_limits(project: &Path, burst: u32, extra: &str) {
     fs::write(&path, document).expect("declare rate limits");
 }
 
-const AUDIENCE_SCOPED_REQUIREMENT: &str = "requirements:\n  - id: urn:example:doctor:requirement:one-call:v1\n    acquisition: {kind: single, source: registry-lookup}\n";
+const AUDIENCE_SCOPED_REQUIREMENT: &str = "requirements:\n  - uri: urn:example:doctor:requirement:one-call:v1\n    acquisition: {type: single, source: registry-lookup}\n";
 
-const HOLDER_BOUND_RELEASE: &str = "responseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nholderBoundBatchMaxSize: 12\nrequirements:\n  - id: urn:example:doctor:requirement:holder:v1\n    subjectBinding: holder-bound\n    acquisition: {kind: single, source: registry-lookup}\n";
+const HOLDER_BOUND_RELEASE: &str = "responseFormats: [signed-jws, sd-jwt-vc, sd-jwt-vc-batch]\nmaximumHolderBoundBatchSize: 12\nrequirements:\n  - uri: urn:example:doctor:requirement:holder:v1\n    subjectBinding: holder-bound\n    acquisition: {type: single, source: registry-lookup}\n";
 
 /// Run doctor in both output forms over a frozen project.
 fn doctor_both_forms(project: &Path) -> (Output, Output) {
@@ -783,11 +783,11 @@ fn doctor_renders_every_call_each_declared_acquisition_will_make() {
 /// The signer a local deployment declares, resolved from the same secret root
 /// the bundle's other references use.
 const LOCAL_SIGNER: &str =
-    "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/signing-p256-private-jwk\n";
+    "signer:\n  type: local-jwk\n  privateKeyRef: secret:file/signing-p256-private-jwk\n";
 
 /// The signer a production deployment declares, over a socket that belongs to
 /// the target host and exists nowhere in this workspace.
-const TRANSIT_SIGNER: &str = "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\n";
+const TRANSIT_SIGNER: &str = "signer:\n  type: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  attemptTimeoutMilliseconds: 2000\n";
 
 fn runtime_document(signer: &str) -> String {
     format!("package:\n  root: bundle\nsecretProviders:\n  file:\n    root: secrets\n{signer}audit:\n  path: audit/evidence.jsonl\n")
@@ -821,7 +821,7 @@ fn provision(project: &Path) {
     issuer: https://identity.invalid
     audience: evidence-scaffold
     jwksSource:
-      kind: uri
+      type: uri
       uri: https://identity.invalid/.well-known/jwks.json
     tokenTypes: [at+jwt]
     algorithms: [ES256]

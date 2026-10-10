@@ -341,7 +341,7 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
     let object = data
         .as_object()
         .context("webhook envelope data must be an object")?;
-    let lifecycle = data["trigger"] == "request_lifecycle";
+    let lifecycle = data["trigger"] == "request-lifecycle";
     if object.len() != if lifecycle { 7 } else { 6 }
         || ![
             "entity",
@@ -362,7 +362,7 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
             .is_some_and(|entity| !entity.is_empty() && entity.len() <= 64)
         || !matches!(
             data["trigger"].as_str(),
-            Some("created" | "patched" | "tombstoned" | "request_lifecycle")
+            Some("created" | "patched" | "tombstoned" | "request-lifecycle")
         )
         || !data["recordId"].as_str().is_some_and(|id| {
             uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id)
@@ -532,18 +532,18 @@ mod tests {
         vocabulary: bool,
     ) -> (tempfile::TempDir, u16, Receiver) {
         let mut field =
-            json!({"id":"label", "type":"string", "maxLength":64, "classification":"internal"});
+            json!({"id":"label", "type":"string", "maximumLength":64, "classification":"internal"});
         if vocabulary {
             field = json!({"id":"label", "type":"vocabulary-code", "vocabulary":"labels", "values":["projected-value-canary", "ready"], "classification":"internal"});
         }
         let mut project = json!({
-            "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-            "registry":{"id":"example", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://example.test"},
+            "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+            "project":{"id":"example", "version":"1", "defaultLanguage":"en", "canonicalBaseIri":"https://example.test"},
             "package":{"sourceRevision":"test"},
             "entities":[{
                 "id":"record", "primaryDataset":"test-dataset", "route":"records", "mutationMode":"mutable",
                 "classification":"internal", "fields":[field],
-                "hooks":[{"phase":"after","id":"record-created-v1", "trigger":trigger, "projection":["label"], "handler":{"kind":"url","destinationId":"local-hook"}}]
+                "hooks":[{"phase":"after","id":"record-created-v1", "trigger":trigger, "projection":["label"], "handler":{"type":"url","destinationId":"local-hook"}}]
             }]
         });
         if trigger == EventTrigger::RequestLifecycle {
@@ -551,28 +551,28 @@ mod tests {
                 "id":"target", "type":"reference", "target":"target-record", "required":true, "classification":"internal"
             }));
             project["entities"][0]["fields"].as_array_mut().unwrap().push(json!({
-                "id":"proposed-label", "type":"string", "maxLength":64, "required":true, "classification":"internal"
+                "id":"proposed-label", "type":"string", "maximumLength":64, "required":true, "classification":"internal"
             }));
             project["entities"][0]["changeRequest"] = json!({
                 "effects":[{"target":{"fromField":"target"}, "operation":"patch", "set":{"label":{"fromField":"proposed-label"}}}],
-                "review":{"authority":"casework", "policyId":"record-change"},
+                "review":{"type":"required","authority":"casework", "policyId":"record-change"},
                 "onApproved":{"mode":"manual"}
             });
             project["entities"].as_array_mut().unwrap().push(json!({
                 "id":"target-record", "primaryDataset":"test-dataset", "route":"target-records", "mutationMode":"mutable", "classification":"internal",
                 "changeControl":{"requiredFor":["patch"]},
-                "fields":[{"id":"label", "type":"string", "maxLength":64, "classification":"internal"}]
+                "fields":[{"id":"label", "type":"string", "maximumLength":64, "classification":"internal"}]
             }));
         }
         if trigger == EventTrigger::RequestLifecycle {
             project["accessProfiles"] = json!([{
                 "id":"operator", "default":true, "principalClaim":"registry_principal","requiredScopes":"unrestricted",
-                "permissions":[{
-                    "entity":"record", "operations":["create", "get", "list", "patch", "submit_request", "apply_request"],
+                "permissions":{"entities":[{
+                    "entity":"record", "operations":["create", "get", "list", "patch", "submit-request", "apply-request"],
                     "readableFields":["label", "target", "proposed-label"],
                     "writableFields":["label", "target", "proposed-label"], "rowBoundaries":"unrestricted",
                     "applyTargets":[{"entity":"target-record", "rowBoundaries":"unrestricted"}]
-                }]
+                }]}
             }]);
         }
         let project = parse_project_json(&serde_json::to_vec(&project).unwrap()).unwrap();
@@ -1006,14 +1006,14 @@ mod tests {
         }
         for request_body in invalid {
             let mut data = event_data();
-            data["trigger"] = json!("request_lifecycle");
+            data["trigger"] = json!("request-lifecycle");
             data["request"] = request_body;
             let (headers, body) = signed_data(1, 1, data);
             assert_eq!(request(port, headers, body), 401);
             assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
         }
         let mut data = event_data();
-        data["trigger"] = json!("request_lifecycle");
+        data["trigger"] = json!("request-lifecycle");
         data["request"] = valid;
         data["values"]["label"] = Value::Null;
         let (headers, body) = signed_data(1, 1, data);

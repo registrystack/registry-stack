@@ -1,9 +1,9 @@
 # The smallest project that sets every member the configuration conformance
 # corpus mutates. `bregctl check` reports no diagnostic on it, so a corpus
 # case's diagnostics are the case's own.
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: minimal
   canonicalBaseIri: https://registry.example.com
   version: 0.1.0
@@ -41,8 +41,8 @@ entities:
       maximumItems: 4
       maximumBytes: 16384
     fields:
-      - {id: code, type: string, required: true, maxLength: 32, classification: internal}
-      - {id: district, type: string, required: true, maxLength: 32, classification: internal}
+      - {id: code, type: string, required: true, maximumLength: 32, classification: internal}
+      - {id: district, type: string, required: true, maximumLength: 32, classification: internal}
     indexes:
       - {id: by-code, fields: [code]}
       - {id: by-district, fields: [district]}
@@ -58,9 +58,10 @@ accessProfiles:
     requiredScopes: [record:read]
     requiredPurposes: [record-administration]
     permissions:
-      - entity: record
-        operations: [get, list]
-        readableFields: [code, district]
-        filterableFields: [code, district]
-        rowBoundaries:
-          - {field: district, claim: assigned_districts, operator: in}
+      entities:
+        - entity: record
+          operations: [get, list]
+          readableFields: [code, district]
+          filterableFields: [code, district]
+          rowBoundaries:
+            - {field: district, claim: assigned_districts, operator: in}

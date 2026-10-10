@@ -243,7 +243,9 @@ PY
       "concepts": [
         {
           "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-          "form": "boolean",
+          "form": {
+            "type": "boolean"
+          },
           "handle": "is_adult",
           "required": true
         }
@@ -281,7 +283,7 @@ PY
       ]
     }
   ],
-  "holderBoundBatchMaxSize": 1,
+  "maximumHolderBoundBatchSize": 1,
   "issuedBy": "urn:registrystack:evidence:local:issuer",
   "providedBy": "urn:registrystack:evidence:local:provider",
   "schema": "registry.evidence-definitions/v1"
@@ -315,7 +317,7 @@ RESPONSE_FORMAT = "signed-jws"
 EXPECTED_OUTPUTS = [
     {
         "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-        "form": "boolean",
+        "form": {"type": "boolean"},
     },
 ]
 MAXIMUM_LIFETIME_SECONDS = 300
@@ -398,7 +400,9 @@ PY
   "expected_outputs": [
     {
       "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-      "form": "boolean"
+      "form": {
+        "type": "boolean"
+      }
     }
   ],
   "issued_by": "urn:registrystack:evidence:local:issuer",
@@ -406,7 +410,9 @@ PY
   "provided_by": "urn:registrystack:evidence:local:provider",
   "published_shape": {
     "concepts": {
-      "urn:registrystack:evidence:local:concept:adult-status:is_adult": "boolean"
+      "urn:registrystack:evidence:local:concept:adult-status:is_adult": {
+        "type": "boolean"
+      }
     },
     "subject": {
       "role": "person",
@@ -434,10 +440,11 @@ Four of those settings are the application's own judgement, and no deployment ca
   answer it will accept.
 
 `expected_outputs` is stated by hand for a different reason. A concept's published `form` and a
-verification expectation's `form` are separate vocabularies: a boolean concept is expected as
-`boolean`, but controlled codes and bounded decimals are expected as `string`, bounded integers as
-`integer`, and the two list forms need explicit bounds. Deriving the expectation from the published
-form would work for this requirement and mislead you on the next one.
+verification expectation's `form` are both mappings named by `type`, and separate vocabularies: a
+boolean concept is expected as `type: boolean`, but controlled codes and bounded decimals are
+expected as `type: string`, bounded integers as `type: integer`, and the two list forms are
+`type: list` with explicit bounds beside it. Deriving the expectation from the published form would
+work for this requirement and mislead you on the next one.
 
 The concept set is checked against discovery in both directions instead, because verification is
 exact: it requires the response's value set to match `expected_outputs` one for one. A deployment
@@ -682,16 +689,16 @@ Branch on the exception class or on `kind`, never on the message text, which is 
 | `token` | `TokenError` | No credential could be obtained. Read `token_kind`. |
 | `transport` | `TransportError` | The exchange failed below the HTTP layer. Read `transport_kind`. |
 | `denied` | `DeniedError` | The deployment refused with a coded problem response. |
-| `not_available` | `NotAvailableError` | The deployment answered that no evidence is available. |
+| `not-available` | `NotAvailableError` | The deployment answered that no evidence is available. |
 | `protocol` | `ProtocolError` | The deployment answered outside its contract, or the response could not be parsed. |
 | `verification` | `VerificationError` | A signed response failed offline verification. Read `code`. |
 
 Every class above inherits from `EvidenceClientError`, which carries `kind`. The status and the body's
 `code` decide the class together, and only for the pairs the problem contract registers: HTTP 401,
 403, and 429 map to `denied`, and 422 carrying the contract's no-evidence code maps to
-`not_available`. Every other status maps to `protocol`, as does any of those four statuses carrying a
+`not-available`. Every other status maps to `protocol`, as does any of those four statuses carrying a
 code the contract does not register for it, because that is a body the deployment did not promise. So
-`not_available` is the branch for a request that was answered and had no evidence to report, not a
+`not-available` is the branch for a request that was answered and had no evidence to report, not a
 protocol failure. No exception carries response bytes, a credential, a header value, a selector
 value, or a subject binding.
 

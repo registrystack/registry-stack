@@ -28,13 +28,13 @@ test('BReg reference includes module extensions, hook conditions, and runtime de
   const project = fields('project');
   const module = fields('module');
   const runtime = fields('runtime');
-  assert.ok(project.has('accessProfiles[].permissions[].entity'));
-  assert.deepEqual(module.get('extendEntities[].hooks[].trigger').values, ['created', 'patched', 'request_lifecycle', 'tombstoned']);
+  assert.ok(project.has('accessProfiles[].permissions.entities[].entity'));
+  assert.deepEqual(module.get('extendEntities[].hooks[].trigger').values, ['created', 'patched', 'request-lifecycle', 'tombstoned']);
   assert.deepEqual(module.get('extendEntities[].hooks[].phase').values, ['after', 'before']);
   for (const path of ['changed[]', 'beforeEquals.*', 'afterEquals.*']) {
     assert.ok(module.has(`extendEntities[].hooks[].when.${path}`), path);
   }
-  assert.deepEqual(module.get('extendEntities[].hooks[].handler.kind').values, ['rhai', 'url', 'wasm']);
+  assert.deepEqual(module.get('extendEntities[].hooks[].handler.type').values, ['rhai', 'url', 'wasm']);
   assert.ok(module.has('extendEntities[].hooks[].handler.destinationId'));
   assert.ok(!module.has('extendEntities[].hooks[].handler.origin'));
   assert.ok(runtime.has('eventDestinations.*.hmacSha256KeyRef'));

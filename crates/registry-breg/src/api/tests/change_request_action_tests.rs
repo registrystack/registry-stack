@@ -275,7 +275,7 @@ fn delegated_token_is_admitted_only_by_an_agent_profile() {
     let delegated = claims(Some("00000000-0000-4000-8000-0000000000aa"));
     let direct = claims(None);
 
-    // `request-reviewer` declares no actorKind and holds submit_request.
+    // `request-reviewer` declares no actorKind and holds submit-request.
     assert!(authorize_route(&service, submit, &delegated, &reviewer).is_none());
     assert!(authorize_route(&service, submit, &direct, &reviewer).is_some());
     assert!(authorize_route(&service, get, &delegated, &reviewer).is_none());
@@ -294,12 +294,12 @@ fn delegation_registry() -> Arc<CompiledRegistry> {
             "requiredScopes": "unrestricted",
             "actorKind": "agent",
             "requesterClients": ["agent-client"],
-            "permissions": [{
+            "permissions": {"entities": [{
                 "entity": "placement-correction-request",
                 "operations": ["get"],
                 "readableFields": ["placement"],
                 "rowBoundaries": "unrestricted"
-            }]
+            }]}
         }));
     let project =
         parse_project_json(&serde_json::to_vec(&project).unwrap()).expect("fixture parses");
@@ -312,18 +312,18 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
 }
 
 const COMPILED_REGISTRY_PROJECT: &str = r#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"change-request-http","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"change-request-http","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
-            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only",
-            "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}]
+            "id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only",
+            "fields":[{"id":"label","type":"string","maximumLength":64,"required":true,"classification":"internal"}]
           },{
             "id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
             "fields":[
               {"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":64,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":64,"classification":"internal"}
             ]
           },{
             "id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable",
@@ -337,25 +337,25 @@ const COMPILED_REGISTRY_PROJECT: &str = r#"{
                 "operation":"patch",
                 "set":{"site":{"fromField":"proposed-site"}}
               }],
-              "review":{"authority":"casework","policyId":"placement-correction"},
+              "review":{"type":"required","authority":"casework","policyId":"placement-correction"},
               "onApproved":{"mode":"manual"}
             }
           }],
           "accessProfiles":[{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement-correction-request",
-              "operations":["get","submit_request","revise_request","cancel_request"],
+              "operations":["get","submit-request","revise-request","cancel-request"],
               "readableFields":["placement","proposed-site"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"placement-correction-request",
-              "operations":["get","apply_request"],
+              "operations":["get","apply-request"],
               "readableFields":["placement"],
               "applyTargets":[{"entity":"placement", "rowBoundaries":[{"field":"site","claim":"site_claim","operator":"equals"}]}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#;
 

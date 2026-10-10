@@ -96,11 +96,11 @@ class TypingContractTests(unittest.TestCase):
         )
         self.assertEqual(
             ast.unparse(aliases["ReviewTaskOwnership"].value),
-            "Literal['assigned_to_me', 'unclaimed']",
+            "Literal['assigned-to-me', 'unclaimed']",
         )
         self.assertEqual(
             ast.unparse(aliases["ReviewDecisionType"].value),
-            "Literal['approve', 'reject', 'changes_requested', 'answer']",
+            "Literal['approve', 'reject', 'changes-requested', 'answer']",
         )
         self.assertEqual(
             ast.unparse(aliases["SupervisoryReviewTaskState"].value),

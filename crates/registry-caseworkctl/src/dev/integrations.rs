@@ -521,7 +521,7 @@ impl Integrations {
                     entries.iter().any(|entry| {
                         entry["issuer"] == authority.issuer
                             && entry["jwksEndpoint"] == expected_jwks
-                            && entry["mapping"] == "institutional_grant"
+                            && entry["mapping"] == "institutional-grant"
                             // The owner derives each exchange client's allowed
                             // assertion authority from the connection it is
                             // paired with, so a task client paired with one of
@@ -701,9 +701,8 @@ impl Integrations {
         value["sources"] = serde_json::to_value(&self.sources)?;
         // A borrowed session's issuer is the shared owner's, which holds every
         // other local project's clients as well. This list is what keeps them
-        // out of this runtime, and an omitted list applies no admission at
-        // all, so it is stated even when the project adds no clients of its
-        // own beyond the ones it borrows.
+        // out of this runtime, so it names the session's clients even when
+        // the project adds none of its own beyond the ones it borrows.
         value["authentication"]["oidc"]["allowedClients"] = json!(clients
             .clients
             .iter()

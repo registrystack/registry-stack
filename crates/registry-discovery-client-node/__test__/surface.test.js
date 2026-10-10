@@ -183,6 +183,35 @@ test('search, resolve, and inert exact selection use the Rust client', async () 
   assert.equal(JSON.parse(JSON.stringify(selection)).recordId, 'record-a');
 });
 
+test('a Discovery problem names its kind in kebab-case', async () => {
+  const problems = [
+    ['not-found', 404, 'Not found'],
+    ['invalid-request', 400, 'Invalid request'],
+    ['result-bound-exceeded', 422, 'Result bound exceeded'],
+  ];
+  for (const [name, status, title] of problems) {
+    const server = http.createServer((_request, response) => {
+      response.statusCode = status;
+      response.setHeader('content-type', 'application/problem+json');
+      response.end(JSON.stringify({
+        type: `https://id.registrystack.org/problems/registry-discovery/${name}`,
+        title,
+        status,
+      }));
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const client = new DiscoveryClient(`http://127.0.0.1:${server.address().port}/`);
+    await assert.rejects(
+      client.searchEvidenceServices({ evidenceTypeId: 'urn:example:evidence-type' }),
+      (error) => error instanceof DiscoveryClientError
+        && error.kind === 'problem'
+        && error.status === status
+        && error.problem === name,
+    );
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('adopter acceptance is explicit and precedes credentials or native traffic', () => {
   const resolution = { ...expectedEvidence.evidenceResolution };
   const selection = selectEvidenceService(
@@ -236,7 +265,7 @@ test('adopter acceptance is explicit and precedes credentials or native traffic'
     assert.throws(
       () => invoke(changed),
       (error) => error instanceof DiscoveryClientError
-        && error.kind === 'local_acceptance_refused',
+        && error.kind === 'local-acceptance-refused',
     );
   }
   assert.equal(tokenConstructions, 0);
@@ -313,7 +342,7 @@ test('renewal refreshes provenance but never silently accepts semantic drift', (
   for (const changed of changes) {
     assert.throws(
       () => continueAfterRenewal(selection, changed),
-      (error) => error instanceof DiscoveryClientError && error.kind === 'selection_changed',
+      (error) => error instanceof DiscoveryClientError && error.kind === 'selection-changed',
     );
   }
 
@@ -327,7 +356,7 @@ test('renewal refreshes provenance but never silently accepts semantic drift', (
       nativeCalls += 1;
       return reselected;
     },
-    (error) => error instanceof DiscoveryClientError && error.kind === 'no_matching_service',
+    (error) => error instanceof DiscoveryClientError && error.kind === 'no-matching-service',
   );
   assert.equal(tokenConstructions, 0);
   assert.equal(nativeCalls, 0);

@@ -74,13 +74,13 @@ fn metadata() -> Value {
         "metadataVersion": "1",
         "entities": [{
             "id": "company", "datasetIdentifier": "legal-entities", "route": "companies",
-            "operations": [{"operation": "apply_request", "accessProfile": "reviewer"}],
+            "operations": [{"operation": "apply-request", "accessProfile": "reviewer"}],
             "readableFields": ["legal-name"], "schema": "/v1/schemas/company"
         }],
         "operations": [{
             "id": "records.company.request.apply", "method": "POST",
             "path": "/v1/records/companies/{record_id}/actions/apply",
-            "operation": "apply_request", "sourceEntity": "company", "responseEntity": "company",
+            "operation": "apply-request", "sourceEntity": "company", "responseEntity": "company",
             "accessProfile": "reviewer", "requiredCapabilities": ["change_request_lifecycle"],
             "entityLabel": "Companies", "identifier": {"apiName": "id", "location": "envelope"},
             "titleFields": ["legal-name"],
@@ -104,7 +104,7 @@ fn record() -> Value {
             "domainData": {"secretProposalBody": "PROPOSAL-BODY-CANARY"},
             "request": {
                 "bregState": "submitted", "proposalVersion": 7, "effectDigest": DIGEST,
-                "proposal":{"review":{"authority":"casework-main","policyId":"registry-correction"}},
+                "proposal":{"review":{"type":"required","authority":"casework-main","policyId":"registry-correction"}},
                 "review":{
                     "submission":{"state":"accepted","authority":"casework-main",
                         "requestId":"00000000-0000-4000-8000-000000000003",
@@ -118,7 +118,7 @@ fn record() -> Value {
                 },
                 "editable": false,
                 "actions": [{
-                    "operation": "apply_request", "method": "POST",
+                    "operation": "apply-request", "method": "POST",
                     "href": format!("/v1/records/companies/{ID}/actions/apply?accessProfile=reviewer"),
                     "ifMatch": ACTION_ETAG, "proposalVersion": 7, "effectDigest": DIGEST
                 }]

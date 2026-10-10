@@ -10,35 +10,35 @@ use serde_json::{json, Value};
 
 fn source() -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1",
-        "kind":"RegistryProject",
-        "registry":{"id":"attachment-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{"id":"attachment-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "entities":[{
             "id":"item","primaryDataset":"test-dataset","route":"items","mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
         },{
             "id":"request","primaryDataset":"test-dataset","route":"requests","mutationMode":"mutable",
             "fields":[
                 {"id":"item","type":"reference","target":"item","required":true,"classification":"internal"},
-                {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+                {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "attachments":[slot()],
             "changeRequest":{
                 "effects":[{"id":"apply-label","target":{"fromField":"item"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-                "review":{"authority":"casework-main","policyId":"attachment-review"},
+                "review":{"type":"required","authority":"casework-main","policyId":"attachment-review"},
                 "onApproved":{"mode":"manual"}
             }
         }],
         "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
                 "entity":"request",
-                "operations":["get","list","create","patch","submit_request","apply_request"],
+                "operations":["get","list","create","patch","submit-request","apply-request"],
                 "readableFields":["item","label","supporting-file"],
                 "writableFields":["item","label","supporting-file"],
                 "applyTargets":[{"entity":"item","rowBoundaries":"unrestricted"}],
                 "rowBoundaries":"unrestricted"
-            }]
+            }]}
         }]
     })
 }
@@ -87,7 +87,8 @@ fn request_slots_keep_field_authority_without_creating_scalar_query_columns() {
         assert!(!query.processing_fields.contains(&slot.id));
     }
     let mut only_slot = source();
-    only_slot["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["supporting-file"]);
+    only_slot["accessProfiles"][0]["permissions"]["entities"][0]["writableFields"] =
+        json!(["supporting-file"]);
     compile(&only_slot).expect("slot-only writable projections are valid");
 }
 
@@ -122,9 +123,9 @@ fn every_slot_policy_member_changes_compiled_and_request_contract_identity() {
     }
     let mut renamed = original.clone();
     renamed["entities"][1]["attachments"][0]["id"] = json!("replacement-file");
-    renamed["accessProfiles"][0]["permissions"][0]["readableFields"] =
+    renamed["accessProfiles"][0]["permissions"]["entities"][0]["readableFields"] =
         json!(["item", "label", "replacement-file"]);
-    renamed["accessProfiles"][0]["permissions"][0]["writableFields"] =
+    renamed["accessProfiles"][0]["permissions"]["entities"][0]["writableFields"] =
         json!(["item", "label", "replacement-file"]);
     let compiled = compile(&renamed).unwrap();
     assert_ne!(compiled.revision(), baseline.revision());
@@ -145,8 +146,10 @@ fn absence_omits_attachment_members_from_source_and_compiled_contracts() {
         .as_object_mut()
         .unwrap()
         .remove("attachments");
-    source["accessProfiles"][0]["permissions"][0]["readableFields"] = json!(["item", "label"]);
-    source["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["item", "label"]);
+    source["accessProfiles"][0]["permissions"]["entities"][0]["readableFields"] =
+        json!(["item", "label"]);
+    source["accessProfiles"][0]["permissions"]["entities"][0]["writableFields"] =
+        json!(["item", "label"]);
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     assert!(serde_json::to_value(&project).unwrap()["entities"][1]
         .get("attachments")
@@ -240,11 +243,10 @@ fn attachment_ids_refuse_invalid_duplicate_and_field_collisions() {
     for id in ["../file", "", "File", "file/name"] {
         let mut candidate = source();
         candidate["entities"][1]["attachments"][0]["id"] = json!(id);
-        assert_diagnostic(
-            &candidate,
-            "breg.identifier.invalid",
-            "entities[id=request].attachments[0].id",
-        );
+        let error = parse_project_json(&serde_json::to_vec(&candidate).unwrap())
+            .expect_err("an identifier outside the grammar is refused where it is read");
+        let error = format!("{error:?}");
+        assert!(error.contains("a local identifier matching"), "{error}");
     }
 }
 
@@ -299,7 +301,8 @@ fn content_types_are_bounded_concrete_and_unique() {
 fn attachments_cannot_be_scalar_query_inputs() {
     for member in ["filterableFields", "sortableFields"] {
         let mut candidate = source();
-        candidate["accessProfiles"][0]["permissions"][0][member] = json!(["supporting-file"]);
+        candidate["accessProfiles"][0]["permissions"]["entities"][0][member] =
+            json!(["supporting-file"]);
         assert_diagnostic(
             &candidate,
             "breg.attachment.access-processing-unsupported",
@@ -309,7 +312,7 @@ fn attachments_cannot_be_scalar_query_inputs() {
         );
     }
     let mut candidate = source();
-    candidate["accessProfiles"][0]["permissions"][0]["rowBoundaries"] =
+    candidate["accessProfiles"][0]["permissions"]["entities"][0]["rowBoundaries"] =
         json!([{"field":"supporting-file", "claim":"owner", "operator":"equals"}]);
     assert_diagnostic(
         &candidate,

@@ -2,10 +2,10 @@
   "ok": false,
   "command": "usage",
   "status": "usage-error",
-  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "apiVersion": "id.registrystack.org/formats/casework/usage-report/v1alpha3",
   "diagnostics": [
     {
-      "artifact": "command_arguments",
+      "artifact": "command-arguments",
       "code": "usage.invalid",
       "message": "unexpected argument --not-a-real-argument",
       "path": "arguments",
@@ -13,5 +13,5 @@
       "suggestedAction": "Run caseworkctl --help, or the command with --help, and retry with the documented arguments."
     }
   ],
-  "kind": "UsageReport"
+  "kind": "CaseworkUsageReport"
 }

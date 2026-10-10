@@ -136,7 +136,7 @@ not answer on the configured Unix socket, and exits `3`.
 
 The flag also adds the dependencies a served request would need. It opens the
 configured audit writer exactly as `serve` would: creating the audit file and its lock if they are
-not already there, and deleting any sealed file already past `audit.retainDays`. It fetches the
+not already there, and deleting any sealed file already past `audit.retentionDays`. It fetches the
 access-token issuer key set fail-closed and resolves every configured source credential. It appends
 no audit event of its own, but run beside a running service it refuses instead, because the writer
 is a single-writer destination and the running service already holds its lock.

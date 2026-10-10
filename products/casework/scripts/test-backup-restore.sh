@@ -217,7 +217,7 @@ review_tasks() {
 
 work_items() {
   local status
-  status=$(casework_call GET '/v1/work-items?view=my_teams&queue=corrections' "$1")
+  status=$(casework_call GET '/v1/work-items?view=my-teams&queue=corrections' "$1")
   expect_status 200 "$status" "$1" "the corrections work-item inbox"
 }
 
@@ -259,8 +259,8 @@ submit_correction() {
   status=$(http GET "$breg_origin/v1/records/scope-corrections/$identifier?accessProfile=editor" \
     "$header" "$work/correction-$tag-draft.json")
   expect_status 200 "$status" "$work/correction-$tag-draft.json" "reading correction $tag"
-  href=$(jq -r '.data.request.actions[] | select(.operation == "submit_request") | .href' "$work/correction-$tag-draft.json")
-  if_match=$(jq -r '.data.request.actions[] | select(.operation == "submit_request") | .ifMatch' "$work/correction-$tag-draft.json")
+  href=$(jq -r '.data.request.actions[] | select(.operation == "submit-request") | .href' "$work/correction-$tag-draft.json")
+  if_match=$(jq -r '.data.request.actions[] | select(.operation == "submit-request") | .ifMatch' "$work/correction-$tag-draft.json")
   status=$(http POST "$breg_origin$href" "$header" "$work/correction-$tag-submitted.json" \
     "idempotency-key: submit-$tag" "if-match: $if_match" -- '{}')
   expect_status 200 "$status" "$work/correction-$tag-submitted.json" "submitting correction $tag"
@@ -293,7 +293,7 @@ task_for_request_open() {
 
 item_for_subject_waiting() {
   work_items "$work/items.json"
-  [[ "$(jq -r --arg subject "$1" '[.items[] | select(.subject.id == $subject and .state == "waiting_application")] | length' "$work/items.json")" == 1 ]]
+  [[ "$(jq -r --arg subject "$1" '[.items[] | select(.subject.id == $subject and .state == "waiting-application")] | length' "$work/items.json")" == 1 ]]
 }
 
 # Absence counts only on a page that read every candidate.
@@ -393,8 +393,8 @@ status=$(casework_call POST "/v1/review-tasks/$first_task/decisions" "$work/appr
 expect_status 204 "$status" "$work/approve-first.json" "approving the first review"
 wait_for "the registry to record the approval" 120 review_result_is "$first_correction" approved
 correction_view "$first_correction" "$work/approved-first.json"
-apply_href=$(jq -r '.data.request.actions[] | select(.operation == "apply_request") | .href' "$work/approved-first.json")
-apply_if_match=$(jq -r '.data.request.actions[] | select(.operation == "apply_request") | .ifMatch' "$work/approved-first.json")
+apply_href=$(jq -r '.data.request.actions[] | select(.operation == "apply-request") | .href' "$work/approved-first.json")
+apply_if_match=$(jq -r '.data.request.actions[] | select(.operation == "apply-request") | .ifMatch' "$work/approved-first.json")
 status=$(http POST "$breg_origin$apply_href" "$(breg_header staff)" "$work/applied-first.json" \
   'idempotency-key: apply-first' "if-match: $apply_if_match" \
   -- "$(jq -c '{proposalVersion: .data.request.proposalVersion, effectDigest: .data.request.effectDigest}' "$work/approved-first.json")")
@@ -406,7 +406,7 @@ second_review=$(review_request_of "$second_correction")
 wait_for "the second review task" 60 task_for_request_open "$second_review"
 wait_for "the second correction's work item" 60 item_for_subject_waiting "$second_correction"
 lost_second_item=$(jq -r --arg subject "$second_correction" '.items[] | select(.subject.id == $subject) | .itemId' "$work/items.json")
-[[ "$(jq -r 'select(.record.event == "casework.review_decided" and .phase == "response") | .eventId' "$audit_file" | wc -l | tr -d ' ')" == 1 ]] ||
+[[ "$(jq -r 'select(.record.event == "casework.review-decided" and .phase == "response") | .eventId' "$audit_file" | wc -l | tr -d ' ')" == 1 ]] ||
   fail "the lost decision was not audited before the restore"
 
 checkpoint "stopping Casework for good and restoring the dump into a fresh database"
@@ -518,7 +518,7 @@ checkpoint "checking that the audit file continues instead of rewinding"
 (($(wc -c <"$audit_file") > audit_backup_length)) || fail "the restored Casework appended no audit entry"
 jq -s -e 'all(.[]; (keys == ["correlation", "eventId", "phase", "record", "schema", "time"]) and .schema == "registry-casework-audit/v1")' \
   "$audit_file" >/dev/null || fail "an audit entry has an unexpected shape"
-[[ "$(jq -r 'select(.record.event == "casework.review_decided" and .phase == "response") | .eventId' "$audit_file" | wc -l | tr -d ' ')" == 1 ]] ||
+[[ "$(jq -r 'select(.record.event == "casework.review-decided" and .phase == "response") | .eventId' "$audit_file" | wc -l | tr -d ' ')" == 1 ]] ||
   fail "the audit file does not keep the one decision the restore lost"
 # The applied correction's item completed before the restore and again after
 # it, both entries under the same item pseudonym; the second correction was

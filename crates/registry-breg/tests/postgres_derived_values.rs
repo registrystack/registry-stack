@@ -327,17 +327,17 @@ fn read_context(registry: &registry_breg::CompiledRegistry) -> ClaimContext {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(br#"{
-        "apiVersion":"registry.registrystack.org/v1alpha1",
-        "kind":"RegistryProject",
-        "registry":{"id":"derived-values","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{"id":"derived-values","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "entities":[{
             "id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable",
-            "fields":[{"id":"scenario","type":"string","required":true,"minLength":1,"maxLength":64,"classification":"internal"}],
+            "fields":[{"id":"scenario","type":"string","required":true,"minimumLength":1,"maximumLength":64,"classification":"internal"}],
             "derived":[{
                 "id":"contract","sql":"contract.sql","key":"id","execution":"live",
                 "fields":[
-                    {"id":"short-code","type":"string","minLength":2,"maxLength":4,"classification":"internal"},
-                    {"id":"description","type":"text","maxLength":5,"classification":"internal"},
+                    {"id":"short-code","type":"string","minimumLength":2,"maximumLength":4,"classification":"internal"},
+                    {"id":"description","type":"text","maximumLength":5,"classification":"internal"},
                     {"id":"amount","type":"decimal","precision":5,"scale":2,"minimum":"-50.00","maximum":"50.00","classification":"internal"},
                     {"id":"count","type":"int64","classification":"internal"},
                     {"id":"state","type":"vocabulary-code","vocabulary":"states","values":["open","closed"],"classification":"internal"}
@@ -346,12 +346,12 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         }],
         "accessProfiles":[{
             "id":"reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-            "permissions":[{
+            "permissions":{"entities":[{
                 "entity":"entry","operations":["create","get","list"],
                 "readableFields":["scenario","short-code","description","amount","count","state"],
                 "writableFields":["scenario"],
                 "rowBoundaries":"unrestricted"
-            }]
+            }]}
         }]
     }"#)
     .expect("derived-value fixture parses");

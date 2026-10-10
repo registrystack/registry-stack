@@ -172,9 +172,16 @@ impl TargetGovernance {
             .into());
         }
         let mut object = Map::from_iter([
-            // The bundle's own grammar version, which governance compiles
-            // into; it is not the governance format version.
-            ("version".to_owned(), json!(1)),
+            // The envelope of the bundle governance compiles into; it is not
+            // the governance envelope.
+            (
+                "apiVersion".to_owned(),
+                json!(evidence_binary::EVIDENCE_BUNDLE_API_VERSION),
+            ),
+            (
+                "kind".to_owned(),
+                json!(evidence_binary::EVIDENCE_BUNDLE_KIND),
+            ),
             (
                 "assuranceProfile".to_owned(),
                 Value::String(self.assurance_profile),
@@ -1198,7 +1205,14 @@ authorityProfiles: {}
         fs::write(target.join("runtime.yaml"), "outboundTls: {}\n").expect("runtime");
         let documents = read_target_documents(target).expect("governance with a BOM");
         assert_eq!(documents.governed_bundle["assuranceProfile"], "local");
-        assert_eq!(documents.governed_bundle["version"], 1);
+        assert_eq!(
+            documents.governed_bundle["apiVersion"],
+            evidence_binary::EVIDENCE_BUNDLE_API_VERSION
+        );
+        assert_eq!(
+            documents.governed_bundle["kind"],
+            evidence_binary::EVIDENCE_BUNDLE_KIND
+        );
     }
 
     #[test]
@@ -1255,7 +1269,7 @@ authorityProfiles:
         .expect("governance");
         fs::write(
             target.join("runtime.yaml"),
-            r#"apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
 kind: EvidenceRuntimeConfig
 outboundTls:
   systemRoots: true
@@ -1303,7 +1317,7 @@ signing: {}
 sourceConnections:
   registry:
     baseUrl: https://registry.example.test
-    authentication: {kind: static-authorization, tokenRef: 'secret:file/registry-token'}
+    authentication: {type: static-authorization, tokenRef: 'secret:file/registry-token'}
 authorityProfiles:
   reviewed: {}
 "#,

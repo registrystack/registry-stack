@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: farmer-landholding-evidence
   canonicalBaseIri: https://farmer-landholding-evidence.example.gov
   version: 0.1.0
@@ -39,34 +39,34 @@ entities:
 - id: landholding
   primaryDataset: farmer-landholding-evidence
   route: landholdings
-  mutationMode: create_only
+  mutationMode: create-only
   fields:
   - id: farmer-number
     apiName: farmerNumber
     type: string
     required: true
-    maxLength: 77
+    maximumLength: 77
     classification: restricted
   - id: parcel-code
     apiName: parcelCode
     type: string
     required: true
-    maxLength: 64
+    maximumLength: 64
     classification: restricted
   - id: farmer-category
     apiName: farmerCategory
     type: string
     required: false
-    maxLength: 64
+    maximumLength: 64
     classification: restricted
   constraints:
-  - kind: unique
+  - type: unique
     fields:
     - parcel-code
 - id: procedure-check
   primaryDataset: farmer-landholding-evidence
   route: procedure-checks
-  mutationMode: create_only
+  mutationMode: create-only
   fields:
   - id: checked
     type: boolean
@@ -79,19 +79,19 @@ actions:
     type: string
     required: true
     classification: restricted
-    maxLength: 12
+    maximumLength: 12
     apiName: farmerPrefix
   - id: farmer-number
     type: string
     required: true
     classification: restricted
-    maxLength: 64
+    maximumLength: 64
     apiName: farmerNumber
   - id: parcel-code
     type: string
     required: true
     classification: internal
-    maxLength: 64
+    maximumLength: 64
     apiName: parcelCode
   - id: include-category
     type: boolean
@@ -118,7 +118,7 @@ actions:
     - category
     maximumObservationAgeSeconds: 60
   handler:
-    kind: rhai
+    type: rhai
     script: scripts/register-landholding.rhai
     abi: registry.action-handler/v2
     refusals:
@@ -141,19 +141,19 @@ actions:
     type: string
     required: true
     classification: restricted
-    maxLength: 12
+    maximumLength: 12
     apiName: farmerPrefix
   - id: farmer-number
     type: string
     required: true
     classification: restricted
-    maxLength: 64
+    maximumLength: 64
     apiName: farmerNumber
   - id: parcel-code
     type: string
     required: true
     classification: internal
-    maxLength: 64
+    maximumLength: 64
     apiName: parcelCode
   - id: include-category
     type: boolean
@@ -180,7 +180,7 @@ actions:
     - category
     maximumObservationAgeSeconds: 60
   handler:
-    kind: rhai
+    type: rhai
     script: scripts/check-procedure.rhai
     abi: registry.action-handler/v2
     refusals:
@@ -204,22 +204,23 @@ accessProfiles:
   requiredPurposes:
   - land-registration
   permissions:
-  - action: register-landholding
-    operations:
-    - invoke
-    targets:
-    - entity: landholding
-      rowBoundaries: unrestricted
-    results:
-    - landholding
-  - action: check-procedure
-    operations:
-    - invoke
-    targets:
-    - entity: procedure-check
-      rowBoundaries: unrestricted
-    results:
-    - procedure-check
+    actions:
+    - action: register-landholding
+      operations:
+      - invoke
+      targets:
+      - entity: landholding
+        rowBoundaries: unrestricted
+      results:
+      - landholding
+    - action: check-procedure
+      operations:
+      - invoke
+      targets:
+      - entity: procedure-check
+        rowBoundaries: unrestricted
+      results:
+      - procedure-check
 - id: landholding-reader
   default: true
   principalClaim: registry_principal
@@ -228,20 +229,21 @@ accessProfiles:
   requiredPurposes:
   - land-registration-audit
   permissions:
-  - entity: landholding
-    operations:
-    - get
-    readableFields:
-    - farmer-number
-    - parcel-code
-    - farmer-category
-    rowBoundaries: unrestricted
-  - entity: procedure-check
-    operations:
-    - get
-    readableFields:
-    - checked
-    rowBoundaries: unrestricted
+    entities:
+    - entity: landholding
+      operations:
+      - get
+      readableFields:
+      - farmer-number
+      - parcel-code
+      - farmer-category
+      rowBoundaries: unrestricted
+    - entity: procedure-check
+      operations:
+      - get
+      readableFields:
+      - checked
+      rowBoundaries: unrestricted
 evidenceProviders:
 - id: farmer-registry
   contracts: evidence/farmer-contracts.json

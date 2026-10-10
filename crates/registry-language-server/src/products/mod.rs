@@ -938,11 +938,52 @@ mod tests {
     }
 
     #[test]
+    fn a_casework_and_a_discovery_root_are_declared_by_the_format_each_file_names() {
+        for (product, marker, source, declared) in [
+            (
+                ProductKind::Casework,
+                "casework.yaml",
+                "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\n",
+                true,
+            ),
+            (
+                ProductKind::Casework,
+                "casework.yaml",
+                "apiVersion: registry.registrystack.org/casework/v1alpha1\n",
+                false,
+            ),
+            (
+                ProductKind::Discovery,
+                "origins.yaml",
+                "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\n",
+                true,
+            ),
+            (
+                ProductKind::Discovery,
+                "origins.yaml",
+                "kind: DiscoveryOrigins\n",
+                true,
+            ),
+            (
+                ProductKind::Discovery,
+                "origins.yaml",
+                "schemaVersion: registry-discovery/origins/v1alpha1\n",
+                false,
+            ),
+        ] {
+            let directory = project(&[(marker, source)]);
+            let root = directory.path().canonicalize().unwrap();
+            assert_eq!(declares_root(&root, product), declared, "{source}");
+        }
+    }
+
+    #[test]
     fn discovery_reads_only_authoring_mappings() {
         let directory = project(&[
             (
                 "origins.yaml",
-                "schemaVersion: registry-discovery/origins/v1alpha1\n",
+                "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\n\
+                 kind: DiscoveryOrigins\n",
             ),
             ("mappings/adult.yaml", "mappingId: adult\n"),
             ("mappings/other.yml", "mappingId: other\n"),

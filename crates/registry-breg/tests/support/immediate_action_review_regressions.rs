@@ -140,7 +140,7 @@ async fn condition_read_terminal_audit_gates_metadata_and_stays_minimized() {
         .find(|record| {
             record["phase"] == "terminal"
                 && record["outcome"] == "returned"
-                && record["operationId"] == "actions.register-household-contact.target_conditions"
+                && record["operationId"] == "actions.register-household-contact.target-conditions"
         })
         .expect("successful condition read records a terminal audit");
     assert_eq!(terminal["actionId"], "register-household-contact");
@@ -204,7 +204,7 @@ async fn condition_read_terminal_audit_gates_metadata_and_stays_minimized() {
     assert!(
         after_records.iter().any(|record| {
             record["phase"] == "attempt"
-                && record["operationId"] == "actions.register-household-contact.target_conditions"
+                && record["operationId"] == "actions.register-household-contact.target-conditions"
         }),
         "the failed condition read keeps its durable attempt audit"
     );
@@ -227,7 +227,7 @@ async fn condition_read_terminal_audit_gates_metadata_and_stays_minimized() {
             .filter(|record| {
                 record["phase"] == "terminal"
                     && record["operationId"]
-                        == "actions.register-household-contact.target_conditions"
+                        == "actions.register-household-contact.target-conditions"
             })
             .count(),
         1,
@@ -558,9 +558,9 @@ async fn setup_lock_order_action_registry() -> (
 
 fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
     let project = json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
             "id": PACKAGE_ID,
             "version": "1",
             "defaultLanguage": "en",
@@ -575,7 +575,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
                 "id": "jurisdiction",
                 "apiName": "jurisdiction",
                 "type": "string",
-                "maxLength": 64,
+                "maximumLength": 64,
                 "required": true,
                 "classification": "restricted"
             }, {
@@ -616,7 +616,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
             "principalClaim": "registry_principal",
             "requiredScopes": ["registry:contact:register"],
             "requiredPurposes": ["contact-registration"],
-            "permissions": [{
+            "permissions": {"actions": [{
                 "action": "cross-link-lock-record",
                 "operations": ["invoke"],
                 "targets": [{
@@ -628,7 +628,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
                     }]
                 }],
                 "results": ["link-write"]
-            }]
+            }]}
         }]
     });
     let bytes = serde_json::to_vec(&project).expect("lock-order action project serializes");
@@ -923,7 +923,7 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
         "id": "jurisdiction",
         "apiName": "jurisdiction",
         "type": "string",
-        "maxLength": 64,
+        "maximumLength": 64,
         "required": true,
         "classification": "restricted"
     })];
@@ -956,9 +956,9 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
         .map(wide_effect_id)
         .collect::<Vec<_>>();
     let project = json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
             "id": PACKAGE_ID,
             "version": "1",
             "defaultLanguage": "en",
@@ -982,7 +982,7 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
             "principalClaim": "registry_principal",
             "requiredScopes": ["registry:contact:register"],
             "requiredPurposes": ["contact-registration"],
-            "permissions": [{
+            "permissions": {"actions": [{
                 "action": "patch-wide-flags",
                 "operations": ["invoke"],
                 "targets": [{
@@ -994,7 +994,7 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
                     }]
                 }],
                 "results": results
-            }]
+            }]}
         }]
     });
     let bytes = serde_json::to_vec(&project).expect("wide action project serializes");

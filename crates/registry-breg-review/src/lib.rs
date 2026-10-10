@@ -92,37 +92,44 @@ pub fn command() -> Command {
             Arg::new("runtime-config")
                 .long("runtime-config")
                 .value_name("FILE")
-                .help("Absolute path to the review page runtime configuration")
+                .help(
+                    "Review page runtime file. `serve` requires an absolute path; `check` also \
+                     accepts a relative one",
+                )
                 .required(true)
                 .value_parser(value_parser!(PathBuf)),
         )
         .subcommand_required(true)
         .subcommand(
             Command::new("check")
-                .about(
-                    "Check the runtime configuration offline, reading no secret and opening no \
-                     socket",
+                .about("Check the runtime file offline, reading no secret and opening no socket")
+                .long_about(
+                    "Check the runtime file offline, reading no secret and opening no socket.\n\n\
+                     The check reads the runtime file as `serve` does, with no secret material, \
+                     network call, audit file, or listener. It does not prove that a secret the \
+                     file names resolves or that the audit directory can be opened: `serve` \
+                     proves both when it starts.",
                 )
                 .arg(
                     Arg::new("format")
                         .long("format")
-                        .help("How to write the findings")
+                        .help("Emit the selected command's report in this format")
                         .value_parser(value_parser!(OutputFormat))
                         .default_value("human"),
                 )
                 .arg(
                     Arg::new("deny-warnings")
                         .long("deny-warnings")
-                        .help("Refuse warnings as well as errors (exit 1)")
+                        .help("Exit 1 when a warning is reported")
                         .action(ArgAction::SetTrue),
                 )
                 .arg(
                     Arg::new("environment")
                         .long("environment")
                         .help(
-                            "Substitute `${NAME}` expressions from this environment and check \
-                             every value. Without it, each expression is checked by syntax and \
-                             position only",
+                            "Fill `${NAME}` expressions in the runtime file from the process \
+                             environment and check the values they produce. Without it, each \
+                             expression is checked by syntax and position only",
                         )
                         .action(ArgAction::SetTrue),
                 ),

@@ -44,7 +44,7 @@ mod tests {
                     .expect("each lifecycle names an id")
             })
             .collect();
-        assert_eq!(ids, vec!["occurrence", "review_request"]);
+        assert_eq!(ids, vec!["occurrence", "review-request"]);
     }
 
     /// The derived flags survive serialization, so a reader drawing the

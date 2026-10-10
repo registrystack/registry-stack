@@ -115,11 +115,11 @@ impl Disposition {
         match self {
             Self::Leased => "leased",
             Self::Delivered => "delivered",
-            Self::RetryPending => "retry_pending",
-            Self::DeadLettered => "dead_lettered",
+            Self::RetryPending => "retry-pending",
+            Self::DeadLettered => "dead-lettered",
             Self::Unknown => "unknown",
             Self::Expired => "expired",
-            Self::ReplayPending => "replay_pending",
+            Self::ReplayPending => "replay-pending",
             Self::Cancelled => "cancelled",
         }
     }
@@ -147,7 +147,7 @@ impl Transition {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::LeaseLapsed(_) => "lease_lapsed",
+            Self::LeaseLapsed(_) => "lease-lapsed",
             Self::Expired { .. } => "expired",
             Self::Cancelled => "cancelled",
         }
@@ -534,7 +534,7 @@ pub trait DispatchStore: Send + Sync + 'static {
     /// Move one row the claim cannot take to a terminal state of this
     /// consumer's choosing, inside the claim transaction.
     ///
-    /// The state must be `dead_lettered`, `expired`, `unknown`, or
+    /// The state must be `dead-lettered`, `expired`, `unknown`, or
     /// `cancelled`, and a state the expiry sweep selects must have
     /// `expired_at` stamped, so the row leaves the claim, recovery, and
     /// sweep sets for good; the core checks the row afterwards and fails the
@@ -563,4 +563,55 @@ pub trait DispatchTransport: Send + Sync {
     type Detail: Send;
 
     async fn send(&self, job: &LeasedJob<Self::Job>) -> Result<Sent<Self::Detail>, DispatchError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_disposition_is_spelled_in_kebab_case() {
+        let spellings = [
+            (Disposition::Leased, "leased"),
+            (Disposition::Delivered, "delivered"),
+            (Disposition::RetryPending, "retry-pending"),
+            (Disposition::DeadLettered, "dead-lettered"),
+            (Disposition::Unknown, "unknown"),
+            (Disposition::Expired, "expired"),
+            (Disposition::ReplayPending, "replay-pending"),
+            (Disposition::Cancelled, "cancelled"),
+        ];
+        for (disposition, spelling) in spellings {
+            assert_eq!(disposition.as_str(), spelling);
+        }
+    }
+
+    #[test]
+    fn every_transition_is_spelled_in_kebab_case() {
+        let spellings = [
+            (
+                Transition::LeaseLapsed(Disposition::Unknown),
+                "lease-lapsed",
+            ),
+            (
+                Transition::Expired {
+                    from: JobState::Pending,
+                    disposition: Disposition::Expired,
+                },
+                "expired",
+            ),
+            (Transition::Cancelled, "cancelled"),
+        ];
+        for (transition, spelling) in spellings {
+            assert_eq!(transition.as_str(), spelling);
+        }
+    }
+
+    #[test]
+    fn a_dead_lettered_disposition_is_spelled_like_its_stored_state() {
+        assert_eq!(
+            Disposition::DeadLettered.as_str(),
+            JobState::DeadLettered.as_str()
+        );
+    }
 }

@@ -1,4 +1,5 @@
-schemaVersion: registry-discovery/evidence-mapping/v1alpha1
+apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1
+kind: DiscoveryEvidenceMapping
 mappingId: urn:example:mapping:adult-status
 mappingAuthorityId: urn:example:mapping-authority
 requirementId: urn:example:requirement:adult-status

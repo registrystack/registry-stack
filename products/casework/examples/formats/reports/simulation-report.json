@@ -2,7 +2,7 @@
   "ok": true,
   "command": "simulate",
   "status": "complete",
-  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "apiVersion": "id.registrystack.org/formats/casework/simulation-report/v1alpha3",
   "clock": {
     "atRiskAt": "2026-09-11T10:00:00Z",
     "calendar": "office",
@@ -19,7 +19,7 @@
   "databaseAccess": false,
   "diagnostics": [],
   "fixture": "friday-review",
-  "kind": "SimulationReport",
+  "kind": "CaseworkSimulationReport",
   "networkAccess": false,
   "policyVersion": "1",
   "projectId": "regional-review",
@@ -31,7 +31,7 @@
   "source": "regional-register",
   "subject": {
     "entity": "regional-correction",
-    "id": "request-0042",
+    "recordId": "request-0042",
     "version": "1"
   }
 }

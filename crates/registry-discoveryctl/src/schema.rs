@@ -21,7 +21,10 @@ use std::collections::BTreeMap;
 use registry_discovery::{RuntimeConfig, RUNTIME_API_VERSION, RUNTIME_KIND};
 use serde_json::{json, Map, Value};
 
-use crate::project::{AuthoredEvidenceMapping, OriginsFile};
+use crate::project::{
+    AuthoredEvidenceMapping, OriginsFile, MAPPING_API_VERSION, MAPPING_KIND, ORIGINS_API_VERSION,
+    ORIGINS_KIND,
+};
 
 /// The `$id` of the origins schema.
 pub const ORIGINS_SCHEMA_ID: &str =
@@ -41,8 +44,12 @@ const DRAFT: &str = "https://json-schema.org/draft/2020-12/schema";
 
 /// Every generated schema, by file name, as the bytes to commit.
 pub fn schema_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
-    let origins = serde_json::to_value(schemars::schema_for!(OriginsFile))?;
-    let mapping = serde_json::to_value(schemars::schema_for!(AuthoredEvidenceMapping))?;
+    let mut origins = serde_json::to_value(schemars::schema_for!(OriginsFile))?;
+    set_const(&mut origins, "apiVersion", ORIGINS_API_VERSION);
+    set_const(&mut origins, "kind", ORIGINS_KIND);
+    let mut mapping = serde_json::to_value(schemars::schema_for!(AuthoredEvidenceMapping))?;
+    set_const(&mut mapping, "apiVersion", MAPPING_API_VERSION);
+    set_const(&mut mapping, "kind", MAPPING_KIND);
     let mut runtime = serde_json::to_value(schemars::schema_for!(RuntimeConfig))?;
     install_runtime_constraints(&mut runtime);
     Ok([
@@ -90,7 +97,7 @@ fn render(derived: Value, id: &str, title: &str) -> Result<String, serde_json::E
 
 /// State in the schema what the runtime enforces beyond its types: the
 /// envelope values, a listener address the runtime can bind, and a package
-/// root with no `.` or `..` segment. The shared `ListenerConfig` and
+/// root with no `.` or `..` segment. The `RuntimeListener` and shared
 /// `PackageConfig` definitions stay unchanged; an `allOf` branch beside each
 /// reference narrows the block where the Discovery runtime uses it.
 fn install_runtime_constraints(schema: &mut Value) {

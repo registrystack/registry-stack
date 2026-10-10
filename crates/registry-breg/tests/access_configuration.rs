@@ -5,17 +5,17 @@ use serde_json::{json, Value};
 
 fn source() -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"access-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://access-example.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"access-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://access-example.example.test"},
         "entities":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
-          "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"},
-                    {"id":"district","type":"string","maxLength":32,"classification":"internal"}],
+          "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"},
+                    {"id":"district","type":"string","maximumLength":32,"classification":"internal"}],
           "accessRequirements":{"requiredScopes":["entry:read"],"allowedPurposes":["administration"],
             "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}}],
         "accessProfiles":[{"id":"reader","principalClaim":"registry_principal","requiredScopes":["entry:read"],
-          "requiredPurposes":["administration"],"permissions":[{"entity":"entry","operations":["get","list"],
+          "requiredPurposes":["administration"],"permissions":{"entities":[{"entity":"entry","operations":["get","list"],
             "readableFields":["code","district"],"filterableFields":["district"],
-            "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}]}]
+            "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}]}}]
     })
 }
 
@@ -83,17 +83,17 @@ fn requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles() {
             "breg.access.requirements-purpose-widened",
         ),
         (
-            "/accessProfiles/0/permissions/0/rowBoundaries",
+            "/accessProfiles/0/permissions/entities/0/rowBoundaries",
             json!("unrestricted"),
             "breg.access.requirements-row-boundary-missing",
         ),
         (
-            "/accessProfiles/0/permissions/0/rowBoundaries/0/claim",
+            "/accessProfiles/0/permissions/entities/0/rowBoundaries/0/claim",
             json!("caller_district"),
             "breg.access.requirements-row-boundary-missing",
         ),
         (
-            "/accessProfiles/0/permissions/0/rowBoundaries/0/operator",
+            "/accessProfiles/0/permissions/entities/0/rowBoundaries/0/operator",
             json!("equals"),
             "breg.access.requirements-row-boundary-missing",
         ),
@@ -113,7 +113,7 @@ fn requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles() {
     stricter["entities"][0]["accessRequirements"]["allowedPurposes"] =
         json!(["administration", "review"]);
     stricter["accessProfiles"][0]["requiredScopes"] = json!(["entry:read", "entry:review"]);
-    stricter["accessProfiles"][0]["permissions"][0]["rowBoundaries"]
+    stricter["accessProfiles"][0]["permissions"]["entities"][0]["rowBoundaries"]
         .as_array_mut()
         .unwrap()
         .push(json!({"field":"code","claim":"assigned_code","operator":"equals"}));
@@ -182,12 +182,12 @@ fn an_anonymous_member_on_a_module_profile_is_refused_when_the_module_is_read() 
     let profile = json!({"id":"public","anonymous":true,"operations":["get"],"rowBoundaries":[]});
     for (module, path) in [
         (
-            json!({"id":"extra","version":"1","entities":[{"id":"place","primaryDataset":"test-dataset",
+            json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","entities":[{"id":"place","primaryDataset":"test-dataset",
               "route":"places","mutationMode":"mutable","accessProfiles":[profile.clone()]}]}),
             "module.entities[0].accessProfiles[0].anonymous",
         ),
         (
-            json!({"id":"extra","version":"1","extendEntities":[{"entity":"entry",
+            json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","extendEntities":[{"entity":"entry",
               "accessProfiles":[profile.clone()]}]}),
             "module.extendEntities[0].accessProfiles[0].anonymous",
         ),
@@ -199,6 +199,73 @@ fn an_anonymous_member_on_a_module_profile_is_refused_when_the_module_is_read() 
             "{failure:?}"
         );
     }
+}
+
+#[test]
+fn a_profile_that_names_no_principal_claim_is_refused_when_the_project_is_read() {
+    use registry_breg::contract::parse_project_yaml;
+    let mut value = source();
+    value["accessProfiles"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("principalClaim")
+        .unwrap();
+    let failure = parse_project_yaml(&serde_json::to_vec(&value).unwrap())
+        .expect_err("a profile that names no principal claim is refused when the project is read");
+    let [diagnostic] = failure.diagnostics() else {
+        panic!("one diagnostic refuses the project: {failure:?}");
+    };
+    assert_eq!(diagnostic.code, "config.missing-key", "{failure:?}");
+    assert_eq!(diagnostic.path, "project.accessProfiles[0]");
+    assert!(
+        diagnostic.message.contains("principalClaim"),
+        "the refusal names the member: {}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn a_module_profile_that_names_no_principal_claim_is_refused_when_the_module_is_read() {
+    use registry_breg::contract::parse_module_yaml;
+    let module = |profile: &Value| {
+        [
+            (
+                json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","entities":[{"id":"place","primaryDataset":"test-dataset",
+                  "route":"places","mutationMode":"mutable","accessProfiles":[profile.clone()]}]}),
+                "module.entities[0].accessProfiles[0]",
+            ),
+            (
+                json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","extendEntities":[{"entity":"entry",
+                  "accessProfiles":[profile.clone()]}]}),
+                "module.extendEntities[0].accessProfiles[0]",
+            ),
+        ]
+    };
+    let unnamed = json!({"id":"clerk","requiredScopes":"unrestricted","operations":["get"],
+        "rowBoundaries":"unrestricted"});
+    for (module, path) in module(&unnamed) {
+        let failure = parse_module_yaml(&serde_json::to_vec(&module).unwrap()).expect_err(
+            "a profile that names no principal claim is refused when the module is read",
+        );
+        assert_eq!(
+            read_refusals(&failure),
+            vec![("config.missing-key", path)],
+            "{failure:?}"
+        );
+    }
+    let mut named = unnamed;
+    named["principalClaim"] = json!("registry_principal");
+    for (module, _) in module(&named) {
+        parse_module_yaml(&serde_json::to_vec(&module).unwrap())
+            .expect("a profile that names its principal claim is read");
+    }
+}
+
+#[test]
+fn a_principal_claim_written_empty_is_refused_when_the_project_is_compiled() {
+    let mut value = source();
+    value["accessProfiles"][0]["principalClaim"] = json!("");
+    assert_refused(&value, "breg.access-profile.principal-claim-required");
 }
 
 #[test]
@@ -225,7 +292,7 @@ fn module_extensions_may_add_but_never_replace_requirements() {
     let mut value = source();
     value["modules"] = json!([{"id":"extra","version":"1"}]);
     let module = parse_module_json(
-        &serde_json::to_vec(&json!({"id":"extra","version":"1","extendEntities":[{
+        &serde_json::to_vec(&json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","extendEntities":[{
             "entity":"entry","accessRequirements":{"requiredScopes":["entry:read"]}
         }]}))
         .unwrap(),
@@ -261,10 +328,10 @@ fn relationship_grants_cannot_bypass_target_or_join_requirements() {
     let mut value = source();
     value["entities"][0]["readPaths"] =
         json!([{"id":"children","through":"link","to":"child","route":"children"}]);
-    value["accessProfiles"][0]["permissions"][0]["readPaths"] =
+    value["accessProfiles"][0]["permissions"]["entities"][0]["readPaths"] =
         json!([{"path":"children","readableFields":["code"]}]);
     value["entities"].as_array_mut().unwrap().extend([
-        json!({"id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]}),
+        json!({"id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]}),
         json!({"id":"link","primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]})
     ]);
     let baseline = compile(&value).unwrap();
@@ -313,11 +380,11 @@ fn spatial_query_grants_do_not_satisfy_or_weaken_access_requirements() {
             "classification":"internal"
         }));
     value["entities"][0]["geojson"] = json!({"geometryField":"location"});
-    value["accessProfiles"][0]["permissions"][0]["readableFields"]
+    value["accessProfiles"][0]["permissions"]["entities"][0]["readableFields"]
         .as_array_mut()
         .expect("readable fields are an array")
         .push(json!("location"));
-    value["accessProfiles"][0]["permissions"][0]["spatialQueries"] = json!({
+    value["accessProfiles"][0]["permissions"]["entities"][0]["spatialQueries"] = json!({
         "bbox": {
             "maximumLongitudeSpanDegrees": 0.25,
             "maximumLatitudeSpanDegrees": 1.5
@@ -337,8 +404,9 @@ fn footgun_findings_are_actionable_deterministic_and_do_not_change_authority() {
         .unwrap()
         .remove("accessRequirements");
     value["accessProfiles"][0]["requiredScopes"] = json!("unrestricted");
-    value["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!("unrestricted");
-    value["accessProfiles"][0]["permissions"][0]["allowDataExport"] = json!(true);
+    value["accessProfiles"][0]["permissions"]["entities"][0]["rowBoundaries"] =
+        json!("unrestricted");
+    value["accessProfiles"][0]["permissions"]["entities"][0]["allowDataExport"] = json!(true);
     let compiled = compile(&value).unwrap();
     for code in [
         "breg.access.profile-unrestricted-collection",
@@ -368,7 +436,7 @@ fn footgun_findings_are_actionable_deterministic_and_do_not_change_authority() {
 fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
     let mut value = source();
     value["entities"][0]["fields"][0]["classification"] = json!("restricted");
-    let grant = &mut value["accessProfiles"][0]["permissions"][0];
+    let grant = &mut value["accessProfiles"][0]["permissions"]["entities"][0];
     grant["operations"] = json!(["get", "list", "patch", "revisions"]);
     grant["revisionAccess"] = json!(true);
     grant["writableFields"] = json!(["district"]);
@@ -390,7 +458,7 @@ fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
         "{}",
         patch_only.message
     );
-    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!([]);
+    value["accessProfiles"][0]["permissions"]["entities"][0]["writableFields"] = json!([]);
     assert!(!compile(&value)
         .unwrap()
         .findings()
@@ -403,7 +471,7 @@ fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
 #[test]
 fn create_grants_keep_the_row_boundary_field_writable() {
     let mut value = source();
-    let grant = &mut value["accessProfiles"][0]["permissions"][0];
+    let grant = &mut value["accessProfiles"][0]["permissions"]["entities"][0];
     grant["operations"] = json!(["create", "get", "list", "patch"]);
     grant["writableFields"] = json!(["code", "district"]);
     let compiled = compile(&value).unwrap();
@@ -435,7 +503,7 @@ fn create_grants_keep_the_row_boundary_field_writable() {
         .all(|d| d.code != "breg.access.profile-row-boundary-not-writable"));
 
     let mut create_only = value.clone();
-    create_only["accessProfiles"][0]["permissions"][0]["operations"] =
+    create_only["accessProfiles"][0]["permissions"]["entities"][0]["operations"] =
         json!(["create", "get", "list"]);
     let create_only = compile(&create_only).unwrap();
     let finding = create_only
@@ -446,7 +514,7 @@ fn create_grants_keep_the_row_boundary_field_writable() {
     assert!(!finding.message.contains("patch"), "{}", finding.message);
 
     // Taking the patch-only advice on a create-bearing grant refuses every create.
-    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["code"]);
+    value["accessProfiles"][0]["permissions"]["entities"][0]["writableFields"] = json!(["code"]);
     let compiled = compile(&value).unwrap();
     let finding = compiled
         .findings()
@@ -470,7 +538,8 @@ fn create_grants_keep_the_row_boundary_field_writable() {
     assert_eq!(compiled.findings(), compile(&value).unwrap().findings());
 
     // Without `create` the boundary field may stay unwritable.
-    value["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get", "list", "patch"]);
+    value["accessProfiles"][0]["permissions"]["entities"][0]["operations"] =
+        json!(["get", "list", "patch"]);
     assert!(compile(&value)
         .unwrap()
         .findings()
@@ -495,26 +564,26 @@ fn synthetic_preview_uses_http_admission_and_never_renders_claim_values() {
     };
     let allowed = serde_json::to_value(preview(scenario.clone())).unwrap();
     assert_eq!(allowed["admitted"], true);
-    assert_eq!(allowed["recordAccess"], "not_evaluated");
+    assert_eq!(allowed["recordAccess"], "not-evaluated");
     assert_eq!(allowed["credentialsVerified"], false);
     assert!(!allowed.to_string().contains("canary"));
     for (path, replacement, reason) in [
-        ("/claims/scopes", json!([]), "required_scope_missing"),
+        ("/claims/scopes", json!([]), "required-scope-missing"),
         (
             "/claims/purpose",
             json!("another-purpose"),
-            "purpose_missing_or_not_allowed",
+            "purpose-missing-or-not-allowed",
         ),
         (
             "/claims/directClaims",
             json!({}),
-            "row_claim_missing_or_wrong_cardinality",
+            "row-claim-missing-or-wrong-cardinality",
         ),
-        ("/operation", json!("patch"), "operation_not_granted"),
+        ("/operation", json!("patch"), "operation-not-granted"),
         (
             "/claims/principalClaim",
             json!("sub"),
-            "principal_missing_or_mismatched",
+            "principal-missing-or-mismatched",
         ),
     ] {
         let mut value = scenario.clone();
@@ -555,8 +624,9 @@ fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
         .as_object_mut()
         .unwrap()
         .remove("requiredPurposes");
-    value["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!("unrestricted");
-    value["accessProfiles"][0]["permissions"][0]["allowDataExport"] = json!(true);
+    value["accessProfiles"][0]["permissions"]["entities"][0]["rowBoundaries"] =
+        json!("unrestricted");
+    value["accessProfiles"][0]["permissions"]["entities"][0]["allowDataExport"] = json!(true);
     let candidate = compile(&value).unwrap();
     let diff =
         registry_breg::tooling::classify_registry_diff(&baseline, &candidate, "package-under-test");
@@ -622,7 +692,7 @@ fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
         .as_array_mut()
         .unwrap()
         .push(binding.clone());
-    reordered["accessProfiles"][0]["permissions"][0]["rowBoundaries"]
+    reordered["accessProfiles"][0]["permissions"]["entities"][0]["rowBoundaries"]
         .as_array_mut()
         .unwrap()
         .push(binding);
@@ -647,9 +717,9 @@ fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
 
 fn second_reader() -> Value {
     json!({"id":"auditor","principalClaim":"registry_principal","requiredScopes":["entry:read"],
-      "requiredPurposes":["administration"],"permissions":[{"entity":"entry","operations":["get","list"],
+      "requiredPurposes":["administration"],"permissions":{"entities":[{"entity":"entry","operations":["get","list"],
         "readableFields":["code","district"],"filterableFields":["district"],
-        "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}]})
+        "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}]}})
 }
 
 fn diagnostic_for<'a>(
@@ -722,7 +792,7 @@ fn default_profile_refusals_name_the_entity_the_operation_and_the_profiles() {
 #[test]
 fn write_grants_without_writable_fields_are_reported() {
     let mut value = source();
-    value["accessProfiles"][0]["permissions"][0]["operations"] =
+    value["accessProfiles"][0]["permissions"]["entities"][0]["operations"] =
         json!(["get", "list", "create", "patch"]);
     let compiled = compile(&value).unwrap();
     let finding = compiled
@@ -738,7 +808,7 @@ fn write_grants_without_writable_fields_are_reported() {
         finding.message.contains("`create`") && finding.message.contains("`patch`"),
         "{finding:?}"
     );
-    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["code"]);
+    value["accessProfiles"][0]["permissions"]["entities"][0]["writableFields"] = json!(["code"]);
     assert!(!compile(&value)
         .unwrap()
         .findings()
@@ -751,7 +821,7 @@ fn create_grants_report_each_required_field_the_profile_cannot_write() {
     let mut value = source();
     value["entities"][0]["fields"][0]["required"] = json!(true);
     value["entities"][0]["fields"][1]["required"] = json!(true);
-    let grant = &mut value["accessProfiles"][0]["permissions"][0];
+    let grant = &mut value["accessProfiles"][0]["permissions"]["entities"][0];
     grant["operations"] = json!(["create", "get", "list", "patch"]);
     grant["writableFields"] = json!([]);
 
@@ -801,7 +871,8 @@ fn create_grants_report_each_required_field_the_profile_cannot_write() {
             .collect::<Vec<_>>()
     );
 
-    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["code", "district"]);
+    value["accessProfiles"][0]["permissions"]["entities"][0]["writableFields"] =
+        json!(["code", "district"]);
     assert!(compile(&value)
         .unwrap()
         .findings()
@@ -810,8 +881,9 @@ fn create_grants_report_each_required_field_the_profile_cannot_write() {
             diagnostic.code != "breg.access.profile-create-required-field-not-writable"
         }));
 
-    value["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get", "list", "patch"]);
-    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!([]);
+    value["accessProfiles"][0]["permissions"]["entities"][0]["operations"] =
+        json!(["get", "list", "patch"]);
+    value["accessProfiles"][0]["permissions"]["entities"][0]["writableFields"] = json!([]);
     assert!(compile(&value)
         .unwrap()
         .findings()
@@ -830,7 +902,7 @@ fn import_grants_report_each_required_field_the_profile_cannot_write() {
         "maximumItems": 100,
         "maximumBytes": 1_048_576
     });
-    let grant = &mut value["accessProfiles"][0]["permissions"][0];
+    let grant = &mut value["accessProfiles"][0]["permissions"]["entities"][0];
     grant["operations"] = json!(["import"]);
     grant["writableFields"] = json!([]);
 
@@ -875,7 +947,8 @@ fn import_grants_report_each_required_field_the_profile_cannot_write() {
             .collect::<Vec<_>>()
     );
 
-    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["code", "district"]);
+    value["accessProfiles"][0]["permissions"]["entities"][0]["writableFields"] =
+        json!(["code", "district"]);
     assert!(compile(&value)
         .unwrap()
         .findings()
@@ -884,8 +957,8 @@ fn import_grants_report_each_required_field_the_profile_cannot_write() {
             diagnostic.code != "breg.access.profile-create-required-field-not-writable"
         }));
 
-    value["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get", "list"]);
-    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!([]);
+    value["accessProfiles"][0]["permissions"]["entities"][0]["operations"] = json!(["get", "list"]);
+    value["accessProfiles"][0]["permissions"]["entities"][0]["writableFields"] = json!([]);
     assert!(compile(&value)
         .unwrap()
         .findings()
@@ -902,7 +975,7 @@ fn unresolved_access_profile_fields_have_one_concrete_path_per_reference() {
         .as_object_mut()
         .unwrap()
         .remove("accessRequirements");
-    let grant = &mut value["accessProfiles"][0]["permissions"][0];
+    let grant = &mut value["accessProfiles"][0]["permissions"]["entities"][0];
     grant["operations"] = json!(["get", "list", "patch"]);
     grant["readableFields"] = json!(["missing-readable"]);
     grant["filterableFields"] = json!(["missing-filterable"]);
@@ -935,14 +1008,14 @@ fn unresolved_read_path_fields_have_one_concrete_path_per_reference() {
     let mut value = source();
     value["entities"][0]["readPaths"] =
         json!([{"id":"children","through":"link","to":"child","route":"children"}]);
-    value["accessProfiles"][0]["permissions"][0]["readPaths"] = json!([{
+    value["accessProfiles"][0]["permissions"]["entities"][0]["readPaths"] = json!([{
         "path":"children",
         "readableFields":["missing-readable"],
         "filterableFields":["missing-filterable"],
         "sortableFields":["missing-sortable"]
     }]);
     value["entities"].as_array_mut().unwrap().extend([
-        json!({"id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]}),
+        json!({"id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]}),
         json!({"id":"link","primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]})
     ]);
 
@@ -962,7 +1035,7 @@ fn unresolved_read_path_fields_have_one_concrete_path_per_reference() {
         ]
     );
 
-    let grant = &mut value["accessProfiles"][0]["permissions"][0]["readPaths"][0];
+    let grant = &mut value["accessProfiles"][0]["permissions"]["entities"][0]["readPaths"][0];
     grant["readableFields"] = json!(["id", "code"]);
     grant["filterableFields"] = json!(["code"]);
     grant["sortableFields"] = json!(["code"]);
@@ -973,10 +1046,10 @@ fn unresolved_read_path_fields_have_one_concrete_path_per_reference() {
 fn unresolved_constraint_fields_name_the_entity_constraint_and_field() {
     let mut value = source();
     value["entities"][0]["constraints"] = json!([
-        {"kind":"unique","id":"unknowns","fields":["missing-first","missing-second"]},
-        {"kind":"int_range","id":"range","field":"missing-range","minimum":0},
-        {"kind":"unique","id":"empty","fields":[]},
-        {"kind":"temporal-non-overlap","id":"empty-temporal","scopeFields":[]}
+        {"type":"unique","id":"unknowns","fields":["missing-first","missing-second"]},
+        {"type":"int-range","id":"range","field":"missing-range","minimum":0},
+        {"type":"unique","id":"empty","fields":[]},
+        {"type":"temporal-non-overlap","id":"empty-temporal","scopeFields":[]}
     ]);
 
     let failure = compile(&value).expect_err("unresolved constraint fields fail compilation");
@@ -1045,7 +1118,7 @@ fn sole_profile_is_implicit_default_and_workflow_routes_may_require_explicit_sel
     {
         profile.default = true;
         // Reach stage-specific route validation rather than the shared GET route.
-        for grant in &mut profile.permissions {
+        for grant in &mut profile.permissions.entities {
             grant
                 .operations
                 .remove(&registry_breg::contract::Operation::Get);

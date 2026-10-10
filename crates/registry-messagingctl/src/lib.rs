@@ -103,7 +103,7 @@ enum Command {
     Init(InitArgs),
     /// Build an immutable runtime package from an editable project.
     Package(PackageArgs),
-    /// Check an authoring project, installed package, or runtime configuration.
+    /// Check an authoring project, installed package, or runtime file.
     Check(CheckArgs),
     /// Render one template version with the given data, offline.
     Preview(PreviewArgs),
@@ -296,8 +296,8 @@ struct PackageSource {
         .args(["runtime_config", "package", "project"])
 ))]
 struct CheckArgs {
-    /// The runtime configuration file, checked offline against the package
-    /// --package or --project names, or else the one its package.root names.
+    /// Runtime file to check offline against the package --package or
+    /// --project names, or else the one its `package.root` names.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
     /// The package directory holding messaging.yaml.
@@ -306,12 +306,12 @@ struct CheckArgs {
     /// Editable authoring project holding messaging.yaml.
     #[arg(long, value_name = "DIRECTORY")]
     project: Option<PathBuf>,
-    /// Fill ${NAME} expressions in the runtime configuration from the
-    /// environment and check every value; without it each expression is
-    /// checked by its syntax and position only.
+    /// Fill `${NAME}` expressions in the runtime file from the process
+    /// environment and check the values they produce. Without it, each
+    /// expression is checked by syntax and position only.
     #[arg(long, requires = "runtime_config")]
     environment: bool,
-    /// Refuse the check when it reports a warning.
+    /// Exit 1 when a warning is reported.
     #[arg(long)]
     deny_warnings: bool,
 }
@@ -467,7 +467,7 @@ const USAGE_ACTION: &str =
 /// problem code, and by its exit class for a code without its own.
 fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
     match code {
-        "usage.invalid" => ("command_arguments", USAGE_ACTION),
+        "usage.invalid" => ("command-arguments", USAGE_ACTION),
         "init.exists" => (
             "filesystem",
             "Name a directory that does not exist yet, then rerun messagingctl init.",
@@ -477,27 +477,27 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
             "Make the parent directory writable, then rerun messagingctl init.",
         ),
         "package.refused" => (
-            "package_output",
+            "package-output",
             "Correct the --output directory as the message names, then rerun messagingctl package.",
         ),
         "config.refused" if exit == OPERATIONAL_FAILURE_EXIT => (
-            "runtime_configuration",
+            "runtime-configuration",
             "Restore the file or secret the message names, then retry.",
         ),
         "config.refused" => (
-            "runtime_configuration",
+            "runtime-configuration",
             "Correct the member the path names, then rerun messagingctl check.",
         ),
         "data.unreadable" => (
-            "template_data",
+            "template-data",
             "Make the --data file readable, then rerun messagingctl preview.",
         ),
         "data.invalid" => (
-            "template_data",
+            "template-data",
             "Correct the --data file as the message names, then rerun messagingctl preview.",
         ),
         "runtime.unavailable" | "output.failed" => (
-            "runtime_dependency",
+            "runtime-dependency",
             "Retry the command; if it fails again, report the message.",
         ),
         "package.outcome-unknown" => (
@@ -515,31 +515,31 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
         "messagingctl.activation.not-activated"
         | "messagingctl.activation.package-not-active"
         | "messagingctl.activation.grants-stale" => (
-            "database_activation",
+            "database-activation",
             "Run messagingctl plan with the runtime configuration, then apply with the migration credential.",
         ),
         "messagingctl.activation.database-id-mismatch" => (
-            "database_activation",
+            "database-activation",
             "Use the database belonging to this deployment, or restore the configured deployment identity.",
         ),
         "messagingctl.activation.role-mode-weakened" => (
-            "database_activation",
+            "database-activation",
             "Restore the split-role ownership and grants, then rerun messagingctl plan.",
         ),
         "messagingctl.activation.ledger-unreadable" => (
-            "database_activation",
+            "database-activation",
             "Restore the runtime credential's read access to the activation ledger, then retry.",
         ),
         "messagingctl.activation.schema-newer" => (
-            "database_activation",
+            "database-activation",
             "Use the Messaging release that owns the recorded schema version.",
         ),
         "messagingctl.activation.schema-invalid" => (
-            "database_activation",
+            "database-activation",
             "Restore a database whose migration history is an ordered prefix of this Messaging release.",
         ),
         "messagingctl.activation.invalid-reference" => (
-            "command_arguments",
+            "command-arguments",
             "Correct the operator or backup reference bounds, then retry.",
         ),
         "database.unavailable" => (
@@ -547,7 +547,7 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
             "Restore the database or the credential the message names, then retry.",
         ),
         "retention.future-cutoff" => (
-            "command_arguments",
+            "command-arguments",
             "Pass a --before instant that is not in the future.",
         ),
         "retention.outcome-unknown" => (
@@ -568,19 +568,19 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
             "Run messagingctl messages show MESSAGE_ID before acting again.",
         ),
         "dev.refused" => (
-            "dev_session",
+            "dev-session",
             "Correct the project or request the message names, then retry.",
         ),
         "dev.failed" | "dev.interrupted" => (
-            "dev_session",
+            "dev-session",
             "Restore Docker or the file the message names, then rerun messagingctl dev.",
         ),
         _ if exit == OPERATIONAL_FAILURE_EXIT => (
-            "runtime_dependency",
+            "runtime-dependency",
             "Restore the file, secret, database, or service the message names, then retry.",
         ),
         _ => (
-            "messaging_package",
+            "messaging-package",
             "Correct the template, locale, or data the message names, then retry.",
         ),
     }

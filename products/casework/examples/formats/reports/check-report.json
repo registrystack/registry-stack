@@ -2,7 +2,7 @@
   "ok": true,
   "command": "check",
   "status": "complete",
-  "apiVersion": "registry.registrystack.org/caseworkctl/v1alpha3",
+  "apiVersion": "id.registrystack.org/formats/casework/check-report/v1alpha3",
   "databaseAccess": false,
   "diagnostics": [],
   "effective": {
@@ -95,7 +95,7 @@
     "sourceConnections": 0
   },
   "filesChecked": 3,
-  "kind": "CheckReport",
+  "kind": "CaseworkCheckReport",
   "networkAccess": false,
   "profile": "authoring",
   "project": "products/casework/examples/standalone-decision"

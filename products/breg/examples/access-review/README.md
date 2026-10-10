@@ -25,7 +25,7 @@ target/debug/bregctl explain access products/breg/examples/access-review \
 ```
 
 The first scenario satisfies profile admission. The second reports
-`required_scope_missing`. Both commands exit successfully because explanation
+`required-scope-missing`. Both commands exit successfully because explanation
 completed. Add `--format json` and inspect `explanation.admitted` in automation.
 A malformed scenario exits unsuccessfully.
 

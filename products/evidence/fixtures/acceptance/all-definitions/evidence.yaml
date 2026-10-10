@@ -1,10 +1,11 @@
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+kind: EvidenceBundle
 assuranceProfile: evidence-grade
 service:
   providerId: urn:example:fixture:provider:evidence
   publicOrigin: https://evidence.invalid
   trustDomain: urn:example:fixture:trust-domain:acceptance
-issuer: {id: urn:example:fixture:issuer:authority}
+issuer: {uri: urn:example:fixture:issuer:authority}
 publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
 authentication:
   oidc:
@@ -14,11 +15,12 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [ES256]
     jwksSource:
-      kind: uri
+      type: uri
       uri: https://identity.invalid/.well-known/jwks.json
     principalClaim: sub
     requesterTagsClaim: evidence_tags
     evidenceAudienceClaim: evidence_audience
+    requiredScopes: unrestricted
     maximumTokenLifetimeSeconds: 300
     revokedKeyIds: []
 audit: {hashKeyRef: secret:file/audit-hash-key, hashKeyVersion: 1}
@@ -67,10 +69,10 @@ selectorProfiles:
 
 sources:
   source-a:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-a-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-a-token}
     request:
       method: POST
       path: /v1/facts
@@ -84,17 +86,17 @@ sources:
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/total, /date_of_birth]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/adult-status-response.schema.yaml
     extractScript: adapters/adult-status-source.rhai
     factSchema: schemas/adult-status-facts.schema.yaml
   source-b:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-b-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-b-token}
     request:
       method: POST
       path: /v1/facts
@@ -108,18 +110,18 @@ sources:
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/total, /official_residence_code]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/residence-region-response.schema.yaml
     extractScript: adapters/residence-region-source.rhai
     factSchema: schemas/residence-region-facts.schema.yaml
   source-c:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: record-transformed
     authentication:
-      kind: basic
+      type: basic
       usernameRef: secret:file/source-c-username
       passwordRef: secret:file/source-c-password
     request:
@@ -135,17 +137,17 @@ sources:
       preparationLimits: {query: required, jsonBody: forbidden, maximumQueryPairs: 4, maximumQueryNameBytes: 64, maximumQueryValueBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/total, /records/*/licence_state, /records/*/valid_from, /records/*/valid_until]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 131072
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/professional-licence-response.schema.yaml
     extractScript: adapters/professional-licence-source.rhai
     factSchema: schemas/professional-licence-facts.schema.yaml
   source-d:
-    transport: http-json
+    type: http-json
     baseUrl: https://source.invalid
     posture: field-projected
-    authentication: {kind: static-authorization, tokenRef: secret:file/source-d-token}
+    authentication: {type: static-authorization, tokenRef: secret:file/source-d-token}
     request:
       method: POST
       path: /v1/child-relationships
@@ -164,9 +166,9 @@ sources:
       preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 8, maximumCollectionItems: 16, maximumStringBytes: 256, maximumNormalizedBytes: 4096}
       projection: [/total, /records/*/returned_child_reference, /records/*/parent_references, /records/*/reference_namespace, /records/*/relationship_set_contract, /records/*/relationship_set_complete]
       redirects: deny
-      timeoutMilliseconds: 3000
+      attemptTimeoutMilliseconds: 3000
       maximumResponseBytes: 65536
-      concurrencyLimit: 8
+      maximumConcurrency: 8
     responseSchema: schemas/legal-parent-relationship-response.schema.yaml
     extractScript: adapters/legal-parent-relationship-source.rhai
     factSchema: schemas/legal-parent-relationship-facts.schema.yaml
@@ -210,10 +212,10 @@ authorityProfiles:
 
 requirements:
   - handle: adult-status
-    id: urn:example:fixture:requirement:adult-status:v1
+    uri: urn:example:fixture:requirement:adult-status:v1
     kind: criterion
     acquisition:
-      kind: single
+      type: single
       source: source-a
     purposes: [fixture-eligibility]
     subjectRoles:
@@ -226,16 +228,16 @@ requirements:
       script: derivations/adult-status.rhai
       parameters: {minimum_age_years: 18}
     concepts:
-      - {handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}
+      - {handle: is_adult, uri: urn:example:fixture:concept:adult-status, type: boolean, required: true, constraints: {}}
     fixtures: fixtures/adult-status-cases.yaml
     disclosureGuard:
       families: [urn:example:fixture:disclosure-family:adult-status]
     existenceDisclosure: collapse-unresolved
   - handle: residence-region
-    id: urn:example:fixture:requirement:residence-region:v1
+    uri: urn:example:fixture:requirement:residence-region:v1
     kind: information-requirement
     acquisition:
-      kind: single
+      type: single
       source: source-b
     purposes: [fixture-routing]
     subjectRoles:
@@ -248,8 +250,8 @@ requirements:
       parameters: {}
     concepts:
       - handle: region
-        id: urn:example:fixture:concept:residence-region
-        form: controlled-code
+        uri: urn:example:fixture:concept:residence-region
+        type: controlled-code
         required: true
         constraints: {codelist: codelists/residence-region-map.yaml, codelistVersion: '2026-01', maximumBytes: 32}
     fixtures: fixtures/residence-region-cases.yaml
@@ -257,10 +259,10 @@ requirements:
       families: [urn:example:fixture:disclosure-family:residence-region]
     existenceDisclosure: collapse-unresolved
   - handle: professional-licence-status
-    id: urn:example:fixture:requirement:professional-licence-status:v1
+    uri: urn:example:fixture:requirement:professional-licence-status:v1
     kind: criterion
     acquisition:
-      kind: single
+      type: single
       source: source-c
     purposes: [fixture-registration]
     subjectRoles:
@@ -279,10 +281,10 @@ requirements:
           - {minimumInclusive: {type: decimal, value: '31'}, maximumExclusive: {type: decimal, value: '91'}, code: within-90-days}
           - {minimumInclusive: {type: decimal, value: '91'}, maximumExclusive: {type: decimal, value: '365001'}, code: later}
     concepts:
-      - {handle: licence-active, id: urn:example:fixture:concept:licence-active, form: boolean, required: true, constraints: {}}
+      - {handle: licence-active, uri: urn:example:fixture:concept:licence-active, type: boolean, required: true, constraints: {}}
       - handle: licence-expiry-category
-        id: urn:example:fixture:concept:licence-expiry-category
-        form: controlled-category
+        uri: urn:example:fixture:concept:licence-expiry-category
+        type: controlled-category
         required: true
         constraints: {categoryScheme: urn:example:fixture:scheme:licence-expiry, schemeVersion: '1', maximumBytes: 32, codelist: codelists/professional-expiry-categories.yaml}
     fixtures: fixtures/professional-licence-cases.yaml
@@ -290,10 +292,10 @@ requirements:
       families: [urn:example:fixture:disclosure-family:professional-licence]
     existenceDisclosure: collapse-unresolved
   - handle: legal-parent-relationship
-    id: urn:example:fixture:requirement:legal-parent-relationship:v1
+    uri: urn:example:fixture:requirement:legal-parent-relationship:v1
     kind: criterion
     acquisition:
-      kind: single
+      type: single
       source: source-d
     purposes: [fixture-enrolment]
     subjectRoles:
@@ -315,7 +317,7 @@ requirements:
         relationship_set_contract: urn:example:fixture:legal-parent-set:v1
         legal_authority_attestation: urn:example:fixture:governance:legal-parent-register:v1
     concepts:
-      - {handle: relationship-confirmed, id: urn:example:fixture:concept:legal-parent-relationship-confirmed, form: boolean, required: true, constraints: {}}
+      - {handle: relationship-confirmed, uri: urn:example:fixture:concept:legal-parent-relationship-confirmed, type: boolean, required: true, constraints: {}}
     fixtures: fixtures/legal-parent-relationship-cases.yaml
     disclosureGuard:
       families: [urn:example:fixture:disclosure-family:legal-parent-relationship]

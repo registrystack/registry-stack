@@ -19,10 +19,10 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/model-explanation/v1alpha4"
     },
     "kind": {
-      "const": "ModelExplanation"
+      "const": "BRegModelExplanation"
     },
     "registryId": {
       "type": "string"
@@ -43,7 +43,7 @@
         "additionalProperties": false,
         "required": ["id", "digest", "version"],
         "properties": {
-          "id": { "type": "string" },
+          "id": { "$ref": "#/$defs/LocalId" },
           "digest": { "$ref": "#/$defs/Digest" },
           "version": { "type": "string" }
         }
@@ -75,6 +75,11 @@
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
       "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     }
   }

@@ -758,11 +758,11 @@ fn valid_string(value: &Value, contract: &Map<String, Value>) -> bool {
     let Some(value) = value.as_str() else {
         return false;
     };
-    let Some(maximum) = contract.get("maxLength").and_then(Value::as_u64) else {
+    let Some(maximum) = contract.get("maximumLength").and_then(Value::as_u64) else {
         return false;
     };
     let minimum = contract
-        .get("minLength")
+        .get("minimumLength")
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let length = value.chars().count() as u64;
@@ -772,7 +772,7 @@ fn valid_string(value: &Value, contract: &Map<String, Value>) -> bool {
 fn valid_text(value: &Value, contract: &Map<String, Value>) -> bool {
     value.as_str().is_some_and(|value| {
         contract
-            .get("maxLength")
+            .get("maximumLength")
             .and_then(Value::as_u64)
             .is_some_and(|maximum| value.chars().count() as u64 <= maximum)
     })
@@ -933,7 +933,7 @@ fn coordinate_text(value: &str, precision: u64, minimum: f64, maximum: f64) -> O
 }
 
 fn valid_structured(value: &Value, contract: &Map<String, Value>) -> bool {
-    let Some(maximum) = contract.get("maxBytes").and_then(Value::as_u64) else {
+    let Some(maximum) = contract.get("maximumBytes").and_then(Value::as_u64) else {
         return false;
     };
     let Some(schema) = contract.get("schema") else {
@@ -1019,7 +1019,7 @@ mod tests {
                     {
                         "id": "label", "apiName": "label", "required": false,
                         "nullable": optional_nullable, "classification": "internal",
-                        "fieldType": {"type":"string","minLength":1,"maxLength":16}
+                        "fieldType": {"type":"string","minimumLength":1,"maximumLength":16}
                     }
                 ],
                 "referenceInputs": [{"input":"target","apiName":"targetId","targetEntity":"item"}],
@@ -1035,7 +1035,7 @@ mod tests {
                     },
                     "targetConditions": {
                         "method":"POST", "path":"/v1/actions/update-item/target-conditions",
-                        "operationId":"actions.update-item.target_conditions", "requiresIdempotencyKey":false,
+                        "operationId":"actions.update-item.target-conditions", "requiresIdempotencyKey":false,
                         "inputSchema":"action-update-item-target-conditions-input",
                         "responseSchema":"action-update-item-target-conditions-response"
                     }
@@ -1167,12 +1167,12 @@ mod tests {
     fn scalar_contracts_preserve_wire_types_and_bounds() {
         assert!(valid_action_input(
             &json!("éé"),
-            &json!({"type":"string","minLength":2,"maxLength":2}),
+            &json!({"type":"string","minimumLength":2,"maximumLength":2}),
             Some(4),
         ));
         assert!(!valid_action_input(
             &json!("éé"),
-            &json!({"type":"string","minLength":2,"maxLength":2}),
+            &json!({"type":"string","minimumLength":2,"maximumLength":2}),
             Some(3),
         ));
         assert!(valid_action_input(
@@ -1239,7 +1239,7 @@ mod tests {
         assert!(valid_action_input(
             &json!({"flag":true}),
             &json!({
-                "type":"structured", "maxBytes":64,
+                "type":"structured", "maximumBytes":64,
                 "schema":{
                     "type":"object", "additionalProperties":false,
                     "required":["flag"], "properties":{"flag":{"type":"boolean"}}
@@ -1250,7 +1250,7 @@ mod tests {
         assert!(!valid_action_input(
             &json!({"flag":"yes"}),
             &json!({
-                "type":"structured", "maxBytes":64,
+                "type":"structured", "maximumBytes":64,
                 "schema":{
                     "type":"object", "additionalProperties":false,
                     "required":["flag"], "properties":{"flag":{"type":"boolean"}}

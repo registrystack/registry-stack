@@ -35,32 +35,32 @@ fn diagnostic_path<'a>(failure: &'a CompileFailure, code: &str) -> &'a str {
 fn change_control_direct_write_grant_identifies_entity_and_profile() {
     let failure = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"change-request-diagnostics","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"change-request-diagnostics","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           },{
             "id":"asset-placement-request","primaryDataset":"test-dataset","route":"asset-placement-requests","mutationMode":"mutable",
             "fields":[
               {"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
+              "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"asset-operator","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"asset-operator","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"asset","operations":["get","patch"],"readableFields":["label"],"writableFields":["label"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           },{
-            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"asset-placement-request","operations":["get","submit-request","apply-request"],"readableFields":["asset","label"],
               "applyTargets":[{"entity":"asset", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -75,27 +75,27 @@ fn change_control_direct_write_grant_identifies_entity_and_profile() {
 fn change_control_required_for_empty_identifies_entity() {
     let failure = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"change-request-diagnostics","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"change-request-diagnostics","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable","changeControl":{"requiredFor":[]},
-            "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           },{
             "id":"asset-placement-request","primaryDataset":"test-dataset","route":"asset-placement-requests","mutationMode":"mutable",
             "fields":[
               {"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
+              "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"asset-placement-request","operations":["get","submit-request","apply-request"],"readableFields":["asset","label"],
               "applyTargets":[{"entity":"asset", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -110,27 +110,27 @@ fn change_control_required_for_empty_identifies_entity() {
 fn change_request_review_authority_invalid_identifies_entity_and_binding() {
     let failure = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"change-request-diagnostics","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"change-request-diagnostics","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           },{
             "id":"asset-placement-request","primaryDataset":"test-dataset","route":"asset-placement-requests","mutationMode":"mutable",
             "fields":[
               {"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"authority":"Casework","policyId":"request-review"},"onApproved":{"mode":"manual"}}
+              "review":{"type":"required","authority":"Casework","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"asset-placement-request","operations":["get","submit-request","apply-request"],"readableFields":["asset","label"],
               "applyTargets":[{"entity":"asset", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -145,29 +145,29 @@ fn change_request_review_authority_invalid_identifies_entity_and_binding() {
 fn change_request_effect_paths_use_index_when_id_missing_and_id_when_present() {
     let failure = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"change-request-diagnostics","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"change-request-diagnostics","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable","changeControl":{"requiredFor":["create","patch"]},
-            "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           },{
             "id":"asset-placement-request","primaryDataset":"test-dataset","route":"asset-placement-requests","mutationMode":"mutable",
             "fields":[
               {"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[
               {"target":{"entity":"asset"},"operation":"create"},
               {"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"nonexistent-field":{"fromField":"label"}}}
-            ],"review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
+            ],"review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
-              "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
+              "entity":"asset-placement-request","operations":["get","submit-request","apply-request"],"readableFields":["asset","label"],
               "applyTargets":[{"entity":"asset", "rowBoundaries": "unrestricted"}],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
@@ -186,30 +186,30 @@ fn change_request_effect_paths_use_index_when_id_missing_and_id_when_present() {
 fn change_request_submit_operation_missing_identifies_entity() {
     let failure = compile_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"change-request-diagnostics","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"change-request-diagnostics","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"asset","primaryDataset":"test-dataset","route":"assets","mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+            "fields":[{"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}]
           },{
             "id":"asset-placement-request","primaryDataset":"test-dataset","route":"asset-placement-requests","mutationMode":"mutable",
             "fields":[
               {"id":"asset","type":"reference","target":"asset","required":true,"classification":"internal"},
-              {"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}
+              {"id":"label","type":"string","maximumLength":32,"required":true,"classification":"internal"}
             ],
             "changeRequest":{"effects":[{"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-              "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
+              "review":{"type":"required","authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"asset-placement-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "id":"asset-placement-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
               "entity":"asset-placement-request","operations":["get"],"readableFields":["asset","label"],
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
           }]
         }"#,
     )
-    .expect_err("a change-request type requires at least one submit_request grant");
+    .expect_err("a change-request type requires at least one submit-request grant");
     assert_eq!(
         diagnostic_path(&failure, "breg.change-request.submit-operation-missing"),
         "entities[id=asset-placement-request].accessProfiles[].operations"

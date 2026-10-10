@@ -126,7 +126,7 @@ test('a request refused before any exchange reports the outcome known', async ()
   await assert.rejects(
     client.statisticsPublish('enrolments', '2025-99', 'final', 'publisher', 'invalid-period-key'),
     (error) => {
-      assert.equal(error.kind, 'invalid_request');
+      assert.equal(error.kind, 'invalid-request');
       assert.equal(error.outcomeUnknown, false);
       return true;
     },

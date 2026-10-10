@@ -1854,7 +1854,7 @@ fn compiled_registry_with_composite_lookup() -> registry_breg::CompiledRegistry 
         .as_array_mut()
         .expect("widget has selector profiles")
         .push(json!({"id": "by-amount-and-label", "fields": ["amount", "label"]}));
-    source["accessProfiles"][0]["permissions"][0]["lookups"]
+    source["accessProfiles"][0]["permissions"]["entities"][0]["lookups"]
         .as_array_mut()
         .expect("operator has widget lookups")
         .push(json!({"selector": "by-amount-and-label", "valueOrigin": "request"}));
@@ -1896,9 +1896,9 @@ fn compile_registry_source(source: &str) -> registry_breg::CompiledRegistry {
 
 fn registry_source() -> String {
     r#"{
-	          "apiVersion":"registry.registrystack.org/v1alpha1",
-	          "kind":"RegistryProject",
-	          "registry":{"id":"read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+	          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+	          "kind":"BRegProject",
+	          "project":{"id":"read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[{
             "id":"widget",
             "primaryDataset":"test-dataset",
@@ -1909,12 +1909,12 @@ fn registry_source() -> String {
             "selectorProfiles":[{"id":"by-amount","fields":["amount"]}],
             "fields":[
               {"id":"jurisdiction","type":"vocabulary-code","vocabulary":"jurisdiction","values":["zone-a","zone-b"],"required":true,"classification":"internal"},
-              {"id":"label","type":"string","required":true,"minLength":2,"maxLength":100,"classification":"internal"},
-              {"id":"secret","type":"string","required":true,"maxLength":100,"classification":"restricted"},
+              {"id":"label","type":"string","required":true,"minimumLength":2,"maximumLength":100,"classification":"internal"},
+              {"id":"secret","type":"string","required":true,"maximumLength":100,"classification":"restricted"},
               {"id":"amount","type":"decimal","required":true,"precision":8,"scale":2,"classification":"internal"},
               {"id":"ordinal","type":"int64","required":true,"classification":"internal"},
               {"id":"rank","type":"int64","required":false,"classification":"internal"},
-              {"id":"internal-code","apiName":"publicCode","type":"string","required":false,"maxLength":32,"classification":"internal"}
+              {"id":"internal-code","apiName":"publicCode","type":"string","required":false,"maximumLength":32,"classification":"internal"}
             ]
           },{
             "id":"assignment",
@@ -1924,8 +1924,8 @@ fn registry_source() -> String {
             "tombstone":true,
             "classification":"restricted",
             "fields":[
-              {"id":"jurisdiction","type":"string","required":true,"maxLength":32,"classification":"internal"},
-              {"id":"label","type":"string","required":true,"maxLength":100,"classification":"internal"},
+              {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
+              {"id":"label","type":"string","required":true,"maximumLength":100,"classification":"internal"},
               {"id":"valid-from","type":"timestamp","required":true,"classification":"internal"},
               {"id":"valid-to","type":"timestamp","required":false,"classification":"internal"}
             ],
@@ -1935,7 +1935,7 @@ fn registry_source() -> String {
               "scopeFields":["label"]
             },
             "constraints":[{
-              "kind":"temporal-non-overlap",
+              "type":"temporal-non-overlap",
               "scopeFields":["label"],
               "startField":"valid-from",
               "endField":"valid-to"
@@ -1947,7 +1947,7 @@ fn registry_source() -> String {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],
             "requiredPurposes":["case-management","audit-review"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"widget",
               "operations":["create","get","lookup","list","tombstone"],
               "readableFields":["label","secret","amount","jurisdiction","ordinal","rank","internal-code"],
@@ -1965,20 +1965,20 @@ fn registry_source() -> String {
               "filterableFields":["label","jurisdiction"],
               "sortableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
-            }]
+            }]}
           },{
             "id":"auditor",
             "principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],
             "requiredPurposes":["case-management"],
-            "permissions":[{
+            "permissions":{"entities":[{
               "entity":"widget",
               "operations":["get","list"],
               "readableFields":["label","jurisdiction","internal-code"],
               "filterableFields":["label"],
               "sortableFields":["label"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
-            }]
+            }]}
           }]
 	        }"#
     .to_owned()

@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/casework/v1alpha1
+apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
-casework: {id: regional-review, version: "1"}
+project: {id: regional-review, version: "1"}
 accessProfiles:
   - {id: staff, principalClaim: sub, requiredScopes: [casework:staff], role: staff}
   - {id: supervisor, principalClaim: sub, requiredScopes: [casework:supervisor], role: supervisor}
@@ -67,14 +67,14 @@ calendars:
     holidaySet: office-holidays
 clocks:
   - id: response-budget
-    scope: subject
-    anchor: firstSubmittedAt
-    completeOn: reviewCompleted
+    type: subject
+    anchor: first-submitted-at
+    completeOn: review-completed
     after: {elapsed: PT48H}
-    pauseWhile: [awaitingApplicant]
+    pauseWhile: [awaiting-applicant]
   - id: review-deadline
-    scope: activity
-    anchor: stageEnteredAt
+    type: activity
+    anchor: stage-entered-at
     calendar: office
     after: {workingDays: 5}
     dueTime: "17:00"

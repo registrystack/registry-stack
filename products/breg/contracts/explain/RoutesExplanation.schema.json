@@ -2,16 +2,23 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha4.schema.json",
   "title": "RoutesExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain routes`. `routes` mixes two record shapes with no shared field beyond the injected `kind` discriminator: an entity-route half, which is a passthrough of the compiled route table (CompiledRoute) with `kind` injected after serialization, and an action-route half, which bregctl reconstructs field by field. Only the injected `kind` and the action half are pinned in full; the entity half's other fields are outside this contract version.",
+  "description": "Wire shape of `explanation` for `bregctl explain routes`. `routes` mixes two record shapes with no shared field beyond the injected `type` discriminator: an entity-route half, which is a passthrough of the compiled route table (CompiledRoute) with `type` injected after serialization, and an action-route half, which bregctl reconstructs field by field. Only the injected `type` and the action half are pinned in full; the entity half's other fields are outside this contract version.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "routes"],
+  "$defs": {
+    "DerivedId": {
+      "description": "An identifier the compiler derives from local identifiers: two or more local identifiers joined by `.`. It is never authored.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
+      "type": "string"
+    }
+  },
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/routes-explanation/v1alpha4"
     },
     "kind": {
-      "const": "RoutesExplanation"
+      "const": "BRegRoutesExplanation"
     },
     "routes": {
       "type": "array",
@@ -19,12 +26,12 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "Entity route. Passthrough of the compiled route table plus the injected `kind`; fields beyond `kind` follow CompiledRoute and are outside this contract version.",
-            "x-registry-passthrough": "bregctl writes each entity route as the engine holds it plus the injected kind; only kind is pinned, and its other members follow CompiledRoute and are outside this contract version.",
+            "description": "Entity route. Passthrough of the compiled route table plus the injected `type`; fields beyond `type` follow CompiledRoute and are outside this contract version.",
+            "x-registry-passthrough": "bregctl writes each entity route as the engine holds it plus the injected type; only type is pinned, and its other members follow CompiledRoute and are outside this contract version.",
             "additionalProperties": true,
-            "required": ["kind"],
+            "required": ["type"],
             "properties": {
-              "kind": { "const": "entity" }
+              "type": { "const": "entity" }
             }
           },
           {
@@ -32,7 +39,7 @@
             "description": "Action route. Reconstructed field by field by bregctl.",
             "additionalProperties": false,
             "required": [
-              "kind",
+              "type",
               "id",
               "actionId",
               "actionRouteKind",
@@ -44,17 +51,17 @@
               "requiresIdempotencyKey"
             ],
             "properties": {
-              "kind": { "const": "action" },
-              "id": { "type": "string" },
+              "type": { "const": "action" },
+              "id": { "$ref": "#/$defs/DerivedId" },
               "actionId": { "type": "string" },
-              "actionRouteKind": { "enum": ["invoke", "target_conditions"] },
+              "actionRouteKind": { "enum": ["invoke", "target-conditions"] },
               "method": { "enum": ["DELETE", "GET", "PATCH", "POST"] },
               "path": { "type": "string" },
               "operation": {
                 "enum": [
                   "create", "get", "lookup", "list", "patch", "tombstone", "batch",
-                  "revisions", "snapshot", "submit_request", "revise_request",
-                  "cancel_request", "apply_request", "invoke"
+                  "revisions", "snapshot", "submit-request", "revise-request",
+                  "cancel-request", "apply-request", "invoke"
                 ]
               },
               "accessProfiles": { "type": "array", "items": { "type": "string" } },

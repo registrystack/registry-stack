@@ -1,3 +1,6 @@
-id: urn:gov:example:scheme:professional-licence-expiry
+apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
+kind: EvidenceCodelist
+uri: urn:gov:example:scheme:professional-licence-expiry
 version: '1'
+type: code-list
 codes: [expired, within-30-days, within-90-days, later]

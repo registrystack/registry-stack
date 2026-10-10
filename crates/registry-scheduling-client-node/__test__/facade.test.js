@@ -122,7 +122,7 @@ async function refusedBeforeAnyRequest(context, calls) {
   for (const call of calls) {
     await assert.rejects(Promise.resolve().then(() => call(scheduling)), (error) => {
       assert.ok(error instanceof SchedulingClientError, `${error}`);
-      assert.equal(error.kind, 'invalid_request');
+      assert.equal(error.kind, 'invalid-request');
       return true;
     });
   }
@@ -313,22 +313,22 @@ test('createHold refuses an undeclared admission member or an unsafe integer bef
 
   await assert.rejects(
     scheduling.createHold('one-call-secret', 'key-1', { ...ADMISSION, priority: 'high' }),
-    (error) => error instanceof SchedulingClientError && error.kind === 'invalid_request',
+    (error) => error instanceof SchedulingClientError && error.kind === 'invalid-request',
   );
   await assert.rejects(
     scheduling.createHold('one-call-secret', 'key-1', { ...ADMISSION, policyRevision: -1 }),
-    (error) => error instanceof SchedulingClientError && error.kind === 'invalid_request',
+    (error) => error instanceof SchedulingClientError && error.kind === 'invalid-request',
   );
   // The facade refuses an unsafe integer synchronously, as Messaging's does.
   assert.throws(
     () => scheduling.createHold('one-call-secret', 'key-1', { ...ADMISSION, policyRevision: Number.MAX_SAFE_INTEGER + 1 }),
-    (error) => error instanceof SchedulingClientError && error.kind === 'invalid_request',
+    (error) => error instanceof SchedulingClientError && error.kind === 'invalid-request',
   );
   const { SchedulingClient: NativeSchedulingClient } = require('../index');
   const native = new NativeSchedulingClient({ baseUrl: 'http://127.0.0.1:9/' });
   await assert.rejects(
     native.createHold('one-call-secret', 'key-1', { ...ADMISSION, policyRevision: Number.MAX_SAFE_INTEGER + 1 }),
-    (error) => JSON.parse(error.message).kind === 'invalid_request',
+    (error) => JSON.parse(error.message).kind === 'invalid-request',
   );
   assert.equal(requests.length, 0);
 });
@@ -665,7 +665,7 @@ test('bearer tokens never reach error text, fields, or inspection', async (conte
     .catch((error) => failures.push(error));
 
   assert.equal(failures.length, 6);
-  assert.equal(failures[0].kind, 'invalid_request');
+  assert.equal(failures[0].kind, 'invalid-request');
   assert.equal(failures[1].kind, 'problem');
   assert.equal(failures[1].code, 'authentication.refused');
   for (const error of failures) {

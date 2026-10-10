@@ -6,16 +6,16 @@ use serde_json::json;
 
 fn source() -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"action-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"action-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "entities":[{"id":"item", "primaryDataset":"test-dataset", "route":"items", "mutationMode":"mutable",
-            "fields":[{"id":"label", "type":"string", "maxLength":40, "required":true, "classification":"internal"}]}],
+            "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]}],
         "actions":[{"id":"rename-item", "inputs":[
             {"id":"item", "apiName":"itemId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
-            {"id":"label", "apiName":"newLabel", "type":"string", "maxLength":40, "required":true, "classification":"internal"}
+            {"id":"label", "apiName":"newLabel", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}
         ], "effects":[{"id":"renamed", "target":{"fromField":"item"}, "operation":"patch", "set":{"label":{"fromField":"label"}}}]}],
         "accessProfiles":[{"id":"operator", "default":true, "principalClaim":"principal", "requiredScopes":["item.rename"],
-            "permissions":[{"action":"rename-item", "operations":["invoke"], "targets":[{"entity":"item", "rowBoundaries":"unrestricted"}], "results":["renamed"]}]}]
+            "permissions":{"actions":[{"action":"rename-item", "operations":["invoke"], "targets":[{"entity":"item", "rowBoundaries":"unrestricted"}], "results":["renamed"]}]}}]
     })
 }
 
@@ -33,17 +33,17 @@ fn source_without_actions() -> Value {
 
 fn ordinary_policy_source(auditor_operations: Option<&[&str]>) -> Value {
     let mut source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"policy-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"policy-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "entities":[{"id":"person", "primaryDataset":"test-dataset", "route":"people", "mutationMode":"mutable",
             "fields":[
-                {"id":"person-code", "type":"string", "maxLength":40, "required":true, "classification":"internal"},
-                {"id":"sensitive-note", "type":"string", "maxLength":120, "classification":"internal"}
+                {"id":"person-code", "type":"string", "maximumLength":40, "required":true, "classification":"internal"},
+                {"id":"sensitive-note", "type":"string", "maximumLength":120, "classification":"internal"}
             ]}],
         "accessProfiles":[{"id":"operator", "default":true, "principalClaim":"principal","requiredScopes":"unrestricted",
-            "permissions":[{"entity":"person", "operations":["create","get","list"],
+            "permissions":{"entities":[{"entity":"person", "operations":["create","get","list"],
                 "readableFields":["person-code","sensitive-note"],
-                "writableFields":["person-code","sensitive-note"], "rowBoundaries":"unrestricted"}]}]
+                "writableFields":["person-code","sensitive-note"], "rowBoundaries":"unrestricted"}]}}]
     });
     if let Some(operations) = auditor_operations {
         let mut permission = json!({
@@ -63,7 +63,7 @@ fn ordinary_policy_source(auditor_operations: Option<&[&str]>) -> Value {
             .expect("accessProfiles is an array")
             .push(json!({
                 "id":"auditor", "principalClaim":"principal",
-                "requiredScopes":["registry.audit"], "permissions":[permission]
+                "requiredScopes":["registry.audit"], "permissions":{"entities":[permission]}
             }));
     }
     source
@@ -183,7 +183,7 @@ fn action_configuration_and_disclosure_changes_are_visible_in_package_diffs() {
     let mut scoped = value.clone();
     scoped["accessProfiles"][0]["requiredScopes"] = json!(["item.rename.restricted"]);
     let mut no_results = value;
-    no_results["accessProfiles"][0]["permissions"][0]["results"] = json!([]);
+    no_results["accessProfiles"][0]["permissions"]["actions"][0]["results"] = json!([]);
     for variant in [renamed, scoped, no_results] {
         let after = compile(&variant);
         let changes = compiled_registry_change_set(&before, &after, "prior-package");
@@ -280,11 +280,11 @@ fn reviewed_successor_does_not_duplicate_action_policies_for_new_entity() {
             "primaryDataset":"test-dataset",
             "route":"tasks",
             "mutationMode":"mutable",
-            "fields":[{"id":"label", "type":"string", "maxLength":40, "required":true, "classification":"internal"}]
+            "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]
         }));
     candidate["actions"] = json!([{
         "id":"create-task",
-        "inputs":[{"id":"label", "apiName":"label", "type":"string", "maxLength":40, "required":true, "classification":"internal"}],
+        "inputs":[{"id":"label", "apiName":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}],
         "effects":[{"id":"task", "target":{"entity":"task"}, "operation":"create", "set":{"label":{"fromField":"label"}}}]
     }]);
     candidate["accessProfiles"] = json!([{
@@ -292,7 +292,7 @@ fn reviewed_successor_does_not_duplicate_action_policies_for_new_entity() {
         "default":true,
         "principalClaim":"principal",
         "requiredScopes":"unrestricted",
-        "permissions":[{"action":"create-task", "operations":["invoke"], "targets":[{"entity":"task", "rowBoundaries":"unrestricted"}], "results":["task"]}]
+        "permissions":{"actions":[{"action":"create-task", "operations":["invoke"], "targets":[{"entity":"task", "rowBoundaries":"unrestricted"}], "results":["task"]}]}
     }]);
     let after = compile(&candidate);
     let plan = reviewed_plan(&before, &after);
@@ -353,7 +353,7 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
         .unwrap()
         .push(json!({
             "id":"group", "primaryDataset":"test-dataset", "route":"groups", "mutationMode":"mutable",
-            "fields":[{"id":"label", "type":"string", "maxLength":40,
+            "fields":[{"id":"label", "type":"string", "maximumLength":40,
                 "required":true, "classification":"internal"}]
         }));
     without_action["entities"][0]["fields"]
@@ -373,7 +373,7 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
             "required":true, "classification":"internal"
         }));
     with_action["actions"][0]["effects"][0]["set"]["group"] = json!({"fromField":"group"});
-    with_action["accessProfiles"][0]["permissions"][0]["targets"]
+    with_action["accessProfiles"][0]["permissions"]["actions"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({
@@ -426,7 +426,7 @@ fn reviewed_successor_does_not_drop_action_policies_for_absent_entity_table() {
         "primaryDataset":"test-dataset",
         "route":"others",
         "mutationMode":"mutable",
-        "fields":[{"id":"label", "type":"string", "maxLength":40, "required":true, "classification":"internal"}]
+        "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]
     }]);
     removed_entity["accessProfiles"] = json!([]);
     let after = compile(&removed_entity);
@@ -442,38 +442,38 @@ fn reviewed_successor_does_not_drop_action_policies_for_absent_entity_table() {
 
 fn change_request_source(operator_operations: &[&str]) -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"change-request-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"change-request-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "entities":[{
             "id":"asset", "primaryDataset":"test-dataset", "route":"assets", "mutationMode":"mutable",
             "changeControl":{"requiredFor":["patch"]},
-            "fields":[{"id":"label", "type":"string", "maxLength":40, "required":true, "classification":"internal"}]
+            "fields":[{"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}]
         },{
             "id":"asset-request", "primaryDataset":"test-dataset", "route":"asset-requests", "mutationMode":"mutable",
             "fields":[
                 {"id":"asset", "type":"reference", "target":"asset", "required":true, "classification":"internal"},
-                {"id":"label", "type":"string", "maxLength":40, "required":true, "classification":"internal"}
+                {"id":"label", "type":"string", "maximumLength":40, "required":true, "classification":"internal"}
             ],
             "changeRequest":{
                 "effects":[{"id":"apply-label","target":{"fromField":"asset"},"operation":"patch","set":{"label":{"fromField":"label"}}}],
-                "review":{"authority":"casework-main","policyId":"request-review"},
+                "review":{"type":"required","authority":"casework-main","policyId":"request-review"},
                 "onApproved":{"mode":"manual"}
             }
         }],
         "accessProfiles":[{
             "id":"operator", "default":true, "principalClaim":"principal","requiredScopes":"unrestricted",
-            "permissions":[{
+            "permissions":{"entities":[{
                 "entity":"asset-request", "operations": operator_operations,
                 "readableFields":["asset","label"], "writableFields":["asset","label"],
                 "applyTargets":[{"entity":"asset", "rowBoundaries":"unrestricted"}],
                 "rowBoundaries":"unrestricted"
-            }]
+            }]}
         }]
     })
 }
 
-/// A change-request action grant (`submit_request`, `revise_request`,
-/// `cancel_request`, `apply_request`) compiles to a `registry_cr_action_rls_`
+/// A change-request action grant (`submit-request`, `revise-request`,
+/// `cancel-request`, `apply-request`) compiles to a `registry_cr_action_rls_`
 /// policy on the request entity's own table. Removing the grant must drop
 /// that policy in the reviewed successor plan, the same way removing an
 /// immediate-action grant drops its `registry_action_rls_` policy.
@@ -482,15 +482,15 @@ fn reviewed_successor_drops_change_request_action_policy_when_grant_is_removed()
     let before = compile(&change_request_source(&[
         "get",
         "list",
-        "submit_request",
-        "cancel_request",
-        "apply_request",
+        "submit-request",
+        "cancel-request",
+        "apply-request",
     ]));
     let after = compile(&change_request_source(&[
         "get",
         "list",
-        "submit_request",
-        "apply_request",
+        "submit-request",
+        "apply-request",
     ]));
     let plan = reviewed_plan(&before, &after);
 
@@ -500,22 +500,22 @@ fn reviewed_successor_drops_change_request_action_policy_when_grant_is_removed()
         drops
             .iter()
             .any(|sql| sql.contains("registry_cr_action_rls_")),
-        "removing the cancel_request grant must drop its registry_cr_action_rls_ policy, got: {drops:?}"
+        "removing the cancel-request grant must drop its registry_cr_action_rls_ policy, got: {drops:?}"
     );
 }
 
 fn change_request_source_with_reviewer_profile(reviewer_operations: &[&str]) -> Value {
-    let mut source = change_request_source(&["get", "list", "submit_request", "apply_request"]);
+    let mut source = change_request_source(&["get", "list", "submit-request", "apply-request"]);
     source["accessProfiles"]
         .as_array_mut()
         .expect("accessProfiles array")
         .push(json!({
             "id":"reviewer-extra", "principalClaim":"principal","requiredScopes":"unrestricted",
-            "permissions":[{
+            "permissions":{"entities":[{
                 "entity":"asset-request", "operations": reviewer_operations,
                 "readableFields":["asset","label"], "writableFields":["asset","label"],
                 "rowBoundaries":"unrestricted"
-            }]
+            }]}
         }));
     source
 }
@@ -523,7 +523,7 @@ fn change_request_source_with_reviewer_profile(reviewer_operations: &[&str]) -> 
 /// The same stale-policy gap applies to the change-request target "prepare"
 /// policies (`registry_cr_rls_`), generated per profile holding submit or
 /// revise authority on the request entity. Removing a second profile's
-/// `submit_request` grant must drop its stale policy in the reviewed
+/// `submit-request` grant must drop its stale policy in the reviewed
 /// successor plan, while `operator` keeps the type's only apply coverage
 /// unchanged so the plan compiles on both sides.
 #[test]
@@ -531,7 +531,7 @@ fn reviewed_successor_drops_change_request_target_policy_when_submit_grant_is_re
     let before = compile(&change_request_source_with_reviewer_profile(&[
         "get",
         "list",
-        "submit_request",
+        "submit-request",
     ]));
     let after = compile(&change_request_source_with_reviewer_profile(&[
         "get", "list",
@@ -542,12 +542,12 @@ fn reviewed_successor_drops_change_request_target_policy_when_submit_grant_is_re
     let drops = drop_policy_sql(&plan);
     assert!(
         drops.iter().any(|sql| sql.contains("registry_cr_rls_")),
-        "removing the reviewer profile's submit_request grant must drop its registry_cr_rls_ target policy, got: {drops:?}"
+        "removing the reviewer profile's submit-request grant must drop its registry_cr_rls_ target policy, got: {drops:?}"
     );
 }
 
 fn change_request_source_with_presence_profile(include_presence: bool) -> Value {
-    let mut source = change_request_source(&["get", "list", "submit_request", "apply_request"]);
+    let mut source = change_request_source(&["get", "list", "submit-request", "apply-request"]);
     let mut viewer_permission = json!({
         "entity":"asset", "operations":["get"],
         "readableFields":["label"], "writableFields":[],
@@ -562,7 +562,7 @@ fn change_request_source_with_presence_profile(include_presence: bool) -> Value 
         .expect("accessProfiles array")
         .push(json!({
             "id":"asset-viewer", "principalClaim":"principal","requiredScopes":"unrestricted",
-            "permissions":[viewer_permission]
+            "permissions":{"entities":[viewer_permission]}
         }));
     source
 }

@@ -439,7 +439,7 @@ fn write_authoring_project(root: &Path, provider: &ProviderDeployment, invalid: 
     fs::write(
         root.join("origins.yaml"),
         format!(
-            "schemaVersion: registry-discovery/origins/v1alpha1\norigins:\n  - originId: evidence-origin\n    catalogUrl: {base}/origins/evidence.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: true\n  - originId: untrusted-origin\n    catalogUrl: {base}/origins/untrusted.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: true\n{invalid_origin}",
+            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  - originId: evidence-origin\n    catalogUrl: {base}/origins/evidence.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: true\n  - originId: untrusted-origin\n    catalogUrl: {base}/origins/untrusted.jsonld\n    profile: registry-discovery-v1alpha1\n    enabled: true\n{invalid_origin}",
             base = provider.base_url,
         ),
     )
@@ -451,7 +451,7 @@ fn write_authoring_project(root: &Path, provider: &ProviderDeployment, invalid: 
     fs::write(
         mappings.join("adult-status.yaml"),
         format!(
-            "schemaVersion: registry-discovery/evidence-mapping/v1alpha1\nmappingId: urn:example:journey:mapping:adult-status\nmappingAuthorityId: urn:example:journey:mapping-authority\nrequirementId: {REQUIREMENT}\njurisdiction: {JURISDICTION}\nalternatives:\n  - evidenceTypeListId: urn:example:journey:list:adult-status\n    evidenceTypeIds:\n      - {EVIDENCE_TYPE}\n"
+            "apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1\nkind: DiscoveryEvidenceMapping\nmappingId: urn:example:journey:mapping:adult-status\nmappingAuthorityId: urn:example:journey:mapping-authority\nrequirementId: {REQUIREMENT}\njurisdiction: {JURISDICTION}\nalternatives:\n  - evidenceTypeListId: urn:example:journey:list:adult-status\n    evidenceTypeIds:\n      - {EVIDENCE_TYPE}\n"
         ),
     )
     .expect("the Discovery mapping writes");

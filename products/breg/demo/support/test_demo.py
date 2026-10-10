@@ -28,7 +28,7 @@ class DevPreparationTests(unittest.TestCase):
         viewer = document["clients"][2]
         self.assertEqual(viewer["claims"]["business_code"], "BUSINESS-DEMO-001")
         registry = (root / "project/registry.yaml").read_text()
-        self.assertIn("field: business-code\n            claim: business_code", registry)
+        self.assertIn("field: business-code\n              claim: business_code", registry)
         self.assertIn("operator-without-purpose-is-concealed", (root / "project/tests/journeys.yaml").read_text())
         self.assertEqual(document["clients"][1]["testBindings"][0]["stepId"], "operator-without-purpose-is-concealed")
 

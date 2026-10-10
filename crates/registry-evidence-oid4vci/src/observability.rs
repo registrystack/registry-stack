@@ -80,24 +80,24 @@ impl Outcome {
 
     const fn label(self) -> &'static str {
         match self {
-            Self::OfferCreated => "offer_created",
-            Self::OfferAuthorizationRefused => "offer_authorization_refused",
-            Self::StoreSaturated => "store_saturated",
-            Self::StoreFault => "store_fault",
-            Self::CodeRedeemed => "code_redeemed",
-            Self::CodeClaimRefused => "code_claim_refused",
-            Self::TokenClaimed => "token_claimed",
-            Self::TokenClaimRefused => "token_claim_refused",
-            Self::NonceMinted => "nonce_minted",
-            Self::NonceInvalid => "nonce_invalid",
-            Self::NonceTampered => "nonce_tampered",
-            Self::NonceExpired => "nonce_expired",
-            Self::ProofRefused => "proof_refused",
-            Self::CredentialIssued => "credential_issued",
-            Self::EvidenceRefused => "evidence_refused",
-            Self::EvidenceNotAvailable => "evidence_not_available",
-            Self::EvidenceUnavailable => "evidence_unavailable",
-            Self::CleanupExpired => "cleanup_expired",
+            Self::OfferCreated => "offer-created",
+            Self::OfferAuthorizationRefused => "offer-authorization-refused",
+            Self::StoreSaturated => "store-saturated",
+            Self::StoreFault => "store-fault",
+            Self::CodeRedeemed => "code-redeemed",
+            Self::CodeClaimRefused => "code-claim-refused",
+            Self::TokenClaimed => "token-claimed",
+            Self::TokenClaimRefused => "token-claim-refused",
+            Self::NonceMinted => "nonce-minted",
+            Self::NonceInvalid => "nonce-invalid",
+            Self::NonceTampered => "nonce-tampered",
+            Self::NonceExpired => "nonce-expired",
+            Self::ProofRefused => "proof-refused",
+            Self::CredentialIssued => "credential-issued",
+            Self::EvidenceRefused => "evidence-refused",
+            Self::EvidenceNotAvailable => "evidence-not-available",
+            Self::EvidenceUnavailable => "evidence-unavailable",
+            Self::CleanupExpired => "cleanup-expired",
         }
     }
 }
@@ -360,9 +360,9 @@ fn normalized_method(method: &Method) -> &'static str {
 
 fn normalized_status(status: StatusCode) -> &'static str {
     if status.is_server_error() {
-        "server_error"
+        "server-error"
     } else if status.is_client_error() {
-        "client_error"
+        "client-error"
     } else {
         "success"
     }
@@ -436,12 +436,41 @@ mod tests {
     }
 
     #[test]
+    fn every_outcome_and_status_class_is_kebab_case() {
+        for outcome in Outcome::ALL {
+            let label = outcome.label();
+            assert!(
+                label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'-'),
+                "outcome label {label} is not kebab-case"
+            );
+        }
+        assert_eq!(Outcome::NonceTampered.label(), "nonce-tampered");
+        assert_eq!(
+            Outcome::EvidenceNotAvailable.label(),
+            "evidence-not-available"
+        );
+        assert_eq!(normalized_status(StatusCode::OK), "success");
+        assert_eq!(normalized_status(StatusCode::BAD_REQUEST), "client-error");
+        assert_eq!(
+            normalized_status(StatusCode::INTERNAL_SERVER_ERROR),
+            "server-error"
+        );
+        // The `error` label passes the protocol's own error codes through,
+        // so the OAuth `server_error` code keeps the spelling its standard
+        // gives it.
+        assert_eq!(normalized_problem("server_error"), "server_error");
+        assert_eq!(normalized_problem("invalid_nonce"), "invalid_nonce");
+    }
+
+    #[test]
     fn rendered_metrics_use_only_closed_labels_and_never_render_canaries() {
         let metrics = Metrics::new(256);
         metrics.record_request(
             "unmatched",
             "other",
-            "client_error",
+            "client-error",
             "other",
             Duration::from_millis(20),
         );
@@ -459,8 +488,8 @@ mod tests {
         ] {
             assert!(!rendered.contains(canary), "metrics rendered {canary}");
         }
-        assert!(rendered.contains("outcome=\"nonce_tampered\"} 1"));
-        assert!(rendered.contains("outcome=\"store_fault\"} 0"));
+        assert!(rendered.contains("outcome=\"nonce-tampered\"} 1"));
+        assert!(rendered.contains("outcome=\"store-fault\"} 0"));
         assert!(rendered.contains("evidence_oid4vci_store_entries 7"));
         assert!(rendered.contains("evidence_oid4vci_store_capacity 256"));
     }
@@ -474,7 +503,7 @@ mod tests {
             .with_writer(buffer.clone())
             .finish();
         tracing::subscriber::with_default(subscriber, || {
-            log_request(CREDENTIAL_PATH, "POST", "client_error", "invalid_nonce");
+            log_request(CREDENTIAL_PATH, "POST", "client-error", "invalid_nonce");
         });
         let rendered = String::from_utf8(buffer.0.lock().expect("log buffer lock").clone())
             .expect("logs are UTF-8");
@@ -504,7 +533,7 @@ mod tests {
             .finish();
         tracing::subscriber::with_default(subscriber, || {
             log_request(HEALTH_PATH, "GET", "success", NO_ERROR);
-            log_request(READY_PATH, "GET", "server_error", "server_error");
+            log_request(READY_PATH, "GET", "server-error", "server_error");
         });
         let rendered = String::from_utf8(buffer.0.lock().expect("log buffer lock").clone())
             .expect("logs are UTF-8");

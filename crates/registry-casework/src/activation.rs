@@ -97,7 +97,7 @@ const EFFECTS_SCHEMA_VERSION: i64 = 18;
 const OPERATOR_PROFILE: &str = "system:operator";
 
 /// The audit event of one package activation.
-const ACTIVATION_EVENT: &str = "casework.package_activated";
+const ACTIVATION_EVENT: &str = "casework.package-activated";
 
 /// The keyed-hash class of an operator reference, scoped by activation id.
 const OPERATOR_REFERENCE_HASH_CLASS: &str = "casework-operator-reference-v1";
@@ -1224,7 +1224,19 @@ async fn grant_runtime_role(
 
 #[cfg(test)]
 mod tests {
-    use super::{MIGRATIONS, MIGRATION_TRIGGERS};
+    use super::{DatabaseIdCheck, MIGRATIONS, MIGRATION_TRIGGERS};
+
+    /// CFG-NAME-2: the comparison a plan report states is a kebab-case value.
+    #[test]
+    fn cfg_name_2_the_database_id_check_is_written_in_kebab_case() {
+        for (check, written) in [
+            (DatabaseIdCheck::NotRecorded, "\"not-recorded\""),
+            (DatabaseIdCheck::Matches, "\"matches\""),
+            (DatabaseIdCheck::Differs, "\"differs\""),
+        ] {
+            assert_eq!(serde_json::to_string(&check).unwrap(), written);
+        }
+    }
 
     /// Every `CREATE TRIGGER` in the migrations, as table, trigger, and
     /// function.

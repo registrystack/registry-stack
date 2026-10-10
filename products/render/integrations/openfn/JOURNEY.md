@@ -35,13 +35,14 @@ profile:
   requiredScopes: [registry:generic:read]
   requiredPurposes: [registry-reporting]
   permissions:
-    - entity: record
-      operations: [get]          # no list, no filterable fields
-      readableFields: [reference, payer-name-ar, payer-name-fr, payer-id,
-                       region, amount, currency, date, method-ar,
-                       purpose-ar, verify-url, bidi-note]
-      rowBoundaries:
-        - {field: status, claim: registry_record_status, operator: equals}
+    entities:
+      - entity: record
+        operations: [get]          # no list, no filterable fields
+        readableFields: [reference, payer-name-ar, payer-name-fr, payer-id,
+                         region, amount, currency, date, method-ar,
+                         purpose-ar, verify-url, bidi-note]
+        rowBoundaries:
+          - {field: status, claim: registry_record_status, operator: equals}
 ```
 
 breg exposes field ids under camelCase HTTP property names

@@ -92,7 +92,7 @@ function cloneJson(value, budget, depth, kind) {
 }
 
 // A refusal is reported as `kind`: `configuration` for the constructor's
-// settings, `invalid_request` for a method's arguments.
+// settings, `invalid-request` for a method's arguments.
 function sanitize(value, kind) {
   return cloneJson(value, { nodes: 0, bytes: 0, active: new WeakSet() }, 0, kind);
 }
@@ -129,11 +129,11 @@ for (const [method, jsonIndexes] of [
   SchedulingClient.prototype[method] = function (...args) {
     try {
       for (const index of jsonIndexes) {
-        if (args[index] !== undefined && args[index] !== null) args[index] = sanitize(args[index], 'invalid_request');
+        if (args[index] !== undefined && args[index] !== null) args[index] = sanitize(args[index], 'invalid-request');
       }
       return this.native[method](...args).catch((error) => { throw normalized(error, 'protocol'); });
     } catch (error) {
-      throw normalized(error, 'invalid_request');
+      throw normalized(error, 'invalid-request');
     }
   };
 }

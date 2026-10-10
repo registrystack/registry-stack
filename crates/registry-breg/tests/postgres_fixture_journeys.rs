@@ -24,8 +24,7 @@ use registry_breg::compiler::{
     CompileProfile,
 };
 use registry_breg::contract::{
-    parse_module_yaml, parse_project_yaml, ChangeRequestNoReviewModeSource,
-    ChangeRequestNoReviewSource, ChangeRequestReviewSource, ModuleAssetSource,
+    parse_module_yaml, parse_project_yaml, ChangeRequestReviewSource, ModuleAssetSource,
 };
 use registry_breg::fixtures::{
     execute_schema_test, validate_fixture_journeys, validate_schema_test_receipt_for_package,
@@ -351,8 +350,8 @@ async fn production_schema_test_setup_failures_identify_configuration_without_se
   destination-canary:
     origin: https://receiver-canary.example
     path: /payload-canary
-    networkProfile: productionHttps
-    dnsFamily: dualStackStrict
+    networkProfile: production-https
+    dnsFamily: dual-stack-strict
     allowedPrivateCidrs: []
     hmacSha256KeyRef: secret:file/key-canary
     classificationCeiling: restricted
@@ -1203,7 +1202,7 @@ impl PackageFixture {
         fs::write(
             &path,
             format!(
-                r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+                r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:9
@@ -1219,7 +1218,7 @@ database:
   runtimeUrlRef: secret:file/database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 8
+    maximumConnections: 8
     waitTimeoutMilliseconds: 2000
     createTimeoutMilliseconds: 2000
     recycleTimeoutMilliseconds: 2000
@@ -1237,17 +1236,17 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: unrestricted
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/oidc-jwks
     jwksCache:
       cacheTtlSeconds: 60
       negativeCacheTtlSeconds: 1
       refreshCooldownSeconds: 1
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
@@ -1257,7 +1256,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 operationalTimeouts:
   httpRequestMilliseconds: 5000
   shutdownGraceMilliseconds: 1000
@@ -1317,7 +1316,7 @@ operationalTimeouts:
         fs::write(
             &path,
             format!(
-                r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+                r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:9
@@ -1333,7 +1332,7 @@ database:
   runtimeUrlRef: secret:file/database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 8
+    maximumConnections: 8
     waitTimeoutMilliseconds: 2000
     createTimeoutMilliseconds: 2000
     recycleTimeoutMilliseconds: 2000
@@ -1351,17 +1350,17 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: unrestricted
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/oidc-jwks
     jwksCache:
       cacheTtlSeconds: 60
       negativeCacheTtlSeconds: 1
       refreshCooldownSeconds: 1
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
@@ -1371,7 +1370,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 operationalTimeouts:
   httpRequestMilliseconds: 5000
   shutdownGraceMilliseconds: 1000
@@ -1853,7 +1852,7 @@ fn compiled_spatial_fixture() -> (registry_breg::CompiledRegistry, Vec<u8>) {
 }
 
 /// Builds the household acceptance project. With `external_review` false the
-/// contact request declares `review: {mode: none}`, so a journey may apply it
+/// contact request declares `review: {type: none}`, so a journey may apply it
 /// without an external decision; otherwise it keeps the authored Casework
 /// review requirement.
 fn compiled_household_fixture(
@@ -1886,9 +1885,7 @@ fn compiled_household_fixture(
         .and_then(|entity| entity.change_request.as_mut())
         .expect("household fixture declares the contact request");
     if !external_review {
-        request.review = ChangeRequestReviewSource::None(ChangeRequestNoReviewSource {
-            mode: ChangeRequestNoReviewModeSource::None,
-        });
+        request.review = ChangeRequestReviewSource::None {};
     }
     let registry = compile_project_with_assets(
         &project,

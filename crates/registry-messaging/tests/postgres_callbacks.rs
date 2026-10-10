@@ -1033,7 +1033,7 @@ async fn a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics() 
     harness
         .execute(
             "UPDATE messaging_dispatch_jobs SET updated_at = updated_at - interval '4000 days' \
-              WHERE state IN ('delivered', 'dead_lettered', 'expired', 'cancelled')",
+              WHERE state IN ('delivered', 'dead-lettered', 'expired', 'cancelled')",
             &[],
         )
         .await;

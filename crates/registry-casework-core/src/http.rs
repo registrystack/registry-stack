@@ -78,7 +78,7 @@ pub const DIRECTORY_TARGETS_PATH: &str = "/v1/directory/targets";
 pub const DESCRIPTION_PATH: &str = "/v1/casework";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum InboxView {
     Mine,
     MyTeams,
@@ -88,7 +88,7 @@ pub enum InboxView {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum InboxSort {
     #[default]
     Due,
@@ -213,7 +213,7 @@ pub struct AbsencesQuery {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum DirectoryTargetPurpose {
     Assignment,
     AbsencePerson,
@@ -443,7 +443,7 @@ mod tests {
     #[test]
     fn list_query_requires_one_complete_subject_selector() {
         let exact: ListWorkItemsQuery = serde_json::from_value(serde_json::json!({
-            "view": "my_teams",
+            "view": "my-teams",
             "sourceId": "source-one",
             "subjectKind": "resident-record",
             "subjectId": "human reference 42"
@@ -459,9 +459,9 @@ mod tests {
         );
 
         for invalid in [
-            serde_json::json!({"view": "my_teams", "sourceId": "source-one"}),
+            serde_json::json!({"view": "my-teams", "sourceId": "source-one"}),
             serde_json::json!({
-                "view": "my_teams",
+                "view": "my-teams",
                 "sourceId": "source-one",
                 "subjectKind": "resident-record",
                 "subjectId": ""
@@ -474,7 +474,7 @@ mod tests {
 
         let long_source_id = "s".repeat(512);
         let admitted: ListWorkItemsQuery = serde_json::from_value(serde_json::json!({
-            "view": "my_teams",
+            "view": "my-teams",
             "sourceId": long_source_id,
             "subjectKind": "resident-record",
             "subjectId": "00000000-0000-4000-8000-000000000001"
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn list_query_binds_exact_reference_and_closed_sort_values() {
         let query: ListWorkItemsQuery = serde_json::from_value(serde_json::json!({
-            "view": "my_teams",
+            "view": "my-teams",
             "sort": "type",
             "reference": "案件-42"
         }))
@@ -505,14 +505,14 @@ mod tests {
 
         for invalid in [
             serde_json::json!({
-                "view": "my_teams",
+                "view": "my-teams",
                 "reference": "CASE-42",
                 "sourceId": "source-one",
                 "subjectKind": "resident-record",
                 "subjectId": "42"
             }),
-            serde_json::json!({"view": "my_teams", "reference": ""}),
-            serde_json::json!({"view": "my_teams", "reference": "x\ny"}),
+            serde_json::json!({"view": "my-teams", "reference": ""}),
+            serde_json::json!({"view": "my-teams", "reference": "x\ny"}),
         ] {
             let query: ListWorkItemsQuery =
                 serde_json::from_value(invalid).expect("wire shape decodes");
@@ -520,14 +520,14 @@ mod tests {
         }
         let too_long: String = std::iter::repeat_n('案', 513).collect();
         let query: ListWorkItemsQuery = serde_json::from_value(serde_json::json!({
-            "view": "my_teams",
+            "view": "my-teams",
             "reference": too_long
         }))
         .expect("wire shape decodes");
         assert!(query.reference().is_err());
         assert!(
             serde_json::from_value::<ListWorkItemsQuery>(serde_json::json!({
-                "view": "my_teams",
+                "view": "my-teams",
                 "sort": "unknown"
             }))
             .is_err()
@@ -563,14 +563,14 @@ mod tests {
         assert_eq!(assignment.person(), None);
 
         let absence_person: DirectoryTargetsQuery =
-            serde_json::from_value(serde_json::json!({"purpose": "absence_person"}))
+            serde_json::from_value(serde_json::json!({"purpose": "absence-person"}))
                 .expect("absence-person query decodes");
         absence_person
             .check()
             .expect("absence-person query validates");
 
         let absence_cover: DirectoryTargetsQuery = serde_json::from_value(serde_json::json!({
-            "purpose": "absence_cover",
+            "purpose": "absence-cover",
             "personIssuer": "https://identity.example",
             "personSubject": "officer-one"
         }))
@@ -595,13 +595,13 @@ mod tests {
                 "personIssuer": "https://identity.example",
                 "personSubject": "officer-one"
             }),
-            serde_json::json!({"purpose": "absence_person", "queue": "review"}),
+            serde_json::json!({"purpose": "absence-person", "queue": "review"}),
             serde_json::json!({
-                "purpose": "absence_cover",
+                "purpose": "absence-cover",
                 "personIssuer": "https://identity.example"
             }),
             serde_json::json!({
-                "purpose": "absence_cover",
+                "purpose": "absence-cover",
                 "personIssuer": "",
                 "personSubject": "officer-one"
             }),

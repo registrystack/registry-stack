@@ -83,7 +83,7 @@ function requestSpec() {
         selectorValues: { record_reference: 'R-001' },
       },
     ],
-    expectedOutputs: [{ concept: 'urn:example:node-test:concept:status-holds', form: 'boolean' }],
+    expectedOutputs: [{ concept: 'urn:example:node-test:concept:status-holds', form: { type: 'boolean' } }],
     maximumAssertionLifetimeSeconds: 300,
     clockSkewSeconds: 60,
     subjectExpectations: 'acceptFirstUse',

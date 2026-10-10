@@ -307,7 +307,7 @@ fn metadata_fixture() -> Value {
         "records.company.request.submit",
         "POST",
         "/v1/records/companies/{record_id}/actions/submit",
-        "submit_request",
+        "submit-request",
         json!(["change_request_lifecycle"]),
         json!({
             "fieldNames": "api",
@@ -339,7 +339,7 @@ fn metadata_fixture() -> Value {
             "operations": [
                 {"operation": "create", "accessProfile": "company-writer"},
                 {"operation": "patch", "accessProfile": "company-writer"},
-                {"operation": "submit_request", "accessProfile": "company-writer"}
+                {"operation": "submit-request", "accessProfile": "company-writer"}
             ],
             "readableFields": ["legal-name"],
             "schema": "/v1/schemas/company"
@@ -462,7 +462,7 @@ fn lifecycle_record_body() -> Value {
                 "effectDigest": EFFECT_DIGEST,
                 "editable": true,
                 "actions": [{
-                    "operation": "submit_request",
+                    "operation": "submit-request",
                     "method": "POST",
                     "href": format!(
                         "/v1/records/companies/{RECORD_ID}/actions/submit?accessProfile=company-writer"
@@ -2276,7 +2276,7 @@ async fn an_action_invocation_with_an_unknown_outcome_is_resent_byte_identically
         "conditionRoute": null, "contractFingerprint": REVISION,
         "inputMode": "fixed", "maximumInputStringBytes": null,
         "inputs": [{"id": "legal-name", "apiName": "legalName", "fieldType": {
-            "type": "string", "minLength": 0, "maxLength": 100},
+            "type": "string", "minimumLength": 0, "maximumLength": 100},
             "required": true, "nullable": false, "classification": "internal"}],
         "referenceInputs": [], "requiredConditionKeys": [],
         "resultEffects": [{"effect": "company", "entity": "company", "operation": "create"}],
@@ -2627,7 +2627,7 @@ fn apply_metadata_fixture() -> Value {
     let operation = &mut metadata["operations"][2];
     operation["id"] = json!("records.company.request.apply");
     operation["path"] = json!("/v1/records/companies/{record_id}/actions/apply");
-    operation["operation"] = json!("apply_request");
+    operation["operation"] = json!("apply-request");
     operation["request"]["schema"] = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object", "additionalProperties": false,
@@ -2638,7 +2638,7 @@ fn apply_metadata_fixture() -> Value {
             "reason": {"type": "string", "maxLength": 4096, "pattern": "^[^\\u0000]*$", "description": "Optional application explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."}
         }
     });
-    metadata["entities"][0]["operations"][2]["operation"] = json!("apply_request");
+    metadata["entities"][0]["operations"][2]["operation"] = json!("apply-request");
     metadata
 }
 
@@ -2650,7 +2650,7 @@ async fn prepared_lifecycle_recovers_original_apply_after_action_disappears() {
     record["data"]["request"]["bregState"] = json!("submitted");
     record["data"]["request"]["editable"] = json!(false);
     let action = &mut record["data"]["request"]["actions"][0];
-    action["operation"] = json!("apply_request");
+    action["operation"] = json!("apply-request");
     action["href"] = json!(format!(
         "/v1/records/companies/{RECORD_ID}/actions/apply?accessProfile=company-writer"
     ));

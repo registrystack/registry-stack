@@ -124,7 +124,7 @@ impl std::fmt::Debug for CaseworkService {
         formatter
             .debug_struct("CaseworkService")
             .field("sources", &self.adapters.keys())
-            .field("project", &self.project.casework.id)
+            .field("project", &self.project.project.id.as_str())
             .finish()
     }
 }

@@ -16,7 +16,7 @@ pub struct ReviewTiming {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum BudgetState {
     Running,
     Paused,

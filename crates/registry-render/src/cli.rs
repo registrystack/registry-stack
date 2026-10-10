@@ -46,9 +46,11 @@ pub enum Command {
         labels: Vec<String>,
     },
     /// Check a bundle or package and a runtime file offline, reporting every
-    /// finding. Exits 0 when nothing was refused, 1 when something was (or a
-    /// warning was reported under --deny-warnings), 2 on a usage error, and
-    /// 3 when an input could not be read.
+    /// finding.
+    ///
+    /// Exits 0 when nothing is refused, 1 when something is refused or, under
+    /// --deny-warnings, a warning is reported, 2 when the command line is
+    /// invalid, and 3 when an input cannot be read.
     Check {
         /// Authored bundle or package directory (default: the current
         /// directory, unless only --runtime-config is given).
@@ -57,18 +59,19 @@ pub enum Command {
         /// Retired. Use `registry-render package` after check succeeds.
         #[arg(long, hide = true)]
         seal: bool,
-        /// Runtime file to check as `registry-render serve` reads it, with
-        /// no package, secret material, or listener.
+        /// Runtime file to check offline, as `registry-render serve` reads
+        /// it, with no package, secret material, or listener.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime: Option<PathBuf>,
-        /// Substitute `${NAME}` expressions in the runtime file from this
-        /// environment and check every value. Without it, each expression
-        /// is checked by syntax and position only.
+        /// Fill `${NAME}` expressions in the runtime file from the process
+        /// environment and check the values they produce. Without it, each
+        /// expression is checked by syntax and position only.
         #[arg(long, requires = "runtime")]
         environment: bool,
         /// Prove that the runtime file's audit file resolves under this
-        /// directory, the one the deployment mounts as persistent storage. A
-        /// stdout audit destination is refused.
+        /// absolute directory, the one the deployment mounts as persistent
+        /// storage. A stdout audit destination is refused. Requires
+        /// --runtime-config.
         #[arg(
             long,
             value_name = "ABSOLUTE_DIRECTORY",
@@ -76,10 +79,10 @@ pub enum Command {
             value_parser = parse_absolute_directory
         )]
         require_audit_under: Option<PathBuf>,
-        /// How to write the findings.
+        /// Emit the selected command's report in this format.
         #[arg(long, value_enum, default_value_t = crate::check::OutputFormat::Human)]
         format: crate::check::OutputFormat,
-        /// Refuse warnings as well as errors (exit 1).
+        /// Exit 1 when a warning is reported.
         #[arg(long)]
         deny_warnings: bool,
     },

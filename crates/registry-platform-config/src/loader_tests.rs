@@ -983,9 +983,39 @@ fn the_shared_removed_jwks_uri_key_names_jwks_source() {
     );
     assert_eq!(
         error.deciding_diagnostic().suggested_action,
-        "Declare `authentication.oidc.jwksSource` with `kind: uri` and `uri` set to the https URL."
+        "Declare `authentication.oidc.jwksSource` with `type: uri` and `uri` set to the https URL."
     );
     assert!(!error.to_string().contains("issuer.example.test"));
+}
+
+#[test]
+fn the_shared_removed_jwks_source_kind_key_names_type() {
+    let loader = RuntimeConfigLoader::new(ENVELOPE)
+        .removed_keys(std::slice::from_ref(&REMOVED_OIDC_JWKS_SOURCE_KIND));
+    let error = loader
+        .parse_str::<serde_json::Value>(
+            &format!(
+                "{}authentication:\n  oidc:\n    jwksSource:\n      kind: uri\n      uri: https://issuer.example.test/jwks\n",
+                header()
+            ),
+            env(&[]),
+        )
+        .unwrap_err();
+    assert_eq!(error.deciding_diagnostic().code, "config.removed-key");
+    assert_eq!(
+        error.deciding_diagnostic().path,
+        "/authentication/oidc/jwksSource/kind"
+    );
+    assert!(error
+        .to_string()
+        .contains("authentication.oidc.jwksSource.type"));
+    assert!(!error.to_string().contains("issuer.example.test"));
+}
+
+#[test]
+fn the_shared_removed_jwks_uri_key_names_the_type_tag() {
+    assert!(REMOVED_OIDC_JWKS_URI.replacement.contains("type: uri"));
+    assert!(!REMOVED_OIDC_JWKS_URI.replacement.contains("kind"));
 }
 
 /// The code, line and column of the first diagnostic.

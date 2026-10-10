@@ -1,2 +1,4 @@
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: asset-site-placement-core
 version: 0.1.0

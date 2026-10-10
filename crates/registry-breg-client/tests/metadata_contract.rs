@@ -147,7 +147,7 @@ fn fixture() -> Value {
 
 fn lifecycle_schema(kind: &str) -> Value {
     match kind {
-        "apply_request" => json!({
+        "apply-request" => json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "additionalProperties": false,
@@ -187,12 +187,12 @@ fn lifecycle_fixture() -> Value {
         (
             "records.company.request.submit",
             "/v1/records/companies/{record_id}/actions/submit",
-            "submit_request",
+            "submit-request",
         ),
         (
             "records.company.request.apply",
             "/v1/records/companies/{record_id}/actions/apply",
-            "apply_request",
+            "apply-request",
         ),
     ] {
         lifecycle_operations.push(operation(
@@ -376,7 +376,7 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
                 "clear": []
             }
         ],
-        "review": {"authority":"casework", "policyId":"address-review"},
+        "review": {"type": "required", "authority":"casework", "policyId":"address-review"},
         "onApproved": {"mode":"automatic", "executor":"breg-worker"},
         "application": {"preconditions":{"request":[]}}
     });
@@ -474,7 +474,7 @@ fn change_request_capability_is_strict_typed_and_never_creates_authority() {
         },
         {
             let mut malformed = capability.clone();
-            malformed["review"]["mode"] = json!("external");
+            malformed["review"]["type"] = json!("external");
             malformed
         },
         {
@@ -859,8 +859,8 @@ fn list_query_and_presentation_descriptors_are_retained_without_authority() {
             {"id": "__request_review_outcome", "apiName": "reviewOutcome", "operators": ["equals", "in"]}
         ],
         "sortableFields": [{"id": "legal-name", "apiName": "legalName", "directions": ["asc", "desc"]}],
-        "allowCount": true, "defaultPageSize": 25, "maxPageSize": 100,
-        "maxFilterClauses": 5, "maxInValues": 10,
+        "allowCount": true, "defaultPageSize": 25, "maximumPageSize": 100,
+        "maximumFilterClauses": 5, "maximumInValues": 10,
         "pagination": {"parameter": "$skiptoken", "responsePath": "pageInfo.nextCursor", "exclusive": true},
         "temporal": {"mode": "current"}
     });
@@ -874,13 +874,13 @@ fn list_query_and_presentation_descriptors_are_retained_without_authority() {
     assert_eq!(query.filterable_fields[0].api_name, "bregState");
     assert_eq!(query.filterable_fields[0].operators, ["equals", "in"]);
     assert_eq!(query.filterable_fields[1].api_name, "reviewOutcome");
-    assert_eq!(query.max_page_size, 100);
+    assert_eq!(query.maximum_page_size, 100);
     assert!(metadata
         .select_direct_write("records.company.get", "company-writer")
         .is_err());
 
     let mut beyond_exact = value.clone();
-    beyond_exact["operations"][2]["query"]["maxPageSize"] = json!(9_007_199_254_740_992u64);
+    beyond_exact["operations"][2]["query"]["maximumPageSize"] = json!(9_007_199_254_740_992u64);
     assert!(
         BRegMetadata::from_slice(&serde_json::to_vec(&beyond_exact).unwrap()).is_err(),
         "a limit the JavaScript number boundary cannot carry exactly must be refused"
@@ -978,8 +978,8 @@ fn complete_descriptive_metadata_is_retained_and_spatial_is_optional() {
         "kind": "list",
         "selectableFields": [{"id": "legal-name", "apiName": "legalName"}],
         "filterableFields": [], "sortableFields": [], "allowCount": false,
-        "defaultPageSize": 25, "maxPageSize": 100, "maxFilterClauses": 8,
-        "maxInValues": 16,
+        "defaultPageSize": 25, "maximumPageSize": 100, "maximumFilterClauses": 8,
+        "maximumInValues": 16,
         "pagination": {"parameter": "$skiptoken", "responsePath": "pageInfo.nextCursor", "exclusive": true},
         "temporal": null,
         "spatialQueries": {"bbox": {"geometryProperty": "legalName",
@@ -1075,7 +1075,7 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
         "conditionRoute": null, "contractFingerprint": REVISION,
         "inputMode": "fixed", "maximumInputStringBytes": null,
         "inputs": [{"id": "legal-name", "apiName": "legalName", "fieldType": {
-            "type": "string", "minLength": 0, "maxLength": 100},
+            "type": "string", "minimumLength": 0, "maximumLength": 100},
             "required": true, "nullable": false, "classification": "internal"}],
         "referenceInputs": [], "requiredConditionKeys": [],
         "resultEffects": [{"effect": "company", "entity": "company", "operation": "create"}],
@@ -1119,7 +1119,7 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
 
     let mut structured = value.clone();
     structured["actions"][0]["inputs"][0]["fieldType"] = json!({
-        "type": "structured", "maxBytes": 64,
+        "type": "structured", "maximumBytes": 64,
         "schema": {"type": "object", "additionalProperties": false,
             "properties": {"value": {"type": "string"}}}
     });
@@ -1142,7 +1142,7 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
     for schema in malformed_structured_schemas {
         let mut malformed = value.clone();
         malformed["actions"][0]["inputs"][0]["fieldType"] =
-            json!({"type": "structured", "maxBytes": 64, "schema": schema});
+            json!({"type": "structured", "maximumBytes": 64, "schema": schema});
         assert_eq!(
             parse(&malformed)
                 .select_immediate_action("register-company", "company-writer")
@@ -1157,7 +1157,7 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
         json!("/v1/actions/register-company/target-conditions");
     optional_condition["actions"][0]["routes"]["targetConditions"] = json!({
         "method": "POST", "path": "/v1/actions/register-company/target-conditions",
-        "operationId": "actions.register-company.target_conditions",
+        "operationId": "actions.register-company.target-conditions",
         "requiresIdempotencyKey": false,
         "inputSchema": "action-register-company-target-conditions-input",
         "responseSchema": "action-register-company-target-conditions-response"
@@ -1211,11 +1211,11 @@ fn request_metadata_grants_are_retained_and_required_on_every_operation() {
     );
 
     let mut granted = fixture();
-    granted["operations"][0]["readableRequestFields"] = json!(["reason", "review_state"]);
+    granted["operations"][0]["readableRequestFields"] = json!(["reason", "review-state"]);
     let metadata = parse(&granted);
     assert_eq!(
         metadata.operations()[0].readable_request_fields(),
-        ["reason", "review_state"]
+        ["reason", "review-state"]
     );
 
     let mut duplicate = fixture();

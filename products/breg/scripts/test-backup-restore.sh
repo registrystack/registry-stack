@@ -325,7 +325,7 @@ render_runtime_config() {
   local database_prefix=$2
   local instance_id=$3
   cat >"$output" <<EOF
-apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: $listener
@@ -341,7 +341,7 @@ database:
   runtimeUrlRef: secret:file/$database_prefix-runtime-url
   migrationUrlRef: secret:file/$database_prefix-migration-url
   pool:
-    maxSize: 4
+    maximumConnections: 4
   roles:
     migration: $restore_migration_role
     runtime: $restore_runtime_role
@@ -356,10 +356,10 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [generic-registry-client]
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 30000
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/issuer-jwks
   authorityClaims:
     principal: registry_principal
@@ -374,8 +374,8 @@ eventDestinations:
   record-events:
     origin: http://$receiver_address
     path: /events
-    networkProfile: loopbackDevelopmentHttp
-    dnsFamily: dualStackStrict
+    networkProfile: loopback-development-http
+    dnsFamily: dual-stack-strict
     allowedPrivateCidrs: []
     hmacSha256KeyRef: secret:file/record-events-key
     classificationCeiling: internal
@@ -714,7 +714,7 @@ def insert_after(needle, addition):
         raise SystemExit(f"insertion point was not found exactly once: {needle.strip()}")
     source = source.replace(needle, needle + addition, 1)
 
-insert_after("      - {id: record-group-code-unique, kind: unique, fields: [code]}\n",
+insert_after("      - {id: record-group-code-unique, type: unique, fields: [code]}\n",
              "    batch: {maximumItems: 10, maximumBytes: 65536}\n")
 insert_after("      - {id: record-status, fields: [status]}\n",
              "    hooks:\n"
@@ -722,26 +722,27 @@ insert_after("      - {id: record-status, fields: [status]}\n",
              "        phase: after\n"
              "        trigger: created\n"
              "        projection: [code, status]\n"
-             "        handler: {kind: url, destinationId: record-events}\n")
-operator_record = ("        operations: [create, get, list, patch]\n"
-                   "        readableFields: [code, label, group, status]\n"
-                   "        writableFields: [code, label, group, status]\n"
-                   "        filterableFields: [code, status]\n")
+             "        handler: {type: url, destinationId: record-events}\n")
+operator_record = ("          operations: [create, get, list, patch]\n"
+                   "          readableFields: [code, label, group, status]\n"
+                   "          writableFields: [code, label, group, status]\n"
+                   "          filterableFields: [code, status]\n")
 if source.count(operator_record) != 1:
     raise SystemExit("the operator record grant was not found exactly once")
 source = source.replace(operator_record, operator_record.replace(
-    "[create, get, list, patch]", "[create, get, list, patch, revisions]") + "        revisionAccess: true\n", 1)
+    "[create, get, list, patch]", "[create, get, list, patch, revisions]") + "          revisionAccess: true\n", 1)
 insert_after("accessProfiles:\n",
              "  - id: loader\n"
              "    principalClaim: registry_principal\n"
              "    requiredScopes: [registry:generic:load]\n"
              "    requiredPurposes: [registry-operations]\n"
              "    permissions:\n"
-             "      - entity: record-group\n"
-             "        rowBoundaries: unrestricted\n"
-             "        operations: [import]\n"
-             "        readableFields: [code, label]\n"
-             "        writableFields: [code, label]\n")
+             "      entities:\n"
+             "        - entity: record-group\n"
+             "          rowBoundaries: unrestricted\n"
+             "          operations: [import]\n"
+             "          readableFields: [code, label]\n"
+             "          writableFields: [code, label]\n")
 path.write_text(source, encoding="utf-8")
 PY
 run_json "$temporary_root/check.json" check "$project" --production

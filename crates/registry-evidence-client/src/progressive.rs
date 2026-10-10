@@ -149,7 +149,8 @@ pub enum VerifiedAudienceScopedEvidence {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceClientContracts {
-    pub schema: String,
+    pub api_version: String,
+    pub kind: String,
     pub assurance_profile: registry_evidence_verifier::AssuranceProfile,
     pub audience: String,
     pub issued_by: String,
@@ -202,7 +203,8 @@ impl std::fmt::Debug for ProgressivePreparedRequest {
 impl From<crate::EvidenceDefinitionsDocument> for EvidenceClientContracts {
     fn from(document: crate::EvidenceDefinitionsDocument) -> Self {
         Self {
-            schema: crate::EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1.to_owned(),
+            api_version: crate::EVIDENCE_CLIENT_CONTRACTS_API_VERSION.to_owned(),
+            kind: crate::EVIDENCE_CLIENT_CONTRACTS_KIND.to_owned(),
             assurance_profile: document.assurance_profile,
             audience: document.audience,
             issued_by: document.issued_by,
@@ -584,7 +586,7 @@ mod tests {
             "audience": "urn:example:audience:client",
             "issuedBy": "urn:example:issuer",
             "providedBy": "urn:example:provider",
-            "holderBoundBatchMaxSize": 1,
+            "maximumHolderBoundBatchSize": 1,
             "definitions": [{
                 "handle": "status-check",
                 "requirement": "urn:example:requirement:status",
@@ -603,7 +605,7 @@ mod tests {
                         "fields": [{"type":"string","name":"person_id","minimumBytes":1,"maximumBytes":64}]
                     }
                 }],
-                "concepts": [{"handle":"eligible","concept":"urn:example:concept:eligible","required":true,"form":"boolean"}]
+                "concepts": [{"handle":"eligible","concept":"urn:example:concept:eligible","required":true,"form":{"type":"boolean"}}]
             }]
         })).expect("definition fixture parses")
     }
@@ -651,10 +653,11 @@ mod tests {
     fn a_selected_definition_must_match_its_own_pins_before_send() {
         let profile = crate::EvidenceClientProfile::from_slice(
             &serde_json::to_vec(&serde_json::json!({
-                "schema": "registry.evidence-client-profile/v1",
+                "apiVersion": "id.registrystack.org/formats/evidence/client-profile/v1",
+                "kind": "EvidenceClientProfile",
                 "baseUrl": "https://evidence.example.org",
                 "clientId": "client",
-                "privateKey": {"source": "environment", "variable": "EVIDENCE_KEY"},
+                "privateKey": {"type": "environment", "variable": "EVIDENCE_KEY"},
                 "expected": {"definitions": {"status-check": {
                     "configurationRevision": format!("sha256:{}", "1".repeat(64)),
                     "evidenceType": "urn:example:evidence-type:status",

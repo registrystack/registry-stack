@@ -11,9 +11,9 @@ use support::{
     EvidenceProject as Project,
 };
 
-const BREG: &str = "apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry: {id: example}\nmodules: [{id: <|module-use|>core}]\naccessProfiles:\n  - id: reader\n    permissions:\n      - entity: <|use|>person\n        readableFields: [<|field-use|>name]\n";
-const BREG_MODULE: &str = "id: <|module|>core\nentities:\n  - id: <|definition|>person\n    fields: [{id: <|field|>name, type: string}]\n";
-const CASEWORK: &str = "apiVersion: registry.registrystack.org/casework/v1alpha1\nkind: CaseworkProject\nqueues: [{id: <|definition|>triage}]\nsources:\n  - id: source\n    description: <|file-use|>sources/import.json\n    requests: [{queue: <|use|>triage}]\naccessProfiles: [{id: staff}]\nreviewKinds:\n  - id: decision\n    stages: [{id: review, queue: triage, decidingProfiles: [staff]}]\n";
+const BREG: &str = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: <|project|>example}\nmodules: [{id: <|module-use|>core}]\naccessProfiles:\n  - id: reader\n    permissions:\n      entities:\n        - entity: <|use|>person\n          readableFields: [<|field-use|>name]\n";
+const BREG_MODULE: &str = "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|module|>core\nentities:\n  - id: <|definition|>person\n    fields: [{id: <|field|>name, type: string}]\n";
+const CASEWORK: &str = "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nproject: {id: <|project|>intake, version: '1'}\nqueues: [{id: <|definition|>triage}]\nsources:\n  - id: source\n    description: <|file-use|>sources/import.json\n    requests: [{queue: <|use|>triage}]\naccessProfiles: [{id: staff}]\nreviewKinds:\n  - id: decision\n    stages: [{id: review, queue: triage, decidingProfiles: [staff]}]\n";
 const SCHEDULING: &str = "apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\nkind: SchedulingProject\nservices: [{id: <|definition|>visit}]\nofferings: [{id: consultation, service: <|use|>visit, location: <|location-use|>office, exactTime: {pool: <|pool-use|>stations}}]\n";
 const RECORDS: &str = "locations: [{id: <|location|>office}]\npools: [{id: <|pool|>stations}]\n";
 const MESSAGING: &str = "apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1\nkind: MessagingProject\nproviders: [{id: <|definition|>smtp}]\nsenderProfiles: [{id: transactional, provider: <|use|>smtp}]\ntemplates: [{id: <|template|>notice, version: '1'}, {id: notice, version: '2'}]\naccessProfiles: [{id: staff, senderProfiles: [transactional], templates: [<|template-use|>notice]}]\n";
@@ -106,12 +106,22 @@ fn runtime_products_resolve_scoped_names_files_and_completion_candidates() {
             let target = index.definitions_at(&path, project.cursor(document, "module-use"));
             assert!(target.iter().any(|location| location.range.start
                 == project.cursor("modules/core/module.yaml", "module")));
+            assert!(index
+                .document_symbols(&path)
+                .iter()
+                .any(|symbol| symbol.name == "example"
+                    && symbol.location.range.start == project.cursor(document, "project")));
         }
         if kind == ProductKind::Casework {
             assert_eq!(
                 index.definitions_at(&path, project.cursor(document, "file-use"))[0].path,
                 project.path("sources/import.json")
             );
+            assert!(index
+                .document_symbols(&path)
+                .iter()
+                .any(|symbol| symbol.name == "intake"
+                    && symbol.location.range.start == project.cursor(document, "project")));
         }
         if kind == ProductKind::Scheduling {
             for (reference, definition) in [("location-use", "location"), ("pool-use", "pool")] {
@@ -319,9 +329,9 @@ async fn disappearing_module_keeps_unsaved_buffer_until_file_returns() {
 #[test]
 fn module_assets_named_constraints_and_action_results_keep_their_own_scope() {
     let project=Project::new(&[
-        file("registry.yaml","kind: RegistryProject\nmodules: [{id: core}, {id: extra}]\naccessProfiles: [{id: staff, permissions: [{action: register, results: [<|result|>created-record]}]}]\n"),
-        file("modules/core/module.yaml","id: core\nentities:\n  - id: person\n    fields: [{id: <|field|>name, type: string}]\n    constraints: [{kind: unique, id: named-rule, fields: [<|constraint|>name]}]\nactions:\n  - id: register\n    effects: [{id: <|effect|>created-record}]\n    handler: {script: <|script|>scripts/action.rhai}\n"),
-        file("modules/extra/module.yaml","id: extra\nactions: [{id: other, handler: {script: scripts/action.rhai}}]\n"),
+        file("registry.yaml","apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: example}\nmodules: [{id: core}, {id: extra}]\naccessProfiles: [{id: staff, permissions: {actions: [{action: register, results: [<|result|>created-record]}]}}]\n"),
+        file("modules/core/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: core\nentities:\n  - id: person\n    fields: [{id: <|field|>name, type: string}]\n    constraints: [{type: unique, id: named-rule, fields: [<|constraint|>name]}]\nactions:\n  - id: register\n    effects: [{id: <|effect|>created-record}]\n    handler: {script: <|script|>scripts/action.rhai}\n"),
+        file("modules/extra/module.yaml","apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: extra\nactions: [{id: other, handler: {script: scripts/action.rhai}}]\n"),
         file("modules/core/scripts/action.rhai","// core\n"),
         file("modules/extra/scripts/action.rhai","// extra\n"),
     ]);
@@ -629,15 +639,15 @@ fn authored_unlocked_modules_still_supply_dependency_symbols() {
     let project = Project::new(&[
         file(
             "registry.yaml",
-            "kind: RegistryProject\nmodules: [{id: core}]\n",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: example}\nmodules: [{id: core}]\n",
         ),
         file(
             "modules/core/module.yaml",
-            "id: core\ndependencies: [<|dependency|>extra]\n",
+            "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: core\ndependencies: [<|dependency|>extra]\n",
         ),
         file(
             "modules/extra/module.yaml",
-            "id: <|definition|>extra\nentities: [{id: supplied}]\n",
+            "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|definition|>extra\nentities: [{id: supplied}]\n",
         ),
     ]);
     let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();

@@ -1,3 +1,5 @@
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: publicschema-household-core
 version: 0.1.0
 entities:
@@ -7,13 +9,13 @@ entities:
     mutationMode: mutable
     classification: restricted
     fields:
-      - {id: person-code, type: string, required: true, maxLength: 64, classification: restricted}
-      - {id: legal-name, type: string, required: true, maxLength: 160, classification: restricted}
-      - {id: family-name, type: string, required: false, maxLength: 120, classification: restricted}
+      - {id: person-code, type: string, required: true, maximumLength: 64, classification: restricted}
+      - {id: legal-name, type: string, required: true, maximumLength: 160, classification: restricted}
+      - {id: family-name, type: string, required: false, maximumLength: 120, classification: restricted}
       - {id: date-of-birth, type: date, required: false, classification: restricted}
       - {id: person-sex, type: vocabulary-code, vocabulary: person-sex, required: true, classification: restricted}
     constraints:
-      - {kind: unique, fields: [person-code]}
+      - {type: unique, fields: [person-code]}
     indexes:
       - {id: by-person-sex, fields: [person-sex]}
   - id: household
@@ -22,14 +24,14 @@ entities:
     mutationMode: mutable
     classification: restricted
     fields:
-      - {id: household-code, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: household-code, type: string, required: true, maximumLength: 64, classification: restricted}
       - {id: local-household-number, type: int64, required: true, classification: restricted}
-      - {id: household-name, type: string, required: true, maxLength: 160, classification: restricted}
-      - {id: administrative-area, type: string, required: true, maxLength: 80, classification: restricted}
+      - {id: household-name, type: string, required: true, maximumLength: 160, classification: restricted}
+      - {id: administrative-area, type: string, required: true, maximumLength: 80, classification: restricted}
       - {id: household-type, type: vocabulary-code, vocabulary: household-type, required: true, classification: restricted}
     constraints:
-      - {kind: unique, fields: [household-code]}
-      - {kind: unique, fields: [administrative-area, local-household-number]}
+      - {type: unique, fields: [household-code]}
+      - {type: unique, fields: [administrative-area, local-household-number]}
     indexes:
       - {id: by-local-household-number, fields: [local-household-number]}
       - {id: by-household-type, fields: [household-type]}
@@ -54,8 +56,8 @@ entities:
       endField: valid-to
       scopeFields: [person]
     constraints:
-      - {kind: unique, fields: [person, household, valid-from]}
-      - {kind: temporal-non-overlap, scopeFields: [person], startField: valid-from, endField: valid-to}
+      - {type: unique, fields: [person, household, valid-from]}
+      - {type: temporal-non-overlap, scopeFields: [person], startField: valid-from, endField: valid-to}
     indexes:
       - {id: by-relationship, fields: [relationship]}
       - {id: by-valid-from, fields: [valid-from]}

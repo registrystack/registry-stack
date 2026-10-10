@@ -113,7 +113,7 @@ test('a request refused before any exchange reports the outcome known', async (c
   const { client, requests } = await retrying(context, [], {});
 
   await assert.rejects(client.createAbsence('one-call-secret', 'administrator', 2, 'two words', ABSENCE), (error) => {
-    assert.equal(error.kind, 'invalid_request');
+    assert.equal(error.kind, 'invalid-request');
     assert.equal(error.outcomeUnknown, false);
     return true;
   });

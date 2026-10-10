@@ -178,7 +178,7 @@ pub(super) fn run(
             PlannerTestEffectReport {
                 id: effect.id.clone(),
                 target_kind: match effect.target.binding {
-                    CompiledActionTargetBinding::Create => "reserved_create",
+                    CompiledActionTargetBinding::Create => "reserved-create",
                     CompiledActionTargetBinding::Existing { .. } => "existing",
                 },
                 operation: operation_wire_name(effect.operation),
@@ -447,9 +447,9 @@ mod tests {
     /// A project whose one action declares a WASM handler over the module
     /// written beside it.
     #[cfg(feature = "wasm")]
-    const WASM_HANDLER_PROJECT: &str = r#"apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+    const WASM_HANDLER_PROJECT: &str = r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: wasm-planner-test-fixture
   version: "1"
   defaultLanguage: en
@@ -460,15 +460,15 @@ entities:
     route: people
     mutationMode: mutable
     fields:
-      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
-      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
 actions:
   - id: register-person
     inputs:
-      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
-      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: person-code, apiName: personCode, type: string, required: true, maximumLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maximumLength: 160, classification: restricted}
     handler:
-      kind: wasm
+      type: wasm
       module: wasm/handler.wasm
       abi: registry.action-handler/v1
       writes:
@@ -482,11 +482,12 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
-      - action: register-person
-        operations: [invoke]
-        targets:
-          - {entity: person, rowBoundaries: unrestricted}
-        results: [person]
+      actions:
+        - action: register-person
+          operations: [invoke]
+          targets:
+            - {entity: person, rowBoundaries: unrestricted}
+          results: [person]
 "#;
 
     /// A WASM handler compiles and is explained by bregctl, but the local

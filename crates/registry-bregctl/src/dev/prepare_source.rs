@@ -364,7 +364,7 @@ fn identifier(entity: &Value, field: &Value) -> bool {
         && entity["constraints"].as_array().is_some_and(|constraints| {
             constraints
                 .iter()
-                .any(|c| c["kind"] == "unique" && c["fields"] == json!([field["id"]]))
+                .any(|c| c["type"] == "unique" && c["fields"] == json!([field["id"]]))
         })
 }
 /// The captured registry and module documents as JSON trees, read through the
@@ -602,8 +602,8 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     };
     registry["accessProfiles"].as_array_mut().context("access profiles missing")?.push(json!({
         "id":args.access_profile,"principalClaim":"registry_principal","requiredScopes":[scope],"requiredPurposes":["evidence-source-read"],
-        "permissions":[{"entity":entity_id,"operations":["lookup"],"readableFields":grant_fields,
-            "lookups":[{"selector":args.selector_profile,"valueOrigin":"request"}],"rowBoundaries":row_boundaries}]}));
+        "permissions":{"entities":[{"entity":entity_id,"operations":["lookup"],"readableFields":grant_fields,
+            "lookups":[{"selector":args.selector_profile,"valueOrigin":"request"}],"rowBoundaries":row_boundaries}]}}));
     let sequence = state
         .sequence
         .checked_add(1)
@@ -978,13 +978,13 @@ mod tests {
                 .unwrap()
                 .remove("permissions")
                 .unwrap();
-            let mut permission = permissions.as_array_mut().unwrap().remove(0);
+            let mut permission = permissions["entities"].as_array_mut().unwrap().remove(0);
             permission.as_object_mut().unwrap().remove("entity");
             operator
                 .as_object_mut()
                 .unwrap()
                 .extend(permission.as_object().unwrap().clone());
-            let module = json!({"id":"local-authority","version":"1","extendEntities":[{"entity":"record","accessProfiles":[operator]}]});
+            let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"local-authority","version":"1","extendEntities":[{"entity":"record","accessProfiles":[operator]}]});
             let module_bytes = serde_norway::to_string(&module).unwrap().into_bytes();
             let parsed = registry_breg::contract::parse_module_yaml(&module_bytes).unwrap();
             model["modules"] = json!([{"id":"local-authority","version":"1","digest":registry_breg::compiler::module_digest(&parsed)}]);
@@ -1277,7 +1277,7 @@ mod tests {
         let (_temporary, mut state) = source_fixture();
         let path = state.project.join("registry.yaml");
         let mut model: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-        model["entities"][0]["fields"][0]["minLength"] = json!(0);
+        model["entities"][0]["fields"][0]["minimumLength"] = json!(0);
         let bytes = serde_norway::to_string(&model).unwrap().into_bytes();
         fs::write(&path, &bytes).unwrap();
         private::replace(&state.root().join("project/registry.yaml"), &bytes).unwrap();
@@ -1381,7 +1381,7 @@ mod tests {
             let root = state.root();
             let path = state.project.join("registry.yaml");
             let mut model: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-            model["accessProfiles"][0]["permissions"][0]["rowBoundaries"] =
+            model["accessProfiles"][0]["permissions"]["entities"][0]["rowBoundaries"] =
                 json!([{"field":field,"claim":"existing_row","operator":operator}]);
             let model = serde_norway::to_string(&model).unwrap().into_bytes();
             fs::write(&path, &model).unwrap();
@@ -1432,9 +1432,9 @@ mod tests {
         target["id"] = json!("organization");
         target["route"] = json!("organizations");
         model["entities"].as_array_mut().unwrap().push(target);
-        let mut target_grant = model["accessProfiles"][0]["permissions"][0].clone();
+        let mut target_grant = model["accessProfiles"][0]["permissions"]["entities"][0].clone();
         target_grant["entity"] = json!("organization");
-        model["accessProfiles"][0]["permissions"]
+        model["accessProfiles"][0]["permissions"]["entities"]
             .as_array_mut()
             .unwrap()
             .push(target_grant);
@@ -1442,9 +1442,9 @@ mod tests {
         model["entities"][0]["constraints"]
             .as_array_mut()
             .unwrap()
-            .push(json!({"kind":"unique","fields":["organization"]}));
+            .push(json!({"type":"unique","fields":["organization"]}));
         for key in ["readableFields", "writableFields"] {
-            model["accessProfiles"][0]["permissions"][0][key]
+            model["accessProfiles"][0]["permissions"]["entities"][0][key]
                 .as_array_mut()
                 .unwrap()
                 .push(json!("organization"));

@@ -30,9 +30,9 @@ const COMPILED_MAXIMUM_PAGE_SIZE: usize = 100;
 
 fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
     let source = json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {"id": "data-contract", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {"id": "data-contract", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
         "entities": [{
             "id": ENTITY,
             "primaryDataset": "test-dataset",
@@ -40,12 +40,12 @@ fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
             "mutationMode": "mutable",
             "batch": {"maximumItems": 2, "maximumBytes": 400},
             "fields": [
-                {"id": "code", "type": "string", "minLength": 2, "maxLength": 16,
+                {"id": "code", "type": "string", "minimumLength": 2, "maximumLength": 16,
                  "required": true, "classification": "internal"},
                 {"id": "count", "type": "int64", "classification": "internal"},
-                {"id": "readonly", "type": "text", "maxLength": 32,
+                {"id": "readonly", "type": "text", "maximumLength": 32,
                  "classification": "internal"},
-                {"id": "hidden", "type": "string", "maxLength": 16,
+                {"id": "hidden", "type": "string", "maximumLength": 16,
                  "classification": "restricted"}
             ]
         }],
@@ -53,14 +53,14 @@ fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
             "id": PROFILE,
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
-            "permissions": [{
+            "permissions": {"entities": [{
                 "entity": ENTITY,
                 "operations": ["create", "patch", "batch", "list"],
                 "readableFields": ["code", "count", "readonly"],
                 "writableFields": ["code", "count"],
                 "allowDataExport": allow_data_export,
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
         }]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
@@ -97,16 +97,16 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// can fill the response bound.
 fn wide_export_registry() -> registry_breg::CompiledRegistry {
     let source = json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {"id": WIDE_REGISTRY, "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {"id": WIDE_REGISTRY, "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
         "entities": [{
             "id": WIDE_ENTITY,
             "primaryDataset": WIDE_DATASET,
             "route": "wide-records",
             "mutationMode": "mutable",
             "fields": [
-                {"id": "payload", "type": "text", "maxLength": 1000000,
+                {"id": "payload", "type": "text", "maximumLength": 1000000,
                  "classification": "internal"}
             ]
         }],
@@ -114,14 +114,14 @@ fn wide_export_registry() -> registry_breg::CompiledRegistry {
             "id": PROFILE,
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
-            "permissions": [{
+            "permissions": {"entities": [{
                 "entity": WIDE_ENTITY,
                 "operations": ["list"],
                 "readableFields": ["payload"],
                 "writableFields": [],
                 "allowDataExport": true,
                 "rowBoundaries": "unrestricted"
-            }]
+            }]}
         }]
     });
     compile_source(source).expect("the wide export registry compiles")
@@ -172,21 +172,21 @@ fn data_export_requires_explicit_profile_permission() {
 
     let base = |operations: Value, readable: Value| {
         json!({
-            "apiVersion": "registry.registrystack.org/v1alpha1",
-            "kind": "RegistryProject",
-            "registry": {"id": "export-contract", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {"id": "export-contract", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
             "entities": [{
-                "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create_only",
-                "fields": [{"id": "code", "type": "string", "maxLength": 16,
+                "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create-only",
+                "fields": [{"id": "code", "type": "string", "maximumLength": 16,
                             "classification": "internal"}]
             }],
             "accessProfiles": [{
                 "id": PROFILE, "principalClaim": "principal", "requiredScopes": "unrestricted",
-                "permissions": [{
+                "permissions": {"entities": [{
                     "rowBoundaries": "unrestricted", "entity": ENTITY,
                     "operations": operations, "readableFields": readable,
                     "allowDataExport": true
-                }]
+                }]}
             }]
         })
     };
@@ -208,17 +208,17 @@ fn data_export_requires_explicit_profile_permission() {
     assert_eq!(plan.profile_id(), PROFILE);
 
     let project_profile = json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {"id": "project-export", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {"id": "project-export", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
         "accessProfiles": [{
             "id": "project-exporter", "principalClaim": "principal", "requiredScopes": "unrestricted",
-            "permissions": [{"entity": ENTITY, "operations": ["list"],
-                        "readableFields": ["code"], "allowDataExport": true, "rowBoundaries": "unrestricted"}]
+            "permissions": {"entities": [{"entity": ENTITY, "operations": ["list"],
+                        "readableFields": ["code"], "allowDataExport": true, "rowBoundaries": "unrestricted"}]}
         }],
         "entities": [{
-            "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create_only",
-            "fields": [{"id": "code", "type": "string", "maxLength": 16,
+            "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create-only",
+            "fields": [{"id": "code", "type": "string", "maximumLength": 16,
                         "classification": "internal"}]
         }]
     });
@@ -338,16 +338,16 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
     );
     let oversized_valid_field_registry = {
         let source = json!({
-            "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-            "registry":{"id":"oversize", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-            "entities":[{"id":ENTITY,"primaryDataset":"test-dataset","route":"records","mutationMode":"create_only",
+            "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+            "project":{"id":"oversize", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+            "entities":[{"id":ENTITY,"primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
                 "batch":{"maximumItems":2,"maximumBytes":100},
-                "fields":[{"id":"code","type":"text","maxLength":1000,"required":true,
+                "fields":[{"id":"code","type":"text","maximumLength":1000,"required":true,
                            "classification":"internal"}]}],
-            "accessProfiles":[{"id":PROFILE,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "accessProfiles":[{"id":PROFILE,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"entities":[{
                     "entity":ENTITY,
                     "operations":["create","batch"],"readableFields":["code"],
-                    "writableFields":["code"], "rowBoundaries": "unrestricted"}]}]
+                    "writableFields":["code"], "rowBoundaries": "unrestricted"}]}}]
         });
         compile_source(source).unwrap()
     };
@@ -373,9 +373,9 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
 #[test]
 fn data_lifecycle_uses_exact_compiled_api_names() {
     let registry = compile_source(json!({
-        "apiVersion": "registry.registrystack.org/v1alpha1",
-        "kind": "RegistryProject",
-        "registry": {"id": "data-logical-names", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {"id": "data-logical-names", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
         "entities": [{
             "id": ENTITY,
             "primaryDataset": "test-dataset",
@@ -386,8 +386,8 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
                 "id": "record-code",
                 "apiName": "publicCode",
                 "type": "string",
-                "minLength": 2,
-                "maxLength": 16,
+                "minimumLength": 2,
+                "maximumLength": 16,
                 "required": true,
                 "classification": "internal"
             }]
@@ -396,14 +396,14 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
             "id": PROFILE,
             "principalClaim": "principal",
             "requiredScopes": "unrestricted",
-            "permissions": [{
+            "permissions": {"entities": [{
                 "entity": ENTITY,
                 "operations": ["create", "patch", "batch", "list"],
                 "readableFields": ["record-code"],
                 "writableFields": ["record-code"],
                 "allowDataExport": true,
               "rowBoundaries": "unrestricted"
-            }]
+            }]}
         }]
     }))
     .unwrap();

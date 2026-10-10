@@ -74,20 +74,20 @@ pub enum ReviewValidationReason {
 impl ReviewValidationReason {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         Some(match value {
-            "kind_not_allowed" => Self::KindNotAllowed,
-            "reference_invalid" => Self::ReferenceInvalid,
-            "object_required" => Self::ObjectRequired,
-            "maximum_bytes_exceeded" => Self::MaximumBytesExceeded,
-            "maximum_depth_exceeded" => Self::MaximumDepthExceeded,
-            "schema_mismatch" => Self::SchemaMismatch,
-            "outcome_not_declared" => Self::OutcomeNotDeclared,
-            "reason_required" => Self::ReasonRequired,
-            "text_invalid" => Self::TextInvalid,
-            "result_not_declared" => Self::ResultNotDeclared,
-            "result_required" => Self::ResultRequired,
-            "field_not_declared" => Self::FieldNotDeclared,
-            "constraint_invalid" => Self::ConstraintInvalid,
-            "constraint_violated" => Self::ConstraintViolated,
+            "kind-not-allowed" => Self::KindNotAllowed,
+            "reference-invalid" => Self::ReferenceInvalid,
+            "object-required" => Self::ObjectRequired,
+            "maximum-bytes-exceeded" => Self::MaximumBytesExceeded,
+            "maximum-depth-exceeded" => Self::MaximumDepthExceeded,
+            "schema-mismatch" => Self::SchemaMismatch,
+            "outcome-not-declared" => Self::OutcomeNotDeclared,
+            "reason-required" => Self::ReasonRequired,
+            "text-invalid" => Self::TextInvalid,
+            "result-not-declared" => Self::ResultNotDeclared,
+            "result-required" => Self::ResultRequired,
+            "field-not-declared" => Self::FieldNotDeclared,
+            "constraint-invalid" => Self::ConstraintInvalid,
+            "constraint-violated" => Self::ConstraintViolated,
             _ => return None,
         })
     }
@@ -172,6 +172,65 @@ impl ReviewClientError {
             Self::Transport { .. } | Self::Problem { .. } | Self::Protocol { .. } => {
                 ReviewMutationErrorClass::Ambiguous
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReviewValidationReason;
+
+    /// The client reads the validation reason header in the spelling the
+    /// Casework runtime writes; the previous spelling is an unknown word.
+    #[test]
+    fn every_validation_reason_is_read_in_kebab_case_only() {
+        let reasons = [
+            ("kind-not-allowed", ReviewValidationReason::KindNotAllowed),
+            (
+                "reference-invalid",
+                ReviewValidationReason::ReferenceInvalid,
+            ),
+            ("object-required", ReviewValidationReason::ObjectRequired),
+            (
+                "maximum-bytes-exceeded",
+                ReviewValidationReason::MaximumBytesExceeded,
+            ),
+            (
+                "maximum-depth-exceeded",
+                ReviewValidationReason::MaximumDepthExceeded,
+            ),
+            ("schema-mismatch", ReviewValidationReason::SchemaMismatch),
+            (
+                "outcome-not-declared",
+                ReviewValidationReason::OutcomeNotDeclared,
+            ),
+            ("reason-required", ReviewValidationReason::ReasonRequired),
+            ("text-invalid", ReviewValidationReason::TextInvalid),
+            (
+                "result-not-declared",
+                ReviewValidationReason::ResultNotDeclared,
+            ),
+            ("result-required", ReviewValidationReason::ResultRequired),
+            (
+                "field-not-declared",
+                ReviewValidationReason::FieldNotDeclared,
+            ),
+            (
+                "constraint-invalid",
+                ReviewValidationReason::ConstraintInvalid,
+            ),
+            (
+                "constraint-violated",
+                ReviewValidationReason::ConstraintViolated,
+            ),
+        ];
+        for (word, reason) in reasons {
+            assert_eq!(ReviewValidationReason::parse(word), Some(reason), "{word}");
+            assert_eq!(
+                ReviewValidationReason::parse(&word.replace('-', "_")),
+                None,
+                "{word}"
+            );
         }
     }
 }

@@ -1,9 +1,10 @@
 {
-  "schema": "registry.evidence-client-profile/v1",
+  "apiVersion": "id.registrystack.org/formats/evidence/client-profile/v1",
+  "kind": "EvidenceClientProfile",
   "baseUrl": "https://evidence.example.org",
   "clientId": "relying-party",
   "privateKey": {
-    "source": "environment",
+    "type": "environment",
     "variable": "EVIDENCE_CLIENT_KEY"
   }
 }

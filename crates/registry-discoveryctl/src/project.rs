@@ -18,16 +18,19 @@ use std::path::{Component, Path, PathBuf};
 
 use registry_discovery::{check_runtime, RUNTIME_KIND};
 use registry_platform_yaml::{
-    Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, NodeValue, Position, Reader, Related,
-    Report, Severity, Source, UniqueList, Url, MAXIMUM_DOCUMENT_BYTES,
+    ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, NodeValue, Position,
+    Reader, Related, RemovedKey, Report, Severity, Source, UniqueList, Url, MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::{Deserialize, Serialize};
 
-pub const ORIGINS_SCHEMA: &str = "registry-discovery/origins/v1alpha1";
-pub const MAPPING_SCHEMA: &str = "registry-discovery/evidence-mapping/v1alpha1";
-/// The name diagnostics give an origins file.
+/// The `apiVersion` an origins file writes.
+pub const ORIGINS_API_VERSION: &str = "id.registrystack.org/formats/discovery/origins/v1alpha1";
+/// The `apiVersion` an evidence mapping file writes.
+pub const MAPPING_API_VERSION: &str =
+    "id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1";
+/// The `kind` an origins file writes.
 pub const ORIGINS_KIND: &str = "DiscoveryOrigins";
-/// The name diagnostics give an evidence mapping file.
+/// The `kind` an evidence mapping file writes.
 pub const MAPPING_KIND: &str = "DiscoveryEvidenceMapping";
 pub const ORIGINS_FILE: &str = "origins.yaml";
 pub const MAPPINGS_DIRECTORY: &str = "mappings";
@@ -46,37 +49,30 @@ const CATALOG_URL_PATTERN: &str = "^https://[^\\s\\u0000-\\u001F\\u007F-\\u009F/
 
 const ORIGINS_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ORIGINS_KIND,
-    envelope: EnvelopeRule::Exempt {
-        reason: "the origins file keeps its schemaVersion header until the recorded move to \
-                 apiVersion and kind",
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(ORIGINS_API_VERSION)],
+        retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: &[RemovedKey {
+        pointer: "/schemaVersion",
+        replacement: "Write apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1 \
+                      and kind: DiscoveryOrigins instead.",
+    }],
 };
 
 const MAPPING_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: MAPPING_KIND,
-    envelope: EnvelopeRule::Exempt {
-        reason: "the evidence mapping file keeps its schemaVersion header until the recorded \
-                 move to apiVersion and kind",
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(MAPPING_API_VERSION)],
+        retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: &[RemovedKey {
+        pointer: "/schemaVersion",
+        replacement: "Write apiVersion: \
+                      id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1 and kind: \
+                      DiscoveryEvidenceMapping instead.",
+    }],
 };
-
-/// The header an origins file carries.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub enum OriginsSchemaVersion {
-    #[serde(rename = "registry-discovery/origins/v1alpha1")]
-    V1Alpha1,
-}
-
-/// The header an evidence mapping file carries.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub enum MappingSchemaVersion {
-    #[serde(rename = "registry-discovery/evidence-mapping/v1alpha1")]
-    V1Alpha1,
-}
 
 /// The publication profile an approved origin implements.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -91,7 +87,10 @@ pub enum OriginProfile {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct OriginsFile {
-    pub schema_version: OriginsSchemaVersion,
+    /// The format and version of this file.
+    pub api_version: String,
+    /// The kind of this file.
+    pub kind: String,
     /// One to 128 approved origins.
     #[cfg_attr(feature = "schema", schemars(length(min = 1, max = MAX_ORIGINS)))]
     pub origins: Vec<ApprovedOrigin>,
@@ -125,7 +124,10 @@ pub struct ApprovedOrigin {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AuthoredEvidenceMapping {
-    pub schema_version: MappingSchemaVersion,
+    /// The format and version of this file.
+    pub api_version: String,
+    /// The kind of this file.
+    pub kind: String,
     /// An absolute URI of at most 4096 characters, unique in the project.
     #[cfg_attr(
         feature = "schema",
@@ -1004,7 +1006,8 @@ mod tests {
         (source.line, source.column)
     }
 
-    const ORIGINS: &str = r#"schemaVersion: registry-discovery/origins/v1alpha1
+    const ORIGINS: &str = r#"apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1
+kind: DiscoveryOrigins
 origins:
   - originId: evidence-one
     catalogUrl: https://unreachable.example.invalid/catalog.jsonld
@@ -1012,7 +1015,8 @@ origins:
     enabled: true
 "#;
 
-    const MAPPING: &str = r#"schemaVersion: registry-discovery/evidence-mapping/v1alpha1
+    const MAPPING: &str = r#"apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1
+kind: DiscoveryEvidenceMapping
 mappingId: urn:example:mapping:one
 mappingAuthorityId: urn:example:authority
 requirementId: urn:example:requirement
@@ -1078,10 +1082,10 @@ alternatives:
             .unwrap()
             .file
             .ends_with("two.yaml"));
-        assert_eq!(line_and_column(diagnostic), (Some(4), Some(16)));
+        assert_eq!(line_and_column(diagnostic), (Some(5), Some(16)));
         assert_eq!(diagnostic.related.len(), 1);
         assert!(diagnostic.related[0].file.ends_with("one.yaml"));
-        assert_eq!(diagnostic.related[0].line, Some(4));
+        assert_eq!(diagnostic.related[0].line, Some(5));
 
         let root = project(ORIGINS, &[("one.yaml", MAPPING), ("two.yaml", MAPPING)]);
         assert_eq!(
@@ -1108,9 +1112,9 @@ alternatives:
             ]
         );
         assert_eq!(diagnostics[0].path, "/origins/1/originId");
-        assert_eq!(line_and_column(&diagnostics[0]), (Some(7), Some(15)));
+        assert_eq!(line_and_column(&diagnostics[0]), (Some(8), Some(15)));
         assert_eq!(diagnostics[0].related[0].path, "/origins/0/originId");
-        assert_eq!(diagnostics[0].related[0].line, Some(3));
+        assert_eq!(diagnostics[0].related[0].line, Some(4));
     }
 
     #[test]
@@ -1185,9 +1189,9 @@ alternatives:
             [SUBSTITUTION_NOT_ALLOWED, SUBSTITUTION_NOT_ALLOWED]
         );
         assert_eq!(diagnostics[0].path, "/origins/0/catalogUrl");
-        assert_eq!(line_and_column(&diagnostics[0]), (Some(4), Some(17)));
+        assert_eq!(line_and_column(&diagnostics[0]), (Some(5), Some(17)));
         assert_eq!(diagnostics[1].path, "/mappingAuthorityId");
-        assert_eq!(line_and_column(&diagnostics[1]), (Some(3), Some(21)));
+        assert_eq!(line_and_column(&diagnostics[1]), (Some(4), Some(21)));
         for diagnostic in &diagnostics {
             assert!(!diagnostic.message.contains("CATALOG_URL"));
             assert!(!diagnostic.message.contains("AUTHORITY"));
@@ -1209,8 +1213,8 @@ alternatives:
         assert_eq!(
             unknown,
             [
-                ("/origins/0/catalogURL", (Some(4), Some(5))),
-                ("/origins/0/disabled", (Some(7), Some(5))),
+                ("/origins/0/catalogURL", (Some(5), Some(5))),
+                ("/origins/0/disabled", (Some(8), Some(5))),
             ]
         );
         assert!(diagnostics[0].suggested_action.contains("catalogUrl"));
@@ -1228,7 +1232,11 @@ alternatives:
             "[urn:example:evidence, urn:example:evidence]",
         );
         for (body, code, path) in [
-            (wrong_header, "config.unknown-variant", "/schemaVersion"),
+            (
+                wrong_header,
+                "config.unsupported-api-version",
+                "/apiVersion",
+            ),
             (null_jurisdiction, "config.null-value", "/jurisdiction"),
             (
                 repeated,
@@ -1260,7 +1268,7 @@ alternatives:
             ["discovery.mapping.invalid-identifier"]
         );
         assert_eq!(diagnostics[0].path, "/alternatives/0/evidenceTypeListId");
-        assert_eq!(line_and_column(&diagnostics[0]), (Some(6), Some(25)));
+        assert_eq!(line_and_column(&diagnostics[0]), (Some(7), Some(25)));
     }
 
     #[test]
@@ -1298,7 +1306,7 @@ alternatives:
         let root = project(ORIGINS, &[("one.yaml", MAPPING)]);
         fs::write(
             root.path().join("runtime.yaml"),
-            "apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1\nkind: DiscoveryRuntimeConfig\nlistener:\n  bind: 127.0.0.1:8080\n",
+            "apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1\nkind: DiscoveryRuntimeConfig\nlistener:\n  bind: 127.0.0.1:8080\n  requestTimeoutMilliseconds: 10000\n",
         )
         .unwrap();
         fs::write(
@@ -1338,7 +1346,7 @@ alternatives:
         let path = root.path().join("nested").join("..").join("runtime.yaml");
         fs::write(
             root.path().join("runtime.yaml"),
-            "apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1\nkind: DiscoveryRuntimeConfig\nlistener:\n  bind: 127.0.0.1:8080\n  surprise: true\n",
+            "apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1\nkind: DiscoveryRuntimeConfig\nlistener:\n  bind: 127.0.0.1:8080\n  surprise: true\n",
         )
         .unwrap();
         fs::create_dir(root.path().join("nested")).unwrap();
@@ -1357,15 +1365,74 @@ alternatives:
     }
 
     #[test]
-    fn the_schema_version_and_profile_spellings_match_their_constants() {
+    fn cfg_env_1_the_origins_and_mapping_files_name_their_format_and_kind() {
         assert_eq!(
-            serde_json::to_value(OriginsSchemaVersion::V1Alpha1).unwrap(),
-            ORIGINS_SCHEMA
+            ORIGINS_API_VERSION,
+            "id.registrystack.org/formats/discovery/origins/v1alpha1"
         );
         assert_eq!(
-            serde_json::to_value(MappingSchemaVersion::V1Alpha1).unwrap(),
-            MAPPING_SCHEMA
+            MAPPING_API_VERSION,
+            "id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1"
         );
+        let root = project(ORIGINS, &[("one.yaml", MAPPING)]);
+        let checked = check_project(root.path(), false).expect("both files are read");
+        assert_eq!(checked.origins.len(), 1);
+        assert_eq!(checked.mappings.len(), 1);
+
+        // Each file is refused under the other's kind, at the member that
+        // names it.
+        let swapped = project(
+            &ORIGINS.replace("kind: DiscoveryOrigins", "kind: DiscoveryEvidenceMapping"),
+            &[],
+        );
+        let diagnostics = refusal(swapped.path());
+        assert_eq!(codes(&diagnostics), ["config.wrong-kind"]);
+        assert_eq!(diagnostics[0].path, "/kind");
+    }
+
+    #[test]
+    fn cfg_change_2_a_schema_version_header_names_the_envelope_to_write() {
+        let old_origins = ORIGINS.replace(
+            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\n",
+            "schemaVersion: registry-discovery/origins/v1alpha1\n",
+        );
+        let old_mapping = MAPPING.replace(
+            "apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1\nkind: DiscoveryEvidenceMapping\n",
+            "schemaVersion: registry-discovery/evidence-mapping/v1alpha1\n",
+        );
+        for (root, api_version, kind) in [
+            (
+                project(&old_origins, &[]),
+                "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1",
+                "kind: DiscoveryOrigins",
+            ),
+            (
+                project(ORIGINS, &[("one.yaml", &old_mapping)]),
+                "apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1",
+                "kind: DiscoveryEvidenceMapping",
+            ),
+        ] {
+            let diagnostics = refusal(root.path());
+            assert_eq!(
+                codes(&diagnostics),
+                ["config.missing-envelope", "config.removed-key"]
+            );
+            let removed = &diagnostics[1];
+            assert_eq!(removed.path, "/schemaVersion");
+            assert_eq!(line_and_column(removed), (Some(1), Some(1)));
+            assert!(
+                removed.suggested_action.contains(api_version),
+                "{removed:?}"
+            );
+            assert!(removed.suggested_action.contains(kind), "{removed:?}");
+            // The header value an older file wrote is never repeated.
+            assert!(!removed.message.contains("registry-discovery/"));
+            assert!(!removed.suggested_action.contains("registry-discovery/"));
+        }
+    }
+
+    #[test]
+    fn the_profile_spelling_matches_its_constant() {
         assert_eq!(
             serde_json::to_value(OriginProfile::RegistryDiscoveryV1Alpha1).unwrap(),
             registry_discovery_profile::PROFILE_ID

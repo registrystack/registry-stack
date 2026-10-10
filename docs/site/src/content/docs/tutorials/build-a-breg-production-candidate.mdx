@@ -84,10 +84,10 @@ bregctl check --production tutorial-work/candidate-project
 
 ```text
 Production check passed; registry revision sha256:6ba1a2c71c27ef6036d37c8bcec1284deaae88de012290ee0ae2855ddd09cdf8.
-warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:141:24 /accessProfiles/0/permissions/1/rowBoundaries
+warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:143:26 /accessProfiles/0/permissions/entities/1/rowBoundaries
   this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
+warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:191:26 /accessProfiles/2/permissions/entities/0/rowBoundaries
   this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
 0 errors, 2 warnings in 4 files
@@ -106,10 +106,10 @@ bregctl check --production --deny-warnings tutorial-work/candidate-project
 
 ```text
 bregctl check refused the project: --deny-warnings refuses a warning.
-warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:141:24 /accessProfiles/0/permissions/1/rowBoundaries
+warning[breg.access.profile-unrestricted-collection] tutorial-work/candidate-project/registry.yaml:143:26 /accessProfiles/0/permissions/entities/1/rowBoundaries
   this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:187:24 /accessProfiles/2/permissions/0/rowBoundaries
+warning[breg.access.profile-unrestricted-rows] tutorial-work/candidate-project/registry.yaml:191:26 /accessProfiles/2/permissions/entities/0/rowBoundaries
   this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access
   next: Review the finding, and change the source if the behavior it describes is not intended.
 0 errors, 2 warnings in 4 files
@@ -218,7 +218,7 @@ driven in-process, and every path must be absolute, which the unquoted heredoc a
 ```sh
 mkdir -p tutorial-work/candidate/empty-package
 cat > tutorial-work/candidate/runtime-test.yaml <<EOF
-apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
@@ -234,7 +234,7 @@ database:
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 4
+    maximumConnections: 4
   roles:
     migration: registry_migration
     runtime: registry_runtime
@@ -250,10 +250,10 @@ authentication:
     scopeSeparator: " "
     allowedClients:
       - generic-registry-client
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 30000
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/issuer-jwks
   authorityClaims:
     principal: registry_principal

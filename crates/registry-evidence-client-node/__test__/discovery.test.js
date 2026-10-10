@@ -47,7 +47,7 @@ const DEFINITIONS_DOCUMENT = {
           handle: 'status-holds',
           concept: 'urn:example:node-test:concept:status-holds',
           required: true,
-          form: 'boolean',
+          form: { type: 'boolean' },
         },
       ],
     },
@@ -105,7 +105,7 @@ test('the metadata bound governs discovery, and the signed response bound does n
     });
     await assert.rejects(bounded.discover(), (error) => {
       assert.equal(error.kind, 'transport');
-      assert.equal(error.transportKind, 'response_too_large');
+      assert.equal(error.transportKind, 'response-too-large');
       return true;
     });
   } finally {

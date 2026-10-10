@@ -172,7 +172,7 @@ impl PolicyBinding {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     tag = "strategy",
-    rename_all = "snake_case",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
@@ -282,7 +282,7 @@ pub struct ReviewRequestAccepted {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewRequestLifecycle {
     Reviewing,
     Approved,
@@ -309,7 +309,7 @@ pub struct ReviewRequestView {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewResultStatus {
     Approved,
     Rejected,
@@ -433,7 +433,7 @@ impl ReviewCancelRequest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     tag = "outcome",
-    rename_all = "snake_case",
+    rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
@@ -766,6 +766,51 @@ mod tests {
                 "resultId": Uuid::nil(),
                 "completedAt": completed_at,
             })
+        );
+    }
+
+    #[test]
+    fn multi_word_protocol_values_are_kebab_case() {
+        assert_eq!(
+            serde_json::to_value(ReviewRequestLifecycle::ChangesRequested).unwrap(),
+            json!("changes-requested")
+        );
+        assert_eq!(
+            serde_json::to_value(ReviewResultStatus::ChangesRequested).unwrap(),
+            json!("changes-requested")
+        );
+        assert!(
+            serde_json::from_value::<ReviewRequestLifecycle>(json!("changes_requested")).is_err()
+        );
+        assert!(serde_json::from_value::<ReviewResultStatus>(json!("changes_requested")).is_err());
+
+        let result = ReviewResult {
+            result_id: Uuid::from_u128(1),
+            request_id: Uuid::nil(),
+            subject: request().subject,
+            policy: PolicyBinding {
+                id: "registry-correction".to_owned(),
+                version: "1".to_owned(),
+                digest: ContentDigest::for_bytes(b"policy"),
+            },
+            submission_digest: submission_digest("producer", "registry", &request()).unwrap(),
+            status: ReviewResultStatus::Cancelled,
+            outcome: None,
+            result: None,
+            completed_at: Utc.with_ymd_and_hms(2026, 9, 19, 0, 0, 0).unwrap(),
+            available_until: Utc.with_ymd_and_hms(2026, 9, 20, 0, 0, 0).unwrap(),
+        };
+        let already_terminal = serde_json::to_value(ReviewCancelResponse::AlreadyTerminal {
+            result: result.clone(),
+        })
+        .unwrap();
+        assert_eq!(already_terminal["outcome"], json!("already-terminal"));
+        let mut previous_spelling = already_terminal;
+        previous_spelling["outcome"] = json!("already_terminal");
+        assert!(serde_json::from_value::<ReviewCancelResponse>(previous_spelling).is_err());
+        assert_eq!(
+            serde_json::to_value(ReviewCancelResponse::Cancelled { result }).unwrap()["outcome"],
+            json!("cancelled")
         );
     }
 

@@ -105,8 +105,8 @@ fn diff_inventory_is_deterministic_and_classification_direction_is_exact() {
         .as_array()
         .expect("changes array")
         .iter()
-        .any(|change| change["classification"] == "disclosure_widening"
-            && change["change"]["code"] == "field_classification_changed"));
+        .any(|change| change["classification"] == "disclosure-widening"
+            && change["change"]["code"] == "field-classification-changed"));
 
     let public_baseline = publish_package(&directory.path, "public-baseline", "public");
     let narrowing = write_project(&directory.path, "narrowing", "internal");
@@ -123,7 +123,7 @@ fn diff_inventory_is_deterministic_and_classification_direction_is_exact() {
         .as_array()
         .expect("changes array")
         .iter()
-        .any(|change| change["classification"] == "disclosure_narrowing"));
+        .any(|change| change["classification"] == "disclosure-narrowing"));
 
     let human = run(&[
         "diff",
@@ -195,7 +195,7 @@ fn a_removed_field_is_reported_as_retained_in_history_not_erased() {
         .as_array()
         .expect("changes array")
         .iter()
-        .any(|change| change["change"]["code"] == "field_removed"));
+        .any(|change| change["change"]["code"] == "field-removed"));
     let retained: Vec<&Value> = report["findings"]
         .as_array()
         .expect("findings array")
@@ -320,7 +320,7 @@ fn package_closure_and_path_disclosure_threats_are_enforced_by_value_free_negati
 }
 
 #[test]
-fn a_package_under_the_retired_api_version_is_read_only_as_the_deployed_predecessor() {
+fn a_package_under_the_retired_api_version_is_refused_as_a_baseline_too() {
     let directory = TestDirectory::create();
     let deployed = publish_package(&directory.path, "deployed", "internal");
     let deployed = retire_package_api_version(deployed);
@@ -338,7 +338,7 @@ fn a_package_under_the_retired_api_version_is_read_only_as_the_deployed_predeces
     assert_eq!(diagnostic["code"], "config.retired-api-version");
     assert!(diagnostic["suggestedAction"]
         .as_str()
-        .is_some_and(|action| action.contains("--baseline-package DEPLOYED")));
+        .is_some_and(|action| action.contains("bregctl apply --initial --package BUILD")));
 
     let integrity_only = run(&[
         "--format",
@@ -359,8 +359,8 @@ fn a_package_under_the_retired_api_version_is_read_only_as_the_deployed_predeces
         "diff.baseline.retired_api_version"
     );
 
-    // The runtime file names the deployed package, which this release reads
-    // as the predecessor of an upgrade.
+    // A runtime file that names the package gives it no other reading: the
+    // retired package is no baseline for a successor.
     let runtime = write_runtime_config(&directory.path, &deployed);
     let runtime_bound = run(&[
         "--format",
@@ -370,10 +370,16 @@ fn a_package_under_the_retired_api_version_is_read_only_as_the_deployed_predeces
         "--runtime-config",
         path(&runtime),
     ]);
-    assert!(runtime_bound.status.success(), "{runtime_bound:?}");
-    let report = json_stdout(&runtime_bound);
-    assert_eq!(report["baselineAssurance"], "runtime_bound");
-    assert_eq!(report["baselinePackageRevision"], deployed.digest);
+    assert_eq!(runtime_bound.status.code(), Some(1), "{runtime_bound:?}");
+    assert_tool_diagnostic(
+        &json_stdout(&runtime_bound)["diagnostics"][0],
+        "baseline_package",
+        "correct_package_build",
+    );
+    assert_eq!(
+        json_stdout(&runtime_bound)["diagnostics"][0]["code"],
+        "diff.baseline.retired_api_version"
+    );
 }
 
 #[test]
@@ -503,7 +509,7 @@ fn diff_help_and_selector_usage_preserve_the_closed_command_inventory_and_exit_c
     fs::write(
         &malformed_runtime,
         format!(
-            "apiVersion: registry.registrystack.org/breg-runtime/v1alpha1\nkind: BRegRuntimeConfig\nunexpectedSetting: {VALUE_CANARY}\n"
+            "apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1\nkind: BRegRuntimeConfig\nunexpectedSetting: {VALUE_CANARY}\n"
         ),
     )
     .expect("malformed runtime configuration is written");
@@ -722,14 +728,14 @@ fn write_project_with_module(parent: &Path, name: &str, module: Vec<u8>) -> Path
 
 fn project_bytes(module_digest: &str) -> Vec<u8> {
     format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject","project":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"restricted","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"modules":[{{"id":"core","version":"1","digest":"{module_digest}"}}]}}"#
     )
     .into_bytes()
 }
 
 fn module_bytes(classification: &str) -> Vec<u8> {
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":16,"classification":"{classification}"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","entities":[{{"id":"record","primaryDataset":"neutral-registry","route":"records","mutationMode":"create-only","fields":[{{"id":"code","type":"string","maximumLength":16,"classification":"{classification}"}}],"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}]}}"#
     )
     .into_bytes()
 }
@@ -749,7 +755,7 @@ fn write_runtime_config(parent: &Path, package: &PublishedPackage) -> PathBuf {
     fs::write(
         &path,
         format!(
-            r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:1
@@ -766,7 +772,7 @@ database:
   runtimeUrlRef: secret:env/DIFF_RUNTIME_DATABASE_SECRET_IS_NOT_OPENED
   migrationUrlRef: secret:env/DIFF_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED
   pool:
-    maxSize: 1
+    maximumConnections: 1
     waitTimeoutMilliseconds: 1000
     createTimeoutMilliseconds: 1000
     recycleTimeoutMilliseconds: 1000
@@ -784,15 +790,14 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: [diff-client]
-    deniedKids: []
-    maxTokenLifetimeSeconds: 300
+    maximumTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 600
       negativeCacheTtlSeconds: 60
       refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 1
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 1
       outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
@@ -802,7 +807,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/{VALUE_CANARY}
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000

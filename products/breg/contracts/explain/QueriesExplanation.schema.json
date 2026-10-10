@@ -7,6 +7,11 @@
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "operations"],
   "$defs": {
+    "DerivedId": {
+      "description": "An identifier the compiler derives from local identifiers: two or more local identifiers joined by `.`. It is never authored.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
+      "type": "string"
+    },
     "fieldType": {
       "type": "object",
       "description": "Passthrough of the compiled field type. Shape follows FieldTypeSource and is outside this contract version.",
@@ -26,10 +31,10 @@
   },
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha4"
+      "const": "id.registrystack.org/formats/breg/queries-explanation/v1alpha4"
     },
     "kind": {
-      "const": "QueriesExplanation"
+      "const": "BRegQueriesExplanation"
     },
     "operations": {
       "type": "array",
@@ -41,11 +46,11 @@
           "sortable", "allowCount", "selectors", "readPath", "wire", "bounds"
         ],
         "properties": {
-          "id": { "type": "string" },
+          "id": { "$ref": "#/$defs/DerivedId" },
           "routeId": { "type": "string" },
           "profile": { "type": "string" },
           "entity": { "type": "string" },
-          "kind": { "enum": ["list", "current", "as_of", "snapshot"] },
+          "kind": { "enum": ["list", "current", "as-of", "snapshot"] },
           "apiFields": { "type": "array", "items": { "$ref": "#/$defs/fieldSummary" } },
           "selectors": { "type": "array", "items": { "$ref": "#/$defs/fieldSummary" } },
           "filterable": {
@@ -62,7 +67,7 @@
                   "type": "array",
                   "uniqueItems": true,
                   "items": {
-                    "enum": ["equals", "in", "range", "is_null", "is_not_null", "prefix", "contains"]
+                    "enum": ["equals", "in", "range", "is-null", "is-not-null", "prefix", "contains"]
                   }
                 },
                 "wireOperators": {
@@ -115,18 +120,18 @@
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "maxPageSize", "maxTop", "maxSelectedFields", "maxFilterPayloadBytes",
-              "maxFilterDepth", "maxFilterNodes", "maxFilterPredicates", "maxInValues"
+              "maximumPageSize", "maximumTop", "maximumSelectedFields", "maximumFilterPayloadBytes",
+              "maximumFilterDepth", "maximumFilterNodes", "maximumFilterPredicates", "maximumInValues"
             ],
             "properties": {
-              "maxPageSize": { "type": "integer", "minimum": 0, "maximum": 65535 },
-              "maxTop": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
-              "maxSelectedFields": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "maxFilterPayloadBytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "maxFilterDepth": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "maxFilterNodes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "maxFilterPredicates": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "maxInValues": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+              "maximumPageSize": { "type": "integer", "minimum": 0, "maximum": 65535 },
+              "maximumTop": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+              "maximumSelectedFields": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "maximumFilterPayloadBytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "maximumFilterDepth": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "maximumFilterNodes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "maximumFilterPredicates": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "maximumInValues": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
             }
           },
           "spatialQueries": {

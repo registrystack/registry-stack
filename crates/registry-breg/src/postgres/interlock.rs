@@ -2613,7 +2613,7 @@ async fn verify_retained_webhook_delivery_bindings(
              WHERE (
                        state.state IN ('pending', 'leased')
                        OR (
-                           state.state = 'dead_lettered'
+                           state.state = 'dead-lettered'
                            AND delivery.operator_replay
                        )
                    )
@@ -4007,16 +4007,16 @@ mod tests {
                 "id": "secret",
                 "apiName": api_name,
                 "type": "string",
-                "maxLength": 256,
+                "maximumLength": 256,
                 "classification": "restricted"
             });
             if encrypted {
                 secret["encrypted"] = json!(true);
             }
             let source = json!({
-                "apiVersion": "registry.registrystack.org/v1alpha1",
-                "kind": "RegistryProject",
-                "registry": {
+                "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+                "kind": "BRegProject",
+                "project": {
                     "id": "field-encryption-scan-keys",
                     "version": "1",
                     "defaultLanguage": "en",
@@ -4034,13 +4034,13 @@ mod tests {
                     "default": true,
                     "principalClaim": "principal",
                     "requiredScopes": "unrestricted",
-                    "permissions": [{
+                    "permissions": {"entities": [{
                         "entity": "case",
                         "rowBoundaries": "unrestricted",
                         "operations": ["get", "list", "create", "patch"],
                         "readableFields": ["secret"],
                         "writableFields": ["secret"]
-                    }]
+                    }]}
                 }]
             });
             let project = parse_project_json(&serde_json::to_vec(&source).unwrap())

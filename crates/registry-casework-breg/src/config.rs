@@ -26,13 +26,18 @@ use std::{
 };
 use url::Url;
 
-/// A description of one request entity, carried as `request`.
-const DESCRIPTION_API_VERSION: &str =
-    "registry.registrystack.org/casework-source-description/v1alpha1";
-/// A description of every paired request entity, carried as `requests`.
-const DESCRIPTION_API_VERSION_REQUESTS: &str =
-    "registry.registrystack.org/casework-source-description/v1alpha2";
-const DESCRIPTION_KIND: &str = "BRegCaseworkSourceDescription";
+/// The `apiVersion` of a source description: every paired request entity,
+/// carried as `requests`.
+pub const DESCRIPTION_API_VERSION: &str =
+    "id.registrystack.org/formats/casework/breg-source-description/v1alpha1";
+/// The `kind` of a source description.
+pub const DESCRIPTION_KIND: &str = "CaseworkBregSourceDescription";
+/// The `apiVersion` values earlier releases wrote. A description carrying
+/// one is refused as retired and imported again, never read.
+pub const RETIRED_DESCRIPTION_API_VERSIONS: [&str; 2] = [
+    "registry.registrystack.org/casework-source-description/v1alpha1",
+    "registry.registrystack.org/casework-source-description/v1alpha2",
+];
 const DESCRIPTION_ORIGIN: &str = "bregctl explain change-requests";
 const DEFAULT_REQUEST_TIMEOUT_MILLISECONDS: u64 = 30_000;
 const DEFAULT_CONNECT_TIMEOUT_MILLISECONDS: u64 = 10_000;
@@ -90,7 +95,7 @@ pub struct BregBinding {
         feature = "schema",
         schemars(range(min = 1, max = MAXIMUM_TIMEOUT_MILLISECONDS))
     )]
-    pub request_timeout_milliseconds: u64,
+    pub attempt_timeout_milliseconds: u64,
     #[serde(
         default = "default_connect_timeout",
         deserialize_with = "registry_casework_core::typed::bounded_u64::<_, 1, MAXIMUM_TIMEOUT_MILLISECONDS>"
@@ -222,7 +227,7 @@ pub fn build_adapter_from_description(
         .transpose()?;
     let generation = binding_generation(binding, source, description)?;
 
-    let request_timeout = Duration::from_millis(binding.request_timeout_milliseconds);
+    let request_timeout = Duration::from_millis(binding.attempt_timeout_milliseconds);
     let connect_timeout = Duration::from_millis(binding.connect_timeout_milliseconds);
     let mut token_config = source_token_config(binding, &client_id, key)?;
     if let Some(trust) = &trust {
@@ -260,7 +265,7 @@ fn source_token_config(
 ) -> Result<PrivateKeyJwtConfig, SourceAdapterError> {
     validate_binding(binding)?;
     let mut config = PrivateKeyJwtConfig::new(parse_url(&binding.token_endpoint)?, client_id, key)
-        .with_request_timeout(Duration::from_millis(binding.request_timeout_milliseconds))
+        .with_request_timeout(Duration::from_millis(binding.attempt_timeout_milliseconds))
         .with_connect_timeout(Duration::from_millis(binding.connect_timeout_milliseconds));
     if let Some(audience) = &binding.client_assertion_audience {
         config = config.with_audience(audience);
@@ -289,13 +294,13 @@ fn validate_binding(binding: &BregBinding) -> Result<(), SourceAdapterError> {
 pub enum BindingRule {
     /// `readerProfile` is empty, too long, or not a bare scalar.
     ReaderProfile,
-    /// `requestTimeoutMilliseconds` is zero.
+    /// `attemptTimeoutMilliseconds` is zero.
     RequestTimeoutZero,
     /// `connectTimeoutMilliseconds` is zero.
     ConnectTimeoutZero,
-    /// `requestTimeoutMilliseconds` exceeds the adapter's maximum.
+    /// `attemptTimeoutMilliseconds` exceeds the adapter's maximum.
     RequestTimeoutAboveMaximum,
-    /// `connectTimeoutMilliseconds` exceeds `requestTimeoutMilliseconds`.
+    /// `connectTimeoutMilliseconds` exceeds `attemptTimeoutMilliseconds`.
     ConnectTimeoutAboveRequestTimeout,
     /// `reconciliationIntervalMilliseconds` falls outside its range.
     ReconciliationIntervalOutOfRange,
@@ -325,7 +330,7 @@ impl BindingRule {
             Self::ReaderProfile => "readerProfile",
             Self::RequestTimeoutZero
             | Self::RequestTimeoutAboveMaximum
-            | Self::ConnectTimeoutAboveRequestTimeout => "requestTimeoutMilliseconds",
+            | Self::ConnectTimeoutAboveRequestTimeout => "attemptTimeoutMilliseconds",
             Self::ConnectTimeoutZero => "connectTimeoutMilliseconds",
             Self::ReconciliationIntervalOutOfRange => "reconciliationIntervalMilliseconds",
             Self::EventSource => "eventSource",
@@ -349,11 +354,11 @@ impl BindingRule {
             Self::ReaderProfile => {
                 "readerProfile must be 1 to 512 bytes with no control characters or surrounding whitespace"
             }
-            Self::RequestTimeoutZero => "requestTimeoutMilliseconds must be greater than zero",
+            Self::RequestTimeoutZero => "attemptTimeoutMilliseconds must be greater than zero",
             Self::ConnectTimeoutZero => "connectTimeoutMilliseconds must be greater than zero",
-            Self::RequestTimeoutAboveMaximum => "requestTimeoutMilliseconds must be at most 300000",
+            Self::RequestTimeoutAboveMaximum => "attemptTimeoutMilliseconds must be at most 300000",
             Self::ConnectTimeoutAboveRequestTimeout => {
-                "requestTimeoutMilliseconds must be at least connectTimeoutMilliseconds"
+                "attemptTimeoutMilliseconds must be at least connectTimeoutMilliseconds"
             }
             Self::ReconciliationIntervalOutOfRange => {
                 "reconciliationIntervalMilliseconds must be between 1000 and 3600000"
@@ -383,7 +388,7 @@ fn validate_binding_rules(binding: &BregBinding) -> Result<(), BindingRule> {
         valid_resource_uri, valid_scope_token, MAXIMUM_REQUESTED_SCOPES,
         MAXIMUM_REQUESTED_SCOPE_BYTES,
     };
-    let request = binding.request_timeout_milliseconds;
+    let request = binding.attempt_timeout_milliseconds;
     let connect = binding.connect_timeout_milliseconds;
     let interval = binding.reconciliation_interval_milliseconds;
     let checks = [
@@ -520,17 +525,19 @@ fn validate_description(
 ) -> Result<ValidatedDescription, DescriptionRefusal> {
     let root = decode_exact_json(bytes).map_err(|_| SourceAdapterError::Invalid)?;
     let object = root.as_object().ok_or(SourceAdapterError::Invalid)?;
-    let requests_key = match root["apiVersion"].as_str() {
-        Some(DESCRIPTION_API_VERSION) => "request",
-        Some(DESCRIPTION_API_VERSION_REQUESTS) => "requests",
+    match root["apiVersion"].as_str() {
+        Some(DESCRIPTION_API_VERSION) => {}
+        Some(version) if RETIRED_DESCRIPTION_API_VERSIONS.contains(&version) => {
+            return Err(DescriptionRefusal::RetiredApiVersion)
+        }
         _ => return Err(DescriptionRefusal::ContractMismatch),
-    };
+    }
     let expected = [
         "apiVersion",
         "authority",
         "kind",
         "origin",
-        requests_key,
+        "requests",
         "sourceId",
         "sourceRevision",
     ];
@@ -551,14 +558,12 @@ fn validate_description(
         .as_str()
         .ok_or(SourceAdapterError::Invalid)?
         .to_owned();
-    let described = match &root[requests_key] {
-        Value::Object(request) if requests_key == "request" => vec![request],
-        Value::Array(requests) if requests_key == "requests" => requests
-            .iter()
-            .map(|request| request.as_object().ok_or(SourceAdapterError::Invalid))
-            .collect::<Result<Vec<_>, _>>()?,
-        _ => return Err(DescriptionRefusal::ContractMismatch),
-    };
+    let described = root["requests"]
+        .as_array()
+        .ok_or(DescriptionRefusal::ContractMismatch)?
+        .iter()
+        .map(|request| request.as_object().ok_or(SourceAdapterError::Invalid))
+        .collect::<Result<Vec<_>, _>>()?;
     // The description and the policy pair exactly the same request entities:
     // an undeclared description entry is as much drift as a missing one.
     if described.len() != source.requests.len() {
@@ -681,7 +686,7 @@ fn resolve_policy_fields(
 
 /// Why an imported source description was refused for one source policy.
 ///
-/// Neither variant carries a description value: a field name is authored
+/// No variant carries a description value: a field name is authored
 /// policy configuration, and a key path names where the policy wrote it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -697,6 +702,9 @@ pub enum DescriptionRefusal {
     /// this source: malformed, drifted, or paired with other request
     /// entities.
     ContractMismatch,
+    /// The description carries an `apiVersion` an earlier release wrote and
+    /// this release no longer reads.
+    RetiredApiVersion,
 }
 
 impl From<SourceAdapterError> for DescriptionRefusal {
@@ -738,9 +746,9 @@ pub fn check_description_input(
 
 fn validate_review_requirement(value: &Value) -> Result<(), SourceAdapterError> {
     let review = value.as_object().ok_or(SourceAdapterError::Invalid)?;
-    match review.get("mode").and_then(Value::as_str) {
+    match review.get("type").and_then(Value::as_str) {
         Some("none") if review.len() == 1 => Ok(()),
-        None if review.len() == 2 => {
+        Some("required") if review.len() == 3 => {
             string_field(review, "authority")?;
             string_field(review, "policyId")?;
             Ok(())
@@ -858,15 +866,16 @@ mod tests {
 
     fn description(entity: &str) -> Vec<u8> {
         serde_json::to_vec(&json!({
-            "apiVersion":DESCRIPTION_API_VERSION, "kind":DESCRIPTION_KIND,
+            "apiVersion":"id.registrystack.org/formats/casework/breg-source-description/v1alpha1",
+            "kind":"CaseworkBregSourceDescription",
             "sourceId":"professional-register", "authority":"none",
             "origin":DESCRIPTION_ORIGIN, "sourceRevision":"sha256:source",
-            "request":{"requestEntity":entity,"requestRoute":"corrections",
+            "requests":[{"requestEntity":entity,"requestRoute":"corrections",
                 "contractFingerprint":"sha256:contract",
                 "fields":[{"field":"region","apiName":"serviceRegion",
                     "schema":{"type":"string","enum":["north","south"]}}],
-                "review":{"authority":"casework-main","policyId":"registry-correction"},
-                "onApproved":{"mode":"manual"},"application":{}}
+                "review":{"type":"required","authority":"casework-main","policyId":"registry-correction"},
+                "onApproved":{"mode":"manual"},"application":{}}]
         }))
         .unwrap()
     }
@@ -884,7 +893,7 @@ mod tests {
             webhook_secret_ref: "secret:file/webhook".into(),
             event_source: "urn:registrystack:registry:package:instance:pilot".into(),
             trusted_root_certificates_ref: None,
-            request_timeout_milliseconds: 30_000,
+            attempt_timeout_milliseconds: 30_000,
             connect_timeout_milliseconds: 10_000,
             reconciliation_interval_milliseconds: DEFAULT_RECONCILIATION_INTERVAL_MILLISECONDS,
         }
@@ -981,7 +990,7 @@ mod tests {
             (
                 BindingRule::RequestTimeoutZero,
                 BregBinding {
-                    request_timeout_milliseconds: 0,
+                    attempt_timeout_milliseconds: 0,
                     ..binding()
                 },
             ),
@@ -995,14 +1004,14 @@ mod tests {
             (
                 BindingRule::RequestTimeoutAboveMaximum,
                 BregBinding {
-                    request_timeout_milliseconds: MAXIMUM_TIMEOUT_MILLISECONDS + 1,
+                    attempt_timeout_milliseconds: MAXIMUM_TIMEOUT_MILLISECONDS + 1,
                     ..binding()
                 },
             ),
             (
                 BindingRule::ConnectTimeoutAboveRequestTimeout,
                 BregBinding {
-                    request_timeout_milliseconds: 9_000,
+                    attempt_timeout_milliseconds: 9_000,
                     ..binding()
                 },
             ),
@@ -1156,7 +1165,7 @@ mod tests {
     fn imported_description_drift_is_refused() {
         assert!(validate_description(&source(), &description("another-entity")).is_err());
         let mut wrong_mode: Value = serde_json::from_slice(&description("correction")).unwrap();
-        wrong_mode["request"]["onApproved"]["mode"] = json!("automatic");
+        wrong_mode["requests"][0]["onApproved"]["mode"] = json!("automatic");
         assert!(
             validate_description(&source(), &serde_json::to_vec(&wrong_mode).unwrap()).is_err()
         );
@@ -1177,15 +1186,15 @@ mod tests {
     #[test]
     fn imported_description_requires_closed_review_and_application_contracts() {
         let mut value: Value = serde_json::from_slice(&description("correction")).unwrap();
-        value["request"]["review"]["stages"] = json!([]);
+        value["requests"][0]["review"]["stages"] = json!([]);
         assert!(validate_description(&source(), &serde_json::to_vec(&value).unwrap()).is_err());
 
         let mut value: Value = serde_json::from_slice(&description("correction")).unwrap();
-        value["request"]["onApproved"] =
+        value["requests"][0]["onApproved"] =
             json!({"mode":"automatic","executor":"breg-application-worker"});
         assert!(validate_description(&source(), &serde_json::to_vec(&value).unwrap()).is_ok());
 
-        value["request"]["review"] = json!({"mode":"none"});
+        value["requests"][0]["review"] = json!({"type":"none"});
         assert!(validate_description(&source(), &serde_json::to_vec(&value).unwrap()).is_ok());
     }
 
@@ -1216,7 +1225,7 @@ mod tests {
 
         source.requests[0].projection = vec!["region".to_owned()];
         let mut duplicate: Value = serde_json::from_slice(&description("correction")).unwrap();
-        duplicate["request"]["fields"]
+        duplicate["requests"][0]["fields"]
             .as_array_mut()
             .unwrap()
             .push(json!({"field":"region","apiName":"otherRegion","schema":{"type":"string"}}));
@@ -1270,7 +1279,7 @@ mod tests {
         // Drift in the description is reported as drift even when the
         // policy also names a field the description does not publish.
         let mut drifted: Value = serde_json::from_slice(&description("correction")).unwrap();
-        drifted["request"]
+        drifted["requests"][0]
             .as_object_mut()
             .unwrap()
             .remove("contractFingerprint");
@@ -1284,7 +1293,7 @@ mod tests {
         binding_generation(binding, source, &description("correction")).unwrap()
     }
 
-    /// A source pairing `correction` and `renewal`, described by `v1alpha2`.
+    /// A source pairing `correction` and `renewal`.
     fn two_entity_source() -> SourcePolicy {
         let mut source = source();
         let mut renewal = source.requests[0].clone();
@@ -1296,24 +1305,15 @@ mod tests {
     fn requests_description(entities: &[(&str, &str)]) -> Value {
         let single: Value = serde_json::from_slice(&description("correction")).unwrap();
         let mut value = single.clone();
-        let object = value.as_object_mut().unwrap();
-        object.remove("request");
-        object.insert(
-            "apiVersion".to_owned(),
-            json!(DESCRIPTION_API_VERSION_REQUESTS),
-        );
-        object.insert(
-            "requests".to_owned(),
-            entities
-                .iter()
-                .map(|(entity, route)| {
-                    let mut request = single["request"].clone();
-                    request["requestEntity"] = json!(entity);
-                    request["requestRoute"] = json!(route);
-                    request
-                })
-                .collect(),
-        );
+        value["requests"] = entities
+            .iter()
+            .map(|(entity, route)| {
+                let mut request = single["requests"][0].clone();
+                request["requestEntity"] = json!(entity);
+                request["requestRoute"] = json!(route);
+                request
+            })
+            .collect();
         value
     }
 
@@ -1363,20 +1363,74 @@ mod tests {
                 "{described}"
             );
         }
-        // The single-request form cannot describe a two-entity source.
+        // A description of one entity cannot describe a two-entity source.
         assert!(validate_description(&source, &description("correction")).is_err());
     }
 
     #[test]
-    fn each_description_version_carries_only_its_own_request_member() {
-        let mut single: Value = serde_json::from_slice(&description("correction")).unwrap();
-        single["apiVersion"] = json!(DESCRIPTION_API_VERSION_REQUESTS);
-        assert!(validate_description(&source(), &serde_json::to_vec(&single).unwrap()).is_err());
+    fn cfg_env_2_a_description_carries_the_format_identifier_and_its_kind() {
+        let described: Value = serde_json::from_slice(&description("correction")).unwrap();
+        assert_eq!(
+            described["apiVersion"],
+            "id.registrystack.org/formats/casework/breg-source-description/v1alpha1"
+        );
+        assert_eq!(described["kind"], "CaseworkBregSourceDescription");
+        let (requests, _) = validate_description(&source(), &description("correction")).unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].entity, "correction");
+    }
 
-        let mut several = requests_description(&[("correction", "corrections")]);
-        assert!(validate_description(&source(), &serde_json::to_vec(&several).unwrap()).is_ok());
-        several["apiVersion"] = json!(DESCRIPTION_API_VERSION);
-        assert!(validate_description(&source(), &serde_json::to_vec(&several).unwrap()).is_err());
+    #[test]
+    fn cfg_env_2_a_description_under_a_retired_api_version_is_refused_as_retired() {
+        let current: Value = serde_json::from_slice(&description("correction")).unwrap();
+        for retired in [
+            "registry.registrystack.org/casework-source-description/v1alpha1",
+            "registry.registrystack.org/casework-source-description/v1alpha2",
+        ] {
+            // The header alone decides: neither the kind nor the request
+            // member an earlier release wrote changes the refusal.
+            let mut described = current.clone();
+            described["apiVersion"] = json!(retired);
+            let mut as_written = described.clone();
+            as_written["kind"] = json!("BRegCaseworkSourceDescription");
+            let request = as_written["requests"][0].clone();
+            as_written.as_object_mut().unwrap().remove("requests");
+            as_written["request"] = request;
+            for value in [described, as_written] {
+                assert_eq!(
+                    check_description_input(&source(), &serde_json::to_vec(&value).unwrap())
+                        .unwrap_err(),
+                    DescriptionRefusal::RetiredApiVersion,
+                    "{retired}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cfg_env_3_a_description_has_one_kind_and_one_request_member() {
+        let current: Value = serde_json::from_slice(&description("correction")).unwrap();
+
+        let mut unknown_version = current.clone();
+        unknown_version["apiVersion"] =
+            json!("id.registrystack.org/formats/casework/breg-source-description/v1alpha2");
+        let mut previous_kind = current.clone();
+        previous_kind["kind"] = json!("BRegCaseworkSourceDescription");
+        let mut single_member = current.clone();
+        let request = single_member["requests"][0].clone();
+        single_member.as_object_mut().unwrap().remove("requests");
+        single_member["request"] = request;
+        let mut no_request = current.clone();
+        no_request["requests"] = json!([]);
+
+        for value in [unknown_version, previous_kind, single_member, no_request] {
+            assert_eq!(
+                check_description_input(&source(), &serde_json::to_vec(&value).unwrap())
+                    .unwrap_err(),
+                DescriptionRefusal::ContractMismatch,
+                "{value}"
+            );
+        }
     }
 
     #[test]
@@ -1506,9 +1560,9 @@ mod tests {
                 },
             ),
             (
-                "requestTimeoutMilliseconds",
+                "attemptTimeoutMilliseconds",
                 BregBinding {
-                    request_timeout_milliseconds: 45_000,
+                    attempt_timeout_milliseconds: 45_000,
                     ..binding()
                 },
             ),

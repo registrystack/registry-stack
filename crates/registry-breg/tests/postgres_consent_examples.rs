@@ -57,7 +57,7 @@ const INSTANCE_ID: &str = "consent-example";
 // The journey sources write every timestamp that must be in force at run time
 // on this date. The harness rebases it to the day before the run, because the
 // runtime evaluates consent validity against the database clock and the
-// fixtures' 365-day maxDuration would otherwise retire those gives.
+// fixtures' 365-day maximumDurationDays would otherwise retire those gives.
 const ANCHOR_DATE_PREFIX: &str = "2026-09-01T";
 // The client a token carries when the journey step names no requester client:
 // the self, steward, and feed profiles bind no client, so any allowed client
@@ -515,7 +515,7 @@ impl TestPackage {
             .package
             .as_ref()
             .expect("consent example declares package identity");
-        let database_id = format!("{}-database", sources.project.registry.id);
+        let database_id = format!("{}-database", sources.project.project.id);
         let prepared = prepare_package(PackageBuildRequest {
             from_package_digest: None,
             compiler_source_revision: identity.source_revision.clone(),
@@ -603,7 +603,7 @@ impl TestPackage {
         fs::write(
             &path,
             format!(
-                r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+                r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:9
@@ -619,7 +619,7 @@ database:
   runtimeUrlRef: secret:file/database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 8
+    maximumConnections: 8
     waitTimeoutMilliseconds: 2000
     createTimeoutMilliseconds: 2000
     recycleTimeoutMilliseconds: 2000
@@ -637,17 +637,17 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: {allowed_clients}
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksSource:
-      kind: static
+      type: static
       documentRef: secret:file/oidc-jwks
     jwksCache:
       cacheTtlSeconds: 60
       negativeCacheTtlSeconds: 1
       refreshCooldownSeconds: 1
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
@@ -657,7 +657,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 operationalTimeouts:
   httpRequestMilliseconds: 5000
   shutdownGraceMilliseconds: 1000

@@ -1,40 +1,42 @@
 # Written by `bregctl module add consent --subject __SUBJECT__`. The module is
 # project-owned from here on: review it, extend it with a local module, or
 # edit it and run `bregctl project lock`.
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: consent-__SUBJECT__
 version: 0.1.0
 entities:
 - id: __SUBJECT__-privacy-notice
   primaryDataset: consent
   route: __SUBJECT__-privacy-notices
-  mutationMode: create_only
+  mutationMode: create-only
   classification: public
   fields:
-  - {id: notice-version, type: string, maxLength: 40, required: true, classification: public}
-  - {id: language, type: string, maxLength: 35, required: true, classification: public}
-  - {id: title, type: string, maxLength: 200, required: true, classification: public}
-  - {id: text, type: text, maxLength: 20000, classification: public}
-  - {id: text-uri, type: string, maxLength: 2048, classification: public}
-  - {id: controller-name, type: string, maxLength: 200, required: true, classification: public}
-  - {id: controller-contact, type: string, maxLength: 320, required: true, classification: public}
-  - {id: jurisdiction, type: string, maxLength: 80, required: true, classification: public}
-  - {id: legal-basis, type: text, maxLength: 4000, required: true, classification: public}
-  - {id: rights-statement, type: text, maxLength: 4000, classification: public}
-  - {id: rights-uri, type: string, maxLength: 2048, classification: public}
-  - {id: withdrawal-method, type: text, maxLength: 4000, required: true, classification: public}
+  - {id: notice-version, type: string, maximumLength: 40, required: true, classification: public}
+  - {id: language, type: string, maximumLength: 35, required: true, classification: public}
+  - {id: title, type: string, maximumLength: 200, required: true, classification: public}
+  - {id: text, type: text, maximumLength: 20000, classification: public}
+  - {id: text-uri, type: string, maximumLength: 2048, classification: public}
+  - {id: controller-name, type: string, maximumLength: 200, required: true, classification: public}
+  - {id: controller-contact, type: string, maximumLength: 320, required: true, classification: public}
+  - {id: jurisdiction, type: string, maximumLength: 80, required: true, classification: public}
+  - {id: legal-basis, type: text, maximumLength: 4000, required: true, classification: public}
+  - {id: rights-statement, type: text, maximumLength: 4000, classification: public}
+  - {id: rights-uri, type: string, maximumLength: 2048, classification: public}
+  - {id: withdrawal-method, type: text, maximumLength: 4000, required: true, classification: public}
   - {id: published-at, type: timestamp, required: true, classification: public}
 - id: __SUBJECT__-notice-clause
   primaryDataset: consent
   route: __SUBJECT__-notice-clauses
-  mutationMode: create_only
+  mutationMode: create-only
   classification: public
   fields:
   - {id: notice, type: reference, target: __SUBJECT__-privacy-notice, required: true, classification: public}
   - {id: recipient, type: vocabulary-code, vocabulary: registry-recipients, required: true, classification: public}
   - {id: purpose, type: vocabulary-code, vocabulary: data-use-purpose, required: true, classification: public}
   - {id: scope, type: vocabulary-code, vocabulary: registry-consent-scopes, required: true, classification: public}
-  - {id: data-life, type: string, maxLength: 80, classification: public}
-  - {id: description, type: text, maxLength: 4000, required: true, classification: public}
+  - {id: data-life, type: string, maximumLength: 80, classification: public}
+  - {id: description, type: text, maximumLength: 4000, required: true, classification: public}
 - id: __SUBJECT__-consent-link
   primaryDataset: consent
   route: __SUBJECT__-consent-links
@@ -42,12 +44,12 @@ entities:
   classification: restricted
   fields:
   - {id: subject, type: reference, target: __SUBJECT__, required: true, classification: restricted}
-  - {id: principal, type: string, maxLength: 255, required: true, classification: restricted}
+  - {id: principal, type: string, maximumLength: 255, required: true, classification: restricted}
   - {id: active, type: boolean, required: true, classification: internal}
 - id: __SUBJECT__-consent-decision
   primaryDataset: consent
   route: __SUBJECT__-consent-decisions
-  mutationMode: create_only
+  mutationMode: create-only
   classification: restricted
   fields:
   - {id: subject, type: reference, target: __SUBJECT__, required: true, classification: restricted}
@@ -61,10 +63,10 @@ entities:
   - {id: effective-at, type: timestamp, required: true, classification: internal}
   - {id: expires-at, type: timestamp, classification: internal}
   - {id: channel, type: vocabulary-code, vocabulary: consent-channel, required: true, classification: internal}
-  - {id: evidence, type: string, maxLength: 2048, classification: restricted}
-  - {id: witness, type: string, maxLength: 255, classification: restricted}
+  - {id: evidence, type: string, maximumLength: 2048, classification: restricted}
+  - {id: witness, type: string, maximumLength: 255, classification: restricted}
   - {id: invalidation-reason, type: vocabulary-code, vocabulary: consent-invalidation-reason, classification: internal}
-  - {id: source-reference, type: string, maxLength: 255, classification: internal}
+  - {id: source-reference, type: string, maximumLength: 255, classification: internal}
   consentRecord:
     subject: subject
     recipient: recipient
@@ -78,7 +80,7 @@ entities:
     validity:
       from: effective-at
       until: expires-at
-      maxDuration: P365D
+      maximumDurationDays: 365
 actions:
 - id: give-__SUBJECT__-consent
   consentIssuer: self
@@ -190,8 +192,8 @@ actions:
   - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [assisted], required: true, classification: internal}
   - {id: effective-at, type: timestamp, required: true, classification: internal}
   - {id: expires-at, type: timestamp, classification: internal}
-  - {id: evidence, type: string, maxLength: 2048, required: true, classification: restricted}
-  - {id: witness, type: string, maxLength: 255, classification: restricted}
+  - {id: evidence, type: string, maximumLength: 2048, required: true, classification: restricted}
+  - {id: witness, type: string, maximumLength: 255, classification: restricted}
   requires:
   - {input: clause, field: recipient, equalsInput: recipient}
   - {input: clause, field: purpose, equalsInput: purpose}
@@ -247,8 +249,8 @@ actions:
   - {id: channel, type: vocabulary-code, vocabulary: consent-channel, values: [import], required: true, classification: internal}
   - {id: effective-at, type: timestamp, required: true, classification: internal}
   - {id: expires-at, type: timestamp, classification: internal}
-  - {id: source-reference, type: string, maxLength: 255, required: true, classification: internal}
-  - {id: evidence, type: string, maxLength: 2048, classification: restricted}
+  - {id: source-reference, type: string, maximumLength: 255, required: true, classification: internal}
+  - {id: evidence, type: string, maximumLength: 2048, classification: restricted}
   effects:
   - id: decision
     target: {entity: __SUBJECT__-consent-decision}

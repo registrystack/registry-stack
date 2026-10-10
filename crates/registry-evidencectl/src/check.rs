@@ -2060,7 +2060,7 @@ fn describe_source(id: &str, value: &Value) -> Value {
     .collect::<Vec<_>>();
     json!({
         "id": id,
-        "transport": value.get("transport").and_then(Value::as_str),
+        "transport": value.get("type").and_then(Value::as_str),
         "connectionRef": value
             .get("connection")
             .or_else(|| value.get("connectionRef"))
@@ -2193,7 +2193,7 @@ fn explain_governance(governance: &Value) -> Value {
     json!({
         "assuranceProfile": governance.get("assuranceProfile"),
         "serviceId": governance.pointer("/publication/serviceId"),
-        "issuer": governance.pointer("/issuer/id"),
+        "issuer": governance.pointer("/issuer/uri"),
         "authorityProfiles": names("/authorityProfiles"),
         "sourceConnections": names("/sourceConnections"),
         "responseFormats": formats,
@@ -2366,14 +2366,14 @@ mod tests {
             temporary.path().join("sources/record-status.yaml"),
             r#"apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: http-json
+type: http-json
 connection: records
 posture: field-projected
 request:
   method: GET
-  pathTemplate: /records/{record_reference}
+  path: /records/{record_reference}
   pathBindings:
-    record_reference: {from: selector, role: subject, profile: record-reference-v1, field: record_reference}
+    record_reference: {type: selector, role: subject, profile: record-reference-v1, field: record_reference}
   fixedHeaders: [{name: Accept, value: application/json}]
   selectorInputs:
     - role: subject
@@ -2385,7 +2385,7 @@ request:
   preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
   projection: [/rows/*/qualifying_record_count]
   redirects: deny
-  timeoutMilliseconds: 2000
+  attemptTimeoutMilliseconds: 2000
   maximumResponseBytes: 8192
 responseSchema: schemas/record-status-response.schema.yaml
 extractScript: adapters/record-status-extract.rhai

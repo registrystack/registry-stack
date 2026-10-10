@@ -335,7 +335,7 @@ pub(super) fn test(project: &Path) -> Result<Value> {
         "filesChecked": checked.report.files_checked(),
         "diagnostics": checked.report.to_json_value(),
         "fixtures": reports,
-        "proofBoundary": "offline_synthetic",
+        "proofBoundary": "offline-synthetic",
         "productionClosure": false,
         "networkAccess": false,
         "databaseAccess": false,
@@ -1026,7 +1026,7 @@ mod tests {
         assert_eq!(report["command"], "test");
         assert_eq!(report["diagnostics"], json!([]));
         assert_eq!(report["filesChecked"], 5);
-        assert_eq!(report["proofBoundary"], "offline_synthetic");
+        assert_eq!(report["proofBoundary"], "offline-synthetic");
         assert_eq!(report["productionClosure"], false);
         assert_eq!(report["networkAccess"], false);
         assert_eq!(report["databaseAccess"], false);

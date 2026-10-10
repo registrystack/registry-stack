@@ -119,107 +119,107 @@ const EVERY_EVENT: &[&str] = &["submit", "revise", "rebase", "cancel", "apply"];
 fn request_enforcement() -> Vec<EnforcementLayer> {
     vec![
         EnforcementLayer {
-            id: "caller_authentication",
+            id: "caller-authentication",
             description: "Every registry route runs behind one bearer admission. A request that presents no credential, and a credential that is presented and does not verify, are refused here, before any route is matched, with a single 401 that names no cause: missing credential, malformed header, malformed token, expired, not yet valid, unknown or disallowed key, disallowed algorithm, wrong issuer, and wrong audience are deliberately indistinguishable to the caller. No route serves a caller without a verified token.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
-            id: "route_admission",
+            id: "route-admission",
             description: "The action arrives on a POST route the caller's access profile lists, for an entity that declares change requests, with the route's operation matching the action and the requested response fields inside the profile's readable fields. The profile is resolved from the identity the layer above established. Refused as an invalid request before any row is read.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
-            id: "review_evidence_load",
+            id: "review-evidence-load",
             description: "An apply on an entity whose plan requires review is routed through a path of its own before the coordinator runs, and this is where that path can refuse. The receipt and applied short-circuits named by the preflight below are consulted first, so a replay and an already-applied request never load review evidence at all. Otherwise the accepted review submission recorded for exactly this request, this proposal version, and this effect digest is loaded. With that row read and no further row held, the caller's task grant and the grant frozen on the proposal are each confirmed current and live, because acquiring a guard is itself a protected disclosure: a revoked or expired grant is refused here, ahead of the review authority, the same as it is ahead of the Evidence provider below. Only then is the evidence itself fetched from the configured review authority: no accepted submission matching all three is a precondition failure, and so is an authority whose name does not match, a result that is pending, concealed, unknown, or expired, and one whose availability lapses between the fetch and the check. A review-result source that is not configured, a token that cannot be obtained, and an authority that does not answer are each refused as unavailable instead. What this layer obtains is only matched against the frozen review requirement much later, by the workflow transition below.",
             events: &["apply"],
         },
         EnforcementLayer {
-            id: "apply_evidence_acquisition",
+            id: "apply-evidence-acquisition",
             description: "An apply on an entity declaring Evidence application preconditions is routed the same way, after any review evidence above. In a transaction of its own, separate from the action's, it re-verifies everything it needs to derive the Evidence requests: the workflow must still be submitted, a recomputed action ETag must equal the caller's If-Match, the current proposal's version, effect digest, and contract fingerprint must match, the frozen application contract must still be the compiled one, and the frozen request values, the target rows, and the per-target predicates must all still hold, with the targets authorized by the same check the apply layer below runs. Those are the preconditions below re-run early, so a request that fails one is refused here rather than there. That transaction is then dropped before any remote call, and with no row held the caller's task grant and the grant frozen on the proposal are each confirmed current and live, because acquiring a guard is itself a protected disclosure: a revoked grant is refused here, ahead of the provider, rather than at the grant layer below. The Evidence requests are resolved outside that transaction, and a provider that cannot be reached, a resolution cancelled or timed out waiting for a concurrency permit, and a response that would exceed the retained-evidence budget are each refused with no row held. A receipt or an already-applied request short-circuits before any of this.",
             events: &["apply"],
         },
         EnforcementLayer {
-            id: "apply_preflight",
+            id: "apply-preflight",
             description: "Before the transaction opens, an apply short-circuits on either of two conditions: a retained receipt for this same key, or a request already in the applied state, whatever key the call carries. Neither grant is consulted on either of those, and the second is not a replay, since the key may never have been seen. Otherwise the caller's task grant and the task grant frozen on the proposal are each confirmed current and live by the task-status check. Runs again on each retry of the transaction.",
             events: &["apply"],
         },
         EnforcementLayer {
-            id: "request_header_lookup",
+            id: "request-header-lookup",
             description: "The first read the transaction makes, before any idempotency row is locked and for every action alike: the named request's stored proposal version is selected from the request-state table, a request that is not there is refused as a precondition failure, and the action context built from that version is refused the same way where it cannot be constructed for this route. Only that version crosses this point, by design, so no intake, decision, snapshot, or held response is read before target-row authorization below. Because it precedes the lock, an action naming a request that does not exist is refused here even when the key it presents is already bound to some other request, and the conflict that binding would raise is never reported.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
-            id: "submit_preparation",
+            id: "submit-preparation",
             description: "Submit plans the submission once, and the planner itself runs inside no transaction at all. An unlocked probe for a receipt under this key comes first, and where it finds one the planning and every check named here is skipped, so a replay never re-plans. Where it finds none, a first transaction reads the request row under the same row policy the locked read below uses, and one combined precondition requires a preview action ETag recomputed from that read to equal the caller's If-Match, the acting principal to be the recorded owner, and the request to still be in draft; it then captures the intake and commits. The planner runs against that captured intake with no transaction open and no row locked, by design, so a plan it refuses holds nothing. Only afterwards does the transaction this stack describes open, and before it locks the idempotency row it probes unlocked for a receipt again, re-reads the row, re-checks that same ETag and owner, and then requires the request to still be in draft at both the record revision and the workflow revision the planner read, admits the profile's submitter targets a first time, and refuses a plan whose intake, re-derived from the row, differs by a byte from the intake the planner ran on. Those two revisions are checked once more after the lock, at the commit-preconditions layer below.",
             events: &["submit"],
         },
         EnforcementLayer {
-            id: "idempotency_replay",
+            id: "idempotency-replay",
             description: "After the header lookup above, the idempotency row for this action's key is locked and read before the request row and workflow are read under that lock. The stored binding covers the caller's If-Match, the target authority, and the canonical body, so a key already bound to a different request is refused as a conflict here, before those reads, and so is a key whose stored result was erased, because erasure is permanent and keeps the key reserved. Submit is the exception to the reading order: an unlocked probe for this key runs first, and where it finds no receipt the preparation layer above reads the row and plans the submission before this lock is taken. A binding that matches replays the stored response once row visibility and, where they apply, submitter targets have been re-checked, and, on an apply whose workflow still carries a current proposal, once that proposal's targets have been re-authorized against the authority this caller presents now: an apply replay by a caller who has since lost authority over a target is refused rather than answered from the record. The other four actions reach that re-authorization and pass through it deciding nothing, so for them a replay is authorized by the row policy above and nothing else. A stored application result presented on any action but apply is refused as a precondition failure here rather than replayed. The replay returns without re-running the action ETag, request ownership, the in-transaction task grant check, the settled review outcome check, the workflow transition, or the persist policy.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
-            id: "row_visibility",
+            id: "row-visibility",
             description: "The request row is read under the row-level SELECT policy generated for this profile and operation, which admits only an active row whose request state the operation may see (draft, submitted, and cancelled; applied as well for apply) and only within the profile's request visibility. A row the policy hides is treated as absent.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
-            id: "submitter_targets",
+            id: "submitter-targets",
             description: "Where the profile declares submitter targets, the caller must still hold read authority over every existing record the request's effects name. Checked against the caller's current authorization, not the authorization held when the request was created.",
             events: &["submit", "revise", "rebase"],
         },
         EnforcementLayer {
-            id: "applied_recovery",
+            id: "applied-recovery",
             description: "An apply naming a request that is already applied, under a key with no retained result, is answered by rebuilding the recorded application instead of applying again, and is admitted by its own checks in place of most of the layers below. The proposal version and effect digest it presents must be the ones the recorded application carries, its If-Match must equal the action ETag recomputed for the state as it stood before that application rather than as it stands now, and the proposal's targets and its frozen application guards are both re-authorized against the target authority this caller presents now. Neither task grant is checked here, because the preflight above did not load them; this path returns before the action ETag, request ownership, the in-transaction task grant check, the workflow transition, and the persist policy.",
             events: &["apply"],
         },
         EnforcementLayer {
-            id: "action_etag",
+            id: "action-etag",
             description: "The caller's If-Match is mandatory, but this layer is not where that is enforced: presence and syntax are settled at the HTTP layer before any mutation path is entered, so a missing value refused as precondition-required and a malformed one refused as a failed precondition both beat every layer above, the review and Evidence paths, the apply preflight, submit planning, and the replay admission among them. Only a well-formed value reaches here, and it must equal the action ETag recomputed from the record and workflow as locked, so an action prepared against a request that has since moved is refused as a failed precondition. For submit this is the second such comparison: the preparation layer above made the first, against an unlocked read, before it planned the submission.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
-            id: "request_ownership",
+            id: "request-ownership",
             description: "The acting principal must be the owner recorded on the request. Apply is exempt: its authority is a task grant, and a different actor applies.",
             events: &["submit", "revise", "rebase", "cancel"],
         },
         EnforcementLayer {
-            id: "task_grant",
+            id: "task-grant",
             description: "Inside the transaction, apply re-verifies that the caller's grant is the one the preflight checked and that both it and the proposal's grant are still current. For every other action, a caller acting under a task grant has that grant's status checked here.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
-            id: "review_outcome",
+            id: "review-outcome",
             description: "Where the reviewed submission of the request's current version has a settled result, revise and rebase are checked against it, as the read reports them. A rejected result is answered only by cancel, so both are refused as a conflict. A send-back, or an approval past its availability that was never applied, is answered by a revision, so a rebase is refused as a conflict and a revision is admitted. Any other result, or none, leaves both admitted.",
             events: &["revise", "rebase"],
         },
         EnforcementLayer {
-            id: "submit_commit_preconditions",
+            id: "submit-commit-preconditions",
             description: "Immediately before the transition, submit re-verifies the plan it made before the lock against the values read under it: the record revision and the workflow revision must still be the ones planning read, and the submission's attachments are validated. A plan made against a request that has moved since is refused here rather than submitted.",
             events: &["submit"],
         },
         EnforcementLayer {
-            id: "apply_target_authorization",
+            id: "apply-target-authorization",
             description: "Apply authorizes the proposal's frozen targets before it writes any of them: each target the effects name is checked against the target authority the caller presented, under this caller's current authorization rather than the authorization held when the proposal was frozen. The same authorization runs at the replay layer above before a retained apply response is handed back, so losing authority over a target closes the replay route as well as this one.",
             events: &["apply"],
         },
         EnforcementLayer {
-            id: "apply_preconditions",
+            id: "apply-preconditions",
             description: "The frozen application preconditions are locked and verified against the records as they stand now, so a proposal whose observed targets have moved since it was approved is refused before any target row is written.",
             events: &["apply"],
         },
         EnforcementLayer {
-            id: "apply_target_persistence",
+            id: "apply-target-persistence",
             description: "Each of the proposal's effects writes its own target row under that target's row-level policy. These are the first writes apply makes, and a row the target's policy refuses stops the apply here, before the workflow transition runs.",
             events: &["apply"],
         },
         EnforcementLayer {
-            id: "workflow_transition",
+            id: "workflow-transition",
             description: "The edge's own guard, run by RequestWorkflow. A refused transition is reported by its workflow error.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
-            id: "persist_policy",
+            id: "persist-policy",
             description: "The request row is then UPDATEd under the row-level UPDATE policy generated for this profile and operation, which admits only the source states the operation may leave (draft for submit; submitted for revise, rebase, and apply; draft or submitted for cancel, and for cancel only when the acting principal is the recorded owner). A transition the workflow accepted from any other state writes no row and is refused as a failed precondition. This is the first write for submit, revise, rebase, and cancel; apply has already written its target rows by this point.",
             events: EVERY_EVENT,
         },
@@ -352,27 +352,27 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "caller_authentication",
-                "route_admission",
-                "review_evidence_load",
-                "apply_evidence_acquisition",
-                "apply_preflight",
-                "request_header_lookup",
-                "submit_preparation",
-                "idempotency_replay",
-                "row_visibility",
-                "submitter_targets",
-                "applied_recovery",
-                "action_etag",
-                "request_ownership",
-                "task_grant",
-                "review_outcome",
-                "submit_commit_preconditions",
-                "apply_target_authorization",
-                "apply_preconditions",
-                "apply_target_persistence",
-                "workflow_transition",
-                "persist_policy",
+                "caller-authentication",
+                "route-admission",
+                "review-evidence-load",
+                "apply-evidence-acquisition",
+                "apply-preflight",
+                "request-header-lookup",
+                "submit-preparation",
+                "idempotency-replay",
+                "row-visibility",
+                "submitter-targets",
+                "applied-recovery",
+                "action-etag",
+                "request-ownership",
+                "task-grant",
+                "review-outcome",
+                "submit-commit-preconditions",
+                "apply-target-authorization",
+                "apply-preconditions",
+                "apply-target-persistence",
+                "workflow-transition",
+                "persist-policy",
             ]
         );
         let events = declared_events(&lifecycle);
@@ -398,37 +398,37 @@ mod tests {
     fn selective_layers_cover_exactly_the_events_the_runtime_gates() {
         let lifecycle = request_lifecycle();
         for id in [
-            "apply_preflight",
-            "applied_recovery",
-            "apply_target_authorization",
-            "apply_preconditions",
-            "apply_target_persistence",
+            "apply-preflight",
+            "applied-recovery",
+            "apply-target-authorization",
+            "apply-preconditions",
+            "apply-target-persistence",
         ] {
             assert_eq!(layer(&lifecycle, id).events, ["apply"], "{id}");
         }
-        for id in ["submit_preparation", "submit_commit_preconditions"] {
+        for id in ["submit-preparation", "submit-commit-preconditions"] {
             assert_eq!(layer(&lifecycle, id).events, ["submit"], "{id}");
         }
         assert_eq!(
-            layer(&lifecycle, "submitter_targets").events,
+            layer(&lifecycle, "submitter-targets").events,
             ["submit", "revise", "rebase"]
         );
         assert_eq!(
-            layer(&lifecycle, "request_ownership").events,
+            layer(&lifecycle, "request-ownership").events,
             ["submit", "revise", "rebase", "cancel"]
         );
         assert_eq!(
-            layer(&lifecycle, "review_outcome").events,
+            layer(&lifecycle, "review-outcome").events,
             ["revise", "rebase"]
         );
         for id in [
-            "route_admission",
-            "idempotency_replay",
-            "row_visibility",
-            "action_etag",
-            "task_grant",
-            "workflow_transition",
-            "persist_policy",
+            "route-admission",
+            "idempotency-replay",
+            "row-visibility",
+            "action-etag",
+            "task-grant",
+            "workflow-transition",
+            "persist-policy",
         ] {
             assert_eq!(
                 layer(&lifecycle, id).events,
@@ -457,17 +457,17 @@ mod tests {
                 .position(|layer| layer.id == id)
                 .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
         };
-        assert!(index("submit_preparation") < index("idempotency_replay"));
-        assert!(index("submit_commit_preconditions") > index("task_grant"));
-        assert!(index("submit_commit_preconditions") < index("workflow_transition"));
+        assert!(index("submit-preparation") < index("idempotency-replay"));
+        assert!(index("submit-commit-preconditions") > index("task-grant"));
+        assert!(index("submit-commit-preconditions") < index("workflow-transition"));
         assert!(
-            !layer(&lifecycle, "action_etag")
+            !layer(&lifecycle, "action-etag")
                 .description
                 .contains("preview"),
             "the preview comparison belongs to submit_preparation"
         );
         assert!(
-            layer(&lifecycle, "submit_preparation")
+            layer(&lifecycle, "submit-preparation")
                 .description
                 .contains("preview"),
             "submit_preparation stopped naming the preview comparison"
@@ -482,13 +482,13 @@ mod tests {
     #[test]
     fn the_replay_layer_names_the_authorization_it_still_runs() {
         let lifecycle = request_lifecycle();
-        let replay = layer(&lifecycle, "idempotency_replay").description;
+        let replay = layer(&lifecycle, "idempotency-replay").description;
         assert!(
             replay.contains("on an apply whose workflow still carries a current proposal"),
             "the replay-time target authorization stopped being reported: {replay}"
         );
         assert!(
-            layer(&lifecycle, "apply_target_authorization")
+            layer(&lifecycle, "apply-target-authorization")
                 .description
                 .contains("before a retained apply response is handed back"),
             "the apply layer no longer says the replay path runs the same check"
@@ -510,10 +510,10 @@ mod tests {
                 .position(|layer| layer.id == id)
                 .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
         };
-        assert!(index("apply_preflight") < index("request_header_lookup"));
-        assert!(index("request_header_lookup") < index("submit_preparation"));
-        assert!(index("request_header_lookup") < index("idempotency_replay"));
-        let lookup = layer(&lifecycle, "request_header_lookup");
+        assert!(index("apply-preflight") < index("request-header-lookup"));
+        assert!(index("request-header-lookup") < index("submit-preparation"));
+        assert!(index("request-header-lookup") < index("idempotency-replay"));
+        let lookup = layer(&lifecycle, "request-header-lookup");
         assert_eq!(lookup.events, EVERY_EVENT);
         assert!(
             lookup.description.contains("never reported"),
@@ -529,8 +529,8 @@ mod tests {
     #[test]
     fn the_authentication_layer_says_a_missing_credential_is_refused_there() {
         let lifecycle = request_lifecycle();
-        assert_eq!(lifecycle.enforcement[0].id, "caller_authentication");
-        let description = layer(&lifecycle, "caller_authentication").description;
+        assert_eq!(lifecycle.enforcement[0].id, "caller-authentication");
+        let description = layer(&lifecycle, "caller-authentication").description;
         assert!(
             description.contains("presents no credential"),
             "the missing-credential refusal stopped being reported: {description}"
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn the_applied_recovery_layer_says_neither_task_grant_is_checked() {
         let lifecycle = request_lifecycle();
-        let recovery = layer(&lifecycle, "applied_recovery");
+        let recovery = layer(&lifecycle, "applied-recovery");
         assert_eq!(recovery.events, ["apply"]);
         assert!(
             recovery
@@ -562,7 +562,7 @@ mod tests {
             recovery.description
         );
         assert!(
-            layer(&lifecycle, "apply_preflight")
+            layer(&lifecycle, "apply-preflight")
                 .description
                 .contains("already in the applied state"),
             "the preflight no longer names its second short-circuit"
@@ -575,20 +575,20 @@ mod tests {
     #[test]
     fn the_replay_layer_names_layers_this_report_still_declares() {
         let lifecycle = request_lifecycle();
-        let replay = layer(&lifecycle, "idempotency_replay").description;
+        let replay = layer(&lifecycle, "idempotency-replay").description;
         let ids: BTreeSet<&str> = lifecycle.enforcement.iter().map(|layer| layer.id).collect();
         let skipped = [
-            ("action_etag", "the action ETag"),
-            ("request_ownership", "request ownership"),
-            ("task_grant", "the in-transaction task grant check"),
-            ("review_outcome", "the settled review outcome check"),
-            ("workflow_transition", "the workflow transition"),
-            ("persist_policy", "the persist policy"),
+            ("action-etag", "the action ETag"),
+            ("request-ownership", "request ownership"),
+            ("task-grant", "the in-transaction task grant check"),
+            ("review-outcome", "the settled review outcome check"),
+            ("workflow-transition", "the workflow transition"),
+            ("persist-policy", "the persist policy"),
         ];
         let replay_index = lifecycle
             .enforcement
             .iter()
-            .position(|layer| layer.id == "idempotency_replay")
+            .position(|layer| layer.id == "idempotency-replay")
             .expect("replay layer");
         for (id, prose) in skipped {
             assert!(ids.contains(id), "{id} is no longer declared");
@@ -610,7 +610,7 @@ mod tests {
     #[test]
     fn the_planner_runs_inside_no_transaction() {
         let lifecycle = request_lifecycle();
-        let preparation = layer(&lifecycle, "submit_preparation").description;
+        let preparation = layer(&lifecycle, "submit-preparation").description;
         assert!(
             preparation.contains("inside no transaction at all"),
             "the planner's concurrency boundary stopped being reported: {preparation}"
@@ -635,10 +635,10 @@ mod tests {
                 .position(|layer| layer.id == id)
                 .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
         };
-        assert!(index("route_admission") < index("review_evidence_load"));
-        assert!(index("review_evidence_load") < index("apply_evidence_acquisition"));
-        assert!(index("apply_evidence_acquisition") < index("apply_preflight"));
-        for id in ["review_evidence_load", "apply_evidence_acquisition"] {
+        assert!(index("route-admission") < index("review-evidence-load"));
+        assert!(index("review-evidence-load") < index("apply-evidence-acquisition"));
+        assert!(index("apply-evidence-acquisition") < index("apply-preflight"));
+        for id in ["review-evidence-load", "apply-evidence-acquisition"] {
             let reported = layer(&lifecycle, id);
             assert_eq!(reported.events, &["apply"], "{id} gates applies alone");
             assert!(
@@ -647,7 +647,7 @@ mod tests {
                 reported.description
             );
         }
-        let acquisition = layer(&lifecycle, "apply_evidence_acquisition").description;
+        let acquisition = layer(&lifecycle, "apply-evidence-acquisition").description;
         assert!(
             acquisition.contains("dropped before any remote call"),
             "the remote call holds no row, and that is the point: {acquisition}"
@@ -672,8 +672,8 @@ mod tests {
                 .position(|layer| layer.id == id)
                 .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
         };
-        assert!(index("apply_evidence_acquisition") < index("task_grant"));
-        let acquisition = layer(&lifecycle, "apply_evidence_acquisition").description;
+        assert!(index("apply-evidence-acquisition") < index("task-grant"));
+        let acquisition = layer(&lifecycle, "apply-evidence-acquisition").description;
         for phrase in [
             "caller's task grant",
             "frozen on the proposal",
@@ -700,8 +700,8 @@ mod tests {
                 .position(|layer| layer.id == id)
                 .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
         };
-        assert!(index("review_evidence_load") < index("task_grant"));
-        let review = layer(&lifecycle, "review_evidence_load").description;
+        assert!(index("review-evidence-load") < index("task-grant"));
+        let review = layer(&lifecycle, "review-evidence-load").description;
         for phrase in [
             "caller's task grant",
             "frozen on the proposal",
@@ -721,7 +721,7 @@ mod tests {
     #[test]
     fn the_etag_layer_names_the_header_admission_that_precedes_it() {
         let lifecycle = request_lifecycle();
-        let etag = layer(&lifecycle, "action_etag").description;
+        let etag = layer(&lifecycle, "action-etag").description;
         assert!(
             etag.contains("this layer is not where that is enforced"),
             "the mandatory header is enforced above, not here: {etag}"
@@ -755,7 +755,6 @@ mod tests {
     use registry_platform_canonical_json::canonicalize_json;
 
     use crate::contract::Operation;
-    use crate::model::{CompiledChangeRequestNoReview, CompiledChangeRequestNoReviewMode};
     use crate::request_workflow::{
         ApplicationId, ApplicationResultLink, ContractFingerprint, DraftStartReason, EffectId,
         EntityId, FieldId, FieldValue, FrozenPlannerKind, FrozenPlanningBinding,
@@ -796,9 +795,7 @@ mod tests {
     }
 
     fn no_review() -> FrozenReviewRequirement {
-        FrozenReviewRequirement::None(CompiledChangeRequestNoReview {
-            mode: CompiledChangeRequestNoReviewMode::None,
-        })
+        FrozenReviewRequirement::None
     }
 
     fn proposal() -> PreparedProposal {
@@ -977,7 +974,7 @@ mod tests {
     }
 
     // Matching exhaustively over `RequestState` means adding a variant without updating
-    // this test fails to compile, forcing the table in `request_lifecycle` to be revisited.
+    // this test fails to compile, forcing the table in `request-lifecycle` to be revisited.
     #[test]
     fn every_request_state_variant_is_declared_in_the_table() {
         fn storage_id(state: RequestState) -> &'static str {

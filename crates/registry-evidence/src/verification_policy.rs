@@ -23,41 +23,59 @@ use registry_evidence_verifier::verifier::{
 };
 use registry_evidence_verifier::AssuranceProfile;
 use registry_platform_yaml::{
-    shape_union, BoundedU32, BoundedU64, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec,
-    Reader, Refusal, Report, ScalarHook, ScalarSite, Severity, UniqueList, MAXIMUM_DOCUMENT_BYTES,
+    tagged_union, ApiVersion, BoundedU32, BoundedU64, Diagnostic, Document, EnvelopeRule, Expect,
+    FormatSpec, Reader, Refusal, RemovedKey, Report, ScalarHook, ScalarSite, Severity, UniqueList,
+    MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize, Serializer};
 
 use registry_platform_config::contains_environment_expression;
 
-/// The kind the reader names a Version 1 verification policy by.
+/// The apiVersion a Version 1 verification policy declares.
+pub const VERIFICATION_POLICY_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/verification-policy/v1";
+
+/// The kind a Version 1 verification policy declares.
 pub const VERIFICATION_POLICY_KIND: &str = "EvidenceVerificationPolicy";
 
-/// The kind the reader names a holder-bound verification policy by.
+/// The apiVersion a holder-bound verification policy declares.
+pub const HOLDER_BOUND_POLICY_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1";
+
+/// The kind a holder-bound verification policy declares.
 pub const HOLDER_BOUND_POLICY_KIND: &str = "EvidenceHolderBoundVerificationPolicy";
 
-/// The Version 1 verification policy format. Its frozen contract declares
-/// neither `apiVersion` nor `kind`; the envelope arrives with the move to
-/// the stable format line.
+/// The Version 1 verification policy format. The file opens with the
+/// envelope; the shared reader checks it and hands the reader types the
+/// members beside it, so the verifier's document type carries no envelope.
 pub const VERIFICATION_POLICY_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: VERIFICATION_POLICY_KIND,
-    envelope: EnvelopeRule::Exempt {
-        reason: "the frozen Version 1 verification policy contract declares no apiVersion or kind",
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(VERIFICATION_POLICY_API_VERSION)],
+        retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: POLICY_REMOVED_KEYS,
 };
 
-/// The holder-bound verification policy format, exempt from the envelope for
-/// the same reason. It is told apart by its required `subjectBinding`.
+/// The holder-bound verification policy format, told apart by its `kind`
+/// and by its required `subjectBinding`.
 pub const HOLDER_BOUND_POLICY_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: HOLDER_BOUND_POLICY_KIND,
-    envelope: EnvelopeRule::Exempt {
-        reason:
-            "the frozen holder-bound verification policy contract declares no apiVersion or kind",
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(HOLDER_BOUND_POLICY_API_VERSION)],
+        retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: POLICY_REMOVED_KEYS,
 };
+
+/// The members both policy formats no longer read, each with the member that
+/// replaces it.
+const POLICY_REMOVED_KEYS: &[RemovedKey<'static>] = &[RemovedKey {
+    pointer: "/expectedOutputs/*/form/list",
+    replacement:
+        "A form is a mapping named by `type`: write `type: list` and the list's members beside it.",
+}];
 
 /// Most expected subjects one policy pins, as both contracts state.
 const MAXIMUM_EXPECTED_SUBJECTS: usize = 8;
@@ -289,57 +307,44 @@ struct ExpectedOutput {
     form: ExpectedForm,
 }
 
-/// A scalar form is written as a plain string and the list form as a
-/// mapping under `list`, so the two differ by node kind.
-#[derive(PartialEq, Eq, Hash)]
+/// A form is a mapping whose `type` member names it. Only the list form has
+/// members of its own, written beside `type`: `items` and `unique` are
+/// written together, or both omitted by a stored legacy procedure.
+#[derive(Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 enum ExpectedForm {
-    Scalar(ScalarForm),
-    List(ListFormWrapper),
+    Boolean {},
+    Integer {},
+    String {},
+    DateBucket {},
+    TimeBucket {},
+    EntityReference {},
+    Structured {},
+    List {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        items: Option<ListItemForm>,
+        minimum_items: ListItems,
+        maximum_items: ListItems,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unique: Option<bool>,
+    },
 }
 
-shape_union!(ExpectedForm {
-    scalar => Scalar,
-    mapping => List,
-});
+tagged_union!(ExpectedForm);
 
 impl Serialize for ExpectedForm {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Scalar(form) => form.serialize(serializer),
-            Self::List(form) => form.serialize(serializer),
-        }
+        crate::config::serialize_tagged(
+            Self::serialize(self, serde_json::value::Serializer),
+            "type",
+            serializer,
+        )
     }
-}
-
-#[derive(Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "kebab-case")]
-enum ScalarForm {
-    Boolean,
-    Integer,
-    String,
-    DateBucket,
-    TimeBucket,
-    EntityReference,
-    Structured,
-}
-
-#[derive(Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(deny_unknown_fields)]
-struct ListFormWrapper {
-    list: ListForm,
-}
-
-/// A list form. `items` and `unique` are written together, or both omitted
-/// by a stored legacy procedure.
-#[derive(Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ListForm {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    items: Option<ListItemForm>,
-    minimum_items: ListItems,
-    maximum_items: ListItems,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    unique: Option<bool>,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Eq, Hash)]
@@ -393,30 +398,36 @@ fn check_expectations(
         "revokedKeyIds lists at most 33 key ids",
     );
     for (index, output) in outputs.iter().enumerate() {
-        if let ExpectedForm::List(wrapper) = &output.form {
-            if wrapper.list.items.is_some() != wrapper.list.unique.is_some() {
+        if let ExpectedForm::List {
+            items,
+            minimum_items,
+            maximum_items,
+            unique,
+        } = &output.form
+        {
+            if items.is_some() != unique.is_some() {
                 diagnostics.push(document.diagnostic_at_value(
                     Severity::Error,
                     "evidence.policy.unpaired-list-form",
-                    &format!("/expectedOutputs/{index}/form/list"),
+                    &format!("/expectedOutputs/{index}/form"),
                     "a list form writes items and unique together, or neither",
                     "Write both `items` and `unique`; only a stored legacy procedure omits both.",
                 ));
             }
-            if wrapper.list.unique == Some(false) {
+            if *unique == Some(false) {
                 diagnostics.push(document.diagnostic_at_value(
                     Severity::Error,
                     "evidence.policy.list-not-unique",
-                    &format!("/expectedOutputs/{index}/form/list/unique"),
+                    &format!("/expectedOutputs/{index}/form/unique"),
                     "a list form's items are unique, so unique is true",
                     "Write `unique: true`; the verifier refuses a list that repeats an item.",
                 ));
             }
-            if wrapper.list.minimum_items.get() > wrapper.list.maximum_items.get() {
+            if minimum_items.get() > maximum_items.get() {
                 diagnostics.push(document.diagnostic_at_value(
                     Severity::Error,
                     "evidence.policy.list-bounds-inverted",
-                    &format!("/expectedOutputs/{index}/form/list/minimumItems"),
+                    &format!("/expectedOutputs/{index}/form/minimumItems"),
                     "minimumItems exceeds maximumItems",
                     "Write a minimumItems that is at most maximumItems.",
                 ));
@@ -470,7 +481,9 @@ mod tests {
 
     fn verification_policy() -> String {
         format!(
-            "expectedAssuranceProfile: evidence-grade
+            "apiVersion: id.registrystack.org/formats/evidence/verification-policy/v1
+kind: EvidenceVerificationPolicy
+expectedAssuranceProfile: evidence-grade
 issuedBy: https://evidence.example.test
 providedBy: https://registry.example.test
 requirement: https://registry.example.test/requirements/adult-status
@@ -485,11 +498,11 @@ expectedOutputs:
   - handle: adult
     concept: https://registry.example.test/concepts/adult
     required: true
-    form: boolean
+    form: {{type: boolean}}
   - handle: regions
     concept: https://registry.example.test/concepts/regions
     required: false
-    form: {{list: {{items: string, minimumItems: 1, maximumItems: 4, unique: true}}}}
+    form: {{type: list, items: string, minimumItems: 1, maximumItems: 4, unique: true}}
 revokedKeyIds: []
 maximumAssertionLifetimeSeconds: 3600
 "
@@ -498,6 +511,14 @@ maximumAssertionLifetimeSeconds: 3600
 
     fn holder_bound_policy() -> String {
         verification_policy()
+            .replace(
+                "formats/evidence/verification-policy/v1",
+                "formats/evidence/holder-bound-verification-policy/v1",
+            )
+            .replace(
+                "kind: EvidenceVerificationPolicy",
+                "kind: EvidenceHolderBoundVerificationPolicy",
+            )
             .replace("purpose:", "expectedIssuancePurpose:")
             .replace("audience: https://relying.example.test\n", "")
             .replace(
@@ -541,8 +562,62 @@ maximumAssertionLifetimeSeconds: 3600
 
     #[test]
     fn neither_document_reads_as_the_other() {
-        assert!(read_holder_bound_policy("policy.yaml", verification_policy().as_bytes()).is_err());
-        assert!(read_verification_policy("policy.yaml", holder_bound_policy().as_bytes()).is_err());
+        let as_holder_bound =
+            read_holder_bound_policy("policy.yaml", verification_policy().as_bytes())
+                .expect_err("a Version 1 policy is not a holder-bound policy");
+        let as_verification =
+            read_verification_policy("policy.yaml", holder_bound_policy().as_bytes())
+                .expect_err("a holder-bound policy is not a Version 1 policy");
+        for report in [as_holder_bound, as_verification] {
+            let diagnostic = &report.diagnostics()[0];
+            assert_eq!(diagnostic.code, "config.wrong-kind", "{diagnostic:?}");
+            assert_eq!(diagnostic.path, "/kind");
+        }
+    }
+
+    /// A policy written before the envelope names neither `apiVersion` nor
+    /// `kind`; the refusal names the two lines to write and repeats no value.
+    #[test]
+    fn a_policy_without_the_envelope_is_refused_with_the_two_lines_named() {
+        let unenveloped = |text: String| -> String {
+            text.lines()
+                .filter(|line| !line.starts_with("apiVersion:") && !line.starts_with("kind:"))
+                .map(|line| format!("{line}\n"))
+                .collect()
+        };
+        let cases = [
+            (
+                read_verification_policy(
+                    "policy.yaml",
+                    unenveloped(verification_policy()).as_bytes(),
+                )
+                .map(|_| ()),
+                VERIFICATION_POLICY_API_VERSION,
+                VERIFICATION_POLICY_KIND,
+            ),
+            (
+                read_holder_bound_policy(
+                    "policy.yaml",
+                    unenveloped(holder_bound_policy()).as_bytes(),
+                )
+                .map(|_| ()),
+                HOLDER_BOUND_POLICY_API_VERSION,
+                HOLDER_BOUND_POLICY_KIND,
+            ),
+        ];
+        for (read, api_version, kind) in cases {
+            let report = read.expect_err("a policy without the envelope is refused");
+            let diagnostics = report.diagnostics();
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            let diagnostic = &diagnostics[0];
+            assert_eq!(diagnostic.code, "config.missing-envelope");
+            assert_eq!(diagnostic.path, "");
+            assert!(diagnostic.suggested_action.contains(api_version));
+            assert!(diagnostic.suggested_action.contains(kind));
+            let rendered = report.render_human();
+            assert!(!rendered.contains("AAAAAAAA"), "{rendered}");
+            assert!(!rendered.contains(REVISION));
+        }
     }
 
     #[test]
@@ -555,42 +630,76 @@ maximumAssertionLifetimeSeconds: 3600
                 format!("{base}{CANARY}: true\n"),
                 "config.unknown-key",
                 "/canary-7f3a",
-                23,
+                25,
             ),
             (
                 "lifetime out of range",
                 base.replace("Seconds: 3600", "Seconds: 0"),
                 "config.out-of-range",
                 "/maximumAssertionLifetimeSeconds",
-                22,
+                24,
             ),
             (
                 "clock skew out of range",
                 format!("{base}clockSkewSeconds: 301\n"),
                 "config.out-of-range",
                 "/clockSkewSeconds",
-                23,
+                25,
             ),
             (
                 "list bound out of range",
                 base.replace("maximumItems: 4", "maximumItems: 65"),
                 "config.out-of-range",
-                "/expectedOutputs/1/form/list/maximumItems",
-                20,
+                "/expectedOutputs/1/form/maximumItems",
+                22,
             ),
             (
                 "unknown form",
-                base.replace("form: boolean", &format!("form: {CANARY}")),
+                base.replace("type: boolean", &format!("type: {CANARY}")),
                 "config.unknown-variant",
+                "/expectedOutputs/0/form/type",
+                18,
+            ),
+            (
+                "a form written as a bare name",
+                base.replace("form: {type: boolean}", "form: boolean"),
+                "config.invalid-type",
                 "/expectedOutputs/0/form",
-                16,
+                18,
+            ),
+            (
+                "a form without its type",
+                base.replace("form: {type: boolean}", "form: {}"),
+                "config.missing-key",
+                "/expectedOutputs/0/form",
+                18,
+            ),
+            (
+                "a member beside a form that declares none",
+                base.replace(
+                    "form: {type: boolean}",
+                    "form: {type: boolean, unique: true}",
+                ),
+                "config.unknown-key",
+                "/expectedOutputs/0/form/unique",
+                18,
+            ),
+            (
+                "a member the list form does not declare",
+                base.replace(
+                    "maximumItems: 4,",
+                    &format!("maximumItems: 4, {CANARY}: 1,"),
+                ),
+                "config.unknown-key",
+                "/expectedOutputs/1/form/canary-7f3a",
+                22,
             ),
             (
                 "repeated subject",
                 base.replace(subject, &format!("{subject}{subject}")),
                 "config.duplicate-item",
                 "/expectedSubjects/1",
-                12,
+                14,
             ),
             (
                 "no subject",
@@ -600,21 +709,21 @@ maximumAssertionLifetimeSeconds: 3600
                 ),
                 "evidence.policy.invalid-count",
                 "/expectedSubjects",
-                10,
+                12,
             ),
             (
                 "unpaired list form",
                 base.replace(", unique: true", ""),
                 "evidence.policy.unpaired-list-form",
-                "/expectedOutputs/1/form/list",
-                20,
+                "/expectedOutputs/1/form",
+                22,
             ),
             (
                 "list that is not unique",
                 base.replace("unique: true", "unique: false"),
                 "evidence.policy.list-not-unique",
-                "/expectedOutputs/1/form/list/unique",
-                20,
+                "/expectedOutputs/1/form/unique",
+                22,
             ),
             (
                 "inverted list bounds",
@@ -623,15 +732,15 @@ maximumAssertionLifetimeSeconds: 3600
                     "minimumItems: 5, maximumItems: 4",
                 ),
                 "evidence.policy.list-bounds-inverted",
-                "/expectedOutputs/1/form/list/minimumItems",
-                20,
+                "/expectedOutputs/1/form/minimumItems",
+                22,
             ),
             (
                 "substitution",
                 base.replace("purpose: benefit.eligibility", "purpose: ${PURPOSE}"),
                 "config.substitution-not-allowed",
                 "/purpose",
-                6,
+                8,
             ),
         ];
         for (label, text, code, path, line) in cases {
@@ -645,6 +754,104 @@ maximumAssertionLifetimeSeconds: 3600
             assert!(!rendered.contains("AAAAAAAA"), "{label}: {rendered}");
             assert!(!rendered.contains(REVISION), "{label}");
         }
+    }
+
+    /// The holder-bound policy shares the form, so it refuses the bare name
+    /// the same way.
+    #[test]
+    fn the_holder_bound_policy_refuses_the_untagged_form() {
+        let base = holder_bound_policy();
+        let text = base.replace("form: {type: boolean}", "form: boolean");
+        assert_ne!(text, base);
+        let report = read_holder_bound_policy("policy.yaml", text.as_bytes())
+            .expect_err("the untagged form is refused");
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.code, "config.invalid-type");
+        assert_eq!(diagnostic.path, "/expectedOutputs/0/form");
+    }
+
+    /// A list form still written under `list` is refused twice over, at the
+    /// form for the `type` it lacks and at `list` with the shape to write.
+    #[test]
+    fn a_list_form_under_the_removed_list_member_names_the_shape_to_write() {
+        let tagged =
+            "form: {type: list, items: string, minimumItems: 1, maximumItems: 4, unique: true}";
+        let nested =
+            "form: {list: {items: string, minimumItems: 1, maximumItems: 4, unique: true}}";
+        let reads = [
+            read_verification_policy(
+                "policy.yaml",
+                verification_policy().replace(tagged, nested).as_bytes(),
+            )
+            .map(|_| ()),
+            read_holder_bound_policy(
+                "policy.yaml",
+                holder_bound_policy().replace(tagged, nested).as_bytes(),
+            )
+            .map(|_| ()),
+        ];
+        for read in reads {
+            let report = read.expect_err("the nested list form is refused");
+            let found: Vec<(&str, &str)> = report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+                .collect();
+            assert_eq!(
+                found,
+                [
+                    ("config.missing-key", "/expectedOutputs/1/form"),
+                    ("config.removed-key", "/expectedOutputs/1/form/list"),
+                ]
+            );
+            let removed = &report.diagnostics()[1];
+            assert!(
+                removed.suggested_action.contains("type: list"),
+                "{removed:?}"
+            );
+            let rendered = report.render_human();
+            assert!(!rendered.contains("AAAAAAAA"), "{rendered}");
+        }
+    }
+
+    /// A refusal of an unknown form names every form the policy accepts.
+    #[test]
+    fn an_unknown_form_names_the_accepted_forms() {
+        let text = verification_policy().replace("type: boolean", "type: decimal");
+        let report = read_verification_policy("policy.yaml", text.as_bytes())
+            .expect_err("an unknown form is refused");
+        let rendered = report.render_human();
+        for form in [
+            "boolean",
+            "integer",
+            "string",
+            "date-bucket",
+            "time-bucket",
+            "entity-reference",
+            "structured",
+            "list",
+        ] {
+            assert!(rendered.contains(form), "{form}: {rendered}");
+        }
+    }
+
+    /// The verifier document a read policy becomes carries each form as the
+    /// policy wrote it.
+    #[test]
+    fn a_read_policy_carries_each_form_to_the_verifier() {
+        use registry_evidence_verifier::verifier::{
+            ExpectedFormDocument, ExpectedScalarFormDocument,
+        };
+        let policy = read_verification_policy("policy.yaml", verification_policy().as_bytes())
+            .expect("the policy reads");
+        assert!(matches!(
+            policy.expected_outputs[0].form,
+            ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean)
+        ));
+        assert!(matches!(
+            policy.expected_outputs[1].form,
+            ExpectedFormDocument::List(_)
+        ));
     }
 
     /// The examples the format registry names are read as the verify

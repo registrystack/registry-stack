@@ -354,21 +354,21 @@ impl SchedulingClient {
 
 fn bearer(value: String) -> Result<BearerToken> {
     BearerToken::new(value)
-        .map_err(|_| binding_error("invalid_request", "the bearer token is invalid"))
+        .map_err(|_| binding_error("invalid-request", "the bearer token is invalid"))
 }
 
 /// One RFC 3339 instant, normalized to UTC.
 fn instant(value: &str) -> Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .map(|parsed| parsed.with_timezone(&Utc))
-        .map_err(|_| binding_error("invalid_request", INVALID_ARGUMENTS))
+        .map_err(|_| binding_error("invalid-request", INVALID_ARGUMENTS))
 }
 
 fn input<T: DeserializeOwned>(value: Value) -> Result<T> {
     if contains_unsafe_integer(&value) {
-        return Err(binding_error("invalid_request", INVALID_ARGUMENTS));
+        return Err(binding_error("invalid-request", INVALID_ARGUMENTS));
     }
-    serde_json::from_value(value).map_err(|_| binding_error("invalid_request", INVALID_ARGUMENTS))
+    serde_json::from_value(value).map_err(|_| binding_error("invalid-request", INVALID_ARGUMENTS))
 }
 
 fn optional_input<T: DeserializeOwned + Default>(value: Option<Value>) -> Result<T> {
@@ -435,7 +435,7 @@ fn error_envelope(error: SchedulingClientError) -> Value {
             "message": "Scheduling client configuration is invalid",
         }),
         SchedulingClientError::InvalidRequest { .. } => json!({
-            "kind": "invalid_request",
+            "kind": "invalid-request",
             "message": INVALID_ARGUMENTS,
         }),
         SchedulingClientError::Transport { kind } => json!({
@@ -478,9 +478,9 @@ fn error_envelope(error: SchedulingClientError) -> Value {
 
 fn protocol_failure(failure: SchedulingProtocolFailure) -> &'static str {
     match failure {
-        SchedulingProtocolFailure::HeaderBounds => "header_bounds",
-        SchedulingProtocolFailure::TraceContext => "trace_context",
-        SchedulingProtocolFailure::MediaType => "media_type",
+        SchedulingProtocolFailure::HeaderBounds => "header-bounds",
+        SchedulingProtocolFailure::TraceContext => "trace-context",
+        SchedulingProtocolFailure::MediaType => "media-type",
         SchedulingProtocolFailure::Body => "body",
         SchedulingProtocolFailure::Problem => "problem",
         SchedulingProtocolFailure::Status => "status",
@@ -566,15 +566,15 @@ mod tests {
     fn protocol_failures_use_the_public_snake_case_vocabulary() {
         assert_eq!(
             protocol_failure(SchedulingProtocolFailure::HeaderBounds),
-            "header_bounds"
+            "header-bounds"
         );
         assert_eq!(
             protocol_failure(SchedulingProtocolFailure::TraceContext),
-            "trace_context"
+            "trace-context"
         );
         assert_eq!(
             protocol_failure(SchedulingProtocolFailure::MediaType),
-            "media_type"
+            "media-type"
         );
         assert_eq!(protocol_failure(SchedulingProtocolFailure::Body), "body");
         assert_eq!(

@@ -91,7 +91,7 @@ impl PilotHarness {
     pub async fn start(fixture_name: &str) -> Self {
         let runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
         let sources = FixtureSources::load(fixture_name);
-        let database_id = format!("{}-acceptance-db", sources.project.registry.id);
+        let database_id = format!("{}-acceptance-db", sources.project.project.id);
         let database = TestDatabase::create(8).await;
         database
             .admin
@@ -600,7 +600,7 @@ fn write_runtime_config(
             registry_breg::model::CompiledChangeRequestReview::Required(requirement) => {
                 Some(requirement.authority.as_str())
             }
-            registry_breg::model::CompiledChangeRequestReview::None(_) => None,
+            registry_breg::model::CompiledChangeRequestReview::None => None,
         })
         .collect::<BTreeSet<_>>();
     let review_authority_config = if review_authorities.is_empty() {
@@ -625,7 +625,7 @@ fn write_runtime_config(
     fs::write(
         &path,
         format!(
-            r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+            r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:9
@@ -641,7 +641,7 @@ database:
   runtimeUrlRef: secret:file/database-url
   migrationUrlRef: secret:file/migration-database-url
   pool:
-    maxSize: 8
+    maximumConnections: 8
     waitTimeoutMilliseconds: 2000
     createTimeoutMilliseconds: 2000
     recycleTimeoutMilliseconds: 2000
@@ -659,14 +659,14 @@ authentication:
     scopeClaim: scope
     scopeSeparator: " "
     allowedClients: unrestricted
-    maxTokenLifetimeSeconds: 3600
+    maximumTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksCache:
       cacheTtlSeconds: 60
       negativeCacheTtlSeconds: 1
       refreshCooldownSeconds: 1
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 5000
+      maximumDocumentBytes: 65536
+      attemptTimeoutMilliseconds: 5000
       outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
@@ -676,7 +676,7 @@ audit:
   path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
+  maximumAgeSeconds: 300
 operationalTimeouts:
   httpRequestMilliseconds: 5000
   shutdownGraceMilliseconds: 1000

@@ -42,7 +42,7 @@ pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
 
 /// A `queued` job has never been applied, so claiming one whose cached
 /// approval already passed `available_until` only spends an attempt on a
-/// request that no longer advertises `apply_request`: discovery ends in
+/// request that no longer advertises `apply-request`: discovery ends in
 /// `block_application_job(..., "source-action-unavailable")`, or a cached
 /// action draws a 412 that requeues the same job, up to
 /// `MAX_APPLICATION_ATTEMPTS`. Leaving it `queued` costs nothing, since the
@@ -1526,7 +1526,7 @@ pub(crate) async fn install(
                  result_id uuid NOT NULL,
                  result jsonb NOT NULL,
                  status text NOT NULL CHECK (status IN
-                     ('approved','rejected','changes_requested','answered','cancelled','superseded')),
+                     ('approved','rejected','changes-requested','answered','cancelled','superseded')),
                  completed_at timestamptz NOT NULL,
                  available_until timestamptz NOT NULL,
                  verified_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
@@ -2716,7 +2716,7 @@ fn decode_application_discovery(
         .ok_or(ApplicationExchangeError::UnavailableAction)?;
     let mut matches = actions.iter().filter_map(|action| {
         let action = action.as_object()?;
-        (action.get("operation")?.as_str()? == "apply_request"
+        (action.get("operation")?.as_str()? == "apply-request"
             && action.get("method")?.as_str()? == "POST"
             && action.get("proposalVersion")?.as_i64()? == job.proposal_version
             && action.get("effectDigest")?.as_str()? == job.proposal_digest)
@@ -2960,7 +2960,7 @@ fn result_status(status: registry_review_client::ReviewResultStatus) -> &'static
     match status {
         registry_review_client::ReviewResultStatus::Approved => "approved",
         registry_review_client::ReviewResultStatus::Rejected => "rejected",
-        registry_review_client::ReviewResultStatus::ChangesRequested => "changes_requested",
+        registry_review_client::ReviewResultStatus::ChangesRequested => "changes-requested",
         registry_review_client::ReviewResultStatus::Answered => "answered",
         registry_review_client::ReviewResultStatus::Cancelled => "cancelled",
         registry_review_client::ReviewResultStatus::Superseded => "superseded",
@@ -3009,7 +3009,7 @@ pub(crate) async fn settled_outcome(
             expired: row.get::<_, bool>(1),
         },
         "rejected" => SettledReviewOutcome::Rejected,
-        "changes_requested" => SettledReviewOutcome::ChangesRequested,
+        "changes-requested" => SettledReviewOutcome::ChangesRequested,
         "answered" | "cancelled" | "superseded" => SettledReviewOutcome::Other,
         _ => return Err(MutationError::Unavailable),
     }))
@@ -3108,7 +3108,7 @@ pub(crate) async fn read_projection(
         None => "pending",
         Some("approved") => "approved",
         Some("rejected") => "rejected",
-        Some("changes_requested") => "changesRequested",
+        Some("changes-requested") => "changesRequested",
         Some("answered") => "answered",
         Some("cancelled") => "cancelled",
         Some("superseded") => "superseded",
@@ -3555,7 +3555,7 @@ mod tests {
                     "effectDigest": job.proposal_digest,
                     "editable": false,
                     "actions": [{
-                        "operation": "apply_request",
+                        "operation": "apply-request",
                         "method": "POST",
                         "href": format!(
                             "/v1/records/requests/{}/actions/apply?accessProfile=automatic-applier",
@@ -3629,7 +3629,7 @@ mod tests {
                 json!({"meta":{"registryIdentifier":"registry-a","datasetIdentifier":"requests","entityTypeIdentifier":"requests"},"data":{
                     "recordIdentifier":job.request_id,"revisionIdentifier":"3","domainData":{},
                     "request":{"bregState":"submitted","proposalVersion":job.proposal_version,"effectDigest":job.proposal_digest,"actions":[{
-                        "operation":"apply_request","method":"POST","href":format!("/v1/records/requests/{}/actions/apply?accessProfile=automatic-applier",job.request_id),
+                        "operation":"apply-request","method":"POST","href":format!("/v1/records/requests/{}/actions/apply?accessProfile=automatic-applier",job.request_id),
                         "ifMatch":"\"current\"","proposalVersion":job.proposal_version,"effectDigest":job.proposal_digest
                     }]}
                 }}),

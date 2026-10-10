@@ -187,8 +187,8 @@ class ProductContractTests(unittest.TestCase):
 
         self.assertIn("projection: [region]", policy)
         self.assertIn("id: northern-requests", policy)
-        self.assertIn("scope: subject", policy)
-        self.assertIn("scope: activity", policy)
+        self.assertIn("type: subject", policy)
+        self.assertIn("type: activity", policy)
         self.assertIn("after: {workingDays: 5}", policy)
         self.assertIn('"authority": "casework-main"', source)
         self.assertIn('"policyId": "regional-review"', source)

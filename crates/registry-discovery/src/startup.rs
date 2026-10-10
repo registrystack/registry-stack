@@ -120,13 +120,13 @@ pub fn prepare(runtime_path: &Path) -> Result<PreparedDiscovery, StartupError> {
     let app = router(
         service,
         runtime.limits.request_bytes(),
-        Duration::from_secs(runtime.limits.request_timeout_seconds.get()),
+        runtime.listener.request_timeout(),
     )
     .map_err(|_| StartupError::RuntimeInvalid)?;
     Ok(PreparedDiscovery {
         bind: runtime.listener.bind.socket_addr(),
         app,
-        shutdown_timeout: Duration::from_secs(runtime.limits.shutdown_timeout_seconds.get()),
+        shutdown_timeout: runtime.limits.shutdown_grace(),
     })
 }
 
@@ -374,9 +374,9 @@ mod tests {
     }
 
     const RUNTIME: &str = "\
-apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1
 kind: DiscoveryRuntimeConfig
-listener: { bind: 127.0.0.1:8080 }
+listener: { bind: 127.0.0.1:8080, requestTimeoutMilliseconds: 10000 }
 package:
   root: /tmp/registry-discovery-package
 limits:
@@ -384,8 +384,7 @@ limits:
   maximumResponseBytes: 1048576
   maximumResultRecords: 100
   maximumResultAlternatives: 100
-  requestTimeoutSeconds: 10
-  shutdownTimeoutSeconds: 10
+  shutdownGraceMilliseconds: 10000
 logLevel: info
 ";
 
@@ -458,13 +457,13 @@ logLevel: info
         // A file that replaced the envelope with schemaVersion is told which
         // envelope to write, and that schemaVersion is no longer read.
         let message = refusal(&RUNTIME.replace(
-            "apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1\nkind: DiscoveryRuntimeConfig",
+            "apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1\nkind: DiscoveryRuntimeConfig",
             "schemaVersion: registry-discovery/runtime/v1alpha1",
         ));
         assert!(
             message.contains(
                 "next: Start the file with `apiVersion: \
-                 registry.registrystack.org/discovery-runtime/v1alpha1` and `kind: \
+                 id.registrystack.org/formats/discovery/runtime/v1alpha1` and `kind: \
                  DiscoveryRuntimeConfig`."
             ),
             "{message}"
@@ -503,7 +502,10 @@ logLevel: info
 
     #[test]
     fn the_listener_bind_is_required_and_substitutes_from_the_environment() {
-        let message = refusal(&RUNTIME.replace("listener: { bind: 127.0.0.1:8080 }\n", ""));
+        let message = refusal(&RUNTIME.replace(
+            "listener: { bind: 127.0.0.1:8080, requestTimeoutMilliseconds: 10000 }\n",
+            "",
+        ));
         assert!(message.contains("listener"), "{message}");
 
         let temporary = canonical_tempdir();

@@ -2,7 +2,7 @@ apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
 # Every timestamp on 2026-09-01 is an anchor: the PostgreSQL acceptance harness
 # rebases that date to the day before the run, so gives that must be in force
-# stay inside the 365-day maxDuration whenever the suite runs.
+# stay inside the 365 days of maximumDurationDays whenever the suite runs.
 journeys:
   - id: lender-reads-a-tenure-right-only-under-consent
     steps:

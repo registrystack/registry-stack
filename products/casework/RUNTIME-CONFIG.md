@@ -36,7 +36,7 @@ that holds it.
 The closed envelope is:
 
 ```yaml
-apiVersion: registry.registrystack.org/casework-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1
 kind: CaseworkRuntimeConfig
 ```
 
@@ -75,9 +75,11 @@ Before it registers any source generation, `caseworkctl apply` compares the
 package it is about to activate with the in-flight work retained in the
 database. Review
 requests still under review pinned their kind's policy when they were
-admitted, and open work items keep the queue they were routed to. Apply
-refuses a package that removes a queue or access profile that work still
-needs, that declares a pinned review kind version with different content, that
+admitted and keep the id of the review producer that submitted them, and open
+work items keep the queue they were routed to. Apply refuses a package that
+removes a queue or access profile that work still needs, that no longer
+declares the review producer of a request still under review, that declares a
+pinned review kind version with different content, that
 removes the source of a source-context review, or whose source read would
 disclose a field the pinned display schema does not declare or omit one it
 requires. The refusal names each conflict with its counts and the package
@@ -131,19 +133,21 @@ answering fails within seconds. The TCP user timeout applies on Linux only.
 `authentication.oidc` requires `issuer` and `audience`. The issuer is an exact
 `https` URL without credentials, query, or fragment; plain `http` is accepted only for
 an IPv4 loopback address under development loopback, for the issuer and for a
-`kind: uri` key set alike. The audience is at most 512
-characters. `jwksSource` defaults to `kind: discovery`. `kind: uri` with `uri`
+`type: uri` key set alike. The audience is at most 512
+characters. `jwksSource` defaults to `type: discovery`. `type: uri` with `uri`
 fetches the key set from a fixed HTTPS address instead of the one discovery
-names. `kind: static` with `documentRef` reads a pinned key set, which does no
+names. `type: static` with `documentRef` reads a pinned key set, which does no
 rotation of its own: rolling a key means replacing the referenced document and
 restarting Casework. The removed `jwksUri` key is refused with a diagnostic
-naming `jwksSource` `kind: uri` as its replacement. `allowedClients` lists the
+naming `jwksSource` `type: uri` as its replacement. `allowedClients` lists the
 client identifiers whose tokens the runtime admits, matched against the token's
-`azp` claim or, when it has none, its `client_id` claim. Under
-`operator-controlled-upstream` the list must name at least one client, because an
-empty list admits every client the issuer verifies; development loopback keeps
-an empty list as a local convenience. A configured `taskAuthority` requires a
-non-empty list in either mode, and its `issuer` is an absolute `http` or
+`azp` claim or, when it has none, its `client_id` claim. Every file writes the
+member: a list of at least one distinct client, or `unrestricted`, which admits
+every client the issuer verifies. An omitted member, an empty list, and a
+repeated client are refused when the file is read. Under
+`operator-controlled-upstream` the member must list its clients; development
+loopback accepts `unrestricted` as a local convenience. A configured
+`taskAuthority` requires a list in either mode, and its `issuer` is an absolute `http` or
 `https` URL with a host and no user information. `scopeClaim` defaults
 to `registry_scopes` for compatibility with existing deployments. Stock ThunderID
 emits `scope`, so the maintained example and `caseworkctl init` set that explicit
@@ -159,7 +163,7 @@ that key's secret reference and must be an exact `secret:env/NAME` or
 `secret:file/name` reference. `audit.destination` is `file` (the default) or
 `stdout`. A `file` destination requires the absolute `audit.path` of the active
 file and accepts `audit.rotateBytes` (default 104857600, at least 1048576, at
-most 4294967295) and `audit.retainDays` (default 90, at least 1, at most
+most 4294967295) and `audit.retentionDays` (default 90, at least 1, at most
 36500); `stdout` refuses all three. A
 `caseworkctl` command that writes audit, such as an applied erasure or
 settlement, writes to a sibling file named for its process role beside
@@ -179,7 +183,8 @@ Background work no caller requested, such as source reconciliation or a
 maintenance pass, writes no request entry: it opens its transaction only while
 the writer reports ready, and its response entries share a correlation that
 identifies the run. The database holds no audit state. `sources` is keyed by the exact source ids declared by the
-selected policy; missing, extra, or empty ids are refused. Source access remains
+selected policy; missing, extra, or empty ids are refused, and each key is a
+local identifier (`^[a-z][a-z0-9_-]{0,63}$`). Source access remains
 bound to each source's configured reader profile and does not grant a caller a
 Casework access profile.
 
@@ -215,7 +220,8 @@ based on the project directory name. Changing these fields keeps the source
 binding generation.
 
 `reviewCompletionDestinations` is keyed by the logical destination ids a
-producer's `completion` block names. Each destination has one `url` and exactly
+producer's `completion` block names, kept as written: 1 to 512 characters
+without control characters. Each destination has one `url` and exactly
 one secret. `bearerTokenRef` presents it as `Authorization: Bearer <secret>`.
 `auth: {secretRef}` does the same, and `auth: {header, secretRef}` presents the
 raw secret as the value of that header instead, with no `Authorization` header,

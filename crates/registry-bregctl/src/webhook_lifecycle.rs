@@ -338,7 +338,7 @@ fn list_item(status: WebhookDeliveryStatus) -> WebhookListItem {
         WebhookDeliveryStatusKind::Pending => ("pending", false),
         WebhookDeliveryStatusKind::Leased => ("leased", false),
         WebhookDeliveryStatusKind::DeadLettered => (
-            "dead_lettered",
+            "dead-lettered",
             status.payload_available && status.binding_active,
         ),
         WebhookDeliveryStatusKind::Expired => ("expired", false),
@@ -369,7 +369,7 @@ fn trigger_name(trigger: EventTrigger) -> &'static str {
         EventTrigger::Created => "created",
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
-        EventTrigger::RequestLifecycle => "request_lifecycle",
+        EventTrigger::RequestLifecycle => "request-lifecycle",
     }
 }
 
@@ -646,12 +646,12 @@ mod tests {
 
         assert!(called.get());
         assert_eq!(outcome.deliveries.len(), 1);
-        assert_eq!(outcome.deliveries[0].state, "dead_lettered");
+        assert_eq!(outcome.deliveries[0].state, "dead-lettered");
         assert!(outcome.deliveries[0].replay_eligible);
         assert!(outcome.deliveries[0].discard_eligible);
         assert_eq!(
             outcome.deliveries[0].dead_letter_reason,
-            Some("always_denied_address")
+            Some("always-denied-address")
         );
     }
 

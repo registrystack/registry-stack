@@ -85,10 +85,10 @@ impl BRegWebhookVerificationError {
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
-            Self::MissingHeader => "missing_header",
-            Self::MalformedSignature => "malformed_signature",
-            Self::SignatureMismatch => "signature_mismatch",
-            Self::UnsupportedVersion => "unsupported_version",
+            Self::MissingHeader => "missing-header",
+            Self::MalformedSignature => "malformed-signature",
+            Self::SignatureMismatch => "signature-mismatch",
+            Self::UnsupportedVersion => "unsupported-version",
         }
     }
 }

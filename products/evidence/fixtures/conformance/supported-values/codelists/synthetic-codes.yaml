@@ -1,3 +1,6 @@
-id: urn:example:fixture:codelist:synthetic-codes
+apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
+kind: EvidenceCodelist
+uri: urn:example:fixture:codelist:synthetic-codes
 version: '1'
+type: code-list
 codes: [C-A, C-B, C-C, C-BOUND]

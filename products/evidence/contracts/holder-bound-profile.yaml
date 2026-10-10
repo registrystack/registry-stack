@@ -129,14 +129,14 @@ request_requirements:
       to one holder.
     bounds: >-
       Bounded by a compile-time maximum, the request schema's maxItems, and the
-      bundle's holderBoundBatchMaxSize, in that order of increasing strictness.
+      bundle's maximumHolderBoundBatchSize, in that order of increasing strictness.
   ordering:
     rule: >-
       The holder-bound requires holderKeys check runs after entitlement
       matching and after the format gate, and before selector resolution, so
       the endpoint never becomes an unauthenticated requirement-existence
       oracle.
-    code: evidence.invalid_request
+    code: evidence.invalid-request
   processing_reach: >-
     Under holder-bound the holder key is no longer inert. Its thumbprint
     reaches subject-binding derivation. It still never reaches authorization,
@@ -194,7 +194,7 @@ batch:
     POST /v1/evidence/batch is a different audience-scoped operation and uses
     application/vnd.registrystack.evidence.request-batch+json. It evaluates one
     to sixteen ordered subject sets, accepts no holderKeys, and emits only
-    flattened signed JWS or evidence_not_available item outcomes. It never
+    flattened signed JWS or evidence-not-available item outcomes. It never
     selects, carries, invokes, verifies, or changes this holder-bound issuance
     envelope. Conversely, POST /v1/evidence with holderKeys never enters the
     request-batch route or its batch-native audit schema. Enabling either feature
@@ -210,7 +210,7 @@ batch:
     exactly one holder key, and the batch media type carries exactly one member
     per holder key. This biconditional is scoped to holder-bound requirements;
     audience-scoped keyless SD-JWT VC issuance is unchanged by it.
-  ceiling: The bundle's holderBoundBatchMaxSize. A request above it is refused before source access.
+  ceiling: The bundle's maximumHolderBoundBatchSize. A request above it is refused before source access.
   evaluation: >-
     One authorization decision, one source acquisition, one derivation, then a
     per-member construction, claim mapping, and signature.

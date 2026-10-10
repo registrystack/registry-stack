@@ -427,7 +427,7 @@ mod tests {
                 "kind":"criterion", "evidenceType":"urn:example:type", "purpose":"registration",
                 "responseFormats":["signed-jws"], "referenceFrameworks":[],
                 "subjects":[{"role":"subject", "cardinality":"one", "selector":{"profile":"exact", "valueOrigin":"request", "fields":[{"type":"string","name":"reference","minimumBytes":1,"maximumBytes":64}]}}],
-                "concepts":[{"handle":"status","concept":"urn:example:concept","required":true,"form":"boolean"}]
+                "concepts":[{"handle":"status","concept":"urn:example:concept","required":true,"form":{"type":"boolean"}}]
             }
         })).unwrap()
     }

@@ -21,13 +21,13 @@ use std::{
 use registry_platform_config::{contains_environment_expression, PackageError, PackageErrorKind};
 use registry_platform_yaml::{
     escape_pointer_segment, Diagnostic, Node, NodeValue, Position, Reader, Refusal, Report,
-    ScalarHook, ScalarSite, Severity, Source,
+    ScalarHook, ScalarSite, Severity, Source, MAXIMUM_DOCUMENT_BYTES,
 };
 
 use crate::{
     bundle::{
-        evidence_package_limits, runtime_binding_findings, validate_ca_bundle, ArtifactFault,
-        Bundle, BundleError, MAX_CA_BUNDLE_BYTES,
+        evidence_package_limits, open_no_follow, runtime_binding_findings, validate_ca_bundle,
+        ArtifactFault, Bundle, BundleError, MAX_CA_BUNDLE_BYTES,
     },
     config::{report_in_file, ConfigError, RuntimeConfig, MAX_CONFIG_BYTES},
 };
@@ -502,14 +502,36 @@ fn push_package_error(check: &mut OfflineCheck, layout: &Layout, error: &Package
             ("evidence.package.mismatch", message, REBUILD_PACKAGE_ACTION)
         }
         PackageErrorKind::UnsafeEntry { path, reason } => {
-            check.push_package(
-                "evidence.package.unsafe-entry",
-                format!("the package holds {path}, which {reason}"),
-                "Remove the entry, since a package holds only regular files, and rebuild the package with `evidencectl package`.",
-            );
+            let members = bundle_members_naming(check, path);
+            if members.is_empty() {
+                check.push_package(
+                    "evidence.package.unsafe-entry",
+                    format!("the package holds {path}, which {reason}"),
+                    "Remove the entry, since a package holds only regular files, and rebuild the package with `evidencectl package`.",
+                );
+            }
+            for (pointer, position) in members {
+                let mut diagnostic = Diagnostic::error(
+                    "evidence.package.unsafe-entry",
+                    pointer,
+                    format!("the package file this member names {reason}"),
+                    "Put a regular file at this path, since a package holds only regular files, and rebuild the package with `evidencectl package`.",
+                );
+                diagnostic.artifact = Some(BUNDLE_ARTIFACT.to_owned());
+                diagnostic.source =
+                    Some(source(&check.package_file(BUNDLE_DOCUMENT), Some(position)));
+                check.diagnostics.push(diagnostic);
+            }
             return;
         }
         PackageErrorKind::Bound { path, reason } => {
+            if let Some(report) = path
+                .as_deref()
+                .and_then(|path| oversized_document(check, path))
+            {
+                check.extend(report);
+                return;
+            }
             check.push_package(
                 "evidence.package.too-large",
                 match path {
@@ -548,6 +570,92 @@ fn push_package_error(check: &mut OfflineCheck, layout: &Layout, error: &Package
         ),
     };
     check.push_runtime(layout, code, pointer, false, message, action);
+}
+
+/// The shared reader's refusal of a package document over its size cap
+/// (CFG-YAML-6), when the file a package bound names is a configuration
+/// document: the bundle, a code list, or a fixture file. The package bound on
+/// one file is the reader's cap, so the document is reported at the file with
+/// the code every other format carries. `None` leaves the package refusal.
+///
+/// The file is opened without following a link and read to one byte past the
+/// cap, so nothing outside the package is read and nothing is parsed.
+fn oversized_document(check: &OfflineCheck, path: &str) -> Option<Report> {
+    artifact_kind(path)?;
+    let bytes = read_package_document(check, path)?;
+    if bytes.len() <= MAXIMUM_DOCUMENT_BYTES {
+        return None;
+    }
+    Reader::new(check.package_file(path)).scan(&bytes).err()
+}
+
+/// The first bytes of one package file, to one byte past the shared reader's
+/// cap, read from a regular file opened without following a link. `None` when
+/// the file is anything else or cannot be read.
+fn read_package_document(check: &OfflineCheck, path: &str) -> Option<Vec<u8>> {
+    let file = open_no_follow(&check.package_root.as_ref()?.join(path)).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let cap = u64::try_from(MAXIMUM_DOCUMENT_BYTES).ok()?;
+    let mut bytes = Vec::new();
+    file.take(cap.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some(bytes)
+}
+
+/// The bundle members whose value is the package path `path`, each with the
+/// position of that value, so a refused package entry is reported where the
+/// author named it (CFG-VAL-8, CFG-DIAG-1). Empty when no member names the
+/// entry or the bundle document cannot be read as YAML, which leaves the
+/// refusal at the package directory.
+///
+/// The package failed verification, so the bundle read here is untrusted: it
+/// is read within the reader's cap for positions only, and no value from it
+/// reaches a diagnostic.
+fn bundle_members_naming(check: &OfflineCheck, path: &str) -> Vec<(String, Position)> {
+    let mut members = Vec::new();
+    let tree = read_package_document(check, BUNDLE_DOCUMENT).and_then(|bytes| {
+        Reader::new(check.package_file(BUNDLE_DOCUMENT))
+            .scan(&bytes)
+            .ok()
+            .flatten()
+    });
+    if let Some(tree) = tree {
+        collect_members_naming(&tree, path, &mut String::new(), &mut members);
+    }
+    members
+}
+
+fn collect_members_naming(
+    node: &Node,
+    path: &str,
+    pointer: &mut String,
+    members: &mut Vec<(String, Position)>,
+) {
+    let length = pointer.len();
+    match &node.value {
+        NodeValue::String(text) if text.text == path => {
+            members.push((pointer.clone(), node.span.start));
+        }
+        NodeValue::Mapping(entries) => {
+            for entry in entries {
+                pointer.push('/');
+                pointer.push_str(&escape_pointer_segment(&entry.key));
+                collect_members_naming(&entry.value, path, pointer, members);
+                pointer.truncate(length);
+            }
+        }
+        NodeValue::Sequence(items) => {
+            for (index, item) in items.iter().enumerate() {
+                pointer.push_str(&format!("/{index}"));
+                collect_members_naming(item, path, pointer, members);
+                pointer.truncate(length);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// One refusal from loading the verified bundle.

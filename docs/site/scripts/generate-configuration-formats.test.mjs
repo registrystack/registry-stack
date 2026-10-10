@@ -49,8 +49,8 @@ test('states each header, schema, check, and stability as the registry records i
     audience: 'authored',
     files: ['registry.yaml'],
     syntax: 'yaml',
-    apiVersion: 'registry.registrystack.org/v1alpha1',
-    kind: 'RegistryProject',
+    apiVersion: 'id.registrystack.org/formats/breg/project/v1alpha1',
+    kind: 'BRegProject',
     exceptionClass: null,
     schemaId: 'https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json',
     schemaPath: 'products/breg/generated/authoring/registry-project.schema.json',
@@ -59,8 +59,8 @@ test('states each header, schema, check, and stability as the registry records i
     docsetProduct: null,
   });
   const module = formats.get('breg/module');
-  assert.equal(module.apiVersion, null);
-  assert.equal(module.kind, null);
+  assert.equal(module.apiVersion, 'id.registrystack.org/formats/breg/module/v1alpha1');
+  assert.equal(module.kind, 'BRegModule');
   const journeys = formats.get('breg/journeys');
   assert.equal(journeys.apiVersion, 'id.registrystack.org/formats/breg/journeys/v1');
   assert.equal(journeys.kind, 'BRegJourneys');

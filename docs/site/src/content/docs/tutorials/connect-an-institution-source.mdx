@@ -114,19 +114,19 @@ to that selector profile:
 ```yaml
 apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: http-json
+type: http-json
 baseUrl: https://registry.example.com
 posture: field-projected
 authentication:
-  kind: basic
+  type: basic
   usernameRef: secret:file/registry-username
   passwordRef: secret:file/registry-password
 request:
   method: GET
-  pathTemplate: /people/{person_id}
+  path: /people/{person_id}
   pathBindings:
     person_id:
-      from: selector
+      type: selector
       role: person
       profile: person-reference-v1
       field: person_id
@@ -147,9 +147,9 @@ request:
     maximumNormalizedBytes: 4096
   projection: [/date_of_birth]
   redirects: deny
-  timeoutMilliseconds: 3000
+  attemptTimeoutMilliseconds: 3000
   maximumResponseBytes: 65536
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 responseSchema: schemas/people-response.schema.yaml
 extractScript: adapters/people-extract.rhai
 factSchema: schemas/people-facts.schema.yaml

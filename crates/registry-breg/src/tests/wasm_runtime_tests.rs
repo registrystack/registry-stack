@@ -139,20 +139,20 @@ fn envelope_guarded_outcome_guest(document: &str) -> String {
 /// WASM module carrying `module_bytes`.
 fn wasm_person_action(module_bytes: &[u8]) -> CompiledAction {
     let source = json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"wasm-runtime","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"wasm-runtime","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://example.test"},
         "entities":[{"id":"person","primaryDataset":"parity","route":"people","mutationMode":"mutable","fields":[
-            {"id":"name","type":"string","maxLength":160,"required":true,"classification":"restricted"},
+            {"id":"name","type":"string","maximumLength":160,"required":true,"classification":"restricted"},
             {"id":"friend","type":"reference","target":"person","classification":"restricted"}
         ]}],
         "actions":[{"id":"register-person","inputs":[
-            {"id":"given-name","apiName":"givenName","type":"string","maxLength":80,"required":true,"classification":"restricted"},
-            {"id":"family-name","type":"string","maxLength":80,"classification":"restricted"},
+            {"id":"given-name","apiName":"givenName","type":"string","maximumLength":80,"required":true,"classification":"restricted"},
+            {"id":"family-name","type":"string","maximumLength":80,"classification":"restricted"},
             {"id":"person","type":"reference","target":"person","required":true,"classification":"restricted"}
-        ],"handler":{"kind":"wasm","module":"handlers/guest.wasm","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
+        ],"handler":{"type":"wasm","module":"handlers/guest.wasm","abi":"registry.action-handler/v1","refusals":[{"code":"blank-name","label":"A name is required."}],"writes":[
             {"id":"person","target":{"entity":"person"},"operation":"create","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"actions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person"]}]}}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(
@@ -444,7 +444,7 @@ fn operator_configuration_maps_onto_the_execution_budgets_and_backend() {
     use crate::runtime_config::{RawWasmExecutionConfig, WasmExecutionConfig};
     use crate::wasm_handler::WasmExecutionBackend;
     let raw: RawWasmExecutionConfig = serde_json::from_str(
-        r#"{"maxModuleBytes":5242880,"maxGuestMemoryBytes":1048576,"backend":"native"}"#,
+        r#"{"maximumModuleBytes":5242880,"maximumGuestMemoryBytes":1048576,"backend":"native"}"#,
     )
     .expect("bounded section parses");
     let configured = WasmExecutionConfig::from_raw(raw).expect("bounded section validates");

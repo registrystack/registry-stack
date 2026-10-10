@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: issuer-portability
   version: 0.1.0
   defaultLanguage: en
@@ -15,8 +15,8 @@ entities:
     tombstone: false
     classification: internal
     fields:
-      - {id: label, type: string, required: true, maxLength: 100, classification: internal}
-      - {id: district, type: string, required: true, maxLength: 100, classification: internal}
+      - {id: label, type: string, required: true, maximumLength: 100, classification: internal}
+      - {id: district, type: string, required: true, maximumLength: 100, classification: internal}
 accessProfiles:
   - id: clerk
     default: true
@@ -24,8 +24,9 @@ accessProfiles:
     requiredScopes: [registry:read]
     requiredPurposes: [registry-administration]
     permissions:
-      - entity: record
-        operations: [get, list]
-        readableFields: [label]
-        rowBoundaries:
-          - {field: district, claim: districts, operator: equals}
+      entities:
+        - entity: record
+          operations: [get, list]
+          readableFields: [label]
+          rowBoundaries:
+            - {field: district, claim: districts, operator: equals}

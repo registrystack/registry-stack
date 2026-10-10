@@ -1,5 +1,5 @@
 {
-  "$comment": "Results are positional and one-for-one with the request. Available members are ordinary signed flattened JWS responses. Singular unavailable conditions become evidence_not_available. Mixed and all-unavailable envelopes return HTTP 200. Every other failure aborts the outer request, and a response above 1048576 serialized bytes is never released.",
+  "$comment": "Results are positional and one-for-one with the request. Available members are ordinary signed flattened JWS responses. Singular unavailable conditions become evidence-not-available. Mixed and all-unavailable envelopes return HTTP 200. Every other failure aborts the outer request, and a response above 1048576 serialized bytes is never released.",
   "$defs": {
     "evidence-result": {
       "additionalProperties": false,
@@ -46,7 +46,7 @@
       "additionalProperties": false,
       "properties": {
         "result": {
-          "const": "evidence_not_available"
+          "const": "evidence-not-available"
         }
       },
       "required": [

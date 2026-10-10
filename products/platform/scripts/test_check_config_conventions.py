@@ -86,6 +86,7 @@ CONVENTION_TEXT = """\
 """
 
 LOCAL_ID = {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+DERIVED_ID = {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$"}
 CANONICAL_DEFS = {
     "LocalId": LOCAL_ID,
     "ExternalId": {"type": "string", "minLength": 1},
@@ -914,6 +915,20 @@ class NameTests(ConventionsTestCase):
 class IdentifierTests(ConventionsTestCase):
     def test_cfg_id_1_reports_an_id_without_the_local_id_type(self) -> None:
         self.repo.project["$defs"]["Queue"]["properties"]["id"] = {"type": "string"}
+        self.assertFinding(self.repo.run(), "CFG-ID-1", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/id"))
+
+    def test_cfg_id_1_accepts_an_id_typed_as_a_derived_id(self) -> None:
+        self.repo.project["$defs"]["DerivedId"] = dict(DERIVED_ID)
+        self.repo.project["$defs"]["Queue"]["properties"]["id"] = {"$ref": "#/$defs/DerivedId"}
+        self.assertNoFinding(self.repo.run(), "CFG-ID-1")
+
+    def test_cfg_id_1_reports_a_derived_id_outside_the_dotted_local_id_grammar(self) -> None:
+        self.repo.project["$defs"]["DerivedId"] = {"type": "string", "minLength": 1}
+        self.repo.project["$defs"]["Queue"]["properties"]["id"] = {"$ref": "#/$defs/DerivedId"}
+        self.assertFinding(self.repo.run(), "CFG-ID-1", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/id"))
+
+    def test_cfg_id_1_reports_a_derived_id_the_schema_does_not_define(self) -> None:
+        self.repo.project["$defs"]["Queue"]["properties"]["id"] = {"$ref": "#/$defs/DerivedId"}
         self.assertFinding(self.repo.run(), "CFG-ID-1", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/id"))
 
     def test_cfg_id_1_reports_a_map_without_typed_keys(self) -> None:

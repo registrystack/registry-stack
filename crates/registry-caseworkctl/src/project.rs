@@ -56,7 +56,7 @@ fn runtime_example(project: &Path, include_source: bool) -> Result<String> {
         std::env::current_dir()?.join(project)
     };
     let mut document = json!({
-        "apiVersion": "registry.registrystack.org/casework-runtime/v1alpha1",
+        "apiVersion": "id.registrystack.org/formats/casework/runtime/v1alpha1",
         "kind": "CaseworkRuntimeConfig",
         "identity": {"databaseId": "casework-example"},
         "package": {"root": project_root.join(LOCAL_PACKAGE_DIRECTORY)},
@@ -66,6 +66,7 @@ fn runtime_example(project: &Path, include_source: bool) -> Result<String> {
         "authentication": {"oidc": {
             "issuer": "https://identity.example.test/realms/registry",
             "audience": "urn:example:casework",
+            "allowedClients": "unrestricted",
             "scopeClaim": "scope",
             "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}
         }},
@@ -88,13 +89,13 @@ fn runtime_example(project: &Path, include_source: bool) -> Result<String> {
 
 #[cfg(test)]
 const BREG_SOURCE_DESCRIPTION: &str = r#"{
-  "apiVersion": "registry.registrystack.org/casework-source-description/v1alpha1",
-  "kind": "BRegCaseworkSourceDescription",
+  "apiVersion": "id.registrystack.org/formats/casework/breg-source-description/v1alpha1",
+  "kind": "CaseworkBregSourceDescription",
   "origin": "bregctl explain change-requests",
   "authority": "none",
   "sourceId": "professional-licences",
   "sourceRevision": "sha256:source-revision",
-  "request": {
+  "requests": [{
     "requestEntity": "scope-correction",
     "requestRoute": "scope-corrections",
     "fields": [
@@ -105,10 +106,10 @@ const BREG_SOURCE_DESCRIPTION: &str = r#"{
       {"field":"supporting-reference","apiName":"supportingReference","schema":{"type":"string","minLength":1,"maxLength":500}}
     ],
     "contractFingerprint": "sha256:contract",
-    "review": {"authority":"casework-main","policyId":"scope-correction"},
+    "review": {"type": "required", "authority":"casework-main","policyId":"scope-correction"},
     "onApproved": {"mode":"manual"},
     "application": {}
-  }
+  }]
 }
 "#;
 
@@ -125,9 +126,9 @@ expect:
 
 const EVENT_WIRING_GUIDANCE: &str = "The configured source reader cannot attest that BReg sends lifecycle events to this Casework receiver with the same key. Run bregctl doctor against the BReg runtime configuration, then cause and confirm one lifecycle delivery.";
 
-pub(super) const STANDALONE_YAML: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+pub(super) const STANDALONE_YAML: &str = r#"apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
-casework:
+project:
   id: standalone-decision
   version: "1"
 accessProfiles:
@@ -557,7 +558,7 @@ fn request_description(request: &SourceRequestPolicy, description: Option<&Value
     json!({
         "entity": request.entity,
         "queue": request.queue,
-        "queueMode": if request.routing.is_empty() { "default" } else { "first_match" },
+        "queueMode": if request.routing.is_empty() { "default" } else { "first-match" },
         "routingRules": request.routing.len(),
         "applicationMode": application_mode,
         "clock": request.clock,
@@ -669,7 +670,7 @@ pub(super) fn checked_project(
             "status": "complete",
             "project": project,
             "effective": {
-                "projectId": policy.casework.id,
+                "projectId": policy.project.id,
                 "mode": "standalone",
                 "queues": policy.queues,
                 "reviewKinds": policy.review_kinds,
@@ -711,7 +712,7 @@ fn sources_report(
     diagnostics: Value,
 ) -> Result<Value> {
     let source_description = if pending {
-        "pending_source_add"
+        "pending-source-add"
     } else {
         "checked"
     };
@@ -751,7 +752,7 @@ fn sources_report(
         "filesChecked": files_checked,
         "diagnostics": diagnostics,
         "effective": {
-            "projectId": policy.casework.id,
+            "projectId": policy.project.id,
             "sources": sources,
             "sourceDescription": source_description,
             "inbox": inbox,
@@ -832,7 +833,7 @@ pub(super) fn test(project: &Path) -> Result<Value> {
         "filesChecked": files_checked,
         "diagnostics": checked["diagnostics"],
         "fixtures": reports,
-        "proofBoundary": "offline_synthetic",
+        "proofBoundary": "offline-synthetic",
         "productionClosure": false,
         "networkAccess": false,
         "databaseAccess": false
@@ -1956,6 +1957,21 @@ fn check_source_descriptions(project: &Path) -> Result<()> {
                     "Name a field listed in the source description's fields, or remove it from the policy.",
                 )
                 .with_related(format!("{at}/description"), "the source description is named here"),
+                // An earlier release wrote this description; only a new
+                // import carries the header and the request list this
+                // release reads.
+                registry_casework_breg::DescriptionRefusal::RetiredApiVersion => ConfigFinding::new(
+                    "config.retired-api-version",
+                    format!("{at}/description"),
+                    format!(
+                        "the imported source description carries a retired apiVersion; the current apiVersion is `{}`",
+                        registry_casework_breg::DESCRIPTION_API_VERSION
+                    ),
+                    format!(
+                        "Move the description aside and repeat source add: {}.",
+                        source_add_command(project, index)
+                    ),
+                ),
                 _ => ConfigFinding::new(
                     "casework.source-description.contract-mismatch",
                     format!("{at}/description"),
@@ -2035,14 +2051,13 @@ fn check_source_review_binding(
     let source = &policy.sources[index];
     let root: Value = serde_json::from_slice(bytes)
         .context("re-parsing a source description already validated as well-formed JSON")?;
-    let described = match root.get("requests").and_then(Value::as_array) {
-        Some(requests) => requests
-            .iter()
-            .enumerate()
-            .map(|(position, request)| (format!("/requests/{position}"), request))
-            .collect::<Vec<_>>(),
-        None => vec![("/request".to_owned(), &root["request"])],
-    };
+    let described = root["requests"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .map(|(position, request)| (format!("/requests/{position}"), request))
+        .collect::<Vec<_>>();
     let mut diagnostics = Vec::new();
     for (request_at, request) in described {
         diagnostics.extend(request_review_binding(
@@ -2081,7 +2096,7 @@ fn request_review_binding(
     request_at: &str,
     review: &Value,
 ) -> Result<Option<Diagnostic>> {
-    if review.get("mode").and_then(Value::as_str) == Some("none") {
+    if review.get("type").and_then(Value::as_str) == Some("none") {
         return Ok(None);
     }
     let policy = &decoded.value;
@@ -2253,7 +2268,7 @@ mod tests {
         // displaySchema; a closed schema that admits none of them conceals
         // every source-backed task.
         let mut disclosed = serde_json::Map::new();
-        for field in description["request"]["fields"].as_array().unwrap() {
+        for field in description["requests"][0]["fields"].as_array().unwrap() {
             if !authored
                 .iter()
                 .any(|name| name == field["field"].as_str().unwrap())
@@ -2602,7 +2617,7 @@ mod tests {
                 "itemId": item_id,
                 "operation": "approve",
                 "bindingReference": "sha256:binding",
-                "outcome": "not_applied",
+                "outcome": "not-applied",
                 "reason": "The source refused the saved evidence version.",
                 "decidedBy": "Registrar duty officer",
                 "attemptState": "refused",
@@ -3184,7 +3199,7 @@ mod tests {
         assert_eq!(tested["authoringStatus"], "complete");
         assert_eq!(tested["diagnostics"], json!([]));
         assert_eq!(tested["filesChecked"], 3);
-        assert_eq!(tested["proofBoundary"], "offline_synthetic");
+        assert_eq!(tested["proofBoundary"], "offline-synthetic");
         assert_eq!(tested["productionClosure"], false);
         let fixture = project.join("fixtures/standalone-decision.yaml");
         let written = fs::read_to_string(&fixture).unwrap();
@@ -3574,7 +3589,7 @@ mod tests {
     #[test]
     fn check_source_descriptions_refuses_an_unresolved_review_policy_id() {
         let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
-        description["request"]["review"]["policyId"] = json!("missing-review-kind");
+        description["requests"][0]["review"]["policyId"] = json!("missing-review-kind");
         let description = serde_json::to_string(&description).unwrap();
         let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
 
@@ -3589,7 +3604,7 @@ mod tests {
         );
         assert!(error.contains("missing-review-kind"), "{error}");
         assert!(
-            error.contains("professional-licences.json /request/review/policyId"),
+            error.contains("professional-licences.json /requests/0/review/policyId"),
             "{error}"
         );
     }
@@ -3658,7 +3673,7 @@ mod tests {
     #[test]
     fn check_source_descriptions_keeps_the_contract_refusal_for_a_description_that_drifted() {
         let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
-        description["request"]
+        description["requests"][0]
             .as_object_mut()
             .unwrap()
             .remove("contractFingerprint");
@@ -3680,10 +3695,40 @@ mod tests {
     }
 
     #[test]
+    fn cfg_env_2_check_refuses_a_description_under_a_retired_api_version_and_names_the_import() {
+        for retired in [
+            "registry.registrystack.org/casework-source-description/v1alpha1",
+            "registry.registrystack.org/casework-source-description/v1alpha2",
+        ] {
+            let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
+            description["apiVersion"] = json!(retired);
+            description["kind"] = json!("BRegCaseworkSourceDescription");
+            let description = serde_json::to_string(&description).unwrap();
+            let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
+
+            let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+            assert!(error.contains("config.retired-api-version"), "{error}");
+            assert!(error.contains(" /sources/0/description\n"), "{error}");
+            assert!(
+                error.contains(
+                    "the imported source description carries a retired apiVersion; the current apiVersion is `id.registrystack.org/formats/casework/breg-source-description/v1alpha1`"
+                ),
+                "{error}"
+            );
+            assert!(
+                error.contains("Move the description aside and repeat source add: caseworkctl source add BREG_PROJECT --project"),
+                "{error}"
+            );
+            assert!(!error.contains(retired), "{error}");
+            assert!(!error.contains("contract-mismatch"), "{error}");
+        }
+    }
+
+    #[test]
     fn check_source_descriptions_accepts_a_no_review_description_with_no_declared_review_kinds() {
         let no_review_kinds_yaml = CASEWORK_YAML.split("reviewKinds:\n").next().unwrap();
         let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
-        description["request"]["review"] = json!({"mode": "none"});
+        description["requests"][0]["review"] = json!({"type": "none"});
         let description = serde_json::to_string(&description).unwrap();
         let (_root, project) = write_offline_project(no_review_kinds_yaml, &description);
 
@@ -3719,7 +3764,7 @@ mod tests {
         // the purpose branch this test targets.
         let wrong_purpose_yaml = CASEWORK_YAML
             .replace("purpose: approval", "purpose: answer")
-            .replace("settlement: changes_requested", "settlement: answered");
+            .replace("settlement: changes-requested", "settlement: answered");
         let (_root, project) = write_offline_project(&wrong_purpose_yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
@@ -3734,7 +3779,7 @@ mod tests {
     // one side of that pair so the source admits what the kind rejects.
     fn description_with_field_schema(api_name: &str, schema: Value) -> String {
         let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
-        let field = description["request"]["fields"]
+        let field = description["requests"][0]["fields"]
             .as_array_mut()
             .unwrap()
             .iter_mut()
@@ -3802,7 +3847,7 @@ mod tests {
         }
 
         let mut described: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
-        for field in described["request"]["fields"].as_array_mut().unwrap() {
+        for field in described["requests"][0]["fields"].as_array_mut().unwrap() {
             field["schema"]["description"] = json!(marker);
         }
         let undeclared = CASEWORK_YAML.replace(
@@ -4270,7 +4315,7 @@ mod tests {
     #[test]
     fn explain_refuses_the_same_unresolved_review_binding_as_check() {
         let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
-        description["request"]["review"]["policyId"] = json!("missing-review-kind");
+        description["requests"][0]["review"]["policyId"] = json!("missing-review-kind");
         let description = serde_json::to_string(&description).unwrap();
         let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
 
@@ -4339,7 +4384,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["refused", "changes-requested"]
         );
-        assert_eq!(kind["outcomes"][1]["settlement"], "changes_requested");
+        assert_eq!(kind["outcomes"][1]["settlement"], "changes-requested");
     }
 
     #[test]
@@ -4422,7 +4467,7 @@ mod tests {
 
         let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
         description["sourceId"] = json!("response-register");
-        description["request"]["requestEntity"] = json!("response-correction");
+        description["requests"][0]["requestEntity"] = json!("response-correction");
 
         let root = crate::canonical_tempdir();
         let project = root.path().join("authored");
@@ -4491,6 +4536,20 @@ mod tests {
         assert_eq!(requests[1]["target"]["elapsed"], "PT72H");
     }
 
+    /// The word the report prints for a request that declares routing rules
+    /// is a kebab-case value.
+    #[test]
+    fn check_reports_a_routed_request_as_first_match() {
+        let project = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/casework/examples/multi-stage-routing-clocks");
+
+        let effective = check(&project, false, false).unwrap()["effective"].clone();
+
+        let request = &effective["sources"][0]["requests"][0];
+        assert_eq!(request["routingRules"], 1);
+        assert_eq!(request["queueMode"], "first-match");
+    }
+
     #[test]
     fn starter_fixtures_check_routing_without_inventing_a_source_application_mode() {
         let root = tempfile::tempdir().unwrap();
@@ -4498,6 +4557,12 @@ mod tests {
         init(&project, "professional-review").unwrap();
         let checked = check(&project, false, false).unwrap();
         assert!(checked["effective"]["sources"][0]["requests"][0]["applicationMode"].is_null());
+        // The word the report prints for a source whose description is not
+        // imported yet is a kebab-case value.
+        assert_eq!(
+            checked["effective"]["sourceDescription"],
+            "pending-source-add"
+        );
         test(&project).expect("offline routing fixture needs no imported source");
 
         let fixture_path = project.join("fixtures/professional-review.yaml");
@@ -4523,16 +4588,7 @@ mod tests {
         let (_root, project) = write_two_source_project();
         let path = project.join("sources/response-register.json");
         let mut description: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        description["request"]["onApproved"] = json!({"mode":"automatic","executor":"applier"});
-        // Cover the plural description as well as the first source's singular one.
-        let request = description
-            .as_object_mut()
-            .unwrap()
-            .remove("request")
-            .unwrap();
-        description["requests"] = json!([request]);
-        description["apiVersion"] =
-            json!("registry.registrystack.org/casework-source-description/v1alpha2");
+        description["requests"][0]["onApproved"] = json!({"mode":"automatic","executor":"applier"});
         fs::write(path, serde_json::to_vec(&description).unwrap()).unwrap();
         let checked = check(&project, false, false).unwrap();
         assert_eq!(

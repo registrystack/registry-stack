@@ -31,7 +31,7 @@ pub use loader::{
     contains_environment_expression, reject_environment_expressions_in_authored_yaml,
     AuthoredExpressions, LoadedRuntimeConfig, RemovedKey, RuntimeConfigError, RuntimeConfigLoader,
     RuntimeEnvelope, DEFAULT_MAX_RUNTIME_CONFIG_BYTES, MAX_RUNTIME_CONFIG_PATH_BYTES,
-    REMOVED_OIDC_JWKS_URI, UNAVAILABLE_CODE,
+    REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI, UNAVAILABLE_CODE,
 };
 pub use offline::{RuntimeFileCheck, DEFAULT_STAND_IN, INCOMPLETE_CODE};
 pub use package::{

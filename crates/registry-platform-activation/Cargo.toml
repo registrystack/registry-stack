@@ -23,6 +23,7 @@ tokio-postgres.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+serde_json.workspace = true
 tokio.workspace = true
 
 [[test]]

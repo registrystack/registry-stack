@@ -139,12 +139,12 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
         "id.registrystack.org/formats/evidence/source/v1alpha1"
     );
     assert_eq!(source["kind"], "EvidenceSource");
-    assert_eq!(source["transport"], "http-json");
+    assert_eq!(source["type"], "http-json");
     assert!(
         source.get("sources").is_none(),
         "source file has no wrapper"
     );
-    assert_eq!(source["authentication"]["kind"], "review-required");
+    assert_eq!(source["authentication"]["type"], "review-required");
 
     // The response schema parses as YAML and carries the sample-derived
     // bounds, widened by the narrowing policy rather than copied.

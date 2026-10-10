@@ -1,6 +1,6 @@
-apiVersion: registry.registrystack.org/casework/v1alpha1
+apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
 kind: CaseworkProject
-casework:
+project:
   id: professional-review
   version: "1"
 accessProfiles:
@@ -56,7 +56,7 @@ reviewKinds:
       # and resubmits it for a fresh review.
       - id: changes-requested
         label: Request changes
-        settlement: changes_requested
+        settlement: changes-requested
         reasonRequired: true
     retention:
       terminalDays: 30

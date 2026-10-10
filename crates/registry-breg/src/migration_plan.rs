@@ -397,9 +397,12 @@ pub struct ReviewedMigrationSource {
 /// A reviewed migration's `descriptor.json`. Rust field names keep their
 /// engine spelling; each serde rename names the document member.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(remote = "Self", deny_unknown_fields, rename_all = "camelCase")]
+#[cfg_attr(feature = "schema", schemars(!remote))]
 pub struct ReviewedMigrationDescriptor {
     #[serde(deserialize_with = "members::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub change_class: CompiledRegistryChangeClass,
     pub covers: Vec<ReviewedChangeCover>,
@@ -409,18 +412,42 @@ pub struct ReviewedMigrationDescriptor {
         rename = "lockTimeoutMilliseconds",
         deserialize_with = "members::lock_timeout"
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU64<1, { MAX_LOCK_TIMEOUT_MS }>")
+    )]
     pub lock_timeout_ms: u64,
     /// The document member `statementTimeoutMilliseconds`.
     #[serde(
         rename = "statementTimeoutMilliseconds",
         deserialize_with = "members::statement_timeout"
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU64<1, { MAX_STATEMENT_TIMEOUT_MS }>")
+    )]
     pub statement_timeout_ms: u64,
     #[serde(deserialize_with = "members::unique_ids")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::UniqueIdList<ReviewedMigrationStepDescriptor>")
+    )]
     pub steps: Vec<ReviewedMigrationStepDescriptor>,
     #[serde(deserialize_with = "members::unique_ids")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<ReviewedMigrationAssertionDescriptor>"
+        )
+    )]
     pub pre_assertions: Vec<ReviewedMigrationAssertionDescriptor>,
     #[serde(deserialize_with = "members::unique_ids")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<ReviewedMigrationAssertionDescriptor>"
+        )
+    )]
     pub post_assertions: Vec<ReviewedMigrationAssertionDescriptor>,
     pub rehearsal_receipt_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -437,12 +464,20 @@ enveloped_document!(
     MIGRATION_DESCRIPTOR_KIND
 );
 
+/// The JSON Schema of the descriptor members the reader decodes. The header
+/// is checked and removed before decoding, so the publisher adds it.
+#[cfg(feature = "schema")]
+pub fn migration_descriptor_schema() -> schemars::Schema {
+    schemars::schema_for!(ReviewedMigrationDescriptor)
+}
+
 /// What the reviewed plan does with the plaintext history that exists before
 /// a field-encryption flip activates. `EraseAndRebaseline` destroys the full
 /// per-record history after activation through the operator lifecycle;
 /// `RetainPlaintextHistory` keeps serving pre-flip revisions as they were
 /// written, scoped by the flip boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewedFieldEncryptionHistory {
     EraseAndRebaseline,
@@ -450,6 +485,7 @@ pub enum ReviewedFieldEncryptionHistory {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ReviewedChangeCover {
     pub code: CompiledRegistryChangeCode,
@@ -465,11 +501,11 @@ impl From<&CompiledRegistryChange> for ReviewedChangeCover {
     }
 }
 
-/// Spelled in snake case because `bregctl plan --format json`, a promised
-/// output, prints the same value; it moves to kebab case with that output's
-/// other respellings.
+/// How an interrupted activation of the reviewed plan is recovered.
+/// `bregctl plan --format json` prints the same word.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewedMigrationRecovery {
     ExactTargetResume,
 }
@@ -477,15 +513,18 @@ pub enum ReviewedMigrationRecovery {
 /// One reviewed step, tagged by `type` (CFG-ID-7). Rust field names keep
 /// their engine spelling; each serde rename names the document member.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     remote = "Self",
     deny_unknown_fields,
     rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum ReviewedMigrationStepDescriptor {
     TransactionalSql {
         #[serde(deserialize_with = "members::local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: String,
         sql_path: String,
         objects: Vec<ReviewedMigrationObject>,
@@ -494,6 +533,7 @@ pub enum ReviewedMigrationStepDescriptor {
     },
     ChunkedBackfill {
         #[serde(deserialize_with = "members::local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: String,
         /// The document member `entity`.
         #[serde(rename = "entity")]
@@ -502,20 +542,36 @@ pub enum ReviewedMigrationStepDescriptor {
         objects: Vec<ReviewedMigrationObject>,
         cursor: ChunkCursorProtocol,
         #[serde(deserialize_with = "members::chunk_size")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU32<1, { MAX_CHUNK_SIZE }>")
+        )]
         chunk_size: u32,
         /// The document member `maximumTotalRows`.
         #[serde(rename = "maximumTotalRows", deserialize_with = "members::total_rows")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU64<1, { MAX_TOTAL_ROWS }>")
+        )]
         max_total_rows: u64,
         /// The document member `lockTimeoutMilliseconds`.
         #[serde(
             rename = "lockTimeoutMilliseconds",
             deserialize_with = "members::lock_timeout"
         )]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU64<1, { MAX_LOCK_TIMEOUT_MS }>")
+        )]
         lock_timeout_ms: u64,
         /// The document member `statementTimeoutMilliseconds`.
         #[serde(
             rename = "statementTimeoutMilliseconds",
             deserialize_with = "members::statement_timeout"
+        )]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU64<1, { MAX_STATEMENT_TIMEOUT_MS }>")
         )]
         statement_timeout_ms: u64,
         exact_affected_rows: bool,
@@ -528,6 +584,7 @@ pub enum ReviewedMigrationStepDescriptor {
     /// SQL artifact.
     FieldEncryptionBackfill {
         #[serde(deserialize_with = "members::local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
         id: String,
         /// The document member `entity`.
         #[serde(rename = "entity")]
@@ -535,20 +592,36 @@ pub enum ReviewedMigrationStepDescriptor {
         objects: Vec<ReviewedMigrationObject>,
         cursor: ChunkCursorProtocol,
         #[serde(deserialize_with = "members::chunk_size")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU32<1, { MAX_CHUNK_SIZE }>")
+        )]
         chunk_size: u32,
         /// The document member `maximumTotalRows`.
         #[serde(rename = "maximumTotalRows", deserialize_with = "members::total_rows")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU64<1, { MAX_TOTAL_ROWS }>")
+        )]
         max_total_rows: u64,
         /// The document member `lockTimeoutMilliseconds`.
         #[serde(
             rename = "lockTimeoutMilliseconds",
             deserialize_with = "members::lock_timeout"
         )]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU64<1, { MAX_LOCK_TIMEOUT_MS }>")
+        )]
         lock_timeout_ms: u64,
         /// The document member `statementTimeoutMilliseconds`.
         #[serde(
             rename = "statementTimeoutMilliseconds",
             deserialize_with = "members::statement_timeout"
+        )]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU64<1, { MAX_STATEMENT_TIMEOUT_MS }>")
         )]
         statement_timeout_ms: u64,
     },
@@ -613,6 +686,7 @@ impl ReviewedMigrationStepDescriptor {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ReviewedMigrationObject {
     pub schema: String,
@@ -628,6 +702,7 @@ pub struct ReviewedMigrationObject {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewedMigrationObjectKind {
     Entity,
@@ -637,26 +712,38 @@ pub enum ReviewedMigrationObjectKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ChunkCursorProtocol {
     RecordIdUuidArray,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AffectedRowBounds {
     /// The document member `minimum`.
     #[serde(rename = "minimum", deserialize_with = "members::row_count")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU64<0, { MAX_TOTAL_ROWS }>")
+    )]
     pub min: u64,
     /// The document member `maximum`.
     #[serde(rename = "maximum", deserialize_with = "members::row_count")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU64<0, { MAX_TOTAL_ROWS }>")
+    )]
     pub max: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ReviewedMigrationAssertionDescriptor {
     #[serde(deserialize_with = "members::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub sql_path: String,
 }
@@ -1407,8 +1494,8 @@ fn descriptor_problems(
         refuse(
             "breg.migration.change-class",
             "/changeClass".to_owned(),
-            "a reviewed migration covers data_backfill_required, access_or_disclosure_change, or \
-             destructive_or_irreversible changes only"
+            "a reviewed migration covers data-backfill-required, access-or-disclosure-change, or \
+             destructive-or-irreversible changes only"
                 .to_owned(),
             "Name the change class `bregctl migration plan` reports for the covered changes.",
         );
@@ -1486,8 +1573,8 @@ fn descriptor_problems(
         refuse(
             "breg.migration.recovery",
             "/recovery".to_owned(),
-            "the only recovery a reviewed migration has is exact_target_resume".to_owned(),
-            "Set `recovery` to exact_target_resume.",
+            "the only recovery a reviewed migration has is exact-target-resume".to_owned(),
+            "Set `recovery` to exact-target-resume.",
         );
     }
     if let Some(base) = base {

@@ -579,7 +579,7 @@ async fn submit_request(
         .as_array()
         .expect("request read exposes action links")
         .iter()
-        .find(|action| action["operation"] == "submit_request")
+        .find(|action| action["operation"] == "submit-request")
         .expect("submit action exists")
         .clone();
     let href = action["href"].as_str().expect("submit action has href");
@@ -705,32 +705,32 @@ impl ReadinessProbe for AlwaysReady {
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
-          "apiVersion":"registry.registrystack.org/v1alpha1",
-          "kind":"RegistryProject",
-          "registry":{"id":"request-query-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"request-query-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
           "entities":[
             {
-              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
+              "id":"asset-site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create-only","classification":"internal",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
-                {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
+                {"id":"name","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"}
               ]
             },
             {
               "id":"asset-placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
               "changeControl":{"requiredFor":["patch"]},
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"site","type":"reference","target":"asset-site","required":true,"classification":"internal"}
               ]
             },
             {
               "id":"correction-request","primaryDataset":"test-dataset","route":"correction-requests","mutationMode":"mutable","classification":"internal",
               "fields":[
-                {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+                {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
                 {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
-                {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"},
+                {"id":"reason","type":"text","maximumLength":1000,"required":true,"classification":"internal"},
                 {"id":"requested-on","type":"date","required":true,"classification":"internal"},
                 {"id":"included","type":"boolean","required":true,"classification":"internal"}
               ],
@@ -740,7 +740,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                   "operation":"patch",
                   "set":{"site":{"fromField":"proposed-site"}}
                 }],
-                "review":{"authority":"casework-main","policyId":"correction-review"},
+                "review":{"type":"required","authority":"casework-main","policyId":"correction-review"},
                 "onApproved":{"mode":"manual"}
               }
             }
@@ -748,7 +748,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[
             {
               "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
                 "readableFields":["tenant","name"],
@@ -762,46 +762,46 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "allowCount":true,
                 "requestPresence":[{"requestType":"correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
-              }]
+              }]}
             },
             {
               "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
-                "operations":["create","get","list","patch","submit_request","revise_request","cancel_request"],
+                "operations":["create","get","list","patch","submit-request","revise-request","cancel-request"],
                 "readableFields":["tenant","placement","proposed-site","reason","requested-on","included"],
                 "writableFields":["tenant","placement","proposed-site","reason","requested-on","included"],
                 "filterableFields":["requested-on","included"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "requestVisibility":"owner",
                 "allowCount":true
-              },{
+              }],"datasets":[{
                 "dataset":"monthly-owned-correction-requests",
                 "operations":["read-live"]
-              }]
+              }]}
             },
             {
               "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "allowCount":true
-              }]
+              }]}
             },
             {
               "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
-              "permissions":[{
+              "permissions":{"entities":[{
                 "entity":"correction-request",
-                "operations":["get","apply_request"],
+                "operations":["get","apply-request"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "applyTargets":[{
                   "entity":"asset-placement",
                   "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
                 }]
-              }]
+              }]}
             }
           ],
           "statisticalDatasets":[{

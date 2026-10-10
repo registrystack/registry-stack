@@ -23,8 +23,8 @@ use registry_platform_yaml::{
 use serde::Serialize;
 
 use crate::{
-    data_lifecycle, dev, init_from_model, test_lifecycle, OutputFormat, DOMAIN_REFUSAL_EXIT,
-    OPERATIONAL_FAILURE_EXIT,
+    data_lifecycle, dev, init_from_model, test_lifecycle, write_ctl_report, OutputFormat,
+    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
 };
 
 /// What `bregctl check --file` was asked to check.
@@ -212,7 +212,7 @@ pub(crate) fn run(
         }
     };
     let written = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(
+        write_ctl_report(
             &mut *stdout,
             &FileCheckReport {
                 ok: exit == 0,

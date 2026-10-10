@@ -68,7 +68,7 @@ GeoJSON branch remains the named BReg shape in the media map.
 # Breaking authoring change: plural catalogue resources
 
 `manifestProjection.dataset` and `manifestProjection.dataService` were removed.
-Projects now declare `registry.canonicalBaseIri`, publisher `id`, one
+Projects now declare `project.canonicalBaseIri`, publisher `id`, one
 `publicService`, plural `datasets`, plural `dataServices` with nonempty
 `servesDatasets`, optional `distributions`, and one `primaryDataset` on every
 entity. Declare `datasets[]` and `dataServices[]` by hand, each with an `id`,

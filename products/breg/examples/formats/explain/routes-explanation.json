@@ -1,6 +1,6 @@
 {
-  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha4",
-  "kind": "RoutesExplanation",
+  "apiVersion": "id.registrystack.org/formats/breg/routes-explanation/v1alpha4",
+  "kind": "BRegRoutesExplanation",
   "routes": [
     {
       "accessProfiles": [
@@ -9,11 +9,11 @@
       "defaultAccessProfile": "district-reader",
       "entityId": "record",
       "id": "records.record.list",
-      "kind": "entity",
       "method": "GET",
       "operation": "list",
       "path": "/v1/records/records",
-      "queryKind": "list"
+      "queryKind": "list",
+      "type": "entity"
     },
     {
       "accessProfiles": [
@@ -22,10 +22,10 @@
       "defaultAccessProfile": "district-reader",
       "entityId": "record",
       "id": "records.record.get",
-      "kind": "entity",
       "method": "GET",
       "operation": "get",
-      "path": "/v1/records/records/{record_id}"
+      "path": "/v1/records/records/{record_id}",
+      "type": "entity"
     }
   ]
 }

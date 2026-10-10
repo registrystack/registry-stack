@@ -38,13 +38,13 @@ fn kind(error: &DiscoveryClientError) -> &'static str {
     match error {
         DiscoveryClientError::Configuration => "configuration",
         DiscoveryClientError::Query => "query",
-        DiscoveryClientError::NoMatchingService => "no_matching_service",
-        DiscoveryClientError::AmbiguousSelection => "ambiguous_selection",
-        DiscoveryClientError::NoMatchingAlternative => "no_matching_alternative",
-        DiscoveryClientError::AmbiguousAlternative => "ambiguous_alternative",
-        DiscoveryClientError::CapabilityMismatch => "capability_mismatch",
-        DiscoveryClientError::LocalAcceptanceRefused => "local_acceptance_refused",
-        DiscoveryClientError::SelectionChanged => "selection_changed",
+        DiscoveryClientError::NoMatchingService => "no-matching-service",
+        DiscoveryClientError::AmbiguousSelection => "ambiguous-selection",
+        DiscoveryClientError::NoMatchingAlternative => "no-matching-alternative",
+        DiscoveryClientError::AmbiguousAlternative => "ambiguous-alternative",
+        DiscoveryClientError::CapabilityMismatch => "capability-mismatch",
+        DiscoveryClientError::LocalAcceptanceRefused => "local-acceptance-refused",
+        DiscoveryClientError::SelectionChanged => "selection-changed",
         DiscoveryClientError::Transport { .. } => "transport",
         DiscoveryClientError::Problem { .. } => "problem",
         DiscoveryClientError::Protocol => "protocol",
@@ -54,9 +54,9 @@ fn kind(error: &DiscoveryClientError) -> &'static str {
 
 fn problem_name(problem: DiscoveryProblem) -> &'static str {
     match problem {
-        DiscoveryProblem::InvalidRequest => "invalid_request",
-        DiscoveryProblem::NotFound => "not_found",
-        DiscoveryProblem::ResultBoundExceeded => "result_bound_exceeded",
+        DiscoveryProblem::InvalidRequest => "invalid-request",
+        DiscoveryProblem::NotFound => "not-found",
+        DiscoveryProblem::ResultBoundExceeded => "result-bound-exceeded",
         DiscoveryProblem::Unavailable => "unavailable",
         _ => "unknown",
     }

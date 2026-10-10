@@ -2,9 +2,9 @@
 # Consent enforcement test fixture: a person gated on its own identity, an
 # enrolment gated through its person reference, a recipient feed over the
 # consent rows, and a steward action that records decisions.
-apiVersion: registry.registrystack.org/v1alpha1
-kind: RegistryProject
-registry:
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
   id: consent-access
   version: '1'
   defaultLanguage: en
@@ -40,8 +40,8 @@ entities:
   mutationMode: mutable
   classification: restricted
   fields:
-  - {id: given-name, type: string, maxLength: 80, required: true, classification: restricted}
-  - {id: district, type: string, maxLength: 80, required: true, classification: internal}
+  - {id: given-name, type: string, maximumLength: 80, required: true, classification: restricted}
+  - {id: district, type: string, maximumLength: 80, required: true, classification: internal}
   selectorProfiles:
   - id: given-name
     fields: [given-name]
@@ -53,7 +53,7 @@ entities:
   mutationMode: mutable
   classification: internal
   fields:
-  - {id: label, type: string, maxLength: 80, required: true, classification: internal}
+  - {id: label, type: string, maximumLength: 80, required: true, classification: internal}
 - id: household-member
   primaryDataset: consent-dataset
   route: household-members
@@ -69,7 +69,7 @@ entities:
   classification: restricted
   fields:
   - {id: person, type: reference, target: person, required: true, classification: restricted}
-  - {id: programme, type: string, maxLength: 80, required: true, classification: internal}
+  - {id: programme, type: string, maximumLength: 80, required: true, classification: internal}
   selectorProfiles:
   - id: programme
     fields: [programme]
@@ -78,7 +78,7 @@ entities:
 - id: consent-decision
   primaryDataset: consent-dataset
   route: consent-decisions
-  mutationMode: create_only
+  mutationMode: create-only
   classification: restricted
   fields:
   - {id: subject, type: reference, target: person, required: true, classification: restricted}
@@ -101,7 +101,7 @@ entities:
     validity:
       from: effective-at
       until: expires-at
-      maxDuration: P365D
+      maximumDurationDays: 365
 - id: enrolment-household
   primaryDataset: consent-dataset
   route: enrolment-households
@@ -142,89 +142,93 @@ accessProfiles:
   requiredScopes: [records:read]
   requiredPurposes: [food-assistance]
   permissions:
-  - entity: person
-    rowBoundaries: unrestricted
-    operations: [get, list, lookup, snapshot, revisions]
-    readableFields: [given-name, district]
-    filterableFields: [district]
-    sortableFields: [given-name]
-    allowCount: true
-    revisionAccess: true
-    lookups:
-    - selector: given-name
-      valueOrigin: request
-    readPaths:
-    - path: households
+    entities:
+    - entity: person
+      rowBoundaries: unrestricted
+      operations: [get, list, lookup, snapshot, revisions]
+      readableFields: [given-name, district]
+      filterableFields: [district]
+      sortableFields: [given-name]
+      allowCount: true
+      revisionAccess: true
+      lookups:
+      - selector: given-name
+        valueOrigin: request
+      readPaths:
+      - path: households
+        readableFields: [label]
+      requireConsent:
+      - {record: consent-decision, on: id}
+    - entity: enrolment
+      rowBoundaries: unrestricted
+      operations: [get, list, lookup, snapshot, revisions]
+      readableFields: [person, programme]
+      allowCount: true
+      revisionAccess: true
+      lookups:
+      - selector: programme
+        valueOrigin: request
+      readPaths:
+      - path: households
+        readableFields: [label]
+      requireConsent:
+      - {record: consent-decision, on: person}
+    # The read path's target needs its own permission in the profile; without
+    # one the runtime answers the path with 503.
+    - entity: household
+      rowBoundaries: unrestricted
+      operations: [get]
       readableFields: [label]
-    requireConsent:
-    - {record: consent-decision, on: id}
-  - entity: enrolment
-    rowBoundaries: unrestricted
-    operations: [get, list, lookup, snapshot, revisions]
-    readableFields: [person, programme]
-    allowCount: true
-    revisionAccess: true
-    lookups:
-    - selector: programme
-      valueOrigin: request
-    readPaths:
-    - path: households
-      readableFields: [label]
-    requireConsent:
-    - {record: consent-decision, on: person}
-  # The read path's target needs its own permission in the profile; without
-  # one the runtime answers the path with 503.
-  - entity: household
-    rowBoundaries: unrestricted
-    operations: [get]
-    readableFields: [label]
 - id: recipient-feed
   principalClaim: principal
   actorKind: service
   requesterClients: [wfp-scope, ngo-alpha-portal]
   requiredScopes: [consent:read]
   permissions:
-  - entity: consent-decision
-    operations: [get, list]
-    readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
-    rowBoundaries:
-    - {field: recipient, claim: 'registry:recipients', operator: in}
+    entities:
+    - entity: consent-decision
+      operations: [get, list]
+      readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
+      rowBoundaries:
+      - {field: recipient, claim: 'registry:recipients', operator: in}
 - id: steward
   principalClaim: principal
   requiredScopes: [records:manage]
   permissions:
-  - entity: person
-    rowBoundaries: unrestricted
-    operations: [create, get, patch]
-    readableFields: [given-name, district]
-    writableFields: [given-name, district]
-  - entity: household
-    rowBoundaries: unrestricted
-    operations: [create, get]
-    readableFields: [label]
-    writableFields: [label]
-  - entity: household-member
-    rowBoundaries: unrestricted
-    operations: [create, get]
-    readableFields: [person, household]
-    writableFields: [person, household]
-  - entity: enrolment
-    rowBoundaries: unrestricted
-    operations: [create, get]
-    readableFields: [person, programme]
-    writableFields: [person, programme]
-  - entity: consent-decision
-    rowBoundaries: unrestricted
-    operations: [get, list]
-    readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
-  - action: record-consent
-    operations: [invoke]
-    targets:
-    - {entity: person, rowBoundaries: unrestricted}
-    - {entity: consent-decision, rowBoundaries: unrestricted}
-    results: [decision]
-  - entity: enrolment-household
-    rowBoundaries: unrestricted
-    operations: [create, get]
-    readableFields: [enrolment, household]
-    writableFields: [enrolment, household]
+    entities:
+    - entity: person
+      rowBoundaries: unrestricted
+      operations: [create, get, patch]
+      readableFields: [given-name, district]
+      writableFields: [given-name, district]
+    - entity: household
+      rowBoundaries: unrestricted
+      operations: [create, get]
+      readableFields: [label]
+      writableFields: [label]
+    - entity: household-member
+      rowBoundaries: unrestricted
+      operations: [create, get]
+      readableFields: [person, household]
+      writableFields: [person, household]
+    - entity: enrolment
+      rowBoundaries: unrestricted
+      operations: [create, get]
+      readableFields: [person, programme]
+      writableFields: [person, programme]
+    - entity: consent-decision
+      rowBoundaries: unrestricted
+      operations: [get, list]
+      readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]
+    - entity: enrolment-household
+      rowBoundaries: unrestricted
+      operations: [create, get]
+      readableFields: [enrolment, household]
+      writableFields: [enrolment, household]
+    actions:
+    - action: record-consent
+      operations: [invoke]
+      targets:
+      - {entity: person, rowBoundaries: unrestricted}
+      - {entity: consent-decision, rowBoundaries: unrestricted}
+      results: [decision]

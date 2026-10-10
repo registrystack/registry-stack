@@ -136,7 +136,7 @@ test('submit refuses a key outside the header grammar before any request', async
   for (const key of ['', 'two words', 'café', 'k'.repeat(129)]) {
     await assert.rejects(client.submit('one-call-secret', key, SUBMISSION), (error) => {
       assert.ok(error instanceof MessagingClientError);
-      assert.equal(error.kind, 'invalid_request');
+      assert.equal(error.kind, 'invalid-request');
       return true;
     });
   }
@@ -150,18 +150,18 @@ test('submit refuses an unknown submission member before any request', async (co
 
   await assert.rejects(
     client.submit('one-call-secret', 'key-1', { ...SUBMISSION, priority: 'high' }),
-    (error) => error.kind === 'invalid_request',
+    (error) => error.kind === 'invalid-request',
   );
   // The facade refuses an unsafe integer synchronously, as Casework's does.
   assert.throws(
     () => client.submit('one-call-secret', 'key-1', { ...SUBMISSION, data: { count: Number.MAX_SAFE_INTEGER + 1 } }),
-    (error) => error instanceof MessagingClientError && error.kind === 'invalid_request',
+    (error) => error instanceof MessagingClientError && error.kind === 'invalid-request',
   );
   const { MessagingClient: NativeMessagingClient } = require('../index');
   const native = new NativeMessagingClient({ baseUrl });
   await assert.rejects(
     native.submit('one-call-secret', 'key-1', { ...SUBMISSION, data: { count: Number.MAX_SAFE_INTEGER + 1 } }),
-    (error) => JSON.parse(error.message).kind === 'invalid_request',
+    (error) => JSON.parse(error.message).kind === 'invalid-request',
   );
   assert.equal(requests.length, 0);
 });
@@ -214,7 +214,7 @@ test('message refuses an identifier outside the lowercase UUID form before any r
 
   await assert.rejects(
     client.message('one-call-secret', MESSAGE_ID.toUpperCase()),
-    (error) => error.kind === 'invalid_request',
+    (error) => error.kind === 'invalid-request',
   );
   assert.equal(requests.length, 0);
 });
@@ -245,7 +245,7 @@ test('cancel refuses an identifier outside the lowercase UUID form before any re
   const client = new MessagingClient({ baseUrl });
 
   for (const id of ['', '../ready', MESSAGE_ID.toUpperCase()]) {
-    await assert.rejects(client.cancel('one-call-secret', id), (error) => error.kind === 'invalid_request');
+    await assert.rejects(client.cancel('one-call-secret', id), (error) => error.kind === 'invalid-request');
   }
   assert.equal(requests.length, 0);
 });
@@ -297,16 +297,16 @@ test('preview refuses a template name outside the package grammar before any req
   for (const [templateId, version] of [['', '1'], ['../ready', '1'], ['Reminder', '1'], ['reminder', '1/preview']]) {
     await assert.rejects(
       client.preview('one-call-secret', templateId, version, PREVIEW_REQUEST),
-      (error) => error.kind === 'invalid_request',
+      (error) => error.kind === 'invalid-request',
     );
   }
   await assert.rejects(
     client.preview('one-call-secret', 'reminder', '1', { ...PREVIEW_REQUEST, channel: 'sms' }),
-    (error) => error.kind === 'invalid_request',
+    (error) => error.kind === 'invalid-request',
   );
   assert.throws(
     () => client.preview('one-call-secret', 'reminder', '1', { locale: 'en', data: { count: Number.MAX_SAFE_INTEGER + 1 } }),
-    (error) => error instanceof MessagingClientError && error.kind === 'invalid_request',
+    (error) => error instanceof MessagingClientError && error.kind === 'invalid-request',
   );
   assert.equal(requests.length, 0);
 });
@@ -550,7 +550,7 @@ test('bearer tokens never reach error text, fields, or inspection', async (conte
   await client.cancel(secret, MESSAGE_ID).catch((error) => failures.push(error));
 
   assert.equal(failures.length, 6);
-  assert.equal(failures[0].kind, 'invalid_request');
+  assert.equal(failures[0].kind, 'invalid-request');
   assert.equal(failures[1].kind, 'problem');
   assert.equal(failures[1].code, 'authentication.refused');
   for (const error of failures) {

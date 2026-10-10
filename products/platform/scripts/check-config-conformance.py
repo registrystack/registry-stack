@@ -157,7 +157,7 @@ ROWS: tuple[Row, ...] = (
         product="discovery",
         loader_sources=("crates/registry-discovery/src",),
         runtime_schema="products/discovery/schemas/runtime.schema.json",
-        shared_blocks=("Digest", "ListenerBind", "ListenerConfig", "PackageConfig"),
+        shared_blocks=("Digest", "ListenerBind", "PackageConfig"),
         reference_refusal=Exemption("the Discovery runtime has no *Ref field"),
         authored_refusal=TestRef(
             "crates/registry-discoveryctl/src/project.rs",
@@ -170,9 +170,9 @@ ROWS: tuple[Row, ...] = (
         rust_blocks=(
             RustBlock(
                 "crates/registry-discovery/src/runtime_config.rs",
-                "RuntimeConfig",
-                "listener",
-                "ListenerConfig",
+                "RuntimeListener",
+                "bind",
+                "ListenerBind",
             ),
             RustBlock(
                 "crates/registry-discovery/src/runtime_config.rs",

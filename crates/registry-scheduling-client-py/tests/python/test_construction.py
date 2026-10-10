@@ -83,7 +83,7 @@ class ConstructionTests(unittest.TestCase):
         ):
             with self.assertRaises(SchedulingClientError) as raised:
                 call()
-            self.assertEqual(raised.exception.kind, "invalid_request")
+            self.assertEqual(raised.exception.kind, "invalid-request")
             self.assertNotIn("canary", str(raised.exception))
             self.assertNotIn("canary", repr(raised.exception))
             self.assertNotIn("canary", repr(vars(raised.exception)))
@@ -94,13 +94,13 @@ class ConstructionTests(unittest.TestCase):
         client = SchedulingClient("https://scheduling.example.invalid/")
         with self.assertRaises(SchedulingClientError) as raised:
             client.create_hold("valid-token", "key-1", {**ADMISSION, "party": party})
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
     def test_unknown_admission_member_is_rejected_before_io(self) -> None:
         client = SchedulingClient("https://scheduling.example.invalid/")
         with self.assertRaises(SchedulingClientError) as raised:
             client.create_hold("valid-token", "key-1", {**ADMISSION, "priority": "high"})
-        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(raised.exception.kind, "invalid-request")
 
 
 if __name__ == "__main__":

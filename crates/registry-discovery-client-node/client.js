@@ -55,7 +55,7 @@ function inputError(kind) {
 
 function localAcceptanceError() {
   return new DiscoveryClientError({
-    kind: 'local_acceptance_refused',
+    kind: 'local-acceptance-refused',
     message: 'the relying application refused the advertised service',
   });
 }

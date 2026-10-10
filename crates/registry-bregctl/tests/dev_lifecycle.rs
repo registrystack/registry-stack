@@ -174,8 +174,8 @@ fn author_automatic_review_executor(project: &Path, authority_port: u16) {
         "classification": "internal",
         "changeControl": {"requiredFor":["create"]},
         "fields": [
-            {"id":"code", "type":"string", "required":true, "minLength":1, "maxLength":64, "classification":"internal"},
-            {"id":"label", "type":"string", "required":true, "maxLength":200, "classification":"internal"}
+            {"id":"code", "type":"string", "required":true, "minimumLength":1, "maximumLength":64, "classification":"internal"},
+            {"id":"label", "type":"string", "required":true, "maximumLength":200, "classification":"internal"}
         ]
     }));
     definition["entities"].as_array_mut().unwrap().push(json!({
@@ -185,8 +185,8 @@ fn author_automatic_review_executor(project: &Path, authority_port: u16) {
         "mutationMode": "mutable",
         "classification": "internal",
         "fields": [
-            {"id":"code", "type":"string", "required":true, "minLength":1, "maxLength":64, "classification":"internal"},
-            {"id":"label", "type":"string", "required":true, "maxLength":200, "classification":"internal"}
+            {"id":"code", "type":"string", "required":true, "minimumLength":1, "maximumLength":64, "classification":"internal"},
+            {"id":"label", "type":"string", "required":true, "maximumLength":200, "classification":"internal"}
         ],
         "changeRequest": {
             "effects": [{
@@ -195,9 +195,9 @@ fn author_automatic_review_executor(project: &Path, authority_port: u16) {
                 "operation": "create",
                 "set": {"code":{"fromField":"code"}, "label":{"fromField":"label"}}
             }],
-            "review": {"authority":"casework", "policyId":"record-approval"},
+            "review": {"type": "required", "authority":"casework", "policyId":"record-approval"},
             "onApproved": {"mode":"automatic", "executor":"automatic-applier"},
-            "retention": {"mode":"operator_erase"}
+            "retention": {"mode":"operator-erase"}
         }
     }));
     let operator = definition["accessProfiles"]
@@ -206,14 +206,17 @@ fn author_automatic_review_executor(project: &Path, authority_port: u16) {
         .iter_mut()
         .find(|profile| profile["id"] == "operator")
         .unwrap();
-    operator["permissions"].as_array_mut().unwrap().push(json!({
-        "entity":"record-change",
-        "operations":["create", "get", "patch", "submit_request"],
-        "readableFields":["code", "label"],
-        "writableFields":["code", "label"],
-        "requestVisibility":"owner",
-        "rowBoundaries":"unrestricted"
-    }));
+    operator["permissions"]["entities"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "entity":"record-change",
+            "operations":["create", "get", "patch", "submit-request"],
+            "readableFields":["code", "label"],
+            "writableFields":["code", "label"],
+            "requestVisibility":"owner",
+            "rowBoundaries":"unrestricted"
+        }));
     definition["accessProfiles"]
         .as_array_mut()
         .unwrap()
@@ -224,14 +227,14 @@ fn author_automatic_review_executor(project: &Path, authority_port: u16) {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry:generic:apply"],
             "requiredPurposes":["registry-application"],
-            "permissions":[{
+            "permissions":{"entities":[{
                 "entity":"record-change",
-                "operations":["get", "apply_request"],
+                "operations":["get", "apply-request"],
                 "readableFields":["code", "label"],
                 "rowBoundaries":"unrestricted",
                 "applyTargets":[{"entity":"automatic-record", "rowBoundaries":"unrestricted"}],
-                "readableRequestFields":["review_state"]
-            }]
+                "readableRequestFields":["review-state"]
+            }]}
         }));
     write(
         &project_file,
@@ -418,17 +421,17 @@ fn installed_dev_accepts_request_lifecycle_delivery_ceiling_floors() {
             "mutationMode": "mutable",
             "classification": "restricted",
             "fields": [
-                {"id":"code", "type":"string", "required":true, "minLength":1, "maxLength":64, "classification":"internal"},
-                {"id":"label", "type":"string", "required":true, "maxLength":200, "classification":"internal"},
-                {"id":"note", "type":"string", "required":true, "maxLength":200, "classification":"internal"}
+                {"id":"code", "type":"string", "required":true, "minimumLength":1, "maximumLength":64, "classification":"internal"},
+                {"id":"label", "type":"string", "required":true, "maximumLength":200, "classification":"internal"},
+                {"id":"note", "type":"string", "required":true, "maximumLength":200, "classification":"internal"}
             ],
             "hooks": [{
                 "phase": "after",
                 "id": "restricted-change-submitted",
-                "trigger": "request_lifecycle",
+                "trigger": "request-lifecycle",
                 "projection": ["note"],
-                "when": {"kind":"request_lifecycle", "transitions":["submit"], "toStates":["submitted"]},
-                "handler": {"kind":"url", "destinationId":"lifecycle-events"}
+                "when": {"type":"request-lifecycle", "transitions":["submit"], "toStates":["submitted"]},
+                "handler": {"type":"url", "destinationId":"lifecycle-events"}
             }],
             "changeRequest": {
                 "effects": [{
@@ -437,9 +440,9 @@ fn installed_dev_accepts_request_lifecycle_delivery_ceiling_floors() {
                     "operation": "create",
                     "set": {"code":{"fromField":"code"}, "label":{"fromField":"label"}}
                 }],
-                "review": {"mode":"none"},
+                "review": {"type":"none"},
                 "onApproved": {"mode":"manual"},
-                "retention": {"mode":"operator_erase"}
+                "retention": {"mode":"operator-erase"}
             }
         }),
         json!({
@@ -449,15 +452,15 @@ fn installed_dev_accepts_request_lifecycle_delivery_ceiling_floors() {
             "mutationMode": "mutable",
             "classification": "public",
             "fields": [
-                {"id":"code", "type":"string", "required":true, "minLength":1, "maxLength":64, "classification":"public"},
-                {"id":"label", "type":"string", "required":true, "maxLength":200, "classification":"public"}
+                {"id":"code", "type":"string", "required":true, "minimumLength":1, "maximumLength":64, "classification":"public"},
+                {"id":"label", "type":"string", "required":true, "maximumLength":200, "classification":"public"}
             ],
             "hooks": [{
                 "phase": "after",
                 "id": "public-change-lifecycle",
-                "trigger": "request_lifecycle",
+                "trigger": "request-lifecycle",
                 "projection": ["label"],
-                "handler": {"kind":"url", "destinationId":"lifecycle-events"}
+                "handler": {"type":"url", "destinationId":"lifecycle-events"}
             }],
             "changeRequest": {
                 "effects": [{
@@ -466,9 +469,9 @@ fn installed_dev_accepts_request_lifecycle_delivery_ceiling_floors() {
                     "operation": "create",
                     "set": {"code":{"fromField":"code"}, "label":{"fromField":"label"}}
                 }],
-                "review": {"mode":"none"},
+                "review": {"type":"none"},
                 "onApproved": {"mode":"manual"},
-                "retention": {"mode":"operator_erase"}
+                "retention": {"mode":"operator-erase"}
             }
         }),
     ]);
@@ -478,7 +481,7 @@ fn installed_dev_accepts_request_lifecycle_delivery_ceiling_floors() {
         .iter_mut()
         .find(|profile| profile["id"] == "operator")
         .unwrap();
-    for permission in operator["permissions"].as_array_mut().unwrap() {
+    for permission in operator["permissions"]["entities"].as_array_mut().unwrap() {
         if matches!(
             permission["entity"].as_str(),
             Some("record" | "record-group")
@@ -489,24 +492,27 @@ fn installed_dev_accepts_request_lifecycle_delivery_ceiling_floors() {
                 .retain(|operation| operation.as_str() != Some("create"));
         }
     }
-    operator["permissions"].as_array_mut().unwrap().extend([
-        json!({
-            "entity": "restricted-change",
-            "rowBoundaries": "unrestricted",
-            "operations": ["create", "get", "patch", "submit_request", "apply_request"],
-            "readableFields": ["code", "label", "note"],
-            "writableFields": ["code", "label", "note"],
-            "applyTargets": [{"entity":"record", "rowBoundaries":"unrestricted"}]
-        }),
-        json!({
-            "entity": "public-change",
-            "rowBoundaries": "unrestricted",
-            "operations": ["create", "get", "patch", "submit_request", "apply_request"],
-            "readableFields": ["code", "label"],
-            "writableFields": ["code", "label"],
-            "applyTargets": [{"entity":"record-group", "rowBoundaries":"unrestricted"}]
-        }),
-    ]);
+    operator["permissions"]["entities"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({
+                "entity": "restricted-change",
+                "rowBoundaries": "unrestricted",
+                "operations": ["create", "get", "patch", "submit-request", "apply-request"],
+                "readableFields": ["code", "label", "note"],
+                "writableFields": ["code", "label", "note"],
+                "applyTargets": [{"entity":"record", "rowBoundaries":"unrestricted"}]
+            }),
+            json!({
+                "entity": "public-change",
+                "rowBoundaries": "unrestricted",
+                "operations": ["create", "get", "patch", "submit-request", "apply-request"],
+                "readableFields": ["code", "label"],
+                "writableFields": ["code", "label"],
+                "applyTargets": [{"entity":"record-group", "rowBoundaries":"unrestricted"}]
+            }),
+        ]);
     write(
         &project_file,
         serde_norway::to_string(&definition).unwrap().as_bytes(),
@@ -725,7 +731,7 @@ journeys:
             .as_array()
             .unwrap()
             .iter()
-            .find(|action| action["operation"] == "submit_request")
+            .find(|action| action["operation"] == "submit-request")
             .expect("draft exposes its governed submit action");
         let submitted = client
             .post(format!("{origin}{}", submit["href"].as_str().unwrap()))
@@ -748,7 +754,7 @@ journeys:
         uuid::Uuid::parse_str(receipt["eventId"].as_str().unwrap()).unwrap();
         assert_eq!(receipt["eventType"], "public-change-lifecycle");
         assert_eq!(receipt["entity"], "public-change");
-        assert_eq!(receipt["trigger"], "request_lifecycle");
+        assert_eq!(receipt["trigger"], "request-lifecycle");
         assert_eq!(
             receipt["deliveryId"],
             "events.public-change.public-change-lifecycle.webhook"
@@ -797,9 +803,9 @@ fn installed_dev_receives_retries_replays_and_retains_authored_events() {
         .unwrap();
     record["hooks"] = json!([
         {"phase":"after","id":"record-created-a", "trigger":"created", "projection":["status"],
-         "handler":{"kind":"url","destinationId":"receiver-a"}},
+         "handler":{"type":"url","destinationId":"receiver-a"}},
         {"phase":"after","id":"record-created-b", "trigger":"created", "projection":["status"],
-         "handler":{"kind":"url","destinationId":"receiver-b"}}
+         "handler":{"type":"url","destinationId":"receiver-b"}}
     ]);
     write(
         &project.join("registry.yaml"),
@@ -995,7 +1001,7 @@ seed:
         deliveries.len() == 2
             && deliveries
                 .iter()
-                .all(|delivery| delivery["state"] == "dead_lettered")
+                .all(|delivery| delivery["state"] == "dead-lettered")
     });
     fs::set_permissions(&inbox, fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(
@@ -1163,7 +1169,7 @@ fn installed_dev_switches_one_clients_claims_and_recovers_import_seed() {
         if profile["id"] == "operator" {
             // No direct-create permission can satisfy either the journey's
             // reference setup or the served database's reference seed.
-            profile["permissions"][0]["operations"] = json!(["import", "get", "list"]);
+            profile["permissions"]["entities"][0]["operations"] = json!(["import", "get", "list"]);
         }
     }
     write(

@@ -30,7 +30,7 @@ catalog:
 datasets:
   - id: dataset
     title: Dataset
-    update_frequency: as_needed
+    update_frequency: as-needed
     entities: []
 codelists: []
 "#,
@@ -42,8 +42,62 @@ codelists: []
     assert_eq!(
         breg["dcat:dataset"][0]["dcterms:accrualPeriodicity"],
         json!("http://publications.europa.eu/resource/authority/frequency/AS_NEEDED"),
-        "as_needed update frequency must map to EU frequency/AS_NEEDED, not UNKNOWN"
+        "as-needed update frequency must map to EU frequency/AS_NEEDED, not UNKNOWN"
     );
+}
+
+fn dataset_manifest(dataset_members: &str) -> String {
+    format!(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: protocol-words
+  base_url: https://data.example.test
+  title: Protocol Words
+  publisher:
+    name: Publisher
+  application_profiles:
+    - id: bregdcat-ap
+      version: "3.0.0"
+datasets:
+  - id: dataset
+    title: Dataset
+{dataset_members}
+    entities: []
+codelists: []
+"#
+    )
+}
+
+#[test]
+fn multi_word_dataset_values_are_kebab_case() {
+    let manifest: MetadataManifest = support::from_yaml(&dataset_manifest(
+        "    access_rights: non-public\n    update_frequency: as-needed\n    status: under-development",
+    ))
+    .expect("kebab-case values parse");
+    let compiled = compile_manifest(&manifest).expect("compile");
+    let catalog = render_catalog(&compiled);
+    assert_eq!(catalog["datasets"][0]["access_rights"], json!("non-public"));
+    assert_eq!(
+        catalog["datasets"][0]["update_frequency"],
+        json!("as-needed")
+    );
+}
+
+#[test]
+fn snake_case_dataset_values_are_refused_naming_the_kebab_word() {
+    for (member, old, new) in [
+        ("access_rights", "non_public", "non-public"),
+        ("update_frequency", "as_needed", "as-needed"),
+        ("status", "under_development", "under-development"),
+    ] {
+        let error = support::from_yaml(&dataset_manifest(&format!("    {member}: {old}")))
+            .expect_err("the snake_case spelling is refused");
+        assert!(
+            error.to_string().contains(&format!("`{new}`")),
+            "{member}: the refusal must name {new}; got {error}"
+        );
+    }
 }
 
 fn fixture(path: &str) -> MetadataManifest {
@@ -2640,20 +2694,20 @@ ecosystem_bindings:
       required_gates:
         - purpose
         - jurisdiction
-        - legal_basis
+        - legal-basis
         - consent
-        - authority_basis
-        - requester_identity
-        - subject_identity
-        - subject_relationship
+        - authority-basis
+        - requester-identity
+        - subject-identity
+        - subject-relationship
         - assurance
-        - source_binding
-        - source_freshness
-        - requested_disclosure
-        - credential_format
-        - route_scope
+        - source-binding
+        - source-freshness
+        - requested-disclosure
+        - credential-format
+        - route-scope
       allowed_outputs:
-        - minimized_json
+        - minimized-json
       policy_id: baseline-policy
       policy_version: "2026.06"
       policy_hash: sha256:54fcbb33655ddd98d628a0342af2ecd891e89067a167092d86e8a38d94552a3f
@@ -2752,7 +2806,7 @@ codelists: []
     );
     assert_eq!(
         catalog["ecosystem_bindings"][0]["evidence_pack"]["allowed_outputs"],
-        json!(["minimized_json"])
+        json!(["minimized-json"])
     );
     assert_eq!(
         catalog["ecosystem_bindings"][0]["evidence_pack"]["policy_id"],
@@ -2827,20 +2881,20 @@ ecosystem_bindings:
       required_gates:
         - purpose
         - jurisdiction
-        - legal_basis
+        - legal-basis
         - consent
-        - authority_basis
-        - requester_identity
-        - subject_identity
-        - subject_relationship
+        - authority-basis
+        - requester-identity
+        - subject-identity
+        - subject-relationship
         - assurance
-        - source_binding
-        - source_freshness
-        - requested_disclosure
-        - credential_format
-        - route_scope
+        - source-binding
+        - source-freshness
+        - requested-disclosure
+        - credential-format
+        - route-scope
       allowed_outputs:
-        - minimized_json
+        - minimized-json
       policy_id: baseline-policy
       policy_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
       odrl_enforcement:
@@ -3144,7 +3198,7 @@ ecosystem_bindings:
       required_gates:
         - purpose
       allowed_outputs:
-        - minimized_json
+        - minimized-json
       policy_id: baseline-policy
       policy_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
       odrl_enforcement:
@@ -3167,6 +3221,70 @@ codelists: []
         }),
         "expected missing jurisdiction gate error; got {errors:?}"
     );
+}
+
+#[test]
+fn validation_refuses_snake_case_gate_and_output_words_naming_the_kebab_word() {
+    let raw = r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: governed-snake-case-words
+  base_url: https://registry.example.test
+  title: Governed Snake Case Words
+  publisher:
+    name: Example Registry
+ecosystem_bindings:
+  - id: baseline-dpi/v1
+    version: v1
+    profile: baseline-dpi
+    type: governed-evidence
+    evidence_pack:
+      pack_id: oots-birth-evidence/v1
+      pack_version: v1
+      source_basis: { family: oots-common-data-model, evidence_type: Birth Evidence }
+      semantic_profile: { vocabulary: publicschema, fit: strong }
+      evidence_envelope: { identifier: required, distribution: one_or_more }
+      required_gates:
+        - purpose
+        - jurisdiction
+        - legal_basis
+        - consent
+        - authority-basis
+        - requester-identity
+        - subject-identity
+        - subject-relationship
+        - assurance
+        - source-binding
+        - source-freshness
+        - requested-disclosure
+        - credential-format
+        - route-scope
+      allowed_outputs:
+        - minimized_json
+      policy_id: baseline-policy
+      policy_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222
+      odrl_enforcement:
+        profile: registry-evidence-gateway-pdp/v1
+        constraint_terms:
+          - odrl:purpose
+datasets: []
+codelists: []
+"#;
+    let manifest: MetadataManifest = support::from_yaml(raw).expect("governed manifest parses");
+
+    let error = validate_manifest(&manifest).expect_err("snake_case words rejected");
+    let MetadataError::Validation { errors } = error else {
+        panic!("unexpected error: {error:?}");
+    };
+    for expected in [
+        "required_gates must include legal-basis",
+        "allowed_outputs must include minimized-json",
+    ] {
+        assert!(
+            errors.iter().any(|error| error.message.contains(expected)),
+            "expected `{expected}`; got {errors:?}"
+        );
+    }
 }
 
 #[test]
@@ -3193,18 +3311,18 @@ ecosystem_bindings:
       required_gates:
         - purpose
         - jurisdiction
-        - legal_basis
+        - legal-basis
         - consent
-        - authority_basis
-        - requester_identity
-        - subject_identity
-        - subject_relationship
+        - authority-basis
+        - requester-identity
+        - subject-identity
+        - subject-relationship
         - assurance
-        - source_binding
-        - source_freshness
-        - requested_disclosure
-        - credential_format
-        - route_scope
+        - source-binding
+        - source-freshness
+        - requested-disclosure
+        - credential-format
+        - route-scope
       allowed_outputs:
         - sd_jwt_vc
       policy_id: baseline-policy

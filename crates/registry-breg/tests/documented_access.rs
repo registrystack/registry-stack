@@ -28,7 +28,7 @@ fn fragment(page: &str, marker: &str) -> Value {
 }
 
 fn field(id: &str) -> Value {
-    json!({"id":id,"type":"string","required":true,"maxLength":64,"classification":"internal"})
+    json!({"id":id,"type":"string","required":true,"maximumLength":64,"classification":"internal"})
 }
 
 fn entity(id: &str, fields: Vec<Value>) -> Value {
@@ -38,8 +38,8 @@ fn entity(id: &str, fields: Vec<Value>) -> Value {
 
 fn project(entities: Vec<Value>, profiles: Value) -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
-        "registry":{"id":"documented-access","version":"0.1.0","defaultLanguage":"en",
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+        "project":{"id":"documented-access","version":"0.1.0","defaultLanguage":"en",
             "canonicalBaseIri":"https://documented-access.example.test"},
         "entities":entities,"accessProfiles":profiles
     })
@@ -142,15 +142,15 @@ fn task_profile_scenarios_match_documented_admission_without_claiming_row_access
         (
             "clerk-cannot-select-supervisor.json",
             false,
-            "required_scope_missing",
+            "required-scope-missing",
         ),
-        ("auditor-cannot-edit.json", false, "operation_not_granted"),
+        ("auditor-cannot-edit.json", false, "operation-not-granted"),
     ] {
         let scenario = serde_json::from_slice(&std::fs::read(example.join(file)).unwrap()).unwrap();
         let preview = registry_breg::access_preview::preview_access(&compiled, scenario).unwrap();
         assert_eq!(preview.admitted, admitted, "{file}");
         assert_eq!(preview.reason, reason, "{file}");
-        assert_eq!(preview.record_access, "not_evaluated", "{file}");
+        assert_eq!(preview.record_access, "not-evaluated", "{file}");
         assert!(!preview.credentials_verified, "{file}");
     }
 }
@@ -161,7 +161,7 @@ fn documented_runtime_config_parses_after_filling_the_package_digest() {
     let page = include_str!("../../../docs/site/src/content/docs/operate/breg.mdx");
     let mut source = fragment(
         page,
-        "apiVersion: registry.registrystack.org/breg-runtime/v1alpha1",
+        "apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1",
     );
     // The operator substitutes the package digest; retain every authored key, kind,
     // token-verifier setting, and secret reference from the example.

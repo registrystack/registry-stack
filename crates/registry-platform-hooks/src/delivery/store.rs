@@ -522,7 +522,7 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
                 },
             )
             .await?;
-        let columns = proposal_columns("dead_lettered", proposal.as_ref())?;
+        let columns = proposal_columns("dead-lettered", proposal.as_ref())?;
         let mut retained = Columns::new();
         if self.dead_letter_reason_column.load(Ordering::Relaxed) == DEAD_LETTER_REASON_PRESENT {
             retained = retained.set(
@@ -550,7 +550,7 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
                     .as_ref()
                     .map(|answer| answer.digest.to_vec()),
             ),
-            Disposition::DeadLettered => ("dead_lettered", None),
+            Disposition::DeadLettered => ("dead-lettered", None),
             Disposition::RetryPending => return Ok(Columns::new()),
             _ => return Err(DispatchError::Unavailable),
         };
@@ -617,7 +617,7 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
                                AND sibling.compiled_delivery_id <> $2
                                AND (
                                    sibling.state IN ('pending', 'leased')
-                                   OR (sibling.state = 'dead_lettered'
+                                   OR (sibling.state = 'dead-lettered'
                                        AND sibling_delivery.operator_replay)
                                )
                         )",

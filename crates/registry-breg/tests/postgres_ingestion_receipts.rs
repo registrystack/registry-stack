@@ -804,16 +804,16 @@ async fn durable_widget_count(harness: &IngestionHarness) -> i64 {
 }
 
 const FIXTURE_HEAD: &str = r#"{
-  "apiVersion":"registry.registrystack.org/v1alpha1",
-  "kind":"RegistryProject",
-  "registry":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+  "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+  "kind":"BRegProject",
+  "project":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
   "entities":[{
     "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
     "batch":{"maximumItems":3,"maximumBytes":8192},
-    "constraints":[{"kind":"unique","fields":["label"]}],
+    "constraints":[{"type":"unique","fields":["label"]}],
     "fields":[
-      {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
-      {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},
+      {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"public"},
+      {"id":"label","type":"string","maximumLength":128,"required":true,"classification":"public"},
       {"id":"quantity","type":"int64","required":true,"classification":"public"}
     ]
   }],"#;
@@ -822,12 +822,12 @@ const FIXTURE_TAIL: &str = r#"
   "accessProfiles":[{
     "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management","case-review"],
-    "permissions":[{
+    "permissions":{"entities":[{
       "entity":"widget","operations":["create","get","patch","batch"],
       "readableFields":["jurisdiction","label","quantity"],
       "writableFields":["jurisdiction","label","quantity"],
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
-    }]
+    }]}
   }]
 }"#;
 
@@ -843,7 +843,7 @@ fn encrypted_widget_fixture() -> String {
             concat!(
                 r#"      {"id":"quantity","type":"int64","required":true,"classification":"public"},"#,
                 "\n",
-                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"restricted","encrypted":true}"#,
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maximumLength":64,"classification":"restricted","encrypted":true}"#,
                 "\n",
             ),
             1,
@@ -930,7 +930,7 @@ fn plain_serial_fixture() -> String {
             concat!(
                 r#"      {"id":"quantity","type":"int64","required":true,"classification":"public"},"#,
                 "\n",
-                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"public"}"#,
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maximumLength":64,"classification":"public"}"#,
                 "\n",
             ),
             1,
@@ -962,11 +962,11 @@ fn reused_api_name_registry() -> Arc<registry_breg::CompiledRegistry> {
     let fixture = plain_serial_fixture()
         .replacen(
             concat!(
-                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"public"}"#,
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maximumLength":64,"classification":"public"}"#,
                 "\n",
             ),
             concat!(
-                r#"      {"id":"batch-code","apiName":"serialNumber","type":"string","maxLength":64,"classification":"public"}"#,
+                r#"      {"id":"batch-code","apiName":"serialNumber","type":"string","maximumLength":64,"classification":"public"}"#,
                 "\n",
             ),
             1,
@@ -1034,13 +1034,13 @@ fn tag_shaped_member_registry() -> Arc<registry_breg::CompiledRegistry> {
     let fixture = encrypted_widget_fixture()
         .replacen(
             concat!(
-                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"restricted","encrypted":true}"#,
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maximumLength":64,"classification":"restricted","encrypted":true}"#,
                 "\n",
             ),
             concat!(
-                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maxLength":64,"classification":"restricted","encrypted":true},"#,
+                r#"      {"id":"serial-number","apiName":"serialNumber","type":"string","maximumLength":64,"classification":"restricted","encrypted":true},"#,
                 "\n",
-                r#"      {"id":"payload","type":"structured","maxBytes":1024,"schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]},"classification":"internal"}"#,
+                r#"      {"id":"payload","type":"structured","maximumBytes":1024,"schema":{"type":"object","additionalProperties":false,"properties":{"__bregEncryptedV1":{"type":"string"}},"required":["__bregEncryptedV1"]},"classification":"internal"}"#,
                 "\n",
             ),
             1,

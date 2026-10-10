@@ -160,7 +160,7 @@ ones. `execute_recovered_action` is the explicit send under the original key.
 The saved bytes contain input values and must be treated as private
 application state.
 
-Use `action.with_reason(text)` on a promoted `apply_request` action to add an
+Use `action.with_reason(text)` on a promoted `apply-request` action to add an
 optional application explanation. It returns a copy and
 validates before network effects. The original action omits the reason. Text
 is preserved exactly, allows an empty string, and is limited to 4096 Unicode
@@ -192,7 +192,7 @@ process. Uploads and removals need the record's current ETag and a caller-chosen
 idempotency key, exactly like `patch_record`.
 
 `slot.value_in(record)` reads the engine-owned projection of the slot out of one
-record mapping: a `kind` of `not_selected`, `empty`, or `filled`, with a `value`
+record mapping: a `kind` of `not-selected`, `empty`, or `filled`, with a `value`
 holding `proposal_version`, `byte_size`, `sha256`, `content_type`,
 `uploaded_at`, `uploaded_by`, `erased`, and `verification_status` when the slot
 is filled.

@@ -96,7 +96,7 @@ field equals the principal claim, with `requestVisibility: owner`. Its writable 
 target and owner fields, because the gateway writes both. A lookup that finds no record, or more
 than one, refuses the call and creates nothing.
 
-The review profile may `get`, `patch`, and `submit_request` the same change-request entity under the
+The review profile may `get`, `patch`, and `submit-request` the same change-request entity under the
 same row boundary, with the owner field not writable, and may `get` the target record through the
 same membership boundary.
 
@@ -213,7 +213,7 @@ resourceServer:
   resource: https://assistant.example.com/mcp
   issuer: https://login.example.com
   jwksSource:
-    kind: uri
+    type: uri
     uri: https://login.example.com/jwks.json
   algorithms:
     - ES256
@@ -278,7 +278,7 @@ addresses the listener may bind:
 |---|---|
 | `resource` | The gateway's resource identifier: the exact `https` URL of its `/mcp` endpoint |
 | `issuer` | The issuer every accepted token must name |
-| `jwksSource` | `kind: discovery` (default), `kind: uri` with `uri`, or `kind: static` with `documentRef`, a secret holding the key set |
+| `jwksSource` | `type: discovery` (default), `type: uri` with `uri`, or `type: static` with `documentRef`, a secret holding the key set |
 | `algorithms` | Accepted signature algorithms: `RS256`, `RS384`, `ES256`, `ES384`, or `EdDSA` |
 | `allowedClients` | The chat-host clients whose tokens are accepted |
 | `requiredScopes` | Scopes every accepted token must carry |

@@ -583,7 +583,7 @@ fn revision_sql(
                            AND l.record_revision = revision.record_revision
                            AND l.request_entity_id = revision.entity_id
                            AND l.request_id = revision.record_id
-                           AND l.link_kind = 'request_lifecycle'
+                           AND l.link_kind = 'request-lifecycle'
                     ) AS request_lifecycle_revision{context_select}
                FROM registry_internal.registry_revisions AS revision
                {context_join}

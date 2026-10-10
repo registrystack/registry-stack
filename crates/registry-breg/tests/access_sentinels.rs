@@ -17,15 +17,15 @@ fn boundary() -> Value {
 
 fn source() -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"access-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://access-example.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"access-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://access-example.example.test"},
         "entities":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
-          "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"},
-                    {"id":"district","type":"string","maxLength":32,"classification":"internal"}]}],
+          "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"},
+                    {"id":"district","type":"string","maximumLength":32,"classification":"internal"}]}],
         "accessProfiles":[{"id":"reader","principalClaim":"registry_principal","requiredScopes":["entry:read"],
-          "permissions":[{"entity":"entry","operations":["get","list"],
+          "permissions":{"entities":[{"entity":"entry","operations":["get","list"],
             "readableFields":["code","district"],"filterableFields":["district"],
-            "rowBoundaries":[boundary()]}]}]
+            "rowBoundaries":[boundary()]}]}}]
     })
 }
 
@@ -33,33 +33,33 @@ fn source() -> Value {
 /// read, never compiled.
 fn every_row_reach() -> Value {
     let mut value = source();
-    value["accessProfiles"][0]["permissions"] = json!([
-        {"entity":"entry","operations":["get"],"readableFields":["code"],
+    value["accessProfiles"][0]["permissions"] = json!({
+        "entities":[{"entity":"entry","operations":["get"],"readableFields":["code"],
          "rowBoundaries":[boundary()],
          "applyTargets":[{"entity":"entry","rowBoundaries":[boundary()]}],
-         "requestPresence":[{"requestType":"entry-change","rowBoundaries":[boundary()]}]},
-        {"action":"register","operations":["invoke"],
-         "targets":[{"entity":"entry","rowBoundaries":[boundary()]}]}
-    ]);
+         "requestPresence":[{"requestType":"entry-change","rowBoundaries":[boundary()]}]}],
+        "actions":[{"action":"register","operations":["invoke"],
+         "targets":[{"entity":"entry","rowBoundaries":[boundary()]}]}]
+    });
     value
 }
 
 const ROW_REACH_SITES: [(&str, &str); 4] = [
     (
-        "/accessProfiles/0/permissions/0/rowBoundaries",
-        "project.accessProfiles[0].permissions[0].rowBoundaries",
+        "/accessProfiles/0/permissions/entities/0/rowBoundaries",
+        "project.accessProfiles[0].permissions.entities[0].rowBoundaries",
     ),
     (
-        "/accessProfiles/0/permissions/0/applyTargets/0/rowBoundaries",
-        "project.accessProfiles[0].permissions[0].applyTargets[0].rowBoundaries",
+        "/accessProfiles/0/permissions/entities/0/applyTargets/0/rowBoundaries",
+        "project.accessProfiles[0].permissions.entities[0].applyTargets[0].rowBoundaries",
     ),
     (
-        "/accessProfiles/0/permissions/0/requestPresence/0/rowBoundaries",
-        "project.accessProfiles[0].permissions[0].requestPresence[0].rowBoundaries",
+        "/accessProfiles/0/permissions/entities/0/requestPresence/0/rowBoundaries",
+        "project.accessProfiles[0].permissions.entities[0].requestPresence[0].rowBoundaries",
     ),
     (
-        "/accessProfiles/0/permissions/1/targets/0/rowBoundaries",
-        "project.accessProfiles[0].permissions[1].targets[0].rowBoundaries",
+        "/accessProfiles/0/permissions/actions/0/targets/0/rowBoundaries",
+        "project.accessProfiles[0].permissions.actions[0].targets[0].rowBoundaries",
     ),
 ];
 
@@ -182,8 +182,12 @@ fn row_reach_is_written_as_unrestricted_or_as_a_list_of_at_least_one_boundary() 
         set(&mut open, pointer, json!("unrestricted"));
     }
     let project = read(&open).expect("unrestricted is accepted at every site");
-    let [entity, action] = project.access_profiles[0].permissions.as_slice() else {
-        panic!("the profile holds two permissions");
+    let permissions = &project.access_profiles[0].permissions;
+    let ([entity], [action]) = (
+        permissions.entities.as_slice(),
+        permissions.actions.as_slice(),
+    ) else {
+        panic!("the profile holds one entity permission and one action permission");
     };
     assert!(entity.row_boundaries.is_empty());
     assert!(entity.apply_targets[0].row_boundaries.is_empty());
@@ -196,12 +200,12 @@ fn an_entity_permission_that_omits_its_row_reach_is_refused_with_the_sentinel_na
     let mut value = source();
     remove(
         &mut value,
-        "/accessProfiles/0/permissions/0",
+        "/accessProfiles/0/permissions/entities/0",
         "rowBoundaries",
     );
     let (code, path, message) = refusal(&value);
     assert_eq!(code, "config.invalid-value", "{message}");
-    assert_eq!(path, "project.accessProfiles[0].permissions[0]");
+    assert_eq!(path, "project.accessProfiles[0].permissions.entities[0]");
     assert!(
         message.contains("write unrestricted to reach every row"),
         "the refusal names the sentinel: {message}"
@@ -211,22 +215,32 @@ fn an_entity_permission_that_omits_its_row_reach_is_refused_with_the_sentinel_na
 #[test]
 fn an_action_permission_has_no_row_reach_to_write_and_serializes_none() {
     let mut value = source();
-    value["accessProfiles"][0]["permissions"] = json!([
-        {"action":"register","operations":["invoke"],
-         "targets":[{"entity":"entry","rowBoundaries":[boundary()]}]}
-    ]);
+    value["accessProfiles"][0]["permissions"] = json!({
+        "actions":[{"action":"register","operations":["invoke"],
+         "targets":[{"entity":"entry","rowBoundaries":[boundary()]}]}]
+    });
     let project = read(&value).expect("an action permission needs no row reach");
     let written = serde_json::to_value(&project).expect("the project serializes");
+    assert!(
+        written
+            .pointer("/accessProfiles/0/permissions/actions/0")
+            .is_some_and(Value::is_object),
+        "the action permission serializes under actions"
+    );
     assert_eq!(
-        written.pointer("/accessProfiles/0/permissions/0/rowBoundaries"),
+        written.pointer("/accessProfiles/0/permissions/actions/0/rowBoundaries"),
         None,
         "an action permission serializes without rowBoundaries"
     );
 
-    value["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!("unrestricted");
+    value["accessProfiles"][0]["permissions"]["actions"][0]["rowBoundaries"] =
+        json!("unrestricted");
     let (code, path, message) = refusal(&value);
-    assert_eq!(code, "config.invalid-value", "{message}");
-    assert_eq!(path, "project.accessProfiles[0].permissions[0]");
+    assert_eq!(code, "config.unknown-key", "{message}");
+    assert_eq!(
+        path,
+        "project.accessProfiles[0].permissions.actions[0].rowBoundaries"
+    );
 }
 
 #[test]
@@ -253,7 +267,7 @@ fn an_access_requirement_only_narrows_so_it_takes_no_empty_list_and_no_unrestric
         }
     }
 
-    let module = json!({"id":"extra","version":"1","extendEntities":[{
+    let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule", "id":"extra","version":"1","extendEntities":[{
         "entity":"entry","accessRequirements":{"requiredScopes":[]}
     }]});
     let failure = parse_module_yaml(&serde_json::to_vec(&module).unwrap())
@@ -480,15 +494,17 @@ fn module_profile() -> Value {
 
 /// A module that contributes `profile` to `entry` by extension.
 fn extension_module(profile: Value) -> Value {
-    json!({"id":"extra","version":"1","extendEntities":[{"entity":"entry","accessProfiles":[profile]}]})
+    json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
+        "id":"extra","version":"1","extendEntities":[{"entity":"entry","accessProfiles":[profile]}]})
 }
 
 /// A module that introduces an entity carrying `profile`.
 fn entity_module(profile: Value) -> Value {
-    json!({"id":"extra","version":"1","entities":[{
+    json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
+        "id":"extra","version":"1","entities":[{
         "id":"other","primaryDataset":"test-dataset","route":"others","mutationMode":"mutable",
         "classification":"internal",
-        "fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}],
+        "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}],
         "accessProfiles":[profile]}]})
 }
 
@@ -619,8 +635,12 @@ fn a_module_profile_writes_row_reach_as_unrestricted_or_a_nonempty_list() {
             .unwrap_or_else(|| panic!("{written}"));
         assert_eq!(profile["rowBoundaries"], "unrestricted");
         assert_eq!(profile["requiredScopes"][0], "entry:read");
-        let read_back =
-            read_module(&without_nulls(written)).expect("the serialized module is read back");
+        // The header is what a module file opens with, not a member of the
+        // module that is read from it.
+        let mut headed = without_nulls(written);
+        headed["apiVersion"] = json!("id.registrystack.org/formats/breg/module/v1alpha1");
+        headed["kind"] = json!("BRegModule");
+        let read_back = read_module(&headed).expect("the serialized module is read back");
         assert_eq!(read_back, module);
     }
 }
@@ -645,7 +665,8 @@ fn a_module_profile_is_reported_by_the_project_profile_findings() {
     let mut open = module_profile();
     open["id"] = json!("open");
     open["requiredScopes"] = json!("unrestricted");
-    let module = json!({"id":"extra","version":"1","extendEntities":[{
+    let module = json!({"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
+        "id":"extra","version":"1","extendEntities":[{
         "entity":"entry","accessProfiles":[module_profile(), open]}]});
     let compiled = compile_with_module(&module).expect("the module compiles");
     assert_eq!(

@@ -9,7 +9,7 @@
 # the configured ceiling, complementing admission-time enforcement): 2 MiB for
 # ordinary modules, 5 MiB for pre-initialized library modules. Both sit under
 # the 5 MiB structural ceiling the compiler enforces at admission; the
-# operator's wasmExecution.maxModuleBytes bounds execution between them.
+# operator's wasmExecution.maximumModuleBytes bounds execution between them.
 #
 # Usage: scripts/build.sh [--preinit] [--skip-proof]
 #   --preinit     also produce the pre-initialized variant via breg-wasm-preinit

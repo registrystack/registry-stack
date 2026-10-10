@@ -940,7 +940,7 @@ impl Fixture {
                 json!([{
                     "handle": "is_adult",
                     "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-                    "form": "boolean",
+                    "form": {"type": "boolean"},
                     "required": true
                 }]),
                 vec!["person"],
@@ -952,7 +952,7 @@ impl Fixture {
                 json!([{
                     "handle": "age_bracket",
                     "concept": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
-                    "form": "string",
+                    "form": {"type": "string"},
                     "required": true
                 }]),
                 vec!["person"],
@@ -964,7 +964,7 @@ impl Fixture {
                 json!([{
                     "handle": "relationship_confirmed",
                     "concept": "urn:registrystack:evidence:local:concept:relationship-check:relationship_confirmed",
-                    "form": "boolean",
+                    "form": {"type": "boolean"},
                     "required": true
                 }]),
                 vec!["child", "candidate"],
@@ -973,7 +973,7 @@ impl Fixture {
                 "urn:registrystack:evidence:local:requirement:other",
                 "other",
                 "urn:registrystack:evidence:local:evidence-type:other",
-                json!([{"handle": "other", "concept": "urn:other", "form": "boolean", "required": true}]),
+                json!([{"handle": "other", "concept": "urn:other", "form": {"type": "boolean"}, "required": true}]),
                 vec!["person"],
             ),
         };
@@ -1251,14 +1251,14 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
                 .map(|concept| {
                     json!({
                         "handle": concept["alias"],
-                        "id": concept["uri"],
-                        "form": concept["form"]
+                        "uri": concept["uri"],
+                        "type": concept["form"]
                     })
                 })
                 .collect::<Vec<_>>();
             json!({
                 "handle": question["alias"],
-                "id": question["requirementUri"],
+                "uri": question["requirementUri"],
                 "purposes": [question["purpose"].clone()],
                 "subjectRoles": roles,
                 "concepts": concepts,
@@ -1319,7 +1319,9 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
                     })
                     .collect::<Vec<_>>();
                 (
-                    requester_tag.to_owned(),
+                    // The profile is named by the tag through the first 32
+                    // hexadecimal digits of its digest.
+                    requester_tag.chars().take(42).collect::<String>(),
                     json!({
                         "kind": "explicit-request",
                         "requesterTags": [requester_tag],

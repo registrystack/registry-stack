@@ -90,8 +90,8 @@ test('specialized read methods keep routes, cursors, snapshots, exact JSON and o
     assert(requests.some(item => item.url.includes(`/companies/${id}/related?$skiptoken=next`)));
 
     const requestCount = requests.length;
-    await assert.rejects(client.listCurrentRecords('companies', { bbox: ['1', '2', '3', '4'] }), error => error.kind === 'invalid_request');
-    await assert.rejects(client.getRecordRevision('companies', id, Number.MAX_SAFE_INTEGER + 1), error => error.kind === 'invalid_request');
+    await assert.rejects(client.listCurrentRecords('companies', { bbox: ['1', '2', '3', '4'] }), error => error.kind === 'invalid-request');
+    await assert.rejects(client.getRecordRevision('companies', id, Number.MAX_SAFE_INTEGER + 1), error => error.kind === 'invalid-request');
     assert.equal(requests.length, requestCount);
   } finally {
     await new Promise(resolve => server.close(resolve));

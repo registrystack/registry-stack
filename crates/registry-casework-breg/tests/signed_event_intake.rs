@@ -84,6 +84,7 @@ fn record(record_id: &str, entity: &str) -> Value {
                 "effectDigest": REGISTRY_REVISION,
                 "proposal": {
                     "review": {
+                        "type": "required",
                         "authority": "casework-main",
                         "policyId": "registry-correction"
                     }
@@ -149,7 +150,7 @@ async fn mount_metadata(server: &MockServer, revision: &str) {
 /// envelope's `data`.
 fn data(deduplication_key: &str) -> Value {
     json!({
-        "trigger": "request_lifecycle",
+        "trigger": "request-lifecycle",
         "entity": "correction",
         "recordId": RECORD_ID,
         "revision": 42,

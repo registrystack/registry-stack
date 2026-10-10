@@ -10,11 +10,11 @@ export const EVIDENCE_OPENAPI_FILE = 'source.openapi.yaml';
 export const EVIDENCE_QUESTIONS_DIRECTORY = 'questions';
 
 const PRODUCT_MARKERS = [
-  ['registry.yaml', 'kind', 'RegistryProject', 'apiVersion', 'registry.registrystack.org/v1alpha1', true],
-  ['casework.yaml', 'kind', 'CaseworkProject', 'apiVersion', 'registry.registrystack.org/casework/'],
+  ['registry.yaml', 'kind', 'BRegProject', 'apiVersion', 'id.registrystack.org/formats/breg/project/v1alpha1', true],
+  ['casework.yaml', 'kind', 'CaseworkProject', 'apiVersion', 'id.registrystack.org/formats/casework/project/'],
   ['scheduling.yaml', 'kind', 'SchedulingProject', 'apiVersion', 'id.registrystack.org/formats/scheduling/project/'],
   ['messaging.yaml', 'kind', 'MessagingProject', 'apiVersion', 'id.registrystack.org/formats/messaging/project/'],
-  ['origins.yaml', '', '', 'schemaVersion', 'registry-discovery/origins/'],
+  ['origins.yaml', 'kind', 'DiscoveryOrigins', 'apiVersion', 'id.registrystack.org/formats/discovery/origins/'],
   ['manifest.yaml', 'kind', 'RenderBundle', 'apiVersion', 'id.registrystack.org/formats/render/bundle/'],
   ['metadata.yaml', '', '', 'schema_version', 'registry-manifest/v1', true],
 ] as const;

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
-use registry_casework_core::schema::refuse_null;
+use registry_casework_core::schema::{refuse_null, type_identifier_keyed_maps};
 
 use crate::{RuntimeConfig, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND};
 
@@ -16,6 +16,7 @@ pub const RUNTIME_CONFIG_SCHEMA_ID: &str =
 pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RuntimeConfig))?;
     refuse_null_outside_shared_blocks(&mut derived)?;
+    type_identifier_keyed_maps(&mut derived)?;
     set_const(&mut derived, "apiVersion", RUNTIME_CONFIG_API_VERSION);
     set_const(&mut derived, "kind", RUNTIME_CONFIG_KIND);
     install_runtime_constraints(&mut derived);
@@ -99,16 +100,6 @@ fn install_runtime_constraints(schema: &mut Value) {
         Value::String(registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN.to_owned()),
     );
     set_jwks_document_provider_requirement(schema);
-    if let Some(sources) = schema
-        .get_mut("properties")
-        .and_then(|properties| properties.get_mut("sources"))
-        .and_then(Value::as_object_mut)
-    {
-        sources.insert(
-            "propertyNames".to_owned(),
-            serde_json::json!({"minLength": 1}),
-        );
-    }
     set_review_completion_auth_constraints(schema);
     set_audit_destination_constraints(schema);
 }
@@ -134,7 +125,7 @@ fn set_audit_destination_constraints(schema: &mut Value) {
                 "not": {"anyOf": [
                     {"required": ["path"]},
                     {"required": ["rotateBytes"]},
-                    {"required": ["retainDays"]}
+                    {"required": ["retentionDays"]}
                 ]}
             }),
         );
@@ -263,7 +254,8 @@ mod tests {
             "authentication": {"oidc": {
                 "issuer": "https://identity.example.test",
                 "audience": "urn:example:casework",
-                "jwksSource": {"kind": "static", "documentRef": document_ref}
+                "allowedClients": "unrestricted",
+                "jwksSource": {"type": "static", "documentRef": document_ref}
             }},
             "audit": {"path": "/var/log/casework/audit.jsonl", "hashKeyRef": supporting_reference}
         })
@@ -490,9 +482,9 @@ mod tests {
                 "review-requester": {
                     "url": "https://requester.example.test/completions",
                     "bearerTokenRef": "secret:file/completion-token",
-                    "timeoutMilliseconds": timeout_milliseconds,
+                    "attemptTimeoutMilliseconds": timeout_milliseconds,
                     "maximumAttempts": maximum_attempts,
-                    "retrySeconds": retry_seconds
+                    "retryDelaySeconds": retry_seconds
                 }
             });
             instance
@@ -651,7 +643,7 @@ mod tests {
         for accepted in [
             serde_json::json!({"hashKeyRef": key, "path": "/var/log/casework/audit.jsonl"}),
             serde_json::json!({"hashKeyRef": key, "destination": "file",
-                "path": "/audit.jsonl", "rotateBytes": 1_048_576, "retainDays": 1}),
+                "path": "/audit.jsonl", "rotateBytes": 1_048_576, "retentionDays": 1}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout"}),
         ] {
             assert!(schema.is_valid(&with(accepted.clone())), "{accepted}");
@@ -661,7 +653,7 @@ mod tests {
             serde_json::json!({"hashKeyRef": key, "path": null}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout", "path": null}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout",
-                "path": null, "rotateBytes": null, "retainDays": null}),
+                "path": null, "rotateBytes": null, "retentionDays": null}),
         ] {
             assert!(!schema.is_valid(&with(nulled.clone())), "{nulled}");
             assert!(read(&with(nulled.clone())).is_err(), "{nulled}");
@@ -671,7 +663,7 @@ mod tests {
             serde_json::json!({"hashKeyRef": key, "path": "audit.jsonl"}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout", "path": "/audit.jsonl"}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout", "rotateBytes": 1_048_576}),
-            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "retainDays": 1}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "retentionDays": 1}),
         ] {
             assert!(!schema.is_valid(&with(refused.clone())), "{refused}");
         }

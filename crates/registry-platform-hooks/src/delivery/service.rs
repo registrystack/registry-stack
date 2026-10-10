@@ -296,7 +296,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
                   WHERE (
                             state.state IN ('pending', 'leased')
                             OR (
-                                state.state = 'dead_lettered'
+                                state.state = 'dead-lettered'
                                 AND delivery.operator_replay
                             )
                         )
@@ -376,7 +376,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
                             AS payload_available,
                         outbox.payload_expires_at,
                         {dead_letter_reason},
-                        state.state IN ('pending', 'dead_lettered')
+                        state.state IN ('pending', 'dead-lettered')
                             OR (state.state = 'leased'
                                 AND state.lease_expires_at <= transaction_timestamp()),
                         delivery.handler_kind,
@@ -389,7 +389,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
                     AND delivery.compiled_delivery_id = state.compiled_delivery_id
                    JOIN {{schema}}.registry_outbox AS outbox
                      ON outbox.event_id = state.event_id
-                  WHERE state.state IN ('pending', 'leased', 'dead_lettered', 'expired')
+                  WHERE state.state IN ('pending', 'leased', 'dead-lettered', 'expired')
                   ORDER BY payload_available DESC, state.updated_at DESC, state.event_id,
                            state.compiled_delivery_id
                   LIMIT $1",
@@ -415,7 +415,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
                 .try_get::<_, Option<String>>(7)?
                 .map(|reason| DeliveryFailureReason::from_spelling(&reason))
                 .transpose()?
-                .filter(|_| stored_state == "dead_lettered");
+                .filter(|_| stored_state == "dead-lettered");
             let mut discard_eligible = row.try_get::<_, bool>(8)? && payload_available;
             if discard_eligible {
                 discard_eligible = self
@@ -556,7 +556,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let package_revision = bounded_text(&row, 4, 256)?;
         let payload_available = row.try_get::<_, bool>(5)?;
         if generation != expected_generation
-            || !matches!(state.as_str(), "pending" | "leased" | "dead_lettered")
+            || !matches!(state.as_str(), "pending" | "leased" | "dead-lettered")
             || !lease_inactive
             || !payload_available
         {
@@ -634,7 +634,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
                         AND compiled_delivery_id = $2
                         AND generation = $3
                         AND (
-                            state IN ('pending', 'dead_lettered')
+                            state IN ('pending', 'dead-lettered')
                             OR (state = 'leased'
                                 AND lease_expires_at <= transaction_timestamp())
                         )",
@@ -675,7 +675,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
                                AND sibling.compiled_delivery_id <> $2
                                AND (
                                    sibling.state IN ('pending', 'leased')
-                                   OR (sibling.state = 'dead_lettered'
+                                   OR (sibling.state = 'dead-lettered'
                                        AND sibling_delivery.operator_replay)
                                )
                         )",
@@ -1008,8 +1008,8 @@ impl<S: DeliverySeams> DeliveryService<S> {
         }
         if binding.outbox_package_revision != claim.package_revision
             || binding.outbox_schema_fingerprint.is_empty()
-            || binding.authentication_profile != "hmac_sha256_v1"
-            || binding.delivery_mode != "after_commit"
+            || binding.authentication_profile != "hmac-sha256-v1"
+            || binding.delivery_mode != "after-commit"
             || binding.dead_letter != "required"
             || !(100..=10_000).contains(&material.deployed_attempt_timeout_ms)
             || !(1..=20).contains(&material.deployed_maximum_attempts)
@@ -1242,7 +1242,7 @@ impl<S: DeliverySeams> DispatchTransport for HookTransport<'_, S> {
             // of the attempts it has left.
             result.failure_reason = Some(DeliveryFailureReason::ProposalDeadLettered);
             SendOutcome::Permanent {
-                code: FailureCode::new("proposal_dead_lettered")
+                code: FailureCode::new("proposal-dead-lettered")
                     .map_err(|_| DispatchError::Unavailable)?,
             }
         } else if result.outcome == DeliveryAuditOutcome::Delivered {
@@ -1370,7 +1370,7 @@ fn accept_handler_answer(body: &[u8]) -> Result<AcceptedAnswer, ErrorCategory> {
 /// dead-lettered.
 ///
 /// A delivered row always states one of `none`, `applied`, or `refused`. A
-/// row the proposal path dead-letters states `dead_lettered` with its
+/// row the proposal path dead-letters states `dead-lettered` with its
 /// reason. A row that dead-letters without accepting an answer keeps the
 /// all-null legacy shape: it never had a proposal to settle.
 pub(super) fn proposal_columns<'a>(
@@ -1398,15 +1398,15 @@ pub(super) fn proposal_columns<'a>(
             code: Some(code.as_str()),
             summary: Some(summary.as_str()),
         }),
-        ("dead_lettered", Some(ProposalOutcome::DeadLettered { code, summary })) => {
+        ("dead-lettered", Some(ProposalOutcome::DeadLettered { code, summary })) => {
             Ok(ProposalColumns {
-                disposition: Some("dead_lettered"),
+                disposition: Some("dead-lettered"),
                 resulting_revision: None,
                 code: Some(code.as_str()),
                 summary: Some(summary.as_str()),
             })
         }
-        ("dead_lettered", None) => Ok(ProposalColumns {
+        ("dead-lettered", None) => Ok(ProposalColumns {
             disposition: None,
             resulting_revision: None,
             code: None,
@@ -1546,86 +1546,127 @@ pub enum DeliveryFailureReason {
 }
 
 impl DeliveryFailureReason {
+    /// Every reason, in declaration order.
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 36] = [
+        Self::HttpNonSuccess,
+        Self::DestinationTimeout,
+        Self::InvalidRemainingTimeout,
+        Self::InvalidFrozenPolicy,
+        Self::InvalidFrozenRequest,
+        Self::ResolutionFailed,
+        Self::ResolutionCapacityUnavailable,
+        Self::TooManyResolverAnswers,
+        Self::NoResolverAnswers,
+        Self::ResolverPortMismatch,
+        Self::ResolverAddressFamilyMismatch,
+        Self::LiteralOriginMismatch,
+        Self::CloudMetadataDenied,
+        Self::AlwaysDeniedAddress,
+        Self::PrivateAddressNotAllowed,
+        Self::NonGlobalAddressDenied,
+        Self::DevelopmentAddressDenied,
+        Self::TlsMaterialUnavailable,
+        Self::ClientBuildFailed,
+        Self::TransportFailed,
+        Self::TransportFailedAfterConnect,
+        Self::DeadlineExceeded,
+        Self::DeadlineExceededAfterConnect,
+        Self::TooManyResponseHeaders,
+        Self::ResponseHeaderBytesExceeded,
+        Self::DestinationPolicyRefused,
+        Self::DestinationBindingRefused,
+        Self::HandlerBindingRefused,
+        Self::HandlerDeadline,
+        Self::HandlerResource,
+        Self::HandlerExecution,
+        Self::HandlerSource,
+        Self::HandlerUnavailable,
+        Self::PayloadRefused,
+        Self::WorkerInterrupted,
+        Self::ProposalDeadLettered,
+    ];
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::HttpNonSuccess => "http_non_success",
-            Self::DestinationTimeout => "destination_timeout",
-            Self::InvalidRemainingTimeout => "invalid_remaining_timeout",
-            Self::InvalidFrozenPolicy => "invalid_frozen_policy",
-            Self::InvalidFrozenRequest => "invalid_frozen_request",
-            Self::ResolutionFailed => "resolution_failed",
-            Self::ResolutionCapacityUnavailable => "resolution_capacity_unavailable",
-            Self::TooManyResolverAnswers => "too_many_resolver_answers",
-            Self::NoResolverAnswers => "no_resolver_answers",
-            Self::ResolverPortMismatch => "resolver_port_mismatch",
-            Self::ResolverAddressFamilyMismatch => "resolver_address_family_mismatch",
-            Self::LiteralOriginMismatch => "literal_origin_mismatch",
-            Self::CloudMetadataDenied => "cloud_metadata_denied",
-            Self::AlwaysDeniedAddress => "always_denied_address",
-            Self::PrivateAddressNotAllowed => "private_address_not_allowed",
-            Self::NonGlobalAddressDenied => "non_global_address_denied",
-            Self::DevelopmentAddressDenied => "development_address_denied",
-            Self::TlsMaterialUnavailable => "tls_material_unavailable",
-            Self::ClientBuildFailed => "client_build_failed",
-            Self::TransportFailed => "transport_failed",
-            Self::TransportFailedAfterConnect => "transport_failed_after_connect",
-            Self::DeadlineExceeded => "deadline_exceeded",
-            Self::DeadlineExceededAfterConnect => "deadline_exceeded_after_connect",
-            Self::TooManyResponseHeaders => "too_many_response_headers",
-            Self::ResponseHeaderBytesExceeded => "response_header_bytes_exceeded",
-            Self::DestinationPolicyRefused => "destination_policy_refused",
-            Self::DestinationBindingRefused => "destination_binding_refused",
-            Self::HandlerBindingRefused => "handler_binding_refused",
-            Self::HandlerDeadline => "handler_deadline",
-            Self::HandlerResource => "handler_resource",
-            Self::HandlerExecution => "handler_execution",
-            Self::HandlerSource => "handler_source",
-            Self::HandlerUnavailable => "handler_unavailable",
-            Self::PayloadRefused => "payload_refused",
-            Self::WorkerInterrupted => "worker_interrupted",
-            Self::ProposalDeadLettered => "proposal_dead_lettered",
+            Self::HttpNonSuccess => "http-non-success",
+            Self::DestinationTimeout => "destination-timeout",
+            Self::InvalidRemainingTimeout => "invalid-remaining-timeout",
+            Self::InvalidFrozenPolicy => "invalid-frozen-policy",
+            Self::InvalidFrozenRequest => "invalid-frozen-request",
+            Self::ResolutionFailed => "resolution-failed",
+            Self::ResolutionCapacityUnavailable => "resolution-capacity-unavailable",
+            Self::TooManyResolverAnswers => "too-many-resolver-answers",
+            Self::NoResolverAnswers => "no-resolver-answers",
+            Self::ResolverPortMismatch => "resolver-port-mismatch",
+            Self::ResolverAddressFamilyMismatch => "resolver-address-family-mismatch",
+            Self::LiteralOriginMismatch => "literal-origin-mismatch",
+            Self::CloudMetadataDenied => "cloud-metadata-denied",
+            Self::AlwaysDeniedAddress => "always-denied-address",
+            Self::PrivateAddressNotAllowed => "private-address-not-allowed",
+            Self::NonGlobalAddressDenied => "non-global-address-denied",
+            Self::DevelopmentAddressDenied => "development-address-denied",
+            Self::TlsMaterialUnavailable => "tls-material-unavailable",
+            Self::ClientBuildFailed => "client-build-failed",
+            Self::TransportFailed => "transport-failed",
+            Self::TransportFailedAfterConnect => "transport-failed-after-connect",
+            Self::DeadlineExceeded => "deadline-exceeded",
+            Self::DeadlineExceededAfterConnect => "deadline-exceeded-after-connect",
+            Self::TooManyResponseHeaders => "too-many-response-headers",
+            Self::ResponseHeaderBytesExceeded => "response-header-bytes-exceeded",
+            Self::DestinationPolicyRefused => "destination-policy-refused",
+            Self::DestinationBindingRefused => "destination-binding-refused",
+            Self::HandlerBindingRefused => "handler-binding-refused",
+            Self::HandlerDeadline => "handler-deadline",
+            Self::HandlerResource => "handler-resource",
+            Self::HandlerExecution => "handler-execution",
+            Self::HandlerSource => "handler-source",
+            Self::HandlerUnavailable => "handler-unavailable",
+            Self::PayloadRefused => "payload-refused",
+            Self::WorkerInterrupted => "worker-interrupted",
+            Self::ProposalDeadLettered => "proposal-dead-lettered",
         }
     }
 
     fn from_spelling(value: &str) -> Result<Self, DeliveryError> {
         match value {
-            "http_non_success" => Ok(Self::HttpNonSuccess),
-            "destination_timeout" => Ok(Self::DestinationTimeout),
-            "invalid_remaining_timeout" => Ok(Self::InvalidRemainingTimeout),
-            "invalid_frozen_policy" => Ok(Self::InvalidFrozenPolicy),
-            "invalid_frozen_request" => Ok(Self::InvalidFrozenRequest),
-            "resolution_failed" => Ok(Self::ResolutionFailed),
-            "resolution_capacity_unavailable" => Ok(Self::ResolutionCapacityUnavailable),
-            "too_many_resolver_answers" => Ok(Self::TooManyResolverAnswers),
-            "no_resolver_answers" => Ok(Self::NoResolverAnswers),
-            "resolver_port_mismatch" => Ok(Self::ResolverPortMismatch),
-            "resolver_address_family_mismatch" => Ok(Self::ResolverAddressFamilyMismatch),
-            "literal_origin_mismatch" => Ok(Self::LiteralOriginMismatch),
-            "cloud_metadata_denied" => Ok(Self::CloudMetadataDenied),
-            "always_denied_address" => Ok(Self::AlwaysDeniedAddress),
-            "private_address_not_allowed" => Ok(Self::PrivateAddressNotAllowed),
-            "non_global_address_denied" => Ok(Self::NonGlobalAddressDenied),
-            "development_address_denied" => Ok(Self::DevelopmentAddressDenied),
-            "tls_material_unavailable" => Ok(Self::TlsMaterialUnavailable),
-            "client_build_failed" => Ok(Self::ClientBuildFailed),
-            "transport_failed" => Ok(Self::TransportFailed),
-            "transport_failed_after_connect" => Ok(Self::TransportFailedAfterConnect),
-            "deadline_exceeded" => Ok(Self::DeadlineExceeded),
-            "deadline_exceeded_after_connect" => Ok(Self::DeadlineExceededAfterConnect),
-            "too_many_response_headers" => Ok(Self::TooManyResponseHeaders),
-            "response_header_bytes_exceeded" => Ok(Self::ResponseHeaderBytesExceeded),
-            "destination_policy_refused" => Ok(Self::DestinationPolicyRefused),
-            "destination_binding_refused" => Ok(Self::DestinationBindingRefused),
-            "handler_binding_refused" => Ok(Self::HandlerBindingRefused),
-            "handler_deadline" => Ok(Self::HandlerDeadline),
-            "handler_resource" => Ok(Self::HandlerResource),
-            "handler_execution" => Ok(Self::HandlerExecution),
-            "handler_source" => Ok(Self::HandlerSource),
-            "handler_unavailable" => Ok(Self::HandlerUnavailable),
-            "payload_refused" => Ok(Self::PayloadRefused),
-            "worker_interrupted" => Ok(Self::WorkerInterrupted),
-            "proposal_dead_lettered" => Ok(Self::ProposalDeadLettered),
+            "http-non-success" => Ok(Self::HttpNonSuccess),
+            "destination-timeout" => Ok(Self::DestinationTimeout),
+            "invalid-remaining-timeout" => Ok(Self::InvalidRemainingTimeout),
+            "invalid-frozen-policy" => Ok(Self::InvalidFrozenPolicy),
+            "invalid-frozen-request" => Ok(Self::InvalidFrozenRequest),
+            "resolution-failed" => Ok(Self::ResolutionFailed),
+            "resolution-capacity-unavailable" => Ok(Self::ResolutionCapacityUnavailable),
+            "too-many-resolver-answers" => Ok(Self::TooManyResolverAnswers),
+            "no-resolver-answers" => Ok(Self::NoResolverAnswers),
+            "resolver-port-mismatch" => Ok(Self::ResolverPortMismatch),
+            "resolver-address-family-mismatch" => Ok(Self::ResolverAddressFamilyMismatch),
+            "literal-origin-mismatch" => Ok(Self::LiteralOriginMismatch),
+            "cloud-metadata-denied" => Ok(Self::CloudMetadataDenied),
+            "always-denied-address" => Ok(Self::AlwaysDeniedAddress),
+            "private-address-not-allowed" => Ok(Self::PrivateAddressNotAllowed),
+            "non-global-address-denied" => Ok(Self::NonGlobalAddressDenied),
+            "development-address-denied" => Ok(Self::DevelopmentAddressDenied),
+            "tls-material-unavailable" => Ok(Self::TlsMaterialUnavailable),
+            "client-build-failed" => Ok(Self::ClientBuildFailed),
+            "transport-failed" => Ok(Self::TransportFailed),
+            "transport-failed-after-connect" => Ok(Self::TransportFailedAfterConnect),
+            "deadline-exceeded" => Ok(Self::DeadlineExceeded),
+            "deadline-exceeded-after-connect" => Ok(Self::DeadlineExceededAfterConnect),
+            "too-many-response-headers" => Ok(Self::TooManyResponseHeaders),
+            "response-header-bytes-exceeded" => Ok(Self::ResponseHeaderBytesExceeded),
+            "destination-policy-refused" => Ok(Self::DestinationPolicyRefused),
+            "destination-binding-refused" => Ok(Self::DestinationBindingRefused),
+            "handler-binding-refused" => Ok(Self::HandlerBindingRefused),
+            "handler-deadline" => Ok(Self::HandlerDeadline),
+            "handler-resource" => Ok(Self::HandlerResource),
+            "handler-execution" => Ok(Self::HandlerExecution),
+            "handler-source" => Ok(Self::HandlerSource),
+            "handler-unavailable" => Ok(Self::HandlerUnavailable),
+            "payload-refused" => Ok(Self::PayloadRefused),
+            "worker-interrupted" => Ok(Self::WorkerInterrupted),
+            "proposal-dead-lettered" => Ok(Self::ProposalDeadLettered),
             _ => Err(DeliveryError::Unavailable),
         }
     }
@@ -1708,7 +1749,7 @@ fn delivery_status_kind(
         "pending" if payload_available => Ok(DeliveryStatusKind::Pending),
         "pending" | "expired" => Ok(DeliveryStatusKind::Expired),
         "leased" => Ok(DeliveryStatusKind::Leased),
-        "dead_lettered" => Ok(DeliveryStatusKind::DeadLettered),
+        "dead-lettered" => Ok(DeliveryStatusKind::DeadLettered),
         _ => Err(DeliveryError::Unavailable),
     }
 }
@@ -2255,6 +2296,37 @@ mod tests {
     }
 
     #[test]
+    fn every_dead_letter_reason_is_spelled_in_kebab_case_and_reads_back() {
+        let mut spellings = std::collections::BTreeSet::new();
+        for reason in DeliveryFailureReason::ALL {
+            let spelling = reason.as_str();
+            assert!(
+                !spelling.is_empty()
+                    && spelling.split('-').all(|word| !word.is_empty()
+                        && word.bytes().all(|byte| byte.is_ascii_lowercase())),
+                "{spelling} is lowercase words joined by single hyphens"
+            );
+            assert_eq!(DeliveryFailureReason::from_spelling(spelling), Ok(reason));
+            assert_eq!(
+                DeliveryFailureReason::from_spelling(&spelling.replace('-', "_")),
+                Err(DeliveryError::Unavailable),
+                "the underscore spelling of {spelling} is not read"
+            );
+            spellings.insert(spelling);
+        }
+        assert_eq!(spellings.len(), 36, "every reason has its own spelling");
+    }
+
+    #[test]
+    fn a_stored_state_in_the_underscore_spelling_is_not_a_status() {
+        assert_eq!(
+            delivery_status_kind("dead_lettered", false),
+            Err(DeliveryError::Unavailable)
+        );
+        assert!(proposal_columns("dead_lettered", None).is_err());
+    }
+
+    #[test]
     fn the_operator_status_reflects_payload_expiry_on_pending_rows() {
         assert_eq!(
             delivery_status_kind("pending", true),
@@ -2269,7 +2341,7 @@ mod tests {
             Ok(DeliveryStatusKind::Expired)
         );
         assert_eq!(
-            delivery_status_kind("dead_lettered", false),
+            delivery_status_kind("dead-lettered", false),
             Ok(DeliveryStatusKind::DeadLettered)
         );
         assert_eq!(
@@ -2721,16 +2793,16 @@ mod tests {
             Some("the proposal failed validation")
         );
 
-        let dead_columns = proposal_columns("dead_lettered", Some(&dead_lettered))
+        let dead_columns = proposal_columns("dead-lettered", Some(&dead_lettered))
             .expect("a dead-lettered proposal is recorded");
-        assert_eq!(dead_columns.disposition, Some("dead_lettered"));
+        assert_eq!(dead_columns.disposition, Some("dead-lettered"));
         assert_eq!(dead_columns.resulting_revision, None);
         assert_eq!(dead_columns.code, Some("hook.proposal.no_principal"));
         assert_eq!(dead_columns.summary, Some("the hook declares no principal"));
 
         // A row that dead-letters without accepting an answer keeps the
         // legacy all-null shape: it never had a proposal to settle.
-        let exhausted = proposal_columns("dead_lettered", None).expect("legacy shape holds");
+        let exhausted = proposal_columns("dead-lettered", None).expect("legacy shape holds");
         assert_eq!(exhausted.disposition, None);
         assert_eq!(exhausted.resulting_revision, None);
         assert_eq!(exhausted.code, None);
@@ -2969,8 +3041,8 @@ mod tests {
                 schema_fingerprint,
                 data_schema: STORED_DATA_SCHEMA,
                 classification_ceiling: "public",
-                authentication_profile: "hmac_sha256_v1",
-                delivery_mode: "after_commit",
+                authentication_profile: "hmac-sha256-v1",
+                delivery_mode: "after-commit",
                 attempt_timeout_ms: 1_000,
                 initial_backoff_ms: 1_000,
                 maximum_backoff_ms: 1_000,

@@ -81,15 +81,15 @@ fn source_config(
     projection: Value,
 ) -> SourceConfig {
     serde_json::from_value(json!({
-        "transport": "http-json",
+        "type": "http-json",
         "baseUrl": base_url,
         "posture": "record-transformed",
         "authentication": authentication,
         "request": {
             "method": "POST",
-            "pathTemplate": "/v1/records/{record}",
+            "path": "/v1/records/{record}",
             "pathBindings": {
-                "record": {"from": "selector", "role": "subject", "profile": "record-v1", "field": "record_id"}
+                "record": {"type": "selector", "role": "subject", "profile": "record-v1", "field": "record_id"}
             },
             "fixedHeaders": fixed_headers,
             "selectorInputs": [{
@@ -112,9 +112,9 @@ fn source_config(
             },
             "projection": projection,
             "redirects": "deny",
-            "timeoutMilliseconds": 1000,
+            "attemptTimeoutMilliseconds": 1000,
             "maximumResponseBytes": 65536,
-            "concurrencyLimit": 4
+            "maximumConcurrency": 4
         },
         "responseSchema": "schemas/response.schema.yaml",
         "extractScript": "adapters/extract.rhai",
@@ -185,8 +185,7 @@ fn fixed_source(base_url: &str, authentication: Value) -> SourceConfig {
         json!(["/ok"]),
     );
     let request = http_request_mut(&mut source);
-    request.path = Some("/data".into());
-    request.path_template = None;
+    request.path = "/data".into();
     request.path_bindings = Default::default();
     request.method = registry_evidence::config::HttpMethod::POST;
     source
@@ -215,7 +214,7 @@ fn oauth_source_with_assumed_lifetime(
     assumed_lifetime_seconds: Option<u64>,
 ) -> SourceConfig {
     let mut authentication = json!({
-        "kind": "oauth2-client-credentials",
+        "type": "oauth2-client-credentials",
         "tokenEndpoint": token_endpoint,
         "clientIdRef": "secret:file/oauth-client-id",
         "clientSecretRef": "secret:file/oauth-client-secret",
@@ -473,7 +472,7 @@ fn shape_stages(
             };
             let mut source_value = stage["validated_source_definition"].clone();
             source_value["baseUrl"] = json!(base_url);
-            if source_value["authentication"]["kind"] == json!("oauth2-client-credentials") {
+            if source_value["authentication"]["type"] == json!("oauth2-client-credentials") {
                 let endpoint = source_value["authentication"]["tokenEndpoint"]
                     .as_str()
                     .expect("token endpoint");
@@ -546,7 +545,7 @@ fn stage_credentials(label: &str, authentication: &Value) -> StageCredentials {
             .to_owned()
     };
     let entry = |reference: &str| (secret_file_name(reference), secret_canary(reference));
-    match authentication["kind"]
+    match authentication["type"]
         .as_str()
         .expect("declared authentication kind")
     {
@@ -800,7 +799,7 @@ async fn exact_request_applies_path_query_body_headers_auth_and_projection_once(
     let (_root, secrets) = resolver(&[("api-key", "api-key-canary")]);
     let source = source_config(
         &server.uri(),
-        json!({"kind": "static-api-key", "headerName": "X-Source-Key", "valueRef": "secret:file/api-key"}),
+        json!({"type": "static-api-key", "headerName": "X-Source-Key", "valueRef": "secret:file/api-key"}),
         json!(["record_id"]),
         json!([
             {"name": "Accept", "value": "application/vnd.registry+json"},
@@ -880,7 +879,7 @@ async fn authorized_access_attribution_is_host_owned_and_opt_in() {
     let (_root, secrets) = resolver(&[("key", "secret")]);
     let mut source = serde_json::to_value(source_config(
         &server.uri(),
-        json!({"kind": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
+        json!({"type": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
         json!(["record_id"]),
         json!([]),
         json!(["/ok"]),
@@ -954,7 +953,7 @@ fn materialized_request_reuses_path_template_query_and_body_without_auth_materia
     let (_root, secrets) = resolver(&[]);
     let source = source_config(
         "http://127.0.0.1:18080",
-        json!({"kind": "static-authorization", "tokenRef": "secret:file/missing-token"}),
+        json!({"type": "static-authorization", "tokenRef": "secret:file/missing-token"}),
         json!(["record_id"]),
         json!([{"name": "X-Fixed-Contract", "value": "fixed-header-canary"}]),
         json!(["/ok"]),
@@ -1074,7 +1073,7 @@ async fn sec_declared_unresolved_problem_is_exact_and_source_neutral() {
             .mount(&server)
             .await;
         let (_root, secrets) = resolver(&[]);
-        let mut source = fixed_source(&server.uri(), json!({"kind": "none"}));
+        let mut source = fixed_source(&server.uri(), json!({"type": "none"}));
         *unresolved_problem_mut(&mut source) = Some(DeclaredUnresolvedProblem {
             status: BoundedU32::new(404).expect("404 is the declared status"),
             type_uri: TYPE_URI.into(),
@@ -1103,7 +1102,7 @@ async fn undeclared_and_oversized_unresolved_problems_remain_dependency_failures
         .mount(&server)
         .await;
     let (_root, secrets) = resolver(&[]);
-    let source = fixed_source(&server.uri(), json!({"kind": "none"}));
+    let source = fixed_source(&server.uri(), json!({"type": "none"}));
     let executor = SourceExecutor::new(&source, Arc::clone(&secrets)).expect("executor builds");
     assert_eq!(
         executor
@@ -1117,7 +1116,7 @@ async fn undeclared_and_oversized_unresolved_problems_remain_dependency_failures
         "omission preserves ordinary 404 dependency failure"
     );
 
-    let mut source = fixed_source(&server.uri(), json!({"kind": "none"}));
+    let mut source = fixed_source(&server.uri(), json!({"type": "none"}));
     *unresolved_problem_mut(&mut source) = Some(DeclaredUnresolvedProblem {
         status: BoundedU32::new(404).expect("404 is the declared status"),
         type_uri: "https://id.example.invalid/problems/consultation/unresolved".into(),
@@ -1149,7 +1148,7 @@ async fn local_unauthenticated_loopback_source_sends_no_authentication_header() 
         .mount(&server)
         .await;
     let (_root, secrets) = resolver(&[]);
-    let source = fixed_source(&server.uri(), json!({"kind": "none"}));
+    let source = fixed_source(&server.uri(), json!({"type": "none"}));
     let executor = SourceExecutor::new(&source, secrets).expect("local source plan compiles");
 
     executor
@@ -1186,7 +1185,7 @@ async fn local_unauthenticated_loopback_source_sends_no_authentication_header() 
 
     let forbidden_header = source_config(
         &server.uri(),
-        json!({"kind": "none"}),
+        json!({"type": "none"}),
         json!(["record_id"]),
         json!([{"name": "Authorization", "value": "caller-controlled"}]),
         json!(["/ok"]),
@@ -1202,7 +1201,7 @@ async fn local_unauthenticated_loopback_source_sends_no_authentication_header() 
         "http://127.0.0.1",
         "http://localhost:18081",
     ] {
-        let invalid = fixed_source(invalid_origin, json!({"kind": "none"}));
+        let invalid = fixed_source(invalid_origin, json!({"type": "none"}));
         assert_eq!(
             SourceExecutor::new(&invalid, resolver(&[]).1).err(),
             Some(SourceError::InvalidPlan),
@@ -1217,7 +1216,7 @@ async fn hostile_path_values_and_malformed_preparation_fail_before_transport_and
     let (_root, secrets) = resolver(&[("token", "credential-canary")]);
     let source = source_config(
         &server.uri(),
-        json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
+        json!({"type": "static-authorization", "tokenRef": "secret:file/token"}),
         json!(["record_id"]),
         json!([]),
         json!(["/ok"]),
@@ -1266,7 +1265,7 @@ async fn path_binding_contract_rejects_empty_missing_and_extra_material_before_c
     let (_empty_root, empty_secrets) = resolver(&[]);
     let base = source_config(
         "http://127.0.0.1:18080",
-        json!({"kind": "static-authorization", "tokenRef": "secret:file/missing-token"}),
+        json!({"type": "static-authorization", "tokenRef": "secret:file/missing-token"}),
         json!(["record_id"]),
         json!([]),
         json!(["/ok"]),
@@ -1277,7 +1276,7 @@ async fn path_binding_contract_rejects_empty_missing_and_extra_material_before_c
         ("extra-binding", "/v1/records"),
     ] {
         let mut source = base.clone();
-        http_request_mut(&mut source).path_template = Some(template.to_owned());
+        http_request_mut(&mut source).path = template.to_owned();
         assert_eq!(
             SourceExecutor::new(&source, Arc::clone(&empty_secrets)).err(),
             Some(SourceError::InvalidPlan),
@@ -1362,7 +1361,7 @@ async fn get_body_is_rejected_before_static_or_oauth_credential_acquisition() {
 
     let mut static_source = fixed_source(
         &data_server.uri(),
-        json!({"kind": "static-authorization", "tokenRef": "secret:file/missing-token"}),
+        json!({"type": "static-authorization", "tokenRef": "secret:file/missing-token"}),
     );
     let static_request = http_request_mut(&mut static_source);
     static_request.method = HttpMethod::GET;
@@ -2184,7 +2183,7 @@ async fn every_acquisition_posture_fixture_executes_with_one_bounded_request() {
         let (_root, secrets) = resolver(&[("token", "synthetic-posture-token")]);
         let mut source = fixed_source(
             &server.uri(),
-            json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
+            json!({"type": "static-authorization", "tokenRef": "secret:file/token"}),
         );
         *posture_mut(&mut source) = posture;
         http_request_mut(&mut source).projection = registry_platform_yaml::UniqueList::new(
@@ -2289,7 +2288,7 @@ async fn every_acquisition_posture_fixture_executes_with_one_bounded_request() {
 async fn basic_bearer_and_static_api_key_headers_are_exact_and_failures_are_redacted() {
     let cases = [
         (
-            json!({"kind": "basic", "usernameRef": "secret:file/user", "passwordRef": "secret:file/password"}),
+            json!({"type": "basic", "usernameRef": "secret:file/user", "passwordRef": "secret:file/password"}),
             vec![("user", "basic-user"), ("password", "basic-password")],
             "authorization",
             format!(
@@ -2301,13 +2300,13 @@ async fn basic_bearer_and_static_api_key_headers_are_exact_and_failures_are_reda
             ),
         ),
         (
-            json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
+            json!({"type": "static-authorization", "tokenRef": "secret:file/token"}),
             vec![("token", "bearer-token")],
             "authorization",
             "Bearer bearer-token".into(),
         ),
         (
-            json!({"kind": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
+            json!({"type": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
             vec![("key", "static-key")],
             "x-api-key",
             "static-key".into(),
@@ -2686,7 +2685,7 @@ async fn oauth_credential_redaction_fixture_fails_closed_without_data_requests()
             assumed_lifetime_seconds,
         );
         if case_id == "transport-timeout" {
-            http_request_mut(&mut source).timeout_milliseconds =
+            http_request_mut(&mut source).attempt_timeout_milliseconds =
                 BoundedU64::new(20).expect("a valid timeout");
         }
         let executor = SourceExecutor::new(&source, secrets).expect("OAuth executor builds");
@@ -2800,7 +2799,7 @@ async fn projection_missing_leaf_is_omitted_but_bad_intermediate_stops_before_ex
         let (_root, secrets) = resolver(&[("token", "token")]);
         let mut source = fixed_source(
             &server.uri(),
-            json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
+            json!({"type": "static-authorization", "tokenRef": "secret:file/token"}),
         );
         http_request_mut(&mut source).projection =
             registry_platform_yaml::UniqueList::new(vec!["/results/*/optional".into()])
@@ -2881,10 +2880,10 @@ async fn source_executor_failure_matrix_is_exact_single_request_and_value_free()
         let (_root, secrets) = resolver(&[("token", "credential-canary")]);
         let mut source = fixed_source(
             &server.uri(),
-            json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
+            json!({"type": "static-authorization", "tokenRef": "secret:file/token"}),
         );
         if case_id == "timeout" {
-            http_request_mut(&mut source).timeout_milliseconds =
+            http_request_mut(&mut source).attempt_timeout_milliseconds =
                 BoundedU64::new(20).expect("a valid timeout");
         }
         if case_id == "raw-oversized-before-projection" {
@@ -2927,7 +2926,7 @@ fn forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilat
     for header_name in RESERVED_HEADER_CONTRACT_CASES {
         let source = source_config(
             "http://127.0.0.1:18080",
-            json!({"kind": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
+            json!({"type": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
             json!(["record_id"]),
             json!([{"name": header_name, "value": "forbidden"}]),
             json!(["/ok"]),
@@ -2940,7 +2939,7 @@ fn forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilat
     }
     let duplicate = source_config(
         "http://127.0.0.1:18080",
-        json!({"kind": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
+        json!({"type": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
         json!(["record_id"]),
         json!([
             {"name": "X-Reviewed-Header", "value": "one"},
@@ -2955,7 +2954,7 @@ fn forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilat
     );
     let authentication_collision = source_config(
         "http://127.0.0.1:18080",
-        json!({"kind": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
+        json!({"type": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
         json!(["record_id"]),
         json!([{"name": "x-api-key", "value": "fixed"}]),
         json!(["/ok"]),
@@ -2968,7 +2967,7 @@ fn forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilat
     for api_key_header in RESERVED_HEADER_CONTRACT_CASES {
         let source = source_config(
             "http://127.0.0.1:18080",
-            json!({"kind": "static-api-key", "headerName": api_key_header, "valueRef": "secret:file/key"}),
+            json!({"type": "static-api-key", "headerName": api_key_header, "valueRef": "secret:file/key"}),
             json!(["record_id"]),
             json!([]),
             json!(["/ok"]),
@@ -2986,7 +2985,7 @@ fn forbidden_header_collisions_and_invalid_projection_contracts_fail_at_compilat
     ] {
         let source = source_config(
             "http://127.0.0.1:18080",
-            json!({"kind": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
+            json!({"type": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
             json!(["record_id"]),
             json!([]),
             projection,
@@ -3012,7 +3011,7 @@ fn an_allowed_selector_set_that_cannot_fill_the_path_template_is_refused() {
     let (_root, secrets) = resolver(&[("key", "api-key-value")]);
     let mut source = source_config(
         "http://127.0.0.1:18080",
-        json!({"kind": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
+        json!({"type": "static-api-key", "headerName": "X-Api-Key", "valueRef": "secret:file/key"}),
         json!(["record_id"]),
         json!([]),
         json!(["/ok"]),
@@ -3072,7 +3071,7 @@ async fn private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails() {
     .expect("TLS config deserializes");
     let mut source = fixed_source(
         &format!("https://127.0.0.1:{}", address.port()),
-        json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
+        json!({"type": "static-authorization", "tokenRef": "secret:file/token"}),
     );
     *tls_trust_profile_mut(&mut source) = Some("private-pki".into());
     let (_root, secrets) = resolver(&[("token", "token")]);
@@ -3144,7 +3143,7 @@ async fn a_reset_transport_failure_yields_exactly_one_connection_attempt() {
     let (address, attempts, server) = spawn_reset_on_connect_server().await;
     let source = fixed_source(
         &format!("http://127.0.0.1:{}", address.port()),
-        json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
+        json!({"type": "static-authorization", "tokenRef": "secret:file/token"}),
     );
     let (_root, secrets) = resolver(&[("token", "token")]);
     let result = SourceExecutor::new(&source, secrets)
@@ -3181,7 +3180,7 @@ fn private_ca_plan_rejects_unbound_missing_and_malformed_captures() {
     .expect("TLS config deserializes");
     let mut source = fixed_source(
         "https://127.0.0.1:443",
-        json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
+        json!({"type": "static-authorization", "tokenRef": "secret:file/token"}),
     );
     *tls_trust_profile_mut(&mut source) = Some("private-pki".into());
     let (_root, secrets) = resolver(&[("token", "token")]);
@@ -3276,7 +3275,7 @@ fn runtime_ca_capture_rejects_symlink_malformed_and_mutable_files() {
         fs::write(
             &runtime_path,
             format!(
-                "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: /etc/registry-evidence/bundle\nlistener:\n  bind: 127.0.0.1:8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nsigner:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000\naudit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    private-pki: {{caBundleFile: {}}}\n",
+                "apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: /etc/registry-evidence/bundle\nlistener:\n  bind: 127.0.0.1:8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nsigner:\n  type: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  attemptTimeoutMilliseconds: 2000\naudit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    private-pki: {{caBundleFile: {}}}\n",
                 secret_root.display(),
                 ca_path.display()
             ),
@@ -3347,7 +3346,7 @@ async fn ambient_proxy_child() {
     ]);
     let source = fixed_source(
         &server.uri(),
-        json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
+        json!({"type": "static-authorization", "tokenRef": "secret:file/token"}),
     );
     SourceExecutor::new(&source, Arc::clone(&secrets))
         .expect("executor builds")
@@ -3406,7 +3405,7 @@ async fn a_static_authorization_source_sends_the_scheme_it_declares() {
 
         let (_root, secrets) = resolver(&[("source-token", "synthetic-token")]);
         let mut authentication = json!({
-            "kind": "static-authorization",
+            "type": "static-authorization",
             "tokenRef": "secret:file/source-token",
         });
         if let Some(declared) = declared {
@@ -3462,7 +3461,7 @@ async fn a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_s
     let source = fixed_source(
         &server.uri(),
         json!({
-            "kind": "oauth2-client-credentials",
+            "type": "oauth2-private-key-jwt",
             "tokenEndpoint": token_endpoint,
             "clientIdRef": "secret:file/oauth-client-id",
             "clientAssertionKeyRef": "secret:file/oauth-client-key",
@@ -3577,7 +3576,7 @@ async fn oauth_resource_indicator_is_sent_exactly_in_both_client_secret_forms() 
         let source = fixed_source(
             &server.uri(),
             json!({
-                "kind": "oauth2-client-credentials",
+                "type": "oauth2-client-credentials",
                 "tokenEndpoint": format!("{}/token", server.uri()),
                 "clientIdRef": "secret:file/oauth-client-id",
                 "clientSecretRef": "secret:file/oauth-client-secret",
@@ -3642,7 +3641,7 @@ fn oauth_resource_indicator_rejects_unusable_identifiers_before_credentials() {
         let source = fixed_source(
             "https://source.invalid",
             json!({
-                "kind": "oauth2-client-credentials",
+                "type": "oauth2-client-credentials",
                 "tokenEndpoint": "https://issuer.invalid/token",
                 "clientIdRef": "secret:file/oauth-client-id",
                 "clientSecretRef": "secret:file/oauth-client-secret",
@@ -3699,7 +3698,7 @@ async fn a_private_key_jwt_source_signs_the_configured_assertion_audience() {
     let source = fixed_source(
         &server.uri(),
         json!({
-            "kind": "oauth2-client-credentials",
+            "type": "oauth2-private-key-jwt",
             "tokenEndpoint": token_endpoint,
             "clientIdRef": "secret:file/oauth-client-id",
             "clientAssertionKeyRef": "secret:file/oauth-client-key",
@@ -3776,7 +3775,7 @@ async fn a_token_endpoint_carrying_a_stripped_character_is_refused() {
         let source = fixed_source(
             "https://source.invalid",
             json!({
-                "kind": "oauth2-client-credentials",
+                "type": "oauth2-private-key-jwt",
                 "tokenEndpoint": endpoint,
                 "clientIdRef": "secret:file/oauth-client-id",
                 "clientAssertionKeyRef": "secret:file/oauth-client-key",
@@ -3824,7 +3823,7 @@ async fn an_unstated_assertion_audience_is_the_token_endpoint_as_configured() {
     let source = fixed_source(
         &server.uri(),
         json!({
-            "kind": "oauth2-client-credentials",
+            "type": "oauth2-private-key-jwt",
             "tokenEndpoint": configured_endpoint,
             "clientIdRef": "secret:file/oauth-client-id",
             "clientAssertionKeyRef": "secret:file/oauth-client-key",
@@ -3886,7 +3885,7 @@ async fn an_unreadable_client_assertion_key_fails_before_the_token_request() {
         let source = fixed_source(
             &server.uri(),
             json!({
-                "kind": "oauth2-client-credentials",
+                "type": "oauth2-private-key-jwt",
                 "tokenEndpoint": format!("{}/token", server.uri()),
                 "clientIdRef": "secret:file/oauth-client-id",
                 "clientAssertionKeyRef": "secret:file/oauth-client-key",
@@ -3945,7 +3944,7 @@ async fn client_assertion_key_material_the_jwk_parser_refuses_never_signs() {
         let source = fixed_source(
             &server.uri(),
             json!({
-                "kind": "oauth2-client-credentials",
+                "type": "oauth2-private-key-jwt",
                 "tokenEndpoint": format!("{}/token", server.uri()),
                 "clientIdRef": "secret:file/oauth-client-id",
                 "clientAssertionKeyRef": "secret:file/oauth-client-key",
@@ -3982,7 +3981,7 @@ async fn client_assertion_key_material_the_jwk_parser_refuses_never_signs() {
 async fn a_client_assertion_key_whose_halves_disagree_never_reaches_the_token_endpoint() {
     let authentication = |server_uri: &str| {
         json!({
-            "kind": "oauth2-client-credentials",
+            "type": "oauth2-private-key-jwt",
             "tokenEndpoint": format!("{server_uri}/token"),
             "clientIdRef": "secret:file/oauth-client-id",
             "clientAssertionKeyRef": "secret:file/oauth-client-key",
@@ -4101,7 +4100,7 @@ fn compilation_refuses_an_authorization_scheme_that_is_not_an_http_token() {
         let source = fixed_source(
             "https://source.invalid",
             json!({
-                "kind": "static-authorization",
+                "type": "static-authorization",
                 "tokenRef": "secret:file/source-token",
                 "scheme": scheme
             }),
@@ -4114,12 +4113,13 @@ fn compilation_refuses_an_authorization_scheme_that_is_not_an_http_token() {
     }
 }
 
-/// The same second gate for the OAuth credential forms. Compilation narrows
-/// the three flat keys into a closed two-member enum, and every combination
-/// that is not exactly one credential form has to be refused on the way in,
-/// not resolved to a default.
+/// The same gate for the OAuth credential forms, held by the type. Each form
+/// is its own authentication type with its credential members required and
+/// the other form's members unknown, so a combination that is not exactly
+/// one credential form cannot be declared under either type and never
+/// reaches compilation to be resolved to a default.
 #[test]
-fn compilation_refuses_an_oauth_source_without_exactly_one_credential_form() {
+fn an_oauth_source_without_exactly_one_credential_form_cannot_be_declared() {
     for (label, secret_ref, placement, key_ref) in [
         (
             "both forms",
@@ -4153,27 +4153,29 @@ fn compilation_refuses_an_oauth_source_without_exactly_one_credential_form() {
         ),
         ("neither form", None, None, None),
     ] {
-        let mut authentication = json!({
-            "kind": "oauth2-client-credentials",
-            "tokenEndpoint": "https://source.invalid/token",
-            "clientIdRef": "secret:file/oauth-client-id",
-            "maximumCacheSeconds": 60
-        });
-        if let Some(secret_ref) = secret_ref {
-            authentication["clientSecretRef"] = json!(secret_ref);
+        for written in ["oauth2-client-credentials", "oauth2-private-key-jwt"] {
+            let mut authentication = json!({
+                "type": written,
+                "tokenEndpoint": "https://source.invalid/token",
+                "clientIdRef": "secret:file/oauth-client-id",
+                "maximumCacheSeconds": 60
+            });
+            if let Some(secret_ref) = secret_ref {
+                authentication["clientSecretRef"] = json!(secret_ref);
+            }
+            if let Some(placement) = placement {
+                authentication["credentialPlacement"] = json!(placement);
+            }
+            if let Some(key_ref) = key_ref {
+                authentication["clientAssertionKeyRef"] = json!(key_ref);
+            }
+            assert!(
+                serde_json::from_value::<registry_evidence::config::SourceAuthentication>(
+                    authentication
+                )
+                .is_err(),
+                "{label} was declared as {written}"
+            );
         }
-        if let Some(placement) = placement {
-            authentication["credentialPlacement"] = json!(placement);
-        }
-        if let Some(key_ref) = key_ref {
-            authentication["clientAssertionKeyRef"] = json!(key_ref);
-        }
-        let (_root, secrets) = resolver(&[("oauth-client-id", "synthetic-client")]);
-        let source = fixed_source("https://source.invalid", authentication);
-        assert_eq!(
-            SourceExecutor::new(&source, secrets).err(),
-            Some(SourceError::InvalidPlan),
-            "{label} compiled into a plan"
-        );
     }
 }

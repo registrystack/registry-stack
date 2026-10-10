@@ -63,8 +63,8 @@ BReg enforces the prepare/submit split; neither service's good behavior is
 the boundary. The access profile a standing citizen agent uses, which both
 the gateway's outbound token and the chat host's requests carry, may only
 read and create or patch change-request drafts: BReg's compiler refuses a
-profile of that kind that also holds `submit_request`, `revise_request`,
-`cancel_request`, `apply_request`, or any direct mutation outside a change
+profile of that kind that also holds `submit-request`, `revise-request`,
+`cancel-request`, `apply-request`, or any direct mutation outside a change
 request. A task grant carries a human's approval inside the grant itself; a
 standing agent carries none, so the human has to confirm the change
 themselves, by submitting it on the review page. See

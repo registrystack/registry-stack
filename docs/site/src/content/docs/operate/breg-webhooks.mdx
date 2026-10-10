@@ -38,8 +38,8 @@ eventDestinations:
   record-receiver:
     origin: https://receiver.example.org
     path: /events
-    networkProfile: productionHttps
-    dnsFamily: dualStackStrict
+    networkProfile: production-https
+    dnsFamily: dual-stack-strict
     allowedPrivateCidrs: []
     hmacSha256KeyRef: secret:file/record-webhook-key
     classificationCeiling: restricted
@@ -52,10 +52,10 @@ eventDelivery:
 
 The destination's `classificationCeiling` must cover the event's derived classification; a binding
 cannot add fields to a payload. For a receiver on a private network, list the intended canonical
-ranges in `allowedPrivateCidrs`. Use `dnsFamily: ipv4Only` only on an IPv4-only network. Optional
+ranges in `allowedPrivateCidrs`. Use `dnsFamily: ipv4-only` only on an IPv4-only network. Optional
 `tls.caBundleRef` and `tls.clientIdentityRef` name PEM secrets for a private certificate authority
-and mutual TLS. `networkProfile: loopbackDevelopmentHttp` exists for local development only.
-The `productionHttps` profile refuses `localhost` and every `*.localhost` name during
+and mutual TLS. `networkProfile: loopback-development-http` exists for local development only.
+The `production-https` profile refuses `localhost` and every `*.localhost` name during
 configuration validation, including absolute names with a trailing dot. Use the loopback profile
 for a receiver on the same development host.
 

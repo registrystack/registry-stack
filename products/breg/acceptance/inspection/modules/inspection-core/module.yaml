@@ -1,3 +1,5 @@
+apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
 id: inspection-core
 version: 0.1.0
 entities:
@@ -10,19 +12,19 @@ entities:
       - id: authority-code
         type: string
         required: true
-        maxLength: 64
+        maximumLength: 64
         classification: restricted
       - id: name
         type: string
         required: true
-        maxLength: 160
+        maximumLength: 160
         classification: restricted
       - id: jurisdiction
         type: string
         required: true
-        maxLength: 80
+        maximumLength: 80
         classification: restricted
     constraints:
-      - kind: unique
+      - type: unique
         fields:
           - authority-code

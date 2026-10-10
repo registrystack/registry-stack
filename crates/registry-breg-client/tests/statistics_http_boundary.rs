@@ -455,7 +455,7 @@ async fn statistics_problems_keep_concealment_and_closed_domain_details() {
         .statistics_live("missing", None, None, None, BRegStatisticsFormat::Json)
         .await
         .unwrap_err();
-    assert_eq!(missing.kind(), "not_found");
+    assert_eq!(missing.kind(), "not-found");
     assert_eq!(
         missing.problem_code(),
         Some(BRegProblemCode::ResourceNotFound)

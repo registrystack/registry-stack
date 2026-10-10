@@ -1,0 +1,505 @@
+{
+  "$defs": {
+    "AffectedRowBounds": {
+      "additionalProperties": false,
+      "properties": {
+        "maximum": {
+          "description": "The document member `maximum`.",
+          "format": "uint64",
+          "maximum": 100000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minimum": {
+          "description": "The document member `minimum`.",
+          "format": "uint64",
+          "maximum": 100000000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "minimum",
+        "maximum"
+      ],
+      "type": "object"
+    },
+    "ChunkCursorProtocol": {
+      "enum": [
+        "record-id-uuid-array"
+      ],
+      "type": "string"
+    },
+    "CompiledRegistryChangeClass": {
+      "enum": [
+        "compatible-additive",
+        "data-backfill-required",
+        "access-or-disclosure-change",
+        "destructive-or-irreversible",
+        "unsupported"
+      ],
+      "type": "string"
+    },
+    "CompiledRegistryChangeCode": {
+      "enum": [
+        "registry-identity-changed",
+        "registry-version-changed",
+        "entity-added",
+        "entity-removed",
+        "entity-physical-name-changed",
+        "entity-route-changed",
+        "entity-mutation-mode-changed",
+        "entity-classification-changed",
+        "entity-access-requirements-changed",
+        "entity-access-log-changed",
+        "entity-geo-json-changed",
+        "entity-temporal-changed",
+        "change-request-contract-changed",
+        "field-added-optional",
+        "field-added-required",
+        "field-removed",
+        "field-type-changed",
+        "field-vocabulary-codes-added",
+        "field-length-widened",
+        "field-physical-name-changed",
+        "field-requiredness-changed",
+        "field-pattern-added",
+        "field-pattern-changed",
+        "field-pattern-removed",
+        "field-encryption-changed",
+        "field-lookup-changed",
+        "field-classification-changed",
+        "field-temporal-role-changed",
+        "derived-relation-added",
+        "derived-relation-removed",
+        "derived-relation-changed",
+        "reference-target-changed",
+        "constraint-added",
+        "constraint-removed",
+        "constraint-changed",
+        "index-added",
+        "index-removed",
+        "index-changed",
+        "access-profile-added",
+        "access-profile-removed",
+        "access-profile-changed",
+        "route-added",
+        "route-removed",
+        "route-changed",
+        "query-inventory-changed",
+        "event-added",
+        "event-removed",
+        "event-changed",
+        "action-added",
+        "action-removed",
+        "action-changed",
+        "action-vocabulary-codes-added",
+        "action-target-fields-widened",
+        "consent-record-changed",
+        "recipient-organization-added",
+        "recipient-organization-removed",
+        "recipient-organization-changed",
+        "recipient-group-added",
+        "recipient-group-removed",
+        "recipient-group-changed",
+        "statistical-dataset-added",
+        "statistical-dataset-removed",
+        "statistical-dataset-changed"
+      ],
+      "type": "string"
+    },
+    "CompiledRegistryChangeTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "entityId": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CompiledRegistryChangeTargetKind"
+        },
+        "memberId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "CompiledRegistryChangeTargetKind": {
+      "enum": [
+        "registry",
+        "entity",
+        "change-request",
+        "field",
+        "derived-relation",
+        "constraint",
+        "index",
+        "access-profile",
+        "route",
+        "query-inventory",
+        "event",
+        "action",
+        "recipient",
+        "statistical-dataset"
+      ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "ReviewedChangeCover": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/CompiledRegistryChangeCode"
+        },
+        "target": {
+          "$ref": "#/$defs/CompiledRegistryChangeTarget"
+        }
+      },
+      "required": [
+        "code",
+        "target"
+      ],
+      "type": "object"
+    },
+    "ReviewedFieldEncryptionHistory": {
+      "description": "What the reviewed plan does with the plaintext history that exists before\na field-encryption flip activates. `EraseAndRebaseline` destroys the full\nper-record history after activation through the operator lifecycle;\n`RetainPlaintextHistory` keeps serving pre-flip revisions as they were\nwritten, scoped by the flip boundary.",
+      "enum": [
+        "erase-and-rebaseline",
+        "retain-plaintext-history"
+      ],
+      "type": "string"
+    },
+    "ReviewedMigrationAssertionDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "sqlPath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "sqlPath"
+      ],
+      "type": "object"
+    },
+    "ReviewedMigrationObject": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "The document member `entity`.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ReviewedMigrationObjectKind"
+        },
+        "member": {
+          "description": "The document member `member`.",
+          "type": "string"
+        },
+        "physicalName": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "table": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "table",
+        "entity",
+        "kind",
+        "physicalName"
+      ],
+      "type": "object"
+    },
+    "ReviewedMigrationObjectKind": {
+      "enum": [
+        "entity",
+        "field",
+        "constraint",
+        "index"
+      ],
+      "type": "string"
+    },
+    "ReviewedMigrationRecovery": {
+      "description": "How an interrupted activation of the reviewed plan is recovered.\n`bregctl plan --format json` prints the same word.",
+      "enum": [
+        "exact-target-resume"
+      ],
+      "type": "string"
+    },
+    "ReviewedMigrationStepDescriptor": {
+      "description": "One reviewed step, tagged by `type` (CFG-ID-7). Rust field names keep\ntheir engine spelling; each serde rename names the document member.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "affectedRows": {
+              "$ref": "#/$defs/AffectedRowBounds"
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "objects": {
+              "items": {
+                "$ref": "#/$defs/ReviewedMigrationObject"
+              },
+              "type": "array"
+            },
+            "sqlPath": {
+              "type": "string"
+            },
+            "type": {
+              "const": "transactional-sql",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "sqlPath",
+            "objects"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "chunkSize": {
+              "format": "uint32",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "cursor": {
+              "$ref": "#/$defs/ChunkCursorProtocol"
+            },
+            "entity": {
+              "description": "The document member `entity`.",
+              "type": "string"
+            },
+            "exactAffectedRows": {
+              "type": "boolean"
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "lockTimeoutMilliseconds": {
+              "description": "The document member `lockTimeoutMilliseconds`.",
+              "format": "uint64",
+              "maximum": 300000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maximumTotalRows": {
+              "description": "The document member `maximumTotalRows`.",
+              "format": "uint64",
+              "maximum": 100000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "objects": {
+              "items": {
+                "$ref": "#/$defs/ReviewedMigrationObject"
+              },
+              "type": "array"
+            },
+            "sqlPath": {
+              "type": "string"
+            },
+            "statementTimeoutMilliseconds": {
+              "description": "The document member `statementTimeoutMilliseconds`.",
+              "format": "uint64",
+              "maximum": 3600000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "chunked-backfill",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "entity",
+            "sqlPath",
+            "objects",
+            "cursor",
+            "chunkSize",
+            "maximumTotalRows",
+            "lockTimeoutMilliseconds",
+            "statementTimeoutMilliseconds",
+            "exactAffectedRows"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The engine-executed field-encryption backfill: it seals the plaintext\ncolumn of every covered field into envelopes and blind indexes, chunk\nby chunk, with the journal and cursor effects each chunk commits. It\ncarries no authored SQL; its bound statement content is the canonical\nJSON of this descriptor step, so the ledger checksum pins it without a\nSQL artifact.",
+          "properties": {
+            "chunkSize": {
+              "format": "uint32",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "cursor": {
+              "$ref": "#/$defs/ChunkCursorProtocol"
+            },
+            "entity": {
+              "description": "The document member `entity`.",
+              "type": "string"
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "lockTimeoutMilliseconds": {
+              "description": "The document member `lockTimeoutMilliseconds`.",
+              "format": "uint64",
+              "maximum": 300000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maximumTotalRows": {
+              "description": "The document member `maximumTotalRows`.",
+              "format": "uint64",
+              "maximum": 100000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "objects": {
+              "items": {
+                "$ref": "#/$defs/ReviewedMigrationObject"
+              },
+              "type": "array"
+            },
+            "statementTimeoutMilliseconds": {
+              "description": "The document member `statementTimeoutMilliseconds`.",
+              "format": "uint64",
+              "maximum": 3600000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "field-encryption-backfill",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "entity",
+            "objects",
+            "cursor",
+            "chunkSize",
+            "maximumTotalRows",
+            "lockTimeoutMilliseconds",
+            "statementTimeoutMilliseconds"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/breg/migration-descriptor/migration-descriptor.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A reviewed migration's `descriptor.json`. Rust field names keep their\nengine spelling; each serde rename names the document member.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/breg/migration-descriptor/v1alpha1",
+      "description": "The format and version this file is written in.",
+      "type": "string"
+    },
+    "backupBindingPath": {
+      "type": "string"
+    },
+    "changeClass": {
+      "$ref": "#/$defs/CompiledRegistryChangeClass"
+    },
+    "covers": {
+      "items": {
+        "$ref": "#/$defs/ReviewedChangeCover"
+      },
+      "type": "array"
+    },
+    "history": {
+      "$ref": "#/$defs/ReviewedFieldEncryptionHistory",
+      "description": "The reviewed choice for pre-flip plaintext history. Required exactly\nwhen a cover turns field encryption on; carried with no default so a\nmissing or silently assumed choice can never reach a plan."
+    },
+    "id": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "kind": {
+      "const": "BRegMigrationDescriptor",
+      "description": "The kind of document this file is.",
+      "type": "string"
+    },
+    "lockTimeoutMilliseconds": {
+      "description": "The document member `lockTimeoutMilliseconds`.",
+      "format": "uint64",
+      "maximum": 300000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "postAssertions": {
+      "items": {
+        "$ref": "#/$defs/ReviewedMigrationAssertionDescriptor"
+      },
+      "type": "array"
+    },
+    "preAssertions": {
+      "items": {
+        "$ref": "#/$defs/ReviewedMigrationAssertionDescriptor"
+      },
+      "type": "array"
+    },
+    "recovery": {
+      "$ref": "#/$defs/ReviewedMigrationRecovery"
+    },
+    "rehearsalReceiptPath": {
+      "type": "string"
+    },
+    "statementTimeoutMilliseconds": {
+      "description": "The document member `statementTimeoutMilliseconds`.",
+      "format": "uint64",
+      "maximum": 3600000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/ReviewedMigrationStepDescriptor"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "id",
+    "changeClass",
+    "covers",
+    "recovery",
+    "lockTimeoutMilliseconds",
+    "statementTimeoutMilliseconds",
+    "steps",
+    "preAssertions",
+    "postAssertions",
+    "rehearsalReceiptPath"
+  ],
+  "title": "Base Registry Engine reviewed migration descriptor",
+  "type": "object"
+}

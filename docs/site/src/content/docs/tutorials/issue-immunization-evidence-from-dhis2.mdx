@@ -315,18 +315,18 @@ Replace `sources/child-tracker.yaml` with:
 ```yaml
 apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
 kind: EvidenceSource
-transport: http-json
+type: http-json
 baseUrl: https://play.im.dhis2.org
 posture: record-transformed
 authentication:
-  kind: basic
+  type: basic
   usernameRef: secret:file/dhis2-username
   passwordRef: secret:file/dhis2-password
 request:
   method: GET
-  pathTemplate: /stable-2-43-1/api/tracker/trackedEntities/{uid}
+  path: /stable-2-43-1/api/tracker/trackedEntities/{uid}
   pathBindings:
-    uid: {from: selector, role: child, profile: child-tracked-entity-v1, field: tracked_entity_id}
+    uid: {type: selector, role: child, profile: child-tracked-entity-v1, field: tracked_entity_id}
   fixedHeaders:
     - name: Accept
       value: application/json
@@ -356,9 +356,9 @@ request:
     - /enrollments/*/events/*/dataValues/*/dataElement
     - /enrollments/*/events/*/dataValues/*/value
   redirects: deny
-  timeoutMilliseconds: 10000
+  attemptTimeoutMilliseconds: 10000
   maximumResponseBytes: 262144
-  concurrencyLimit: 8
+  maximumConcurrency: 8
 responseSchema: schemas/child-tracker-response.schema.yaml
 extractScript: adapters/child-tracker-extract.rhai
 factSchema: schemas/child-tracker-facts.schema.yaml
@@ -835,12 +835,12 @@ service account, review the source acquisition posture, and build a reviewed pro
 
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
-| `curl` fails with 404 against `$DHIS2_BASE_URL` | The demo publishes each DHIS2 release under its own version path, and this tutorial pins `stable-2-43-1`. | Take the current version path from the demo landing page, then update `DHIS2_BASE_URL` and the `pathTemplate` prefix in `sources/child-tracker.yaml`. Re-read the Tracker API reference for that version before trusting the field names. |
+| `curl` fails with 404 against `$DHIS2_BASE_URL` | The demo publishes each DHIS2 release under its own version path, and this tutorial pins `stable-2-43-1`. | Take the current version path from the demo landing page, then update `DHIS2_BASE_URL` and the `path` prefix in `sources/child-tracker.yaml`. Re-read the Tracker API reference for that version before trusting the field names. |
 | `curl` fails with 401 | The shared demo account was rotated or disabled. | Take the credential the demo publishes now and update `.local/dhis2.curl`, `secrets/dhis2-username`, and `secrets/dhis2-password`. Do not put a real DHIS2 account in these files. |
 | `choose-dhis2-subject.py` reports that no record on the page carries all five readings | The demo data was reset, or this page of records holds no complete Child Programme case. | Request a later page with `page=2`, or raise `pageSize`. Do not drop a concept from the question so a partial record qualifies. |
 | Writing the subject file fails with `FileExistsError` | `os.open` refuses `O_EXCL` when the file is already there, so a second run cannot overwrite it. | Remove `../.local/dhis2-subjects.json` and run the step again. |
 | Evidence Gateway returns no assertion for a subject that worked earlier | The record changed: a reading was removed, or an `ACTIVE` and a `COMPLETED` event now disagree. | Run the discovery step again and pick a current subject. Leave `merge_reading` refusing conflicts. A disagreement between two events is a fact about the record. |
-| Evidence Gateway reports a source dependency failure | The shared demo was slow or unreachable, or the response exceeded `timeoutMilliseconds` or `maximumResponseBytes`. | Retry later. Treat the bounds as reviewed source policy, and raise one only after deciding it is right for the deployment. |
+| Evidence Gateway reports a source dependency failure | The shared demo was slow or unreachable, or the response exceeded `attemptTimeoutMilliseconds` or `maximumResponseBytes`. | Retry later. Treat the bounds as reviewed source policy, and raise one only after deciding it is right for the deployment. |
 | `curl` fails with a certificate error | An intercepting proxy or an out-of-date trust store on your machine. | Repair the trust store, or exempt the demo host from interception. Do not reach for `--insecure`: the source denies redirects and reaches the demo over HTTPS only. |
 
 ## Next

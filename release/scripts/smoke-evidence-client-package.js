@@ -27,7 +27,7 @@ const spec = {
   configurationRevision: `sha256:${'0'.repeat(64)}`,
   expectedAssuranceProfile: 'local',
   subjects: [{ role: 'subject', selectorProfile: 'national-id' }],
-  expectedOutputs: [{ concept: 'urn:example:concept:status-holds', form: 'boolean' }],
+  expectedOutputs: [{ concept: 'urn:example:concept:status-holds', form: { type: 'boolean' } }],
   maximumAssertionLifetimeSeconds: 300,
   clockSkewSeconds: 60,
   subjectExpectations: 'acceptFirstUse',

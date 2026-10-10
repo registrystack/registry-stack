@@ -71,7 +71,7 @@ def main() -> None:
         now = int(time.time())
         claims = {"aud": "urn:breg:change-request-example", "client_id": "registry-change-request-example", "exp": now + 3600, "iat": now,
                   "iss": "https://issuer.example/change-request-example", "jti": f"farmer-{suffix}-{role}", "registry_principal": f"synthetic-landholding-{role}",
-                  "sub": f"synthetic-landholding-{role}", "registry_purpose": purpose, "scope": scope}
+                  "sub": f"synthetic-landholding-{role}", "registry_actor_kind": "service", "registry_purpose": purpose, "scope": scope}
         body = b64(json.dumps({"alg": "EdDSA", "kid": kid, "typ": "JWT"}, separators=(",", ":")).encode()) + "." + b64(json.dumps(claims, separators=(",", ":")).encode())
         signing_input = root / "token-signing-input"
         signing_input.write_text(body)
@@ -115,13 +115,13 @@ def main() -> None:
                 url = urlunsplit((admin.scheme, f"{quote(role)}:{password}@{admin.hostname}:{admin.port or 5432}", f"/{database}", "", ""))
                 (secret_root / f"{label}-{index}").write_text(url)
             runtime = {
-                "apiVersion": "registry.registrystack.org/breg-runtime/v1alpha1", "kind": "BRegRuntimeConfig", "listener": {"bind": "127.0.0.1:0"},
+                "apiVersion": "id.registrystack.org/formats/breg/runtime/v1alpha1", "kind": "BRegRuntimeConfig", "listener": {"bind": "127.0.0.1:0"},
                 "identity": {"environment": "acceptance", "instanceId": "farmer-landholding-evidence", "databaseId": database_id, "databaseInitializationEnvironment": "acceptance"},
                 "secretProviders": {"file": {"root": str(secret_root)}},
-                "database": {"runtimeUrlRef": f"secret:file/runtime-{index}", "migrationUrlRef": f"secret:file/migration-{index}", "pool": {"maxSize": 4, "waitTimeoutMilliseconds": 1000, "createTimeoutMilliseconds": 1000, "recycleTimeoutMilliseconds": 1000}, "roles": {"migration": migration, "runtime": runtime_role}},
+                "database": {"runtimeUrlRef": f"secret:file/runtime-{index}", "migrationUrlRef": f"secret:file/migration-{index}", "pool": {"maximumConnections": 4, "waitTimeoutMilliseconds": 1000, "createTimeoutMilliseconds": 1000, "recycleTimeoutMilliseconds": 1000}, "roles": {"migration": migration, "runtime": runtime_role}},
                 "package": {"root": str(root / "empty-package")},
-                "authentication": {"oidc": {"issuer": "https://issuer.example/change-request-example", "audience": "urn:breg:change-request-example", "allowedAlgorithm": "EdDSA", "accessTokenType": "JWT", "scopeClaim": "scope", "scopeSeparator": " ", "allowedClients": ["registry-change-request-example"], "deniedKids": [], "maxTokenLifetimeSeconds": 3600, "leewayMilliseconds": 60000, "jwksCache": {"cacheTtlSeconds": 600, "negativeCacheTtlSeconds": 60, "refreshCooldownSeconds": 30, "maxDocumentBytes": 65536, "requestTimeoutMilliseconds": 5000, "outageToleranceSeconds": 0}, "jwksSource": {"kind": "static", "documentRef": "secret:file/oidc-jwks"}}, "authorityClaims": {"principal": "registry_principal", "purpose": "registry_purpose"}},
-                "audit": {"hashKeyRef": "secret:file/audit-key", "path": str(root / f"audit-{index}" / "audit.jsonl")}, "cursor": {"secretRef": "secret:file/cursor-key", "maxAgeSeconds": 300}, "eventDestinations": {},
+                "authentication": {"oidc": {"issuer": "https://issuer.example/change-request-example", "audience": "urn:breg:change-request-example", "allowedAlgorithm": "EdDSA", "accessTokenType": "JWT", "scopeClaim": "scope", "scopeSeparator": " ", "allowedClients": ["registry-change-request-example"], "maximumTokenLifetimeSeconds": 3600, "leewayMilliseconds": 60000, "jwksCache": {"cacheTtlSeconds": 600, "negativeCacheTtlSeconds": 60, "refreshCooldownSeconds": 30, "maximumDocumentBytes": 65536, "attemptTimeoutMilliseconds": 5000, "outageToleranceSeconds": 0}, "jwksSource": {"type": "static", "documentRef": "secret:file/oidc-jwks"}}, "authorityClaims": {"principal": "registry_principal", "purpose": "registry_purpose"}},
+                "audit": {"hashKeyRef": "secret:file/audit-key", "path": str(root / f"audit-{index}" / "audit.jsonl")}, "cursor": {"secretRef": "secret:file/cursor-key", "maximumAgeSeconds": 300}, "eventDestinations": {},
                 "evidenceProviders": {"farmer-registry": {"baseUrl": ready["baseUrl"], "trustBindingId": "synthetic-farmer-live", "tokenRef": "secret:file/evidence-token", "trustedJwksRef": "secret:file/evidence-jwks", "revokedKeyIds": []}},
                 "operationalTimeouts": {"httpRequestMilliseconds": 10000, "shutdownGraceMilliseconds": 30000, "recordLockMilliseconds": 5000, "migrationLockMilliseconds": 30000, "migrationStatementMilliseconds": 60000},
             }
