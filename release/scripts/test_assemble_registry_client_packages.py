@@ -36,6 +36,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             "maturin",
             Path("/work"),
             Path("/out"),
+            include_coordinator=True,
         )
         self.rendered = [step.render() for step in self.steps]
 
@@ -86,6 +87,17 @@ class AssembleClientPackagesTest(unittest.TestCase):
                 f"{product} addon is not copied into the platform package",
             )
 
+    def test_every_platform_loader_exposes_the_coordinator_candidate_addon(self) -> None:
+        for platform in self.module.PLATFORMS:
+            with self.subTest(platform=platform):
+                source = (
+                    ROOT / "crates/registry-stack-client-node/npm" / platform / "index.js"
+                ).read_text(encoding="utf-8")
+                self.assertIn(
+                    f"coordinator: require('./coordinator-client.{platform}.node')",
+                    source,
+                )
+
     def test_macos_platform_package_bundles_fips_dylibs_before_packing(self) -> None:
         bundle_index, bundle = next(
             (index, step)
@@ -114,7 +126,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             consumers,
             [
                 platform_directory / f"{product}-client.darwin-arm64.node"
-                for product in self.module.PRODUCTS
+                for product in (*self.module.NODE_PRODUCTS, "coordinator")
             ],
         )
         addon_copies = [
@@ -148,6 +160,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             Path("/work"),
             Path("/out"),
             "/maturin/python",
+            include_coordinator=True,
         )
         self.assertFalse(
             any(
@@ -238,8 +251,10 @@ class AssembleClientPackagesTest(unittest.TestCase):
                     ROOT, "9.9.9", napi_platform, "all", "maturin",
                     Path("/work"), Path("/out"), "/maturin/python",
                 )
-                release = self.module.plan(*args)
-                ci = self.module.plan(*args, python_profile="ci")
+                release = self.module.plan(*args, include_coordinator=True)
+                ci = self.module.plan(
+                    *args, python_profile="ci", include_coordinator=True
+                )
                 self.assertEqual(len(release), len(ci))
                 products = []
                 for release_step, ci_step in zip(release, ci):
@@ -361,7 +376,8 @@ class AssembleClientPackagesTest(unittest.TestCase):
 
     def test_the_artifact_selection_splits_the_two_halves(self) -> None:
         node_only = self.module.plan(
-            ROOT, "9.9.9", "darwin-arm64", "node", "maturin", Path("/work"), Path("/out")
+            ROOT, "9.9.9", "darwin-arm64", "node", "maturin", Path("/work"), Path("/out"),
+            include_coordinator=True,
         )
         python_only = self.module.plan(
             ROOT,
@@ -388,6 +404,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
                 "--napi-platform",
                 "darwin-arm64",
                 "--include-casework",
+                "--include-coordinator",
                 "--dry-run",
             ],
             capture_output=True,
@@ -397,6 +414,21 @@ class AssembleClientPackagesTest(unittest.TestCase):
         self.assertIn("npm pack --ignore-scripts", result.stdout)
         self.assertIn("assemble-registry-client-wheel.py", result.stdout)
         self.assertFalse(Path("/out").exists())
+
+    def test_node_candidates_require_explicit_coordinator_selection(self) -> None:
+        args = (
+            ROOT, "0.40.0", "darwin-arm64", "node", "maturin",
+            Path("/work"), Path("/out"),
+        )
+        with self.assertRaisesRegex(ValueError, "explicit candidate"):
+            self.module.plan(*args)
+        steps = self.module.plan(*args, include_coordinator=True)
+        addons = [step for step in steps if step.description.startswith("add the built")]
+        self.assertEqual(addons[-1].description, "add the built coordinator addon to the platform package")
+        self.assertIn(
+            "coordinator-client.darwin-arm64.node",
+            " ".join(addons[-1].argv),
+        )
 
     def test_0_29_requires_explicit_casework_candidate_selection(self) -> None:
         args = (

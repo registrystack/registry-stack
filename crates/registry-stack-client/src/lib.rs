@@ -3,6 +3,10 @@
 //! Each product remains in its own module so route, authentication, error,
 //! record, and verification contracts cannot be mistaken for one another.
 
+pub mod coordinator {
+    pub use registry_coordinator_client::*;
+}
+
 pub mod breg {
     pub use registry_breg_client::{
         verify_webhook_delivery, BRegActionInvocationRequest, BRegActionReceipt,

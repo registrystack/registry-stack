@@ -15,7 +15,10 @@ PLATFORM_TRIPLES = {
     "linux-arm64-gnu": "aarch64-unknown-linux-gnu",
     "linux-x64-gnu": "x86_64-unknown-linux-gnu",
 }
-PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
+PRODUCTS = (
+    "discovery", "evidence", "breg", "casework", "messaging", "scheduling",
+    "coordinator",
+)
 
 
 def load_module():
@@ -94,6 +97,7 @@ SCHEDULING_LICENCES = (
     "crates/registry-scheduling-client-node/LICENSE",
     "crates/registry-scheduling-client-py/LICENSE",
 )
+COORDINATOR_LICENCE = "crates/registry-coordinator-client-node/LICENSE"
 
 
 class SyncRegistryClientNodeLicenceTest(unittest.TestCase):
@@ -141,6 +145,9 @@ class SyncRegistryClientNodeLicenceTest(unittest.TestCase):
         for licence in SCHEDULING_LICENCES:
             with self.subTest(licence=licence):
                 self.assertIn(licence, self.gated)
+
+    def test_the_coordinator_binding_licence_is_gated(self) -> None:
+        self.assertIn(COORDINATOR_LICENCE, self.gated)
 
 
 if __name__ == "__main__":

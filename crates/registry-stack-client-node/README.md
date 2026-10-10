@@ -1,7 +1,8 @@
 # @registrystack/client
 
 One versioned Node.js package for the Discovery, Evidence, Base Registry
-Engine, Casework, Messaging, and Scheduling client APIs in Registry Stack.
+Engine, Casework, Messaging, Scheduling, and Coordinator client APIs in Registry
+Stack. Coordinator is currently included only in explicit candidate builds.
 
 ## Install
 
@@ -11,13 +12,13 @@ npm install "@registrystack/client@<version>"
 
 Requires Node.js 22.12 or newer. Supported targets are macOS arm64, Linux
 arm64 with glibc, and Linux x64 with glibc; installing the package pulls in
-one platform-specific optional dependency containing all six native
+one platform-specific optional dependency containing the selected native
 bindings.
 
 ## Usage
 
 ```js
-const { discovery, evidence, breg, casework, messaging, scheduling } = require('@registrystack/client');
+const { discovery, evidence, breg, casework, messaging, scheduling, coordinator } = require('@registrystack/client');
 
 const registry = new breg.BaseRegistryClient({
   baseUrl: 'https://registry.example.invalid/',
@@ -30,6 +31,9 @@ const messages = new messaging.MessagingClient({
 });
 const appointments = new scheduling.SchedulingClient({
   baseUrl: 'https://scheduling.example.invalid/',
+});
+const workflows = new coordinator.CoordinatorClient({
+  baseUrl: 'https://coordinator.example.invalid/',
 });
 ```
 
@@ -47,6 +51,8 @@ const appointments = new scheduling.SchedulingClient({
   institution-owned messages.
 - `scheduling`: Registry Scheduling, published offerings, availability,
   holds, and appointments over operator-anchored supply.
+- `coordinator`: Registry Coordinator, start, observe, inspect, and reconcile
+  durable workflow runs while each product retains effect ownership.
 
 Each product remains in its own namespace because its routing,
 authentication, errors, and verification rules are different.
@@ -123,6 +129,9 @@ Registry Stack v0.38.0.
 
 The `scheduling` namespace is part of the unified package beginning with
 Registry Stack v0.40.0.
+
+The `coordinator` namespace is available in explicit Coordinator-enabled
+candidate packages. Published version selection does not include it yet.
 
 ## Casework notes
 

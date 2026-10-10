@@ -1,7 +1,7 @@
 # Registry Stack client guidance
 
-This guide covers the six product clients, the Node.js and Python bindings
-maintained for each of them, `registry-stack-client`, the unified
+This guide covers the product clients, their maintained Node.js and Python
+bindings, `registry-stack-client`, the unified
 native-package facades, and shared `registry-record` DTOs. Apply the owning
 product guide as well.
 
@@ -15,6 +15,7 @@ that every checkout or release ships it.
 | Area | Owns |
 |---|---|
 | `registry-{breg,casework,discovery,evidence,messaging,scheduling}-client` | Canonical Rust product HTTP and response contract |
+| `registry-coordinator-client` / `registry-coordinator-client-node` | Canonical Rust and thin Node contract for controlled pilot admission, progress, inspection and original-receipt reconciliation; no Python binding in this slice |
 | `registry-evidence-verifier` | Evidence response formats, payload contract, and relying-party verification |
 | BReg, Casework, Discovery, Evidence, Messaging, and Scheduling `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
 | `registry-stack-client` | Curated Rust facade for BReg, Casework, Discovery, Evidence, Messaging, and Scheduling, with separate product, record, and auth modules |
@@ -84,6 +85,19 @@ Make ordinary composition easy through typed product namespaces and existing
 HTTP contracts. A language facade should remove packaging and conversion work
 from adopters while keeping consequential choices explicit, such as local
 trust acceptance and the mutation retry count.
+
+Coordinator sends one exchange per call, with no hidden retries. Its caller owns
+durable admission retries and retains the original issuer, subject, flow, key,
+and input. Client policy is separately checked on every request. Reconciliation
+reads an original supported product receipt through the runtime's saved command;
+it never resubmits it. Coordinator keeps its own bounded JSON problem contract,
+without the trace or RFC 9457 requirements of other product clients. A backend
+run remains backend-owned. Source-record authorization and explicit application
+correlation are required before presenting progress to staff or citizens.
+
+Local Node assembly can include the Coordinator binding with the explicit
+`--include-coordinator` candidate option. Do not infer its inclusion when checking
+historical or published package bytes, and do not publish a local candidate.
 
 ## Verification and generated surfaces
 

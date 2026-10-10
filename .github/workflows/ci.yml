@@ -2518,6 +2518,7 @@ jobs:
             crates/registry-casework-client-node/package-lock.json
             crates/registry-messaging-client-node/package-lock.json
             crates/registry-scheduling-client-node/package-lock.json
+            crates/registry-coordinator-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Cache Cargo registry
@@ -2531,7 +2532,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-node registry-evidence-client-node registry-breg-client-node registry-casework-client-node registry-messaging-client-node registry-scheduling-client-node; do
+          for client in registry-discovery-client-node registry-evidence-client-node registry-breg-client-node registry-casework-client-node registry-messaging-client-node registry-scheduling-client-node registry-coordinator-client-node; do
             (
               cd "crates/${client}"
               npm ci

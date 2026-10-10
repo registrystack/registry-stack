@@ -1,4 +1,4 @@
-import { breg, casework, discovery, evidence, messaging, scheduling } from '..'
+import { breg, casework, coordinator, discovery, evidence, messaging, scheduling } from '..'
 
 const bregClient = new breg.BaseRegistryClient({ baseUrl: 'https://registry.example.invalid/' })
 const discoveryClient = new discovery.DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/' })
@@ -11,6 +11,7 @@ const evidenceClient = new evidence.EvidenceClient({
 const caseworkClient = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' })
 const messagingClient = new messaging.MessagingClient({ baseUrl: 'https://messaging.example.invalid/' })
 const schedulingClient = new scheduling.SchedulingClient({ baseUrl: 'https://scheduling.example.invalid/' })
+const coordinatorClient = new coordinator.CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/' })
 
 bregClient.listRecords('people', { top: 25 })
 breg.verifyWebhookDelivery({
@@ -87,6 +88,7 @@ type BregHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof breg>>
 type CaseworkHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof casework>>
 type MessagingHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof messaging>>
 type SchedulingHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof scheduling>>
+type CoordinatorHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof coordinator>>
 
 // @ts-expect-error Product query vocabularies remain distinct.
 bregClient.listRecords('people', { pageSize: 25 })
@@ -107,6 +109,29 @@ void messagingClient.messageReceipt('header.payload.signature', 'original-notice
   senderProfile: 'reminders-sms', to: { phone: '+15550100' }, content: { text: 'Appointment tomorrow' },
 })
 void schedulingClient.appointmentReceipt('header.payload.signature', 'original-booking', { hold: 'hold-1' })
+const coordinatorStarted: Promise<coordinator.CoordinatorOutcome<coordinator.RunStatus>> = coordinatorClient.start(
+  'header.payload.signature', 'admission 42', {
+  flow: 'decision-follow-up', input: { caseId: 'case-42' },
+})
+const coordinatorStatus: Promise<coordinator.CoordinatorOutcome<coordinator.RunStatus>> = coordinatorClient.status(
+  'header.payload.signature',
+  '0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d',
+)
+const coordinatorInspection: Promise<coordinator.CoordinatorOutcome<coordinator.RunInspection>> = coordinatorClient.inspect(
+  'header.payload.signature',
+  '0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d',
+)
+const coordinatorReconciliation: Promise<coordinator.CoordinatorOutcome<coordinator.RunInspection>> = coordinatorClient.reconcile(
+  'header.payload.signature',
+  '0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d',
+  'operator reviewed the original receipt',
+)
+void [coordinatorStarted, coordinatorStatus, coordinatorInspection, coordinatorReconciliation]
+
+// @ts-expect-error Coordinator start requires a caller-selected idempotency key.
+coordinatorClient.start('header.payload.signature', { flow: 'decision-follow-up', input: {} })
+// @ts-expect-error Coordinator exposes only its four maintained operations.
+coordinatorClient.retry('header.payload.signature', '0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d')
 const unresolvedMessage: messaging.MessagingProblemCode = 'receipt.unresolved'
 const unresolvedAppointment: scheduling.SchedulingProblemCode = 'receipt.unresolved'
 void unresolvedMessage

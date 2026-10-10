@@ -2299,6 +2299,19 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-scheduling-client-node", outputs["rust_packages"])
         self.assertIn("registry-scheduling-client-py", outputs["rust_packages"])
 
+    def test_coordinator_client_and_binding_run_the_existing_native_job(self) -> None:
+        for path in (
+            "crates/registry-coordinator-client/src/client.rs",
+            "crates/registry-coordinator-client-node/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["client_bindings"])
+                self.assertIn("registry-coordinator-client-node", outputs["rust_packages"])
+                self.assertFalse(outputs["coordinator"])
+        workflow = Path(".github/workflows/ci.yml").read_text()
+        self.assertIn("registry-scheduling-client-node registry-coordinator-client-node; do", workflow)
+
     def test_an_sdk_or_verifier_change_also_runs_the_binding_job(self) -> None:
         # Both bindings are Cargo path-dependents of the SDK and the verifier,
         # so either can change the native surface or the error envelope the

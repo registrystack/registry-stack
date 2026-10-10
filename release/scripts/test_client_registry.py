@@ -90,6 +90,7 @@ class ClientRegistryTest(unittest.TestCase):
         include_casework: bool = False,
         include_messaging: bool = False,
         include_scheduling: bool = False,
+        include_coordinator: bool = False,
     ) -> None:
         definition = self.module.client_definition(client)
         optional = {
@@ -100,6 +101,7 @@ class ClientRegistryTest(unittest.TestCase):
                 include_casework=include_casework,
                 include_messaging=include_messaging,
                 include_scheduling=include_scheduling,
+                include_coordinator=include_coordinator,
             )
         }
         for path, (platform, binary) in zip(
@@ -110,6 +112,7 @@ class ClientRegistryTest(unittest.TestCase):
                 include_casework=include_casework,
                 include_messaging=include_messaging,
                 include_scheduling=include_scheduling,
+                include_coordinator=include_coordinator,
             ),
             strict=True,
         ):
@@ -131,6 +134,7 @@ class ClientRegistryTest(unittest.TestCase):
                     include_messaging=include_messaging,
                     include_scheduling=include_scheduling,
                 )
+                + (("coordinator",) if include_coordinator else ())
                 if client == "stack"
                 else ()
             ),
@@ -273,6 +277,41 @@ class ClientRegistryTest(unittest.TestCase):
                     "--client",
                     "stack",
                     "--include-scheduling",
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "validated\n")
+
+    def test_local_coordinator_candidate_does_not_change_published_validation(self) -> None:
+        self.version = "0.40.0"
+        self._write_distribution("stack", include_coordinator=True)
+        self.module.validate_distribution(
+            self.directory,
+            self.version,
+            "stack",
+            include_coordinator=True,
+        )
+        platform = self.module.npm_tarballs(
+            self.directory, self.version, "stack"
+        )[0]
+        _metadata, names = self.module.npm_package_metadata(platform)
+        self.assertIn("package/coordinator-client.darwin-arm64.node", names)
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError, "wrong native payload"
+        ):
+            self.module.validate_distribution(self.directory, self.version, "stack")
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = self.module.main(
+                [
+                    "validate-dist",
+                    "--directory",
+                    str(self.directory),
+                    "--version",
+                    self.version,
+                    "--client",
+                    "stack",
+                    "--include-coordinator",
                 ]
             )
         self.assertEqual(exit_code, 0)
@@ -806,9 +845,9 @@ class ClientReadmeInstallTest(unittest.TestCase):
             for pattern in ("*-client-node", "*-client-py")
             for path in (repo / "crates").glob(f"{pattern}/README.md")
         )
-        # Six products have Node and Python bindings, and both unified
-        # facades remain present.
-        self.assertEqual(14, len(found), found)
+        # Six products have Node and Python bindings, Coordinator has Node,
+        # and both unified facades remain present.
+        self.assertEqual(15, len(found), found)
         return found
 
     def test_install_lines_name_only_the_unified_packages(self) -> None:
@@ -833,6 +872,7 @@ class ClientReadmeInstallTest(unittest.TestCase):
             "registry-evidence-client-node": "@registrystack/client",
             "registry-messaging-client-node": "@registrystack/client",
             "registry-scheduling-client-node": "@registrystack/client",
+            "registry-coordinator-client-node": "@registrystack/client",
             "registry-breg-client-py": "registry-stack-client",
             "registry-casework-client-py": "registry-stack-client",
             "registry-discovery-client-py": "registry-stack-client",

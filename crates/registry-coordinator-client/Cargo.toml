@@ -1,0 +1,27 @@
+[package]
+name = "registry-coordinator-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bounded server-side client for Registry Coordinator."
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["serde"] }
+registry-platform-canonical-json.workspace = true
+registry-platform-httputil.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["io-util"] }

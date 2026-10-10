@@ -16,7 +16,8 @@ It produces, into `--output-dir`:
 Prerequisites this script does not perform:
 
   * the Node bindings selected for this version, built for this platform from
-    `crates/registry-{discovery,evidence,breg,casework,messaging,scheduling}-client-node`:
+    `crates/registry-{discovery,evidence,breg,casework,messaging,scheduling}-client-node`,
+    plus `registry-coordinator-client-node` for `--include-coordinator`:
     `npm ci && npm run build:debug` (or `npm run build` for a release build)
     For a release at version 0.33.0 or later on macOS, set the package's
     compatibility floor before every native build:
@@ -32,7 +33,7 @@ readable form of the recipe.
 
 Python wheels use the release profile by default. `--python-profile ci` opts
 into the workspace's cheaper CI profile for installed-package tutorial checks;
-it still assembles all six bindings with the same platform and package layout.
+it still assembles all six Python bindings with the same platform and package layout.
 
 The checked-in `crates/registry-stack-client-node/package.json` is never
 modified: the optional platform dependencies bind in a staging copy, because
@@ -47,6 +48,8 @@ published historical bytes remain validated against their version-selected roste
 Scheduling joins the unified clients at its client first release in
 release_roster.py, and `--include-scheduling` permits the same local integration
 before that release.
+Coordinator has no published Node roster version yet. `--include-coordinator`
+adds its native binding to an explicit local candidate and has no Python effect.
 """
 
 from __future__ import annotations
@@ -152,6 +155,7 @@ def node_steps(
     work_dir: Path,
     output_dir: Path,
     macos_library_roots: tuple[Path, ...] = (),
+    include_coordinator: bool = False,
 ) -> list[Step]:
     facade = root / "crates" / "registry-stack-client-node"
     staging = work_dir / "node-root"
@@ -192,7 +196,8 @@ def node_steps(
             root,
         ),
     ]
-    for product in NODE_PRODUCTS:
+    selected_products = NODE_PRODUCTS + (("coordinator",) if include_coordinator else ())
+    for product in selected_products:
         binding = root / "crates" / f"registry-{product}-client-node"
         steps.append(
             Step(
@@ -218,7 +223,7 @@ def node_steps(
             "--library-directory",
             str(platform_directory),
         ]
-        for product in NODE_PRODUCTS:
+        for product in selected_products:
             bundle += [
                 "--consumer",
                 str(platform_directory / f"{product}-client.{napi_platform}.node"),
@@ -365,6 +370,7 @@ def plan(
     macos_library_roots: tuple[Path, ...] = (),
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_coordinator: bool = False,
 ) -> list[Step]:
     if not client_registry.includes_casework(
         version, include_casework=include_casework
@@ -389,6 +395,13 @@ def plan(
         )
     steps: list[Step] = []
     if artifacts in ("all", "node"):
+        if not client_registry.includes_coordinator(
+            include_coordinator=include_coordinator
+        ):
+            raise ValueError(
+                "this checkout contains the Coordinator Node client; an explicit "
+                "candidate requires --include-coordinator"
+            )
         steps += node_steps(
             root,
             version,
@@ -396,6 +409,7 @@ def plan(
             work_dir,
             output_dir,
             macos_library_roots,
+            include_coordinator,
         )
     if artifacts in ("all", "python"):
         steps += python_steps(
@@ -467,6 +481,11 @@ def main() -> int:
         action="store_true",
         help="include Scheduling in an explicit local integration before its first release",
     )
+    parser.add_argument(
+        "--include-coordinator",
+        action="store_true",
+        help="include Coordinator in an explicit local Node candidate",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -507,6 +526,7 @@ def main() -> int:
             macos_library_roots,
             args.include_messaging,
             args.include_scheduling,
+            args.include_coordinator,
         )
     except (ValueError, client_registry.ClientRegistryError) as exc:
         parser.error(str(exc))

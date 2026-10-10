@@ -5378,6 +5378,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-coordinator-client"
+version = "0.40.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "registry-platform-canonical-json",
+ "registry-platform-httputil",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "registry-coordinator-client-node"
+version = "0.40.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "registry-coordinator-client",
+ "serde",
+ "serde_json",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "registry-discovery"
 version = "0.40.0"
 dependencies = [
@@ -6508,6 +6539,7 @@ dependencies = [
  "chrono",
  "registry-breg-client",
  "registry-casework-client",
+ "registry-coordinator-client",
  "registry-discovery-client",
  "registry-evidence-client",
  "registry-messaging-client",

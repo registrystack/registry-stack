@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/registry-coordinator",
+    "crates/registry-coordinator-client",
+    "crates/registry-coordinator-client-node",
     "crates/registry-review-client",
     "crates/registry-review-protocol",
     "crates/registry-casework-client-node",
@@ -151,6 +153,8 @@ registry-cli-reference = { path = "crates/registry-cli-reference", version = "0.
 registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.40.0" }
 registry-platform-config = { path = "crates/registry-platform-config", version = "0.40.0" }
 registry-coordinator = { path = "crates/registry-coordinator", version = "0.40.0" }
+registry-coordinator-client = { path = "crates/registry-coordinator-client", version = "0.40.0" }
+registry-coordinator-client-node = { path = "crates/registry-coordinator-client-node", version = "0.40.0" }
 registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.40.0" }
 registry-platform-dispatch = { path = "crates/registry-platform-dispatch", version = "0.40.0" }
 registry-platform-hooks = { path = "crates/registry-platform-hooks", version = "0.40.0" }

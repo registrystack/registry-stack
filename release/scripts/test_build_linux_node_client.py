@@ -204,9 +204,23 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
             ).is_file()
         )
 
+    def test_accepts_internal_coordinator_binding_for_candidate_package(self) -> None:
+        self.make_client("coordinator", "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
+        result = self.run_build(client="coordinator")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(
+            (
+                self.root
+                / "crates/registry-coordinator-client-node/coordinator-client.linux-arm64-gnu.node"
+            ).is_file()
+        )
+
     def test_reuses_compiler_paths_for_all_products_in_one_job(self) -> None:
         compilers = []
-        for client in ("discovery", "evidence", "breg", "casework", "messaging", "scheduling"):
+        for client in (
+            "discovery", "evidence", "breg", "casework", "messaging", "scheduling",
+            "coordinator",
+        ):
             self.make_client(client, "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
             result = self.run_build(client=client)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -247,7 +261,7 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
         result = self.run_build(client="relay")
         self.assertEqual(result.returncode, 2)
         self.assertIn(
-            "client must be discovery, evidence, breg, casework, messaging, or scheduling",
+            "client must be discovery, evidence, breg, casework, messaging, scheduling, or coordinator",
             result.stderr,
         )
         self.assertFalse(self.napi_log.exists())

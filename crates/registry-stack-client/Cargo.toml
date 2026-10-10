@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 registry-breg-client.workspace = true
 registry-casework-client.workspace = true
+registry-coordinator-client.workspace = true
 registry-discovery-client.workspace = true
 registry-evidence-client.workspace = true
 registry-messaging-client.workspace = true
