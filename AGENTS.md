@@ -227,6 +227,27 @@ Messaging access profile decides. Messaging never writes to another product's
 database. The source-neutral core depends on no other Messaging crate, and the
 client never reaches the runtime.
 
+Registry Coordinator is implemented by `registry-coordinator`, which builds
+the `coordinator` service and the `coordinatorctl` operator CLI. Its pilot
+contract, deployment runbook, authored examples, generated schemas, OpenAPI
+document, security review notes, and gates live under `products/coordinator`.
+The Coordinator owns its run state in PostgreSQL: each run's pinned
+definition, its encrypted input, outputs, and prepared commands, and the audit
+records of its recovery actions. Every effect, and the authorization for it,
+stays with the product that receives the call. The Coordinator acquires a
+credential when a call is attempted and inherits no authority from a product
+it calls; a wait, a retry, or a restart never extends a Casework approval
+deadline. It reaches a product only through that product's maintained client.
+Its product dependencies are client and core crates only
+(`registry-breg-client`, `registry-casework-client`,
+`registry-messaging-client`, `registry-messaging-core`,
+`registry-scheduling-client`, and `registry-scheduling-core`), never a product
+runtime or adopter tooling crate, and its integration suites run Messaging as
+separately built executables. The Messaging and Scheduling
+dependency-direction gates enforce that for those two products on the
+Coordinator's whole forward closure, and refuse a Messaging or Scheduling
+crate that reaches the Coordinator.
+
 Registry Discovery is a curated index over public provider descriptions, not
 a trust broker, authorization service, protocol adapter, or data proxy.
 `registry-discovery-profile` is the narrow publication contract Evidence
@@ -510,6 +531,36 @@ skips, without `MESSAGING_TEST_DATABASE_URL`. The contracts check holds every
 security invariant row in `products/messaging/contracts/` to a threat, an
 enforcement point, a refusal, and either a runnable negative test or the
 later slice that owes one.
+
+Registry Coordinator product and gates:
+
+```bash
+products/coordinator/scripts/check-schemas.sh
+cargo test --locked -p registry-coordinator --features schema
+COORDINATOR_TEST_DATABASE_URL=<disposable database> \
+  COORDINATOR_MESSAGING_TEST_DATABASE_URL=<second disposable database> \
+  products/coordinator/scripts/test-postgres.sh
+python3 products/messaging/scripts/check_dependency_direction.py
+python3 products/scheduling/scripts/check_dependency_direction.py
+```
+
+The schema check fails when a committed project, runtime, or scenario schema,
+or the committed OpenAPI document, drifts from its generator. The PostgreSQL
+script needs two distinct disposable PostgreSQL 17 or newer databases, builds
+the Messaging service and `messagingctl` as separate executables, and runs
+the `postgres-test` suites, which the plain test command does not select. The
+generated files are regenerated, never hand-edited:
+
+```bash
+cargo run --locked -p registry-coordinator --features schema \
+  --example project-schema -- --output products/coordinator/generated/project
+cargo run --locked -p registry-coordinator --features schema \
+  --example runtime-schema -- --output products/coordinator/generated/runtime
+cargo run --locked -p registry-coordinator --features schema \
+  --example scenario-schema -- --output products/coordinator/generated/scenarios
+cargo run --locked -p registry-coordinator --bin coordinatorctl -- openapi \
+  > products/coordinator/generated/openapi/coordinator.openapi.json
+```
 
 The unified Node.js and Python packages are generated from the maintained product
 bindings. After changing a binding or facade, run:

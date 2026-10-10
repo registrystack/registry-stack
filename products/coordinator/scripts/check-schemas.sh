@@ -12,3 +12,6 @@ cargo run --locked --quiet -p registry-coordinator --features schema --example s
 diff -u products/coordinator/generated/project/project.schema.json "$schema_dir/project/project.schema.json"
 diff -u products/coordinator/generated/runtime/runtime.schema.json "$schema_dir/runtime/runtime.schema.json"
 diff -u products/coordinator/generated/scenarios/scenarios.schema.json "$schema_dir/scenarios/scenarios.schema.json"
+# The OpenAPI document is reproduced by the command the README documents.
+cargo run --locked --quiet -p registry-coordinator --bin coordinatorctl -- openapi >"$schema_dir/coordinator.openapi.json"
+diff -u products/coordinator/generated/openapi/coordinator.openapi.json "$schema_dir/coordinator.openapi.json"

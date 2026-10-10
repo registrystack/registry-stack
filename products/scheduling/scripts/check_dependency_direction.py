@@ -29,6 +29,11 @@ SCHEDULING_CLIENT_PREFIX = "registry-scheduling-client"
 # may use the Scheduling client but never the runtime or adopter tooling.
 UNIFIED_CLIENT_PREFIX = "registry-stack-client"
 
+# The Coordinator calls Scheduling through its client. It may use the client
+# and the core, never the runtime or adopter tooling, and no scheduling crate
+# may reach it.
+COORDINATOR_PREFIX = "registry-coordinator"
+
 
 def package_graph(metadata: dict) -> tuple[dict[str, str], dict[str, set[str]]]:
     names = {package["id"]: package["name"] for package in metadata["packages"]}
@@ -62,7 +67,7 @@ def product_violations(name: str, package_id: str, names: dict[str, str], edges:
         {
             names[item]
             for item in closure(package_id, edges)
-            if names[item].startswith(PRODUCT_PREFIXES)
+            if names[item].startswith((*PRODUCT_PREFIXES, COORDINATOR_PREFIX))
         }
     )
     if forbidden:
@@ -129,10 +134,11 @@ def violations(metadata: dict) -> list[str]:
                 f"{package_name} transitively depends on Scheduling package(s): {', '.join(forbidden)}"
             )
 
-    # The unified client may compose the Scheduling client beside other
-    # products' clients, and may never reach the runtime or adopter tooling.
+    # The unified client and the Coordinator may compose the Scheduling client
+    # beside other products' clients, and may never reach the runtime or
+    # adopter tooling.
     for package_id, package_name in sorted(names.items(), key=lambda item: item[1]):
-        if not package_name.startswith(UNIFIED_CLIENT_PREFIX):
+        if not package_name.startswith((UNIFIED_CLIENT_PREFIX, COORDINATOR_PREFIX)):
             continue
         forbidden = sorted(
             {

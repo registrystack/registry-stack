@@ -18,6 +18,7 @@ def metadata(edges: dict[str, list[str]]) -> dict:
         "client-node": "registry-scheduling-client-node",
         "client-py": "registry-scheduling-client-py",
         "stack-client": "registry-stack-client",
+        "coordinator": "registry-coordinator",
         "runtime": "registry-scheduling",
         "ctl": "registry-schedulingctl",
         "breg-client": "registry-breg-client",
@@ -249,6 +250,69 @@ class DependencyDirectionTests(unittest.TestCase):
                     f"package(s): {reached}",
                     failures,
                 )
+
+    def test_the_coordinator_beside_the_client_and_core_is_accepted(self):
+        graph = metadata(
+            {
+                "core": ["serde"],
+                "client": ["core"],
+                "coordinator": ["client", "core", "breg-client", "casework-core"],
+                "runtime": ["core"],
+                "ctl": ["runtime", "core"],
+                "breg-client": [],
+                "casework-core": [],
+                "serde": [],
+            }
+        )
+        self.assertEqual(MODULE.violations(graph), [])
+
+    def test_the_coordinator_reaching_the_scheduling_runtime_is_rejected(self):
+        for runtime, reached in (
+            ("runtime", "registry-scheduling"),
+            ("ctl", "registry-scheduling, registry-schedulingctl"),
+        ):
+            with self.subTest(runtime=runtime):
+                graph = metadata(
+                    {
+                        "core": ["serde"],
+                        "client": ["core"],
+                        "coordinator": ["client", runtime],
+                        "runtime": ["core"],
+                        "ctl": ["runtime", "core"],
+                        "serde": [],
+                    }
+                )
+                failures = "\n".join(MODULE.violations(graph))
+                self.assertIn(
+                    "registry-coordinator transitively depends on Scheduling runtime "
+                    f"package(s): {reached}",
+                    failures,
+                )
+
+    def test_a_scheduling_crate_reaching_the_coordinator_is_rejected(self):
+        for crate, name in (
+            ("core", "registry-scheduling-core"),
+            ("client", "registry-scheduling-client"),
+            ("runtime", "registry-scheduling"),
+            ("ctl", "registry-schedulingctl"),
+        ):
+            with self.subTest(crate=crate):
+                edges = {
+                    "core": ["serde"],
+                    "client": ["serde"],
+                    "runtime": ["serde"],
+                    "ctl": ["serde"],
+                    "coordinator": [],
+                    "serde": [],
+                }
+                edges[crate] = ["coordinator"]
+                failures = "\n".join(MODULE.violations(metadata(edges)))
+                self.assertIn(
+                    f"{name} transitively depends on other-product package(s): "
+                    "registry-coordinator",
+                    failures,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
