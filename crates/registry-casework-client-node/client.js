@@ -115,6 +115,8 @@ for (const [method, jsonIndexes] of [
   ['reviewKinds', []],
   ['reviewKind', []],
   ['reviewTasks', [2]],
+  ['ownReviewDecisions', [2]],
+  ['supervisoryReviewTasks', [2]],
   ['reviewTask', []],
   ['reviewTaskContext', []],
   ['previewReviewTaskTemplates', []],

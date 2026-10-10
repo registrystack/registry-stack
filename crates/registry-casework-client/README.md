@@ -6,6 +6,42 @@ contract, including unified review request, result, task, draft, history,
 accountability, and kind discovery routes. It does not contain Base Registry
 Engine routes or policy authority.
 
+Reviewer discovery accepts the optional `ReviewTaskOwnership::AssignedToMe`
+or `Unclaimed` filter. `supervisory_review_tasks` is a separate bounded view
+for current supervisors of served queues; its rows contain only task and
+accountability references, and its state is a holder-free string. A single decided-task read includes
+`decision_receipt` only when `decided_by_caller` is true, so response-loss
+recovery exposes the caller's own decision without private reasons or result
+data.
+
+`own_review_decisions(auth, &OwnReviewDecisionQuery)` discovers the caller's
+retained decisions after a fresh sign-in. Optional queue, limit and continuation
+select a bounded page ordered newest decision first. Each `OwnReviewDecision`
+contains task/request ids, current queue, the retained producer
+`requester_reference`, and the same own `decision_receipt` a single task read
+returns. Current deciding profile, team, queue, source and result retention
+checks apply; prior holding is not authorship.
+
+Receipts include the optional `outcome_label` from the decision's pinned policy,
+so later policy edits cannot relabel a selection. Approval has no outcome or
+label. The separately audited Supervisor `review_accountability` read also
+exposes that receipt through accountability retention, after result erasure.
+Legacy non-approval selections erased before upgrade omit the receipt rather
+than infer an outcome. No context or structured result is added to either read.
+
+Set `SupervisoryReviewTaskQuery::request_id` to the canonical request UUID to
+find a shared request before pagination. It composes with queue, limit and
+continuation, and the client rejects a response row for another request.
+Unknown or inaccessible requests return the same neutral empty page under
+current list semantics. A reference grants no authority to decide, read review
+content or retrieve the separate audited accountability record.
+
+Pass review-task `next_cursor` values unchanged with the same caller, profiles
+and query filters. A continuation past undisclosed candidates is an opaque UUID
+scan checkpoint valid for at most 15 minutes, so it cannot be used as a task id.
+On `410 review.result-expired`, restart without the cursor. Task rows remain
+subject to current source visibility, Casework membership and retention.
+
 The client takes a bearer token and explicit Casework profile for each call.
 Source-reading calls also take an explicit source profile. It never retains a
 human token or follows redirects, and it resends a mutation only under the

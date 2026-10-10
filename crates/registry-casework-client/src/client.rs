@@ -9,17 +9,18 @@ use registry_casework_core::{
     DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
     DirectoryTargetsQuery, DraftResponse, HistoryPage, HoldingsPage, HoldingsQuery,
     HolidaySetDocument, HolidaySetRevisionInput, ListWorkItemsQuery, MutationResponse,
-    NextWorkItemQuery, RecoverAttemptRequest, ReleaseRequest, ReviewAccountabilityRecord,
-    ReviewCancelRequest, ReviewCancelResponse, ReviewClockOccurrence, ReviewContextStrategy,
-    ReviewCreateRequest, ReviewHistoryAudience, ReviewHistoryEntry, ReviewHistoryPage,
-    ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewRequestAccepted, ReviewRequestView,
-    ReviewResultFeedPage, ReviewSourceBindingStatus, ReviewTaskContext, ReviewTaskContextData,
-    ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewValidationError,
-    ReviewValidationReason, ReviewerTask, ReviewerTaskState, SaveDraftRequest, WorkItem,
-    WorkItemPage, CASEWORK_PROBLEM_TYPE_BASE, CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH,
-    HOLDINGS_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES,
-    MAXIMUM_CASEWORK_PROFILE_BYTES, NEXT_WORK_ITEM_PATH, SOURCE_PROFILE_HEADER,
-    VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER, WORK_ITEMS_PATH,
+    NextWorkItemQuery, OwnReviewDecisionPage, RecoverAttemptRequest, ReleaseRequest,
+    ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse, ReviewClockOccurrence,
+    ReviewContextStrategy, ReviewCreateRequest, ReviewHistoryAudience, ReviewHistoryEntry,
+    ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewRequestAccepted,
+    ReviewRequestView, ReviewResultFeedPage, ReviewSourceBindingStatus, ReviewTaskContext,
+    ReviewTaskContextData, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage,
+    ReviewValidationError, ReviewValidationReason, ReviewerTask, ReviewerTaskState,
+    SaveDraftRequest, SupervisoryReviewTaskPage, WorkItem, WorkItemPage,
+    CASEWORK_PROBLEM_TYPE_BASE, CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH, HOLDINGS_PATH,
+    IDEMPOTENCY_KEY_HEADER, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES,
+    NEXT_WORK_ITEM_PATH, SOURCE_PROFILE_HEADER, VALIDATION_PATH_HEADER, VALIDATION_REASON_HEADER,
+    WORK_ITEMS_PATH,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -45,7 +46,7 @@ use uuid::Uuid;
 use crate::{
     CaseworkAuth, CaseworkClientConfig, CaseworkClientError, CaseworkComplete, CaseworkProblemCode,
     CaseworkProtocolFailure, ReviewPageQuery, ReviewResultResponse, ReviewTaskDecisionRequest,
-    ReviewTaskQuery, WorkItemHistoryQuery,
+    ReviewTaskQuery, SupervisoryReviewTaskQuery, WorkItemHistoryQuery,
 };
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -54,6 +55,8 @@ const MAXIMUM_PROBLEM_BYTES: u64 = 8 * 1024;
 const MAXIMUM_CURSOR_BYTES: usize = 4096;
 const MAXIMUM_PAGE_SIZE: usize = 100;
 const MAXIMUM_ABSENCES_PAGE_SIZE: usize = 1000;
+const MAXIMUM_REVIEW_IDENTITY_BYTES: usize = 64;
+const MAXIMUM_REVIEW_RECEIPT_OUTCOME_BYTES: usize = 128;
 const ORIGINAL_ATTEMPT_HEADER: &str = "registry-casework-attempt";
 
 pub struct CaseworkClient {
@@ -273,9 +276,11 @@ impl CaseworkClient {
         )?;
         let complete: CaseworkComplete<ReviewTaskPage> =
             self.send_json(request, StatusCode::OK).await?;
-        if complete.value.items.len() > MAXIMUM_PAGE_SIZE
+        if page_exceeds_limit(complete.value.items.len(), query.limit)
             || complete.value.items.iter().any(|task| {
                 task.decided_by_caller.is_some()
+                    || task.decision_receipt.is_some()
+                    || !review_task_matches_ownership(&task.state, query.ownership)
                     || query
                         .queue
                         .as_ref()
@@ -284,6 +289,85 @@ impl CaseworkClient {
                         .eligible_profiles
                         .iter()
                         .any(|profile| profile == auth.profile)
+            })
+        {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
+    }
+
+    pub async fn own_review_decisions(
+        &self,
+        auth: CaseworkAuth<'_>,
+        query: &crate::OwnReviewDecisionQuery,
+    ) -> Result<CaseworkComplete<OwnReviewDecisionPage>, CaseworkClientError> {
+        if let Some(queue) = &query.queue {
+            validate_identifier(queue, "the review queue identifier is invalid")?;
+        }
+        validate_review_page(query.limit)?;
+        let request = self.authorized(
+            self.http
+                .get(self.url(&["v1", "review-tasks", "own-decisions"])?)
+                .query(query),
+            &auth,
+        )?;
+        let complete: CaseworkComplete<OwnReviewDecisionPage> =
+            self.send_json(request, StatusCode::OK).await?;
+        if page_exceeds_limit(complete.value.items.len(), query.limit)
+            || complete.value.items.iter().any(|row| {
+                query
+                    .queue
+                    .as_ref()
+                    .is_some_and(|queue| &row.queue != queue)
+                    || row.requester_reference.trim().is_empty()
+                    || row.requester_reference.len() > 256
+                    || row.requester_reference.chars().any(char::is_control)
+                    || !valid_decision_receipt(&row.decision_receipt)
+            })
+            || complete.value.items.windows(2).any(|rows| {
+                (rows[0].decision_receipt.decided_at, rows[0].task_id)
+                    <= (rows[1].decision_receipt.decided_at, rows[1].task_id)
+            })
+        {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
+    }
+
+    pub async fn supervisory_review_tasks(
+        &self,
+        auth: CaseworkAuth<'_>,
+        query: &SupervisoryReviewTaskQuery,
+    ) -> Result<CaseworkComplete<SupervisoryReviewTaskPage>, CaseworkClientError> {
+        if let Some(queue) = &query.queue {
+            validate_identifier(queue, "the review queue identifier is invalid")?;
+        }
+        validate_review_page(query.limit)?;
+        let request = self.authorized(
+            self.http
+                .get(self.url(&["v1", "review-tasks", "supervision"])?)
+                .query(query),
+            &auth,
+        )?;
+        let complete: CaseworkComplete<SupervisoryReviewTaskPage> =
+            self.send_json(request, StatusCode::OK).await?;
+        if page_exceeds_limit(complete.value.items.len(), query.limit)
+            || complete.value.items.iter().any(|task| {
+                query
+                    .queue
+                    .as_ref()
+                    .is_some_and(|queue| &task.queue != queue)
+                    || query
+                        .request_id
+                        .is_some_and(|request_id| task.request_id != request_id)
             })
         {
             return Err(protocol(
@@ -754,7 +838,24 @@ impl CaseworkClient {
                 &[],
             )
             .await?;
-        if complete.value.event_id != event_id {
+        if complete.value.event_id != event_id
+            || complete
+                .value
+                .decision_receipt
+                .as_ref()
+                .is_some_and(|receipt| {
+                    !valid_decision_receipt(receipt)
+                        || receipt.decided_at != complete.value.occurred_at
+                        || match receipt.decision {
+                            registry_casework_core::ReviewDecisionType::Approve => "approve",
+                            registry_casework_core::ReviewDecisionType::Reject => "reject",
+                            registry_casework_core::ReviewDecisionType::ChangesRequested => {
+                                "changes_requested"
+                            }
+                            registry_casework_core::ReviewDecisionType::Answer => "answer",
+                        } != complete.value.decision
+                })
+        {
             return Err(protocol(
                 StatusCode::OK,
                 CaseworkProtocolFailure::Body,
@@ -1863,10 +1964,18 @@ fn require_review_task_id(
     expected_task_id: Uuid,
     status: StatusCode,
 ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
-    // `decidedByCaller` belongs to a single decided-task read, and only there.
+    // Caller decision details belong to a single decided-task read, and only
+    // the deciding principal receives the bounded receipt.
     if complete.value.task_id != expected_task_id
         || complete.value.decided_by_caller.is_some()
             != matches!(complete.value.state, ReviewerTaskState::Decided)
+        || complete.value.decision_receipt.is_some()
+            != (complete.value.decided_by_caller == Some(true))
+        || complete
+            .value
+            .decision_receipt
+            .as_ref()
+            .is_some_and(|receipt| !valid_decision_receipt(receipt))
     {
         return Err(protocol(
             status,
@@ -1875,6 +1984,67 @@ fn require_review_task_id(
         ));
     }
     Ok(complete)
+}
+
+fn valid_decision_receipt(receipt: &registry_casework_core::ReviewDecisionReceipt) -> bool {
+    use registry_casework_core::ReviewDecisionType;
+
+    let id = receipt.policy.id.as_bytes();
+    let valid_policy_id = !id.is_empty()
+        && id.len() <= MAXIMUM_REVIEW_IDENTITY_BYTES
+        && id[0].is_ascii_lowercase()
+        && id[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-');
+    let valid_policy_version = !receipt.policy.version.is_empty()
+        && receipt.policy.version.len() <= MAXIMUM_REVIEW_IDENTITY_BYTES
+        && receipt
+            .policy
+            .version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
+    let valid_outcome = receipt.outcome.as_ref().is_none_or(|outcome| {
+        !outcome.trim().is_empty()
+            && outcome.len() <= MAXIMUM_REVIEW_RECEIPT_OUTCOME_BYTES
+            && outcome.chars().all(|character| !character.is_control())
+    });
+    valid_policy_id
+        && valid_policy_version
+        && valid_outcome
+        && receipt.outcome_label.as_ref().is_none_or(|label| {
+            receipt.outcome.is_some()
+                && !label.trim().is_empty()
+                && label.len() <= 120
+                && label.chars().all(|character| !character.is_control())
+        })
+        && match receipt.decision {
+            ReviewDecisionType::Approve => receipt.outcome.is_none(),
+            ReviewDecisionType::Reject
+            | ReviewDecisionType::ChangesRequested
+            | ReviewDecisionType::Answer => receipt.outcome.is_some(),
+        }
+}
+
+fn review_task_matches_ownership(
+    state: &ReviewerTaskState,
+    ownership: Option<registry_casework_core::ReviewTaskOwnership>,
+) -> bool {
+    match ownership {
+        None => matches!(
+            state,
+            ReviewerTaskState::Open | ReviewerTaskState::Held { .. }
+        ),
+        Some(registry_casework_core::ReviewTaskOwnership::AssignedToMe) => {
+            matches!(state, ReviewerTaskState::Held { .. })
+        }
+        Some(registry_casework_core::ReviewTaskOwnership::Unclaimed) => {
+            *state == ReviewerTaskState::Open
+        }
+    }
+}
+
+fn page_exceeds_limit(item_count: usize, requested_limit: Option<usize>) -> bool {
+    item_count > requested_limit.unwrap_or(MAXIMUM_PAGE_SIZE)
 }
 
 /// A successful mutation response must show the transition it was asked to
@@ -1889,6 +2059,7 @@ fn require_review_task_transition(
 ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
     if complete.value.task_id != expected_task_id
         || complete.value.decided_by_caller.is_some()
+        || complete.value.decision_receipt.is_some()
         || !transition.completed(&complete.value, expected_revision)
     {
         return Err(protocol(
@@ -2228,6 +2399,96 @@ mod tests {
         assert!(validate_identifier(&"x".repeat(129), "profile").is_err());
         assert!(validate_idempotency_key(&"x".repeat(128)).is_ok());
         assert!(validate_idempotency_key(&"x".repeat(129)).is_err());
+    }
+
+    #[test]
+    fn decision_receipts_enforce_the_decision_outcome_shape() {
+        use registry_casework_core::{
+            ContentDigest, PolicyBinding, ReviewDecisionReceipt, ReviewDecisionType,
+        };
+
+        let receipt = |decision, outcome| ReviewDecisionReceipt {
+            outcome_label: None,
+            policy: PolicyBinding {
+                id: "review".to_owned(),
+                version: "1".to_owned(),
+                digest: ContentDigest::for_bytes(b"review"),
+            },
+            decision,
+            outcome,
+            decided_at: chrono::Utc::now(),
+        };
+        assert!(valid_decision_receipt(&receipt(
+            ReviewDecisionType::Approve,
+            None
+        )));
+        assert!(valid_decision_receipt(&receipt(
+            ReviewDecisionType::Reject,
+            Some("declined".to_owned())
+        )));
+        assert!(!valid_decision_receipt(&receipt(
+            ReviewDecisionType::Approve,
+            Some("unexpected".to_owned())
+        )));
+        assert!(!valid_decision_receipt(&receipt(
+            ReviewDecisionType::Answer,
+            None
+        )));
+        assert!(!valid_decision_receipt(&receipt(
+            ReviewDecisionType::Reject,
+            Some(" \n".to_owned())
+        )));
+        let mut invalid_policy = receipt(ReviewDecisionType::Reject, Some("declined".to_owned()));
+        invalid_policy.policy.id = "Invalid_Policy".to_owned();
+        assert!(!valid_decision_receipt(&invalid_policy));
+        invalid_policy.policy.id = "review".to_owned();
+        invalid_policy.policy.version = "x".repeat(MAXIMUM_REVIEW_IDENTITY_BYTES + 1);
+        assert!(!valid_decision_receipt(&invalid_policy));
+        let mut labelled = receipt(ReviewDecisionType::Answer, Some("confirm".to_owned()));
+        labelled.outcome_label = Some("Confirm".to_owned());
+        assert!(valid_decision_receipt(&labelled));
+        for invalid_label in ["".to_owned(), " \n".to_owned(), "x".repeat(121)] {
+            labelled.outcome_label = Some(invalid_label);
+            assert!(!valid_decision_receipt(&labelled));
+        }
+        let mut approval = receipt(ReviewDecisionType::Approve, None);
+        approval.outcome_label = Some("Confirm".to_owned());
+        assert!(!valid_decision_receipt(&approval));
+    }
+
+    #[test]
+    fn discovery_filters_require_matching_state_and_requested_page_bound() {
+        use registry_casework_core::{IssuerPrincipal, ReviewTaskOwnership};
+
+        let held = ReviewerTaskState::Held {
+            holder: IssuerPrincipal {
+                issuer: "https://issuer.example.test".to_owned(),
+                subject: "reviewer".to_owned(),
+            },
+        };
+        assert!(review_task_matches_ownership(
+            &held,
+            Some(ReviewTaskOwnership::AssignedToMe)
+        ));
+        assert!(!review_task_matches_ownership(
+            &ReviewerTaskState::Open,
+            Some(ReviewTaskOwnership::AssignedToMe)
+        ));
+        assert!(review_task_matches_ownership(
+            &ReviewerTaskState::Open,
+            Some(ReviewTaskOwnership::Unclaimed)
+        ));
+        assert!(!review_task_matches_ownership(
+            &ReviewerTaskState::Decided,
+            Some(ReviewTaskOwnership::Unclaimed)
+        ));
+        assert!(!review_task_matches_ownership(
+            &ReviewerTaskState::Decided,
+            None
+        ));
+        assert!(page_exceeds_limit(2, Some(1)));
+        assert!(!page_exceeds_limit(1, Some(1)));
+        assert!(page_exceeds_limit(MAXIMUM_PAGE_SIZE + 1, None));
     }
 
     #[test]

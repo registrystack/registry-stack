@@ -114,15 +114,127 @@ value-free and may add the paired
 rejected values.
 
 Human reviewers use `/v1/review-tasks` to list, read, claim, assign, delegate,
-release, draft, and decide work. A decided task read carries `decidedByCaller`,
-true only when the current caller recorded the decision, so a reviewer whose
-decide response was lost can confirm the outcome without the Supervisor-only
-accountability record. Every mutation checks the current task revision,
-membership, queue service, exclusions, and idempotency binding in the committing
-transaction. `GET /v1/review-tasks/{taskId}/context` returns only the frozen
-submitted context, or a bounded current source projection authorized for the
-exact human caller, together with the policy snapshot pinned to that task.
-Kind descriptions supply the currently configured kinds for discovery; task
+release, draft, and decide work. Its optional `ownership=assigned_to_me` filter
+selects tasks held by the caller's effective issuer-qualified principal,
+including a delegated holding. `ownership=unclaimed` selects open tasks.
+Omitting `ownership` preserves the complete eligible active-task view. Casework
+applies either filter before pagination and still checks current role,
+membership, served queue, pinned deciding profile, and source visibility. The
+filter grants no authority.
+
+```text
+GET /v1/review-tasks?ownership=assigned_to_me&limit=50
+GET /v1/review-tasks?ownership=unclaimed&queue=decisions&limit=50
+```
+
+A decided single-task read always carries `decidedByCaller`. When it is true,
+the read also carries `decisionReceipt` for the retained decision recorded by
+the current caller's exact issuer-qualified principal. The receipt identifies
+the pinned policy, decision type, configured outcome when required, its
+decision-time `outcomeLabel`, and decision time. The label comes from the
+request's pinned policy snapshot and does not follow later policy changes.
+Approval has no selected outcome or label. The receipt excludes the private
+reason and structured producer result. Active task lists and mutation responses
+omit both fields. This lets a reviewer
+recover a lost decide response without receiving the Supervisor-only
+accountability record.
+
+After a fresh sign-in, reviewers can discover their own retained decisions
+through `GET /v1/review-tasks/own-decisions?queue=decisions&limit=25`. The optional
+queue filter and exact issuer-qualified decision author are applied before
+pagination. Rows are ordered by decision time, newest first, then task UUID.
+Each row contains only `taskId`, `requestId`, current `queue`, the retained
+producer `requesterReference`, and `decisionReceipt`. The reference provides a
+human correlation value without inspecting any submitted snapshot. Reopen the
+existing single task using `taskId` to read the same own receipt.
+
+Own discovery requires the current human Staff or Supervisor profile to be a
+pinned deciding profile, with current membership, queue service and source
+visibility, exactly as an own receipt read does. Prior holding or assignment
+does not make someone the decision author. Administrator and Requester profiles
+cannot use this route. No colleague receipt, private reason, submitted context,
+structured producer result or decision controls are released. Own receipts and
+discovery end at terminal result expiry or erasure, even while separate
+accountability remains retained.
+
+Supervisors discover operational review work through
+`GET /v1/review-tasks/supervision`. It covers currently supervised queues and
+includes active tasks plus retained decided or closed tasks within the terminal
+result window. It does not require the Supervisor's profile to be a pinned
+deciding profile. Staff and Administrator profiles cannot use this route. Each
+row contains only the task and request ids, queue, revision, a holder-free
+`open`, `held`, or `decided` state, and an optional accountability event id.
+The state never identifies the holder. Source-context rows still require the
+caller's current source visibility. Resolving an event id through
+`GET /v1/review-accountability/{eventId}` performs that endpoint's independent
+Supervisor authority and audit checks.
+
+The explicit audited accountability record also includes `decisionReceipt`
+with the exact configured outcome and pinned label. Its actor, action, time,
+private reason and result digest retain their existing protected boundary.
+Accountability remains Casework-owned: it uses current Supervisor membership
+and service of the recorded decision queue, accepts no source-profile header,
+and releases no reviewer context or structured result. The exact selection is
+retained independently through the accountability window, including after
+result erasure. A legacy non-approval record whose selection was already erased
+at upgrade omits `decisionReceipt`; absence means unavailable, never approval.
+
+To find a request another reviewer shares, pass its canonical request UUID as
+`requestId`. Casework selects that exact request before pagination and combines
+it with the optional queue filter, bounded limit, and continuation. A request
+can have several tasks, so follow its `nextCursor` with the same selection.
+
+```text
+GET /v1/review-tasks/supervision?requestId=00000000-0000-4000-8000-000000000042&queue=decisions&limit=25
+```
+
+The reference grants no authority. Unknown, other-team, revoked, concealed, and
+expired requests return the same neutral empty page under the existing list
+semantics. Current Supervisor membership, queue service, source visibility and
+the pinned source occurrence still control disclosure. The lookup exposes no
+deciding eligibility, submitted context, private reason, producer result, or
+accountability record.
+
+Reviewer and Supervisor task cursors resume an immutable task creation and id
+position in a live walk. Pass `nextCursor` unchanged with the same caller,
+Casework profile, source profile, queue, ownership and supervisory `requestId`
+filters. A disclosed task
+anchor uses its task UUID and requires current source visibility before its
+position is accepted. Each page rechecks current membership, queue service,
+retention and task existence; reviewer pages also recheck the pinned deciding
+profile. A claim, release or decision at the anchor does not invalidate it, and
+the original policy anchor need not remain active. Restart without a cursor
+after a refresh or filter change to see earlier rows that newly entered the view.
+Own-decision cursors instead resume the decision-time/task-UUID position and
+bind the own-decisions view. Their anchors must still belong to the current
+caller and satisfy current pinned deciding profile, team, queue and retention
+scope. They cannot be reused by a colleague or on the active or supervisory
+task list.
+
+A page stopped by a source-read budget, candidate scan or deadline can need to
+continue past an undisclosed candidate. Its `nextCursor` is then an opaque UUID
+checkpoint in the existing expiring cursor mechanism, not a task reference.
+The checkpoint lasts at most 15 minutes, is bound to the caller, both selected
+profiles and the exact list view and filters, and is erased with its anchor's
+review result. It saves only a scan position. Every returned row still requires
+current Casework and source authority. Unknown, erased, expired or
+no-longer-authorized anchors and mismatched checkpoints all return
+`410 review.result-expired`; restart without a cursor after this refusal.
+An exact supervisory lookup also refuses a task anchor from another request
+with that same problem. Its opaque checkpoints bind the exact `requestId`
+selection, including the distinction between an exact and an unfiltered list.
+
+The configured source-read budget bounds candidate preflights. A supplied
+source-backed task anchor adds at most one preflight under the same page
+deadline. Internal scan positions and issued checkpoints add no anchor source
+read, so a one-read candidate budget can still advance past hidden work.
+
+Every mutation checks the current task revision, membership, queue service,
+exclusions, and idempotency binding in the committing transaction.
+`GET /v1/review-tasks/{taskId}/context` returns only the frozen submitted
+context, or a bounded current source projection authorized for the exact human
+caller, together with the policy snapshot pinned to that task. Kind
+descriptions supply the currently configured kinds for discovery; task
 handling uses the returned pinned snapshot. Casework pins the policy identity
 and submission digest once, so a later configuration change cannot reinterpret
 accepted work.
@@ -148,7 +260,8 @@ and an exact source-owned release receipt without a BReg dependency.
 bounds protected accountability state and must be at least as long. Result-feed
 and history cursors are bound to their caller and query context. After result
 expiry, Casework erases request, context, result, history, notes, drafts, tasks,
-clock occurrences, and replay response payloads while retaining only the bounded tombstone needed
+clock occurrences, and replay response payloads while retaining minimized
+accountability and the bounded tombstone needed
 to prevent unsafe idempotency-key reissue until accountability expiry. The
 producer and initiator identities are kept as request-bound sha256 tombstones for the
 same period, so either one still receives `410` rather than `404` for an

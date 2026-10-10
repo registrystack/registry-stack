@@ -19,6 +19,7 @@ OTHER_ITEM_ID = "00000000-0000-4000-8000-000000000005"
 CLOCK_OCCURRENCE_ID = "00000000-0000-4000-8000-000000000002"
 PREVIEW_ID = "00000000-0000-4000-8000-000000000003"
 EXPIRED_CURSOR = "00000000-0000-4000-8000-000000000004"
+SUPERVISORY_CURSOR = "00000000-0000-4000-8000-000000000008"
 POLICY_DIGEST = (
     "sha256:38ea436942f78766fc2db332c18e3ed545ec4e907d3386ec41b0c2eeb60e7f6c"
 )
@@ -75,6 +76,36 @@ class _Handler(BaseHTTPRequestHandler):
                 "revision": 1,
                 "eligibleProfiles": ["staff"],
                 "state": "open",
+            })
+            return
+        if self.path.startswith("/tenant/v1/review-tasks/own-decisions?"):
+            self.respond({
+                "items": [{
+                    "taskId": ITEM_ID, "requestId": OTHER_ITEM_ID,
+                    "queue": "reviews", "requesterReference": "BATCH-0042",
+                    "decisionReceipt": {
+                        "policy": {"id": "registry-correction", "version": "1", "digest": POLICY_DIGEST},
+                        "decision": "answer", "outcome": "confirm", "outcomeLabel": "Confirm",
+                        "decidedAt": "2026-10-10T01:00:00Z",
+                    },
+                }], "status": "complete",
+            })
+            return
+        if self.path in (
+            f"/tenant/v1/review-tasks/supervision?queue=reviews&requestId={request_id}"
+            f"&cursor={SUPERVISORY_CURSOR}&limit=10"
+            for request_id in (OTHER_ITEM_ID, ITEM_ID)
+        ):
+            self.respond({
+                "items": [{
+                    "taskId": ITEM_ID,
+                    "requestId": OTHER_ITEM_ID,
+                    "queue": "reviews",
+                    "revision": 3,
+                    "state": "decided",
+                    "accountabilityEventId": CLOCK_OCCURRENCE_ID,
+                }],
+                "status": "complete",
             })
             return
         if self.path == f"/tenant/v1/review-tasks/{ITEM_ID}/context":
@@ -457,10 +488,62 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(observation["profile"], "staff")
         self.assertEqual(observation["source_profile"], "source-one")
 
+    def test_supervisory_review_tasks_use_exact_route_and_bounded_row(self) -> None:
+        page = self.client.supervisory_review_tasks(
+            "supervisor-token",
+            "supervisor",
+            {"queue": "reviews", "requestId": OTHER_ITEM_ID, "cursor": SUPERVISORY_CURSOR, "limit": 10},
+            "source-one",
+        )
+
+        self.assertEqual(
+            page["value"]["items"][0]["accountabilityEventId"],
+            CLOCK_OCCURRENCE_ID,
+        )
+        observation = _Handler.observations[0]
+        self.assertEqual(
+            observation["path"],
+            f"/tenant/v1/review-tasks/supervision?queue=reviews&requestId={OTHER_ITEM_ID}"
+            f"&cursor={SUPERVISORY_CURSOR}&limit=10",
+        )
+        self.assertEqual(observation["profile"], "supervisor")
+        self.assertEqual(observation["source_profile"], "source-one")
+
+    def test_own_decisions_preserve_reference_and_pinned_receipt(self) -> None:
+        page = self.client.own_review_decisions(
+            "staff-token", "staff", {"queue": "reviews", "cursor": SUPERVISORY_CURSOR, "limit": 10}, "source-one",
+        )
+        row = page["value"]["items"][0]
+        self.assertEqual(set(row), {"taskId", "requestId", "queue", "requesterReference", "decisionReceipt"})
+        self.assertEqual(row["requesterReference"], "BATCH-0042")
+        self.assertEqual(row["decisionReceipt"]["outcome"], "confirm")
+        self.assertEqual(row["decisionReceipt"]["outcomeLabel"], "Confirm")
+        observation = _Handler.observations[0]
+        self.assertEqual(observation["path"], f"/tenant/v1/review-tasks/own-decisions?queue=reviews&cursor={SUPERVISORY_CURSOR}&limit=10")
+        self.assertEqual(observation["profile"], "staff")
+        self.assertEqual(observation["source_profile"], "source-one")
+        with self.assertRaises(CaseworkClientError) as raised:
+            self.client.own_review_decisions("staff-token", "staff", {"queue": "another"})
+        self.assertEqual(raised.exception.kind, "protocol")
+        self.assertEqual(raised.exception.protocol_failure, "body")
+
+    def test_supervisory_review_tasks_refuse_rows_for_another_request(self) -> None:
+        with self.assertRaises(CaseworkClientError) as raised:
+            self.client.supervisory_review_tasks(
+                "supervisor-token", "supervisor",
+                {"queue": "reviews", "requestId": ITEM_ID,
+                 "cursor": SUPERVISORY_CURSOR, "limit": 10},
+                "source-one",
+            )
+        self.assertEqual(raised.exception.kind, "protocol")
+        self.assertEqual(raised.exception.protocol_failure, "body")
+
     def test_review_optional_arguments_may_be_omitted(self) -> None:
         calls = (
             lambda: self.client.review_results("", "requester"),
             lambda: self.client.review_tasks("", "staff"),
+            lambda: self.client.supervisory_review_tasks("", "supervisor"),
+            lambda: self.client.own_review_decisions("", "staff"),
             lambda: self.client.review_task("", "staff", ITEM_ID),
             lambda: self.client.review_task_context("", "staff", ITEM_ID),
             lambda: self.client.claim_review_task("", "staff", ITEM_ID, 1, "claim-key"),

@@ -737,6 +737,60 @@ pub enum ReviewerTaskState {
     Decided,
 }
 
+/// Select active review tasks by their current holder. Selection never grants
+/// reviewer eligibility or source authority.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewTaskOwnership {
+    AssignedToMe,
+    Unclaimed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDecisionType {
+    Approve,
+    Reject,
+    ChangesRequested,
+    Answer,
+}
+
+/// A retained decision, interpreted under the task's pinned policy and released
+/// through an own receipt or the explicit audited accountability read.
+/// Private reasons and structured producer result data are never included.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewDecisionReceipt {
+    pub policy: crate::PolicyBinding,
+    pub decision: ReviewDecisionType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// The configured label from the decision's immutable pinned policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_label: Option<String>,
+    pub decided_at: DateTime<Utc>,
+}
+
+/// A current caller's retained decision reference, without context or reason.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnReviewDecision {
+    pub task_id: Uuid,
+    pub request_id: Uuid,
+    pub queue: String,
+    pub requester_reference: String,
+    pub decision_receipt: ReviewDecisionReceipt,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnReviewDecisionPage {
+    pub items: Vec<OwnReviewDecision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Uuid>,
+    pub status: crate::PageStatus,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewerTask {
@@ -753,18 +807,61 @@ pub struct ReviewerTask {
     /// lost can confirm the outcome without learning who else decided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided_by_caller: Option<bool>,
+    /// Present only on a single decided-task read when `decidedByCaller` is
+    /// true. Current task eligibility, membership, source disclosure, and
+    /// result retention still apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_receipt: Option<ReviewDecisionReceipt>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewTaskPage {
     pub items: Vec<ReviewerTask>,
+    /// Pass unchanged with the same caller, profiles and filters. A cursor
+    /// after an undisclosed candidate is an opaque expiring scan checkpoint,
+    /// not a task identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<Uuid>,
     /// Whether the page stopped early: `budget_exhausted` when the source-read
     /// budget, candidate scan, or page deadline ran out before the page
     /// filled, and `source_unavailable` when a bound source did not answer in
     /// time. Either comes with a `nextCursor` to continue from.
+    pub status: crate::PageStatus,
+}
+
+/// Operational discovery for a current supervisor of the task's serving team.
+/// This reference grants neither review eligibility nor access to task content.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SupervisoryReviewTaskState {
+    Open,
+    Held,
+    Decided,
+}
+
+/// A task reference without reviewer identity, content, or decision data.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SupervisoryReviewTask {
+    pub task_id: Uuid,
+    pub request_id: Uuid,
+    pub queue: String,
+    pub revision: i64,
+    pub state: SupervisoryReviewTaskState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accountability_event_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SupervisoryReviewTaskPage {
+    pub items: Vec<SupervisoryReviewTask>,
+    /// Pass unchanged with the same caller, profiles and queue. A cursor
+    /// after an undisclosed candidate is an opaque expiring scan checkpoint,
+    /// not a task identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Uuid>,
     pub status: crate::PageStatus,
 }
 
@@ -883,6 +980,10 @@ pub struct ReviewAccountabilityRecord {
     pub actor: IssuerPrincipal,
     pub profile_id: String,
     pub decision: String,
+    /// Unavailable for legacy selections no longer retained when upgraded.
+    /// New selections are retained through the accountability window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_receipt: Option<ReviewDecisionReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2179,6 +2280,7 @@ mod tests {
                 holder: person(holder),
             },
             decided_by_caller: None,
+            decision_receipt: None,
         }
     }
 

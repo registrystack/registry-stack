@@ -10,6 +10,11 @@ client = casework.CaseworkClient("https://casework.example.invalid/")
 page = client.review_tasks(
     token,
     "staff",
+    {"queue": "review", "ownership": "assigned_to_me", "limit": 25},
+)
+supervised = client.supervisory_review_tasks(
+    supervisor_token,
+    "supervisor",
     {"queue": "review", "limit": 25},
 )
 ```
@@ -24,6 +29,32 @@ Requester review operations omit a source profile. Officer task reads, claims,
 assignment, delegation, drafts, decisions, history, notes, and review clocks
 accept an optional source profile when resolving source context. Accountability
 and kind discovery remain Casework-owned authorization paths.
+Supervisory discovery returns only bounded task and accountability references,
+with a holder-free string state.
+Its query accepts `{"requestId": canonical_request_uuid, "limit": 25}` to find
+a shared request before pagination, optionally combined with `queue`. Keep that
+selection unchanged when following `nextCursor`. Invalid UUIDs fail before I/O,
+and response rows must match the selection. Unknown or inaccessible requests
+produce a neutral empty page under current list semantics. A reference grants
+no decision, content, or accountability authority.
+A single decided-task read includes `decisionReceipt` only when
+`decidedByCaller` is true.
+
+`own_review_decisions(token, profile, {"queue": "review", "limit": 25}, source_profile)`
+discovers the caller's retained decisions, newest first, without a saved task
+link. Each row has only task/request ids, queue, producer `requesterReference`
+and the same own `decisionReceipt` returned by `review_task`. Current deciding
+profile, membership, served queue, source visibility and result retention
+remain required. Prior holding is not authorship. Keep the caller, profiles,
+queue and own-decisions view unchanged when following `nextCursor`; refetch
+without a cursor after `410 review.result-expired`.
+
+Receipts carry the optional decision-time pinned `outcomeLabel`, which cannot
+follow current policy edits. Approval has no outcome or label. The explicit
+audited Supervisor `review_accountability` read includes that receipt through
+its independent accountability retention, including after result erasure.
+Legacy non-approval selections already erased at upgrade omit the receipt.
+Own discovery and single-task receipts end at result expiry or erasure.
 
 `CaseworkClientError` preserves problem codes, status, trace context, validation
 details, and original attempt identifiers. Callers can therefore handle cursor

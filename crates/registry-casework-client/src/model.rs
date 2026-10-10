@@ -84,6 +84,35 @@ pub struct ReviewTaskQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<registry_casework_core::ReviewTaskOwnership>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+/// Bounded discovery of the current principal's retained authored decisions.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnReviewDecisionQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+/// Bounded supervisory discovery over the queues the selected profile serves.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SupervisoryReviewTaskQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue: Option<String>,
+    /// Exact canonical request selection, applied before pagination.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
@@ -101,4 +130,84 @@ pub enum ReviewResultResponse {
     Pending { trace_id: String },
     ConcealedOrUnknown { trace_id: String },
     Expired { trace_id: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OwnReviewDecisionQuery, ReviewTaskQuery, SupervisoryReviewTaskQuery};
+    use registry_casework_core::ReviewTaskOwnership;
+    use serde_json::json;
+
+    #[test]
+    fn reviewer_ownership_uses_the_closed_wire_names() {
+        let query = ReviewTaskQuery {
+            ownership: Some(ReviewTaskOwnership::AssignedToMe),
+            ..ReviewTaskQuery::default()
+        };
+        assert_eq!(
+            serde_json::to_value(query).expect("serialize query"),
+            json!({"ownership": "assigned_to_me"})
+        );
+        assert!(serde_json::from_value::<ReviewTaskQuery>(json!({
+            "ownership": "someone_elses"
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn supervisory_query_has_no_ownership_selector() {
+        assert!(serde_json::from_value::<SupervisoryReviewTaskQuery>(json!({
+            "ownership": "unclaimed"
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn own_decision_query_accepts_only_bounded_discovery_selectors() {
+        let query = OwnReviewDecisionQuery {
+            queue: Some("review".to_owned()),
+            cursor: Some(uuid::Uuid::from_u128(9)),
+            limit: Some(25),
+        };
+        let wire = serde_json::to_value(&query).unwrap();
+        assert_eq!(
+            serde_json::from_value::<OwnReviewDecisionQuery>(wire).unwrap(),
+            query
+        );
+        for wire in [
+            json!({"cursor": "not-a-uuid"}),
+            json!({"ownership": "assigned_to_me"}),
+            json!({"author": "colleague"}),
+            json!({"limit": -1}),
+        ] {
+            assert!(serde_json::from_value::<OwnReviewDecisionQuery>(wire).is_err());
+        }
+    }
+
+    #[test]
+    fn supervisory_request_selection_uses_a_canonical_uuid() {
+        let request_id = uuid::Uuid::from_u128(9);
+        let query = SupervisoryReviewTaskQuery {
+            request_id: Some(request_id),
+            ..Default::default()
+        };
+        let wire = json!({"requestId": "00000000-0000-0000-0000-000000000009"});
+        assert_eq!(serde_json::to_value(&query).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<SupervisoryReviewTaskQuery>(wire).unwrap(),
+            query
+        );
+        for invalid in [
+            json!(""),
+            json!("not-a-uuid"),
+            json!(42),
+            json!({}),
+            json!([]),
+        ] {
+            assert!(serde_json::from_value::<SupervisoryReviewTaskQuery>(json!({
+                "requestId": invalid
+            }))
+            .is_err());
+        }
+    }
 }

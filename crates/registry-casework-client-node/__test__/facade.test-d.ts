@@ -13,6 +13,9 @@ import {
   type ReviewResultOutcome,
   type ReviewTaskContext,
   type ReviewTaskDecisionRequest,
+  type ReviewTaskQuery,
+  type SupervisoryReviewTask,
+  type OwnReviewDecision,
   type WorkItem,
 } from '../client'
 
@@ -129,6 +132,15 @@ void client.cancelReviewRequest(token, 'requester', accepted, 'cancel-43', {
   reason: 'No longer needed',
 })
 void client.reviewTasks(token, profile, { queue: 'review', limit: 25 }, sourceProfile)
+void client.ownReviewDecisions(token, profile, { queue: 'review', limit: 25 }, sourceProfile).then((page) => {
+  const row: OwnReviewDecision | undefined = page.value.items[0]
+  const label: string | undefined = row?.decisionReceipt.outcomeLabel
+  const reference: string | undefined = row?.requesterReference
+  void label
+  void reference
+})
+// @ts-expect-error own decisions never select another author
+void client.ownReviewDecisions(token, profile, { author: 'colleague' })
 client.reviewTaskContext(token, profile, item.itemId, sourceProfile).then((response) => {
   const context: ReviewTaskContext = response.value
   if (context.context.strategy === 'source' && context.context.bindingStatus === 'current') {
@@ -143,10 +155,17 @@ void client.reviewClocks(token, profile, item.itemId, sourceProfile)
 void client.reviewAccountability(token, 'supervisor', '00000000-0000-0000-0000-000000000000')
   .then((record) => {
     const resultDigest: string | undefined = record.value.resultDigest
+    const outcome: string | undefined = record.value.decisionReceipt?.outcome
+    const label: string | undefined = record.value.decisionReceipt?.outcomeLabel
     void resultDigest
+    void outcome
+    void label
   })
 const reviewDecision: ReviewTaskDecisionRequest = { decision: { type: 'approve' } }
 void client.decideReviewTask(token, profile, item.itemId, item.revision, 'decide-43', reviewDecision, sourceProfile)
+const assignedReviewTasks: ReviewTaskQuery = { queue: 'review', ownership: 'assigned_to_me', limit: 25 }
+void client.reviewTasks(token, profile, assignedReviewTasks, sourceProfile)
+void client.supervisoryReviewTasks(token, 'supervisor', { queue: 'review', requestId: item.itemId, limit: 25 }, sourceProfile)
 
 function taskHolder(task: ReviewerTask): string | undefined {
   if (task.state === 'open' || task.state === 'decided') return undefined
@@ -155,9 +174,18 @@ function taskHolder(task: ReviewerTask): string | undefined {
 void taskHolder
 
 function decidedByMe(task: ReviewerTask): boolean {
-  return task.state === 'decided' && task.decidedByCaller === true
+  if (task.state !== 'decided' || task.decidedByCaller !== true) return false
+  const decision = task.decisionReceipt?.decision
+  return decision === 'approve' || decision === 'reject' || decision === 'changes_requested' || decision === 'answer'
 }
 void decidedByMe
+
+function accountabilityEvent(task: SupervisoryReviewTask): string | undefined {
+  const state: 'open' | 'held' | 'decided' = task.state
+  void state
+  return task.accountabilityEventId
+}
+void accountabilityEvent
 
 function resultTrace(outcome: ReviewResultOutcome): string {
   switch (outcome.kind) {

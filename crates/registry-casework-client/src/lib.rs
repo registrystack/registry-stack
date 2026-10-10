@@ -23,8 +23,8 @@ pub use client::CaseworkClient;
 pub use config::CaseworkClientConfig;
 pub use error::{CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure};
 pub use model::{
-    CaseworkAuth, CaseworkComplete, ReviewPageQuery, ReviewResultResponse,
-    ReviewTaskDecisionRequest, ReviewTaskQuery, WorkItemHistoryQuery,
+    CaseworkAuth, CaseworkComplete, OwnReviewDecisionQuery, ReviewPageQuery, ReviewResultResponse,
+    ReviewTaskDecisionRequest, ReviewTaskQuery, SupervisoryReviewTaskQuery, WorkItemHistoryQuery,
 };
 pub use registry_casework_core::{
     submission_digest, AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery,
@@ -41,23 +41,25 @@ pub use registry_casework_core::{
     HistoryEntry, HistoryKind, HistoryPage, HoldingSummary, HoldingsPage, HoldingsQuery,
     HolidaySetDocument, HolidaySetRevisionInput, HumanIdentity, InboxSort, InboxView,
     IssuerPrincipal, ListWorkItemsQuery, MutationResponse, NextWorkItemQuery, OccurrenceKind,
-    OccurrenceState, OneOfPredicate, OperationName, Page, PageStatus, PolicyBinding, QueueRecord,
-    RecoverAttemptRequest, ReleaseRequest, ReviewAccountabilityRecord, ReviewCancelRequest,
-    ReviewCancelResponse, ReviewClockOccurrence, ReviewCompletion, ReviewCompletionType,
-    ReviewContext, ReviewCreateRequest, ReviewHistoryAudience, ReviewHistoryEntry,
+    OccurrenceState, OneOfPredicate, OperationName, OwnReviewDecision, OwnReviewDecisionPage, Page,
+    PageStatus, PolicyBinding, QueueRecord, RecoverAttemptRequest, ReleaseRequest,
+    ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse, ReviewClockOccurrence,
+    ReviewCompletion, ReviewCompletionType, ReviewContext, ReviewCreateRequest,
+    ReviewDecisionReceipt, ReviewDecisionType, ReviewHistoryAudience, ReviewHistoryEntry,
     ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewRequestAccepted,
     ReviewRequestLifecycle, ReviewRequestView, ReviewResult, ReviewResultFeedEntry,
     ReviewResultFeedPage, ReviewResultStatus, ReviewSourceBindingStatus, ReviewSourceProjection,
     ReviewTaskContext, ReviewTaskContextData, ReviewTaskDraft, ReviewTaskDraftInput,
-    ReviewTaskPage, ReviewValidationError, ReviewValidationReason, ReviewerDecisionKind,
-    ReviewerTask, ReviewerTaskState, RoutingActivity, RoutingCondition, RoutingPredicate,
-    RoutingRule, SaveDraftRequest, SchedulingTaskPermission, SourceBinding, SourceContextBinding,
-    SourcePolicy, SourceReceipt, SourceRequestPolicy, StaffingDiagnostic, SubjectClockAnchor,
-    SubjectClockCompletion, SubjectClockPause, SubjectRef, SubmissionDigest, TaskApprovalRequest,
-    TaskAssertionResponse, TaskGrantBounds, TaskGrantList, TaskGrantRevocation, TaskGrantStatus,
-    TaskGrantStatusDetails, TaskGrantView, TaskPermission, TaskTemplatePreview,
-    TaskTemplatePreviews, TeamRecord, WorkItem, WorkItemPage, WorkItemRouting, WorkingDaysAfter,
-    WorkingDaysBefore, WorkingWeekday,
+    ReviewTaskOwnership, ReviewTaskPage, ReviewValidationError, ReviewValidationReason,
+    ReviewerDecisionKind, ReviewerTask, ReviewerTaskState, RoutingActivity, RoutingCondition,
+    RoutingPredicate, RoutingRule, SaveDraftRequest, SchedulingTaskPermission, SourceBinding,
+    SourceContextBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy, StaffingDiagnostic,
+    SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef, SubmissionDigest,
+    SupervisoryReviewTask, SupervisoryReviewTaskPage, SupervisoryReviewTaskState,
+    TaskApprovalRequest, TaskAssertionResponse, TaskGrantBounds, TaskGrantList,
+    TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView, TaskPermission,
+    TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, WorkItem, WorkItemPage, WorkItemRouting,
+    WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
 };
 pub use registry_platform_httputil::client::BearerToken;
 pub use registry_review_client::ReviewMutationErrorClass;

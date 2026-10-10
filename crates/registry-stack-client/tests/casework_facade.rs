@@ -20,12 +20,13 @@ use registry_stack_client::casework::{
     DecideRequest, DelegateRequest, Description, DirectoryResponse, DirectoryTargetPage,
     DirectoryTargetsQuery, DirectoryTeamUpdateRequest, DraftResponse, HistoryPage, HoldingsPage,
     HoldingsQuery, HolidaySetDocument, HolidaySetRevisionInput, ListWorkItemsQuery,
-    MutationResponse, NextWorkItemQuery, RecoverAttemptRequest, ReviewAccountabilityRecord,
-    ReviewCancelRequest, ReviewCancelResponse, ReviewCreateRequest, ReviewHistoryEntry,
-    ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewPageQuery,
-    ReviewRequestAccepted, ReviewRequestView, ReviewResultFeedPage, ReviewTaskContext,
-    ReviewTaskDecisionRequest, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage,
-    ReviewTaskQuery, ReviewerTask, SaveDraftRequest, SubmissionDigest, Uuid, WorkItem,
+    MutationResponse, NextWorkItemQuery, OwnReviewDecisionPage, OwnReviewDecisionQuery,
+    RecoverAttemptRequest, ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse,
+    ReviewCreateRequest, ReviewHistoryEntry, ReviewHistoryPage, ReviewKindPolicySnapshot,
+    ReviewNoteRequest, ReviewPageQuery, ReviewRequestAccepted, ReviewRequestView,
+    ReviewResultFeedPage, ReviewTaskContext, ReviewTaskDecisionRequest, ReviewTaskDraft,
+    ReviewTaskDraftInput, ReviewTaskPage, ReviewTaskQuery, ReviewerTask, SaveDraftRequest,
+    SubmissionDigest, SupervisoryReviewTaskPage, SupervisoryReviewTaskQuery, Uuid, WorkItem,
     WorkItemHistoryQuery, WorkItemPage,
 };
 
@@ -63,6 +64,8 @@ async fn every_casework_method_names_its_types(
     review_page: &ReviewPageQuery,
     work_item_history_query: &WorkItemHistoryQuery,
     review_task_query: &ReviewTaskQuery,
+    own_review_decision_query: &OwnReviewDecisionQuery,
+    supervisory_review_task_query: &SupervisoryReviewTaskQuery,
     list_query: &ListWorkItemsQuery,
     next_query: &NextWorkItemQuery,
     draft: &SaveDraftRequest,
@@ -120,6 +123,18 @@ async fn every_casework_method_names_its_types(
         .await?;
     let _: CaseworkComplete<ReviewTaskPage> = client
         .review_tasks(CaseworkAuth::new(token, profile), review_task_query)
+        .await?;
+    let _: CaseworkComplete<OwnReviewDecisionPage> = client
+        .own_review_decisions(CaseworkAuth::new(token, profile), own_review_decision_query)
+        .await?;
+    let _: CaseworkComplete<SupervisoryReviewTaskPage> = client
+        .supervisory_review_tasks(
+            CaseworkAuth::new(token, profile),
+            &SupervisoryReviewTaskQuery {
+                request_id: Some(item_id),
+                ..supervisory_review_task_query.clone()
+            },
+        )
         .await?;
     let _: CaseworkComplete<ReviewerTask> = client
         .review_task(CaseworkAuth::new(token, profile), item_id)

@@ -39,8 +39,36 @@ const client = new CaseworkClient({ baseUrl: input.baseUrl });
 
 async function main() {
   if (input.operation === 'list') {
-    const outcome = await client.reviewTasks(input.token, input.profile, { limit: 25 });
+    const outcome = await client.reviewTasks(input.token, input.profile, { limit: 25, ownership: 'unclaimed' });
     process.stdout.write(JSON.stringify(outcome.value));
+    return;
+  }
+  if (input.operation === 'supervision') {
+    const outcome = await client.supervisoryReviewTasks(input.token, input.profile, { queue: 'decisions', limit: 25 });
+    if (outcome.value.items.some((task) => 'decisionReceipt' in task || 'eligibleProfiles' in task || 'context' in task)) {
+      throw new Error('supervisor discovery exposed reviewer data');
+    }
+    process.stdout.write(JSON.stringify(outcome.value));
+    return;
+  }
+  if (input.operation === 'refuseStaffSupervision') {
+    try {
+      await client.supervisoryReviewTasks(input.token, input.profile, { limit: 25 });
+    } catch (error) {
+      if (error && error.kind === 'problem' && error.status === 403) {
+        process.stdout.write(JSON.stringify({ refused: true, status: error.status }));
+        return;
+      }
+      throw error;
+    }
+    throw new Error('staff unexpectedly received supervisor discovery');
+  }
+  if (input.operation === 'receipt') {
+    const outcome = await client.reviewTask(input.token, input.profile, input.taskId);
+    if (outcome.value.decidedByCaller !== true || outcome.value.decisionReceipt?.outcome !== 'confirmed') {
+      throw new Error('the retained own decision receipt was not recovered');
+    }
+    process.stdout.write(JSON.stringify(outcome.value.decisionReceipt));
     return;
   }
   if (input.operation === 'refuseUnauthorizedList') {
@@ -80,7 +108,7 @@ with open(sys.argv[1], encoding="utf-8") as source:
 
 client = casework.CaseworkClient(request["baseUrl"])
 page = client.review_tasks(
-    request["token"], request["profile"], {"limit": 25}, None,
+    request["token"], request["profile"], {"limit": 25, "ownership": "unclaimed"}, None,
 )["value"]
 items = page["items"]
 if len(items) != 1 or items[0]["requestId"] != request["requestId"]:
@@ -90,12 +118,28 @@ claimed = client.claim_review_task(
     request["token"], request["profile"], task["taskId"], task["revision"],
     "python-claim-synthetic-batch-0042", None,
 )["value"]
+mine = client.review_tasks(request["token"], request["profile"],
+    {"limit": 25, "ownership": "assigned_to_me"})["value"]["items"]
+if len(mine) != 1 or mine[0]["taskId"] != task["taskId"]:
+    raise AssertionError("the own holding was not in the ownership-filtered inbox")
+try:
+    client.supervisory_review_tasks(request["token"], request["profile"], {"limit": 25})
+except casework.CaseworkClientError as error:
+    if error.status != 403:
+        raise
+else:
+    raise AssertionError("staff unexpectedly received supervisor discovery")
 client.decide_review_task(
     request["token"], request["profile"], task["taskId"], claimed["revision"],
     "python-answer-synthetic-batch-0042",
     {"decision": {"type": "answer", "outcome": "confirmed"}}, None,
 )
-sys.stdout.write(json.dumps({"requestId": task["requestId"], "claimedRevision": claimed["revision"]}))
+receipt = client.review_task(request["token"], request["profile"], task["taskId"])["value"]
+if receipt.get("decidedByCaller") is not True or receipt.get("decisionReceipt", {}).get("outcome") != "confirmed":
+    raise AssertionError("the own exact decision receipt was not recovered")
+if "reason" in receipt["decisionReceipt"] or "result" in receipt["decisionReceipt"]:
+    raise AssertionError("the receipt exposed private decision data")
+sys.stdout.write(json.dumps({"requestId": task["requestId"], "taskId": task["taskId"], "claimedRevision": claimed["revision"]}))
 "#;
 
 struct NativeClients {
@@ -681,6 +725,20 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     assert_eq!(items.len(), 1, "{items:#?}");
     assert_eq!(items[0]["requestId"], request);
     assert_eq!(items[0]["queue"], "decisions");
+    let supervision = session.native.node(&json!({
+        "operation": "supervision",
+        "baseUrl": first["caseworkUrl"],
+        "token": session.token(&first, "supervisor"),
+        "profile": "supervisor"
+    }));
+    assert_eq!(supervision["items"][0]["taskId"], items[0]["taskId"]);
+    let staff_refused = session.native.node(&json!({
+        "operation": "refuseStaffSupervision",
+        "baseUrl": first["caseworkUrl"],
+        "token": session.token(&first, "staff"),
+        "profile": "staff"
+    }));
+    assert_eq!(staff_refused, json!({"refused": true, "status": 403}));
 
     // A stopped session keeps its records: the same item is in the same inbox
     // after a restart, on the same retained ports. Complete it only after that
@@ -722,6 +780,16 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     }));
     assert_eq!(retained_result["kind"], "available", "{retained_result:#}");
     assert_eq!(retained_result["value"], result);
+    let receipt = session.native.node(&json!({
+        "operation": "receipt",
+        "baseUrl": terminal_restart["caseworkUrl"],
+        "token": session.token(&terminal_restart, "staff"),
+        "profile": "staff",
+        "taskId": completed["taskId"]
+    }));
+    assert_eq!(receipt["decision"], "answer");
+    assert_eq!(receipt["outcome"], "confirmed");
+    assert_eq!(receipt["policy"], accepted["policy"]);
 
     // Removal discards them: the same project starts empty and serves again.
     assert_eq!(session.stop(&["--remove"])["status"], "stopped");

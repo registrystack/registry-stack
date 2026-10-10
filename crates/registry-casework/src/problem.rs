@@ -547,13 +547,12 @@ const REVIEW_KIND_READ: &[ProblemCode] = &[
 ];
 const REVIEW_TASK_PAGE: &[ProblemCode] = &[
     ProblemCode::AuthenticationRefused,
-    ProblemCode::CursorExpired,
-    ProblemCode::CursorInvalid,
     ProblemCode::OperationNotAuthorized,
     ProblemCode::ProfileNotAuthorized,
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
     ProblemCode::RequestLimitOutOfRange,
+    ProblemCode::ReviewResultExpired,
     ProblemCode::ServiceUnavailable,
     ProblemCode::SourceBadGateway,
     ProblemCode::SourceProfileNotApplicable,
@@ -1293,6 +1292,24 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
     },
     OperationContract {
         method: "GET",
+        path: "/v1/review-tasks/supervision",
+        success_statuses: &[200],
+        extracts_path: false,
+        extracts_query: true,
+        accepts_json: false,
+        problems: REVIEW_TASK_PAGE,
+    },
+    OperationContract {
+        method: "GET",
+        path: "/v1/review-tasks/own-decisions",
+        success_statuses: &[200],
+        extracts_path: false,
+        extracts_query: true,
+        accepts_json: false,
+        problems: REVIEW_TASK_PAGE,
+    },
+    OperationContract {
+        method: "GET",
         path: "/v1/review-tasks/{task_id}",
         success_statuses: &[200],
         extracts_path: true,
@@ -1972,5 +1989,27 @@ mod tests {
             .into_iter()
             .collect::<BTreeSet<_>>()
         );
+    }
+
+    /// Review task cursors name retained task anchors. The store reports a
+    /// missing or no-longer-authorized anchor as an expired review result,
+    /// while malformed UUIDs are rejected during query extraction.
+    #[test]
+    fn review_task_pages_list_their_cursor_anchor_problem() {
+        for path in [
+            "/v1/review-tasks",
+            "/v1/review-tasks/supervision",
+            "/v1/review-tasks/own-decisions",
+        ] {
+            let operation = OPERATION_CONTRACTS
+                .iter()
+                .find(|operation| operation.method == "GET" && operation.path == path)
+                .expect("review task page operation");
+            assert!(operation
+                .problems
+                .contains(&ProblemCode::ReviewResultExpired));
+            assert!(!operation.problems.contains(&ProblemCode::CursorExpired));
+            assert!(!operation.problems.contains(&ProblemCode::CursorInvalid));
+        }
     }
 }
