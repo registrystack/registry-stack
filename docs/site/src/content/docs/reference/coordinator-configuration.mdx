@@ -63,8 +63,9 @@ Functions cannot acquire credentials, contact services or add steps to the graph
 | `create-appointment` | `scheduling` | Mutation | Same command and read-only receipt |
 | `invoke-breg-action` | `breg` | Mutation | Same prepared command; no read-only receipt |
 | `external-get` | `external-http` | Read | Read again |
+| `evaluate-decision` | `decision` | Evaluation | Hold after uncertain dispatch |
 
-These seven identifiers are the complete inventory.
+These eight identifiers are the complete inventory.
 There is no arbitrary HTTP method, SQL step or dynamic call destination.
 
 `invoke-breg-action` accepts `action` and an object-valued `input`.
@@ -92,7 +93,7 @@ Package commands remain unchanged, but a changed digest needs a new workflow ver
 ## External HTTP reads
 
 Declare `external-http` as the project's logical connection type, then bind that name under `runtime.externalHttpConnections`.
-Product bindings remain under `runtime.connections`; the names across both maps must be distinct, with at most 16 connections in total.
+Product bindings remain under `runtime.connections`; the names across product, external HTTP, and decision maps must be distinct, with at most 16 connections in total.
 Omitting `externalHttpConnections` disables external reads.
 
 This runtime fragment permits one public directory path and one query parameter:
@@ -149,6 +150,88 @@ Those scenarios and mock HTTP adapter checks do not prove a live institutional i
     crates/registry-coordinator/tests/external_http.rs;
     crates/registry-coordinator/tests/external_runtime.rs;
     products/coordinator/examples/external-directory/runtime.yaml. */}
+
+## Typed decision models
+
+Declare a logical `decision` connection in your project and call `evaluate-decision`.
+Use `decisionConnections` in the runtime file to select a protocol and model.
+Omitting that map disables decision calls.
+The common contract supports predicates, choices, and ordered rubric scores.
+General structured generation, images, agent tools, and asynchronous jobs are not supported.
+
+```yaml
+decisionConnections:
+  assessor:
+    protocol: system-one
+    baseUrl: https://decision.example.org
+    model: institution-reviewed-model
+    authorization:
+      bearer:
+        tokenRef: secret:env/DECISION_TOKEN
+        principal: institutional-decision-account
+```
+
+`system-one` sends to `v1/systemone`; `openai-decisions` sends to `v1/decisions`.
+The configured base path is preserved.
+Use the service root as `baseUrl`, rather than repeating the protocol path.
+For an unauthenticated local service, explicitly use `authorization.local: {}` and a numeric loopback URL.
+The `principal` names the stable account represented by your bearer credential.
+Keep that account unchanged when rotating the secret; Coordinator cannot discover the account behind an opaque API key.
+
+`attemptTimeoutMilliseconds` accepts 1 to 8000, default 8000.
+`maximumRequestBytes` and `maximumResponseBytes` each accept 1 to 65,536, default 65,536.
+The time budget covers destination resolution, credentials, and HTTP.
+The client performs one request without redirects, ambient proxy use, or automatic provider fallback.
+
+Your existing Rhai input mapping returns `state` and a `questions` object.
+State is a string, object, or array; object and array state becomes canonical JSON text for OpenAI.
+Question names and choice values are local identifiers.
+You can ask 1 to 32 named questions per call.
+Each question supplies text `instructions` and a `type`:
+
+- `predicate` asks for a probability from zero to one.
+- `choice` supplies `criteria` as a map from 2 to 32 allowed choices to their descriptions.
+- `score` supplies `criteria` as an ordered list of 2 to 10 rubric descriptions, indexed from zero.
+
+The result contains `protocol`, `requestedModel`, and named `answers`.
+`returnedModel` appears only when the provider supplies it; `usage` retains provider metadata.
+A predicate answer has `type: predicate` and `probability`.
+A choice answer has `type: choice`, `choice`, `probabilities`, and `nativeConfidence`.
+A score answer has `type: score`, `score`, `legend`, `probabilities`, and `nativeConfidence`.
+An OpenAI per-question refusal is `type: refusal`, with no numeric answer or copied provider explanation.
+System One HTTP refusals stop the call and do not become a typed review answer.
+Rubric scores can be fractional and are not probabilities.
+Native confidence preserves the provider's statistic; it is not normalized across models or a guarantee of correctness.
+
+Review which fields you send to the model, and test your thresholds against labeled cases for that provider and model.
+A model alias may change upstream even though Coordinator pins the configured name.
+Use a stable release identifier when your provider offers one.
+A pure `choose` step applies your policy to the stored answers; the next product operation obtains its own authority.
+A terminal `needs-review` outcome returns control to the caller and creates no approval task.
+
+Before dispatch, Coordinator saves the exact prepared request without credentials.
+The validated result and next checkpoint are committed together, so restarting or reading a completed step does not evaluate again.
+After possible dispatch, a lost or malformed reply leaves the call uncertain.
+Inspection reports `hold-after-dispatch`; automatic retry, `retry-same`, and receipt reconciliation cannot repeat that evaluation.
+Only a proven non-dispatch failure is retryable.
+Cancel the run and make a separately authorized new start if you accept another potentially billable evaluation with a possibly different answer.
+Cancellation does not retract provider processing.
+Status keeps `uncertain: true` and reports `cancelRequested: true`.
+After a restore, complete execution recovery may abandon that cancelled evaluation once its active lease has ended and its protected request has been checked.
+Releasing the restore hold then permits unrelated work while retaining the unknown outcome and preventing replay of the cancelled run.
+Unknown product mutations do not qualify for this recovery path.
+
+Contract tests use local HTTP fixtures for both profiles and the documented System One compatible local-provider shape.
+Offline scenarios test policy, refusal, and uncertainty; they do not establish live model compatibility or decision accuracy.
+
+{/* Evidence: crates/registry-coordinator/src/decision.rs;
+    crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
+    crates/registry-coordinator/src/operations.rs, CATALOG;
+    crates/registry-coordinator/src/store.rs;
+    crates/registry-coordinator/tests/decision_runtime.rs;
+    crates/registry-coordinator/tests/decision_protocol.rs;
+    crates/registry-coordinator/tests/process_restart.rs;
+    products/coordinator/examples/decision-follow-up/functions.rhai. */}
 
 ## Application integration
 
