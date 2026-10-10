@@ -52,10 +52,10 @@ for each release before you start the next. See
 
 BReg goes first, because Casework and Evidence both read it. Casework follows because it refuses
 a BReg of another release. Evidence and its wallet-facing front end come next. Scheduling and
-Messaging read none of them and upgrade independently, before the clients. Each release's notes
-list, per product, the project and runtime-file changes its upgrade needs; make them in the step
-that upgrades that product. Rehearse the whole
-sequence on a restored copy first, as
+Messaging read none of them and upgrade independently, before the clients. Read the target
+release's notes for every deployed product. Complete their required drains and outcome
+reconciliation before that product's apply, and make the listed project and runtime-file changes
+in its upgrade step. Rehearse the whole sequence on a restored copy first, as
 [Run a disaster-recovery drill](../back-up-and-restore/#run-a-disaster-recovery-drill) describes.
 
 1. **Back up every database.** Take the BReg and Casework `pg_dump`s, and the Scheduling and
@@ -65,8 +65,14 @@ sequence on a restored copy first, as
    [Operational limits](../../../configure/evidence-oid4vci/#operational-limits).
 3. **Pause and drain Evidence traffic** for every question that reads BReg, or pause the whole
    instance when you cannot drain one question at a time. Keep the previous Evidence candidate.
-4. **Upgrade BReg.** Make the project and runtime-file changes the release notes list, rebuild
-   the deployed project with no model change using the new `bregctl test` and `bregctl package
+4. **Upgrade BReg.** For v0.39.0 to v0.40.0, finish or cancel active ingestion runs before applying,
+   and preserve any run metadata and receipts you need: the upgrade deletes every stored run,
+   chunk, and receipt. Record committed counts and resolve uncertain chunk outcomes before that
+   deletion. An earlier checkpoint cannot resume afterward; import only the uncommitted input
+   under a fresh checkpoint, as
+   [Load a governed entity through an import window](../../breg-data/#load-a-governed-entity-through-an-import-window)
+   describes. Make the project and runtime-file changes the release notes list, rebuild the
+   deployed project with no model change using the new `bregctl test` and `bregctl package
    --test-receipt FILE --output BUILD` (a receipt from the earlier release is not accepted), point
    `package.root` at `BUILD/package` (and `package.expectedDigest`, when set, at the package
    digest it reports, `packageDigest` with `--format json`), check it against the live database with
@@ -118,6 +124,8 @@ sequence on a restored copy first, as
     docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx, "Coordinate a breaking
     update"; crates/registry-casework/src/store.rs, StoreError::AttemptPending;
     crates/registry-breg/src/migration.rs, MigrationError::ResumeRolesDiffer;
+    crates/registry-breg/src/ingestion_store.rs, install() and cancel_run();
+    docs/site/src/content/docs/operate/breg-data.mdx, committedItems and the uncommitted lines;
     crates/registry-bregctl/src/apply_lifecycle.rs, load_active_predecessor_package();
     crates/registry-bregctl/src/lib.rs, PlanSuccessReport, StatusSuccessReport, and
     lifecycle_failure() for ApplyLifecycleError::CurrentPackage;
