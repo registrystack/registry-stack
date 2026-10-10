@@ -3075,7 +3075,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json",
-        "sha256": "f00ec5eb3c6b9361c072cbc8eb343a82f4d2d6fb641964556c0427a412b60009",
+        "sha256": "dcf46154f0c67123960c68ea04323e14069a9ce439e330ff8f59fb334e6384ac",
         "mediaType": "application/schema+json"
       }
     },
