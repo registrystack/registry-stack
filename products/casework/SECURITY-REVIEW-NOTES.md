@@ -606,26 +606,83 @@ database. No compatibility reader or migration of earlier state is provided.
 
 ## Execution leases use the database clock
 
-Threat: A host-written execution deadline can remain live on PostgreSQL's
-clock after an attempt has finished. Recovery or settlement then refuses the
-released attempt, and a skewed reservation can expire too early or too late.
+Threat: A host-written execution deadline can disagree with PostgreSQL's
+clock, leaving a finished attempt live or shortening an active lease. Even a
+database transaction timestamp sampled before an item-row lock wait can
+consume the 30-second margin between the 330-second lease and the 300-second
+source-action timeout before execution begins.
 
 Enforcement: `reserve_attempt_for_execution` in
-`crates/registry-casework/src/store.rs` writes the initial lease with
-`now()+interval '330 seconds'`. `finish_attempt` releases it with `now()`.
-Recovery acquisition, execution fencing, and operator settlement already use
-that same database clock. The lease duration, execution token, caller binding,
-state checks, locking, and audit acceptance gates remain authoritative.
+`crates/registry-casework/src/store.rs` writes its initial 330-second lease
+with PostgreSQL `clock_timestamp()` at the INSERT after the item-row lock.
+`finish_attempt` releases the lease with PostgreSQL `now()`, the transaction
+clock. Recovery acquisition, execution fencing, and operator settlement
+continue to use the database transaction clock. The execution token, caller
+binding, state checks, locking, audit acceptance gates, and 330-second
+lease duration are unchanged.
 
-Verification: `reserving_an_attempt_sets_a_live_lease_on_the_database_clock`
-and `finishing_an_attempt_releases_its_lease_on_the_database_clock` in
-`crates/registry-casework/tests/postgres_transactions.rs` observe SQL clock
-reads while returning the ordinary PostgreSQL transaction timestamp. They
-check the exact finite deadline, refusal to recover a live lease, and immediate
-recovery after release through an ordinary pool. They require no machine clock
-offset. The full transaction suite also covers live-lease settlement refusals,
-caller-scoped recovery, settlement state checks, and audit failures.
+Verification: `reservation_waiting_on_item_lock_starts_a_full_execution_lease_after_unblock`
+in `crates/registry-casework/tests/postgres_transactions.rs` holds the item
+row lock for two seconds after observing the blocked reservation, then checks
+the committed deadline against database time immediately before unlock. The
+pre-fix run failed at its lease assertion. The existing
+`reserving_an_attempt_sets_a_live_lease_on_the_database_clock` and
+`finishing_an_attempt_releases_its_lease_on_the_database_clock` tests observe
+the wall-clock reservation and transaction-clock release respectively while
+returning ordinary PostgreSQL time. They check a bounded finite reservation,
+refusal to recover a live lease, and immediate recovery after release through
+an ordinary pool. They require no machine clock offset. The transaction suite
+also covers live-lease settlement refusals, caller-scoped recovery, settlement
+state checks, and audit failures.
 
-Residual: PostgreSQL transaction time remains the lease authority. This change
-adds no clock synchronization service and does not change host-written history
-timestamps or pagination lifetimes.
+Residual: PostgreSQL is the lease clock authority; reservation uses its wall
+clock and release and recovery use its transaction clock. The initial 330
+seconds start at the INSERT, so a delay between that INSERT and commit still
+consumes some of the 30-second execution margin. This change adds no clock
+synchronization service and does not change host-written history timestamps
+or pagination lifetimes.
+
+## Retained decision and client refusal vocabulary
+
+A persisted decision must read as the decision that was made, and an
+accountability response must not pair a receipt with another action or time.
+`review_decision_receipt` in `crates/registry-casework/src/review.rs` reads the
+stored word `changes-requested` as `ChangesRequested`, with its selected
+outcome. The underscore spelling is refused rather than converted. Approval
+still has no selected outcome.
+
+The accountability read in `crates/registry-casework-client/src/client.rs`
+checks the event identity, valid receipt, exact retained action and equal
+decision time. Its enum-to-action comparison also uses `changes-requested`.
+Current Supervisor membership, service of the recorded queue, retention and
+audit acceptance remain authoritative. This spelling change grants no access
+to a receipt or submitted content.
+
+The Node and Python client mappings in their respective `src/lib.rs` expose
+kebab-case failure words, including `invalid-request`, `header-bounds`,
+`trace-context`, and `media-type`, from the same Rust failure variants. Shared
+transport words come from `TransportKind::kind`. Response validation,
+retryability and unknown-outcome reporting are unchanged. Callers branching
+on these words must use the current vocabulary; no alias is supplied.
+
+Proof obligations:
+
+- `crates/registry-casework-client/tests/http_boundary.rs`:
+  `accountability_receipts_must_match_the_retained_action_and_time` accepts
+  matching `changes-requested`, refuses its underscore spelling, and refuses
+  mismatched action and time.
+- `crates/registry-casework/tests/review_postgres.rs`:
+  `subject_clock_pauses_and_continues_across_review_rounds` reads a persisted
+  ChangesRequested receipt and checks its serialized `changes-requested` word.
+- `crates/registry-casework-client-node/src/lib.rs`:
+  `protocol_failures_use_the_public_snake_case_vocabulary` asserts the current
+  `header-bounds`, `trace-context`, `media-type` and other protocol words.
+- `crates/registry-casework-client-py/src/lib.rs`:
+  `an_answer_the_binding_cannot_convert_is_a_protocol_failure_with_an_unknown_outcome`
+  checks the protocol category, unknown outcome and fixed value-free message.
+- `crates/registry-platform-httputil/src/client/mod.rs`:
+  `every_transport_failure_reports_its_own_kebab_case_kind`.
+
+The Python test does not enumerate every protocol word; the closed mapping
+defines those words. These references do not assert that a native binding,
+listener or live database test has executed.

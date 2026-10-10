@@ -2431,6 +2431,11 @@ unchanged, so no security invariant row changes.
   age bound (`maximumAgeSeconds`, at most 31 days), prior package digest and
   schema fingerprint, database identity, and backup digest checks run as
   before, and so does every descriptor shape and step check.
+- **Decoded change words.** Change classes, change codes, target kinds,
+  recovery words, and step variants are written in kebab-case. Classification
+  and coverage compare decoded variants and typed covers, never their written
+  strings. No variant, classification rule, or cover rule changes. A word in
+  its previous spelling does not decode and is refused at its member.
 - **Value-free refusals.** Reader diagnostics name the key and the expected
   shape, never the value; `bregctl` prints them unchanged under one sentence
   naming the document.
@@ -2439,6 +2444,7 @@ unchanged, so no security invariant row changes.
 
 `crates/registry-breg/tests/migration_plan.rs`:
 `reviewed_migration_documents_refuse_their_previous_spellings_at_each_key`,
+`reviewed_descriptor_refuses_the_snake_case_spelling_of_each_enumerated_word`,
 `reviewed_descriptor_reformatted_by_hand_keeps_its_rehearsal_binding`, and
 `reviewed_package_whose_receipt_carries_the_retired_proofs_is_refused`.
 `crates/registry-breg/src/migration.rs`:
@@ -2692,3 +2698,125 @@ must keep the decoded failure's classification and recovery advice.
 Report and audit consumers that compare the old spellings must update with
 this release. The engine does not accept both spellings or convert retained
 rows. State from earlier releases is refused; install fresh.
+
+## Module task-grant issuers and provenance sets
+
+### Threat
+
+An ill-shaped issuer identity or a repeated provenance requirement makes an
+authored access profile ambiguous before it reaches authorization checks.
+
+### Enforcement and defaults
+
+- `TaskGrantSource` in `crates/registry-breg/src/contract.rs` reads a module
+  profile's `taskGrant.sourceIssuer` through `members::url_text`, with the
+  shared `Url` schema. An issuer outside that URL grammar is refused at its
+  member. The issuer remains a comparison identity, not a fetch instruction.
+- `provenanceFields` uses `members::unique_items` and the `UniqueSet` schema
+  in project and module profiles. Distinct fields retain their declared
+  order; a repetition is refused as `config.duplicate-item` at the repeated
+  element rather than silently collapsed.
+- These reader checks leave issuer matching and provenance enforcement for
+  accepted profiles unchanged. The issuer refusal diagnostic never repeats
+  the supplied issuer.
+
+### Tests
+
+`crates/registry-breg/tests/compiler_contract.rs`:
+`a_module_profile_task_grant_issuer_is_read_as_a_url` refuses a URN issuer at
+the source member without echoing it, and
+`provenance_fields_are_read_as_a_set_in_a_project_and_a_module` accepts
+distinct fields and refuses repetitions in both authored forms.
+
+### Accepted residuals
+
+The operator rewrites a refused declaration; no alias, deduplication, or
+issuer discovery is supplied. These checks grant no task authority.
+
+## JWKS source discriminator in runtime and MCP configuration
+
+### Threat
+
+A retired discriminator must not be ignored or interpreted as a default key
+source in authentication configuration.
+
+### Enforcement and defaults
+
+The shared runtime loader names
+`authentication.oidc.jwksSource.kind` as a removed key, with `type` as its
+replacement. The MCP configuration loader does the same for
+`resourceServer.jwksSource.kind`. Both refuse it as `config.removed-key` at
+its own pointer before token processing. There is no alternate reader for
+the retired member. Trusted key sources, signature checks, audience checks,
+and client admission are unchanged for accepted configuration.
+
+### Tests
+
+- `crates/registry-breg/tests/runtime_config.rs`:
+  `the_issuer_key_source_names_its_variant_in_a_type_member`.
+- `crates/registry-breg-mcp/src/config.rs`:
+  `each_removed_key_is_refused_with_its_replacement`.
+- `crates/registry-platform-config/src/blocks_tests.rs`:
+  `a_jwks_source_tagged_by_kind_is_refused`, and `loader_tests.rs`:
+  `the_shared_removed_jwks_source_kind_key_names_type`.
+
+### Accepted residuals
+
+Operators must write the discriminator as `type`; the diagnostic names that
+fix without repeating the configured value.
+
+## Client refusal and webhook audit vocabulary
+
+### Threat
+
+A receiver or audit consumer branching on a retired failure word may miss a
+refusal or misclassify a delivery. Vocabulary changes must preserve the
+closed failure variants and the audit identity that relates an attempt to
+its terminal result.
+
+### Enforcement and defaults
+
+- Node and Python bindings project the same closed Rust failure variants
+  using kebab-case words, including `invalid-request`, `header-bounds`,
+  `trace-context`, and `media-type`. The mapping is in
+  `crates/registry-breg-client-node/src/lib.rs` and
+  `crates/registry-breg-client-py/src/lib.rs`. Shared transport words come
+  from `TransportKind::kind`; retryability, unknown-outcome reporting and
+  response validation are unchanged.
+- `BRegWebhookVerificationError::code` in
+  `crates/registry-breg-client/src/webhook.rs` returns `missing-header`,
+  `malformed-signature`, `signature-mismatch`, or `unsupported-version`.
+  Signature verification and value-free failure messages are unchanged.
+- `webhook_outcome_name` and `webhook_disposition_name` in
+  `crates/registry-breg/src/audit.rs` write kebab-case words, such as
+  `attempt-started`, `http-non-success`, `retry-pending`, and `dead-lettered`,
+  under the existing `breg-webhook-audit/v2` schema. Dispatch still uses
+  typed variants. Request/response pairing, attempt correlation, separate
+  discard correlation and treatment of an interrupted delivery of unknown
+  fate are unchanged.
+
+### Tests
+
+- `crates/registry-breg-client/tests/webhook.rs`:
+  `fixed_vector_verifies_and_returns_exact_delivery` and
+  `refusal_codes_are_closed_and_value_free` cover successful verification,
+  the four refused variants and absence of supplied values from errors.
+- `crates/registry-breg-client-node/__test__/immediate-actions.test.js`:
+  `metadata-selected immediate action conditions and invocations use exact caller input`
+  asserts `invalid-request`;
+  `an immediate action recovers after a lost response from persisted bytes and the same key`
+  asserts the transport kind and unknown outcome.
+- `crates/registry-platform-httputil/src/client/mod.rs`:
+  `every_transport_failure_reports_its_own_kebab_case_kind`.
+- `crates/registry-breg/src/audit.rs`:
+  `webhook_attempt_and_terminal_share_the_attempt_identity`,
+  `webhook_discard_is_answered_under_a_phase_scoped_identity`, and
+  `an_interrupted_terminal_of_unknown_fate_is_recorded_only_as_unknown`.
+
+### Accepted residuals
+
+Consumers must match the current words; no spelling conversion is provided.
+The webhook refusal test covers failure variants and value absence, and the
+audit tests cover correlation and unknown fate. They do not enumerate every
+emitted code or audit word; the closed source mappings define that vocabulary.
+These references name proof obligations, not an execution claim.
