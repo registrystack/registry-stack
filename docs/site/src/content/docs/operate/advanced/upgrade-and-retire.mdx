@@ -104,11 +104,21 @@ in its upgrade step. Rehearse the whole sequence on a restored copy first, as
    destination bindings until its hook deliveries drain. Run `schedulingctl plan --runtime-config
    FILE` and `schedulingctl apply --runtime-config FILE` with the new binary, then start
    `scheduling`; `schedulingctl status --runtime-config FILE` confirms what the database activated.
+   For v0.39.0 to v0.40.0, the new `schedulingctl` does not upgrade a database the earlier release
+   wrote: `plan`, `apply`, and `records apply` refuse it as
+   `schedulingctl.activation.earlier-release`. Start from a new database, then run `schedulingctl
+   apply --runtime-config FILE` and `schedulingctl records apply RUNTIME_CONFIG RECORDS` with the
+   files changed as the release notes list. Nothing the earlier database held carries over,
+   published windows, holds, and appointments included.
 8. **Upgrade Messaging**, when it runs. Stop new submissions, let in-flight senders finish
    retrying submissions whose answers they lost, then stop every earlier `messaging` runtime. Give
    graceful shutdown time to finish sends already in flight. After every old runtime stops, refresh
    the Messaging `pg_dump`; this stopped, pre-apply snapshot includes the old runtime's final sends
-   and is the rollback backup. Run `messagingctl plan --runtime-config FILE`, then `messagingctl
+   and is the rollback backup. For v0.39.0 to v0.40.0, the new binaries refuse the earlier runtime
+   file and a package the earlier release built: make the project and runtime-file changes the
+   release notes list, build the package again with the new `messagingctl package PROJECT --output
+   DIRECTORY`, and point `package.root` at the new directory (and `package.expectedDigest`, when
+   set, at the digest it reports). Run `messagingctl plan --runtime-config FILE`, then `messagingctl
    apply --runtime-config FILE` with the new binary. Confirm the activation with `messagingctl status
    --runtime-config FILE`, start the new `messaging`, and require `GET /ready` to answer `200` before
    you resume submissions. For v0.39.0 to v0.40.0, migration 3 discards earlier idempotency records,
@@ -132,8 +142,17 @@ in its upgrade step. Rehearse the whole sequence on a restored copy first, as
     docs/site/src/content/docs/operate/messaging.mdx, "Plan, apply, inspect, and serve";
     crates/registry-messaging/migrations/0003_idempotency_caller.sql;
     crates/registry-messaging/src/runtime.rs, shutdown_signal() and Listeners::serve_until();
+    release/notes/config-conventions/messaging.md, "BREAKING: the runtime file's keys and
+    apiVersion are renamed" (the earlier runtime file and package are refused, the upgrade order);
+    crates/registry-messaging/src/config.rs, MESSAGING_RETIRED_API_VERSIONS and
+    PACKAGE_EXPECTED_DIGEST; crates/registry-messaging-core/src/package.rs,
+    MESSAGING_PROJECT_FORMAT; crates/registry-messagingctl/src/lib.rs, PackageArgs;
+    release/scripts/rehearse-upgrade.py, repackage();
     release/notes/v0.36.0.md, "Upgrade Scheduling, Relay, and Discovery from v0.35.0"
     (apply before start, hook drain);
+    release/notes/config-conventions/scheduling.md, "BREAKING: a database an earlier release
+    wrote is not read"; crates/registry-scheduling/src/store.rs, StoreError::EarlierRelease and
+    retained_policy(); crates/registry-schedulingctl/src/lib.rs, RecordsApplyArgs;
     release/scripts/rehearse-upgrade.py rehearses each product alone, not this composition. */}
 
 ## Roll back
