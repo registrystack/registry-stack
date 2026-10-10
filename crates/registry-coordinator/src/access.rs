@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Verified access-token ownership and exact deployment policy matching.
-use crate::{store::Actor, PocError, Result};
+use crate::{store::Actor, CoordinatorError, Result};
 use jsonwebtoken::Algorithm;
 use registry_platform_config::{
     JwksSource, OidcClientsConfig, OidcIssuerConfig, SecretProvidersConfig,
@@ -101,7 +101,11 @@ impl AccessConfig {
             .next()
             .map_or(Ok(()), Err)
     }
-    pub(crate) fn findings(&self, secrets: &SecretProvidersConfig, local: bool) -> Vec<PocError> {
+    pub(crate) fn findings(
+        &self,
+        secrets: &SecretProvidersConfig,
+        local: bool,
+    ) -> Vec<CoordinatorError> {
         let mut errors = Vec::new();
         for result in [
             self.issuer.check("deployment.authentication", local),
@@ -299,7 +303,7 @@ impl Caller {
         if !self.policy.actions.contains(&action)
             || flow.is_some_and(|flow| !self.policy.flows.iter().any(|f| f == flow))
         {
-            return Err(PocError::new(
+            return Err(CoordinatorError::new(
                 "coordinator.access.denied",
                 "the caller policy does not authorize this operation",
             ));
@@ -335,7 +339,7 @@ impl Authenticator {
                 | OidcError::InvalidJwk
                 | OidcError::EmptyKeySet
                 | OidcError::MissingIssuer
-                | OidcError::ConflictingEndpointConfiguration => PocError::new(
+                | OidcError::ConflictingEndpointConfiguration => CoordinatorError::new(
                     "coordinator.access.unavailable",
                     "the configured verifier cannot answer",
                 ),
@@ -371,7 +375,7 @@ impl Authenticator {
                         .all(|s| verified.scopes.contains(s))
             })
             .ok_or_else(|| {
-                PocError::new(
+                CoordinatorError::new(
                     "coordinator.access.denied",
                     "the caller policy does not authorize this operation",
                 )
@@ -387,22 +391,22 @@ impl Authenticator {
         })
     }
 }
-fn refused() -> PocError {
-    PocError::new(
+fn refused() -> CoordinatorError {
+    CoordinatorError::new(
         "coordinator.access.configuration",
         "configure an exact OIDC issuer, admitted clients and one bounded policy per client",
     )
 }
-fn access_error(field: &str, advice: &str) -> PocError {
-    PocError::new(
+fn access_error(field: &str, advice: &str) -> CoordinatorError {
+    CoordinatorError::new(
         "coordinator.access.configuration",
         "the access configuration was refused",
     )
     .at("runtime.yaml", crate::runtime::pointer(field))
     .suggest(advice)
 }
-fn unauthenticated() -> PocError {
-    PocError::new(
+fn unauthenticated() -> CoordinatorError {
+    CoordinatorError::new(
         "coordinator.access.unauthenticated",
         "a verified access token is required",
     )

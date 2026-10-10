@@ -91,7 +91,7 @@ async fn real_breg_action_recovers_exactly_once_and_rechecks_current_authority()
         .create_record(
             &create,
             &BRegCreateRequest::new(
-                json!({"owner":"poc-reader", "label":"Before"})
+                json!({"owner":"workflow-reader", "label":"Before"})
                     .as_object()
                     .unwrap()
                     .clone(),
@@ -293,7 +293,7 @@ async fn worker_reconstruction_recovers_notice_after_one_real_breg_action() {
         .create_record(
             &create,
             &BRegCreateRequest::new(
-                json!({"owner":"poc-reader", "label":"Before"})
+                json!({"owner":"workflow-reader", "label":"Before"})
                     .as_object()
                     .unwrap()
                     .clone(),

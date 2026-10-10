@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Product-owned key custody and contextual encryption over Platform Crypto.
 
-use crate::{PocError, Result};
+use crate::{CoordinatorError, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use registry_platform_crypto::{
     mac::hmac_sha256,
@@ -19,8 +19,8 @@ pub struct StateKeys {
     admission: Arc<Zeroizing<[u8; 32]>>,
 }
 
-fn invalid() -> PocError {
-    PocError::new(
+fn invalid() -> CoordinatorError {
+    CoordinatorError::new(
         "coordinator.command.protected-state-unavailable",
         "protected state could not be authenticated with the configured keys",
     )
@@ -42,10 +42,10 @@ impl StateKeys {
             || keys.values().any(|key| key == &[0; 32])
             || admission_key == [0; 32]
         {
-            return Err(PocError::new("coordinator.command.state-keys-invalid", "configure one active nonzero key version, retained read keys and a separate stable admission key"));
+            return Err(CoordinatorError::new("coordinator.command.state-keys-invalid", "configure one active nonzero key version, retained read keys and a separate stable admission key"));
         }
         if keys.values().any(|key| key == &admission_key) {
-            return Err(PocError::new(
+            return Err(CoordinatorError::new(
                 "coordinator.command.state-keys-invalid",
                 "use separate payload encryption and admission commitment keys",
             ));
@@ -91,13 +91,13 @@ impl StateKeys {
         let configured = self.custody_markers(database);
         for (version, marker) in registered {
             if configured.get(version) != Some(marker) {
-                return Err(PocError::new("coordinator.command.state-key-custody","retain the registered payload key bytes and versions; recover missing keys from deployment custody"));
+                return Err(CoordinatorError::new("coordinator.command.state-key-custody","retain the registered payload key bytes and versions; recover missing keys from deployment custody"));
             }
         }
         if !allow_new
             && registered.get(&self.active.to_string()) != configured.get(self.active.to_string())
         {
-            return Err(PocError::new(
+            return Err(CoordinatorError::new(
                 "coordinator.command.state-key-custody",
                 "apply the new payload key version before starting the service",
             ));

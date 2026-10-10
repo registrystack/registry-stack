@@ -18,7 +18,7 @@ use crate::{
     functions::{check_value, Functions, INTERPRETER_ABI},
     operations::OperationIdentity,
     protocol::Operation,
-    PocError, Result,
+    CoordinatorError, Result,
 };
 
 pub const SNAPSHOT_API_VERSION: &str =
@@ -145,8 +145,8 @@ impl Definition {
         let path = project.join("workflow.yaml");
         let bytes = read_bytes(&path, MAX_DOCUMENT_BYTES)?;
         let (workflow, document) = crate::authoring::parse_project(&path, &bytes)?;
-        // The PoC deliberately has one local source file, rather than an import
-        // loader or arbitrary path vocabulary.
+        // A project has one local source file, rather than an import loader or
+        // arbitrary path vocabulary.
         if workflow.functions != "functions.rhai" {
             return Err(crate::authoring::positioned(
                 &document,
@@ -725,12 +725,12 @@ fn read_bytes(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn fail(code: &'static str) -> PocError {
+fn fail(code: &'static str) -> CoordinatorError {
     if code == "coordinator.definition.snapshot-limit" {
-        return PocError::new(code, "the workflow snapshot exceeds the 393216-byte limit")
+        return CoordinatorError::new(code, "the workflow snapshot exceeds the 393216-byte limit")
             .suggest("Reduce workflow/schema annotations or functions.rhai source until the canonical snapshot is at most 393216 bytes, then rerun check and package. Admitted runs keep their original snapshot.");
     }
-    PocError::new(code, match code {
+    CoordinatorError::new(code, match code {
         "coordinator.definition.cycle" => "the graph contains a cycle",
         "coordinator.definition.unreachable" => "a step is not reachable from start",
         "coordinator.definition.deadline" => "deadline must be a positive s, m, h or d duration no longer than 365 days",
@@ -745,8 +745,8 @@ fn fail(code: &'static str) -> PocError {
     }).suggest("Inspect the authored field and function, correct the definition, then rerun check. Admitted runs keep their original snapshot.")
 }
 
-fn authored(code: &'static str, field: &str, message: &str, action: &str) -> PocError {
-    PocError::new(code, message)
+fn authored(code: &'static str, field: &str, message: &str, action: &str) -> CoordinatorError {
+    CoordinatorError::new(code, message)
         .at("workflow.yaml", field)
         .suggest(action)
 }

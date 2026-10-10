@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use url::{Host, Url};
 
-use crate::{protocol::CallOutcome, runtime::AuthorizationConfig, PocError, Result};
+use crate::{protocol::CallOutcome, runtime::AuthorizationConfig, CoordinatorError, Result};
 
 /// The reviewed directory contract and environment-specific destination.
 #[derive(Clone, Serialize, Deserialize)]
@@ -69,7 +69,7 @@ impl ExternalHttpConfig {
         self.findings("").into_iter().next().map_or(Ok(()), Err)
     }
 
-    pub fn findings(&self, prefix: &str) -> Vec<PocError> {
+    pub fn findings(&self, prefix: &str) -> Vec<CoordinatorError> {
         let mut errors = Vec::new();
         let mut refuse = |member: &str, repair: &str| {
             let field = if prefix.is_empty() {
@@ -78,7 +78,7 @@ impl ExternalHttpConfig {
                 format!("{prefix}.{member}")
             };
             errors.push(
-                PocError::new(
+                CoordinatorError::new(
                     "coordinator.external-http.configuration",
                     "the configured external read contract was refused",
                 )
@@ -162,7 +162,7 @@ impl ExternalHttpConnection {
     ) -> Result<Self> {
         config.validate()?;
         if config.authorization.is_some() != tokens.is_some() {
-            return Err(PocError::new(
+            return Err(CoordinatorError::new(
                 "coordinator.external-http.configuration",
                 "the external read credential provider does not match its configured identity",
             )
@@ -173,7 +173,7 @@ impl ExternalHttpConnection {
         Ok(Self {
             config: config.clone(),
             base: ServiceBaseUrl::new(config.base_url.clone()).map_err(|_| {
-                PocError::new(
+                CoordinatorError::new(
                     "coordinator.external-http.configuration",
                     "invalid service base URL",
                 )

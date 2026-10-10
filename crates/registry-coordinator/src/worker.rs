@@ -5,7 +5,7 @@ use crate::{
     definition::{Definition, Step},
     protocol::{AdapterSet, CallOutcome, CallRequest},
     store::{Detail, FrozenCommand, Job, Store},
-    PocError, Result,
+    CoordinatorError, Result,
 };
 use async_trait::async_trait;
 use registry_platform_dispatch::postgres::{DispatchOutcome, DispatchTransport, LeasedJob};
@@ -28,7 +28,7 @@ impl Worker {
             .dispatch_once(self)
             .await
             .map_err(|_| {
-                PocError::new(
+                CoordinatorError::new(
                     "coordinator.command.worker-unavailable",
                     "the durable worker could not complete this tick",
                 )

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 /// A category, authored location and repair action, without runtime values.
 #[derive(Debug, thiserror::Error)]
 #[error("{}", self.render())]
-pub struct PocError {
+pub struct CoordinatorError {
     pub code: String,
     pub message: String,
     pub file: Option<Box<Path>>,
@@ -15,7 +15,7 @@ pub struct PocError {
     pub exit_code: u8,
 }
 
-impl PocError {
+impl CoordinatorError {
     /// `code` is written in the one form every surface carries:
     /// `coordinator.<area>.<condition>`, each segment kebab-case.
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
@@ -141,7 +141,7 @@ impl PocError {
     }
 }
 
-pub type Result<T> = std::result::Result<T, PocError>;
+pub type Result<T> = std::result::Result<T, CoordinatorError>;
 
 fn is_product_code(code: &str) -> bool {
     let mut segments = code.split('.');
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn a_report_carries_the_code_exactly_as_it_was_written() {
-        let error = PocError::new("coordinator.command.run-absent", "no such run");
+        let error = CoordinatorError::new("coordinator.command.run-absent", "no such run");
         assert_eq!(error.report().diagnostics()[0].code, error.code);
         assert!(error
             .to_string()

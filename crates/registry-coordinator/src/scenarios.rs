@@ -4,7 +4,7 @@
 use crate::{
     definition::{parse_timestamp, Definition, Step},
     protocol::CallRequest,
-    PocError, Result,
+    CoordinatorError, Result,
 };
 use chrono::{DateTime, Utc};
 use registry_platform_config::AuthoredExpressions;
@@ -234,7 +234,7 @@ pub(crate) fn decode_bytes(source: &[u8], file: &str) -> Result<ScenarioDocument
     let decoded = Reader::new(file)
         .with_hook(&mut hook)
         .decode::<CoordinatorScenarios>(source, &Expect::one(&FORMAT))
-        .map_err(PocError::from_report)?;
+        .map_err(CoordinatorError::from_report)?;
     decoded.value.into_document(&decoded.document)
 }
 
@@ -358,7 +358,7 @@ impl CoordinatorScenarios {
             });
         }
         if !findings.is_empty() {
-            return Err(PocError::from_diagnostics(&findings));
+            return Err(CoordinatorError::from_diagnostics(&findings));
         }
         Ok(ScenarioDocument { cases })
     }
@@ -615,8 +615,8 @@ pub fn check(definition: &Definition, document: &ScenarioDocument) -> Result<Vec
         .collect()
 }
 
-fn error(code: &'static str) -> PocError {
-    PocError::new(code,"the offline scenario or expected synthetic result was refused")
+fn error(code: &'static str) -> CoordinatorError {
+    CoordinatorError::new(code,"the offline scenario or expected synthetic result was refused")
         .at("scenarios.yaml","cases")
         .suggest("Correct the named scenario input, bounded replies and expected graph path; no live effects were attempted.")
 }

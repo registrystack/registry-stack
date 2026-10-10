@@ -19,7 +19,7 @@ pub(crate) mod schema;
 pub mod store;
 pub mod worker;
 
-pub use error::{PocError, Result};
+pub use error::{CoordinatorError, Result};
 
 pub mod access;
 pub mod deployment;

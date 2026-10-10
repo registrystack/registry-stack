@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Shared strict configuration loading and controlled-pilot deployment policy.
 
-use crate::{PocError, Result};
+use crate::{CoordinatorError, Result};
 use registry_breg_client::BRegRecordOptions;
 use registry_platform_config::{
     DatabaseConfig, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvider,
@@ -106,7 +106,7 @@ impl AuthorizationConfig {
         &self,
         field: &str,
         secrets: Option<&SecretProvidersConfig>,
-    ) -> Vec<PocError> {
+    ) -> Vec<CoordinatorError> {
         let mut errors = Vec::new();
         check_endpoint(&self.token_endpoint).map_err(|_| config_error(&format!("{field}.tokenEndpoint"), "use an HTTPS token endpoint or explicit loopback HTTP IP URL without credentials, query or fragment")).unwrap_or_else(|error| errors.push(error));
         if self.client_id.trim().is_empty() || self.client_id.len() > 256 {
@@ -154,7 +154,7 @@ impl AuthorizationConfig {
         &self,
         field: &str,
         secrets: &SecretProvidersConfig,
-    ) -> Option<PocError> {
+    ) -> Option<CoordinatorError> {
         secrets
             .check_reference(
                 &format!("{field}.signingKeyRef"),
@@ -257,7 +257,7 @@ impl RuntimeConfig {
             .iter()
             .any(|d| d.severity == registry_platform_yaml::Severity::Error)
         {
-            return Err(PocError::from_diagnostics(&checked.diagnostics));
+            return Err(CoordinatorError::from_diagnostics(&checked.diagnostics));
         }
         checked
             .loaded
@@ -296,7 +296,7 @@ impl RuntimeConfig {
         }
     }
 
-    fn findings(&self) -> Vec<PocError> {
+    fn findings(&self) -> Vec<CoordinatorError> {
         let mut errors = Vec::new();
         self.secret_providers
             .check()
@@ -527,7 +527,7 @@ impl RuntimeConfig {
         for (name, product) in &workflow.connections {
             if product == "decision" {
                 if !self.decision_connections.contains_key(name) {
-                    return Err(PocError::new(
+                    return Err(CoordinatorError::new(
                         "coordinator.runtime.workflow-binding",
                         "the declared workflow connection has no matching decision binding",
                     )
@@ -540,7 +540,7 @@ impl RuntimeConfig {
             }
             if product == "external-http" {
                 if !self.external_http_connections.contains_key(name) {
-                    return Err(PocError::new(
+                    return Err(CoordinatorError::new(
                         "coordinator.runtime.workflow-binding",
                         "the declared workflow connection has no matching external HTTP binding",
                     )
@@ -567,7 +567,7 @@ impl RuntimeConfig {
                 .get(name)
                 .is_some_and(|b| b.product == expected)
             {
-                return Err(PocError::new(
+                return Err(CoordinatorError::new(
                     "coordinator.runtime.workflow-binding",
                     "the declared workflow connection has no matching product binding",
                 )
@@ -585,7 +585,7 @@ impl RuntimeConfig {
                         .get(&call.connection)
                         .is_some_and(|binding| binding.authorization.task_authority.is_some())
                 {
-                    return Err(PocError::new("coordinator.runtime.workflow-binding", "governed action invocation requires an explicitly permitted BReg service profile")
+                    return Err(CoordinatorError::new("coordinator.runtime.workflow-binding", "governed action invocation requires an explicitly permitted BReg service profile")
                         .at("workflow.yaml", format!("steps.{name}.call"))
                         .suggest("Use a separately authorized BReg connection without taskAuthority for this operation; task authority cannot fall back to service authority."));
                 }
@@ -595,7 +595,7 @@ impl RuntimeConfig {
                         .get(&call.connection)
                         .is_some_and(|binding| binding.authorization.task_authority.is_none())
                 {
-                    return Err(PocError::new(
+                    return Err(CoordinatorError::new(
                         "coordinator.runtime.workflow-binding",
                         "appointment creation requires task-bound Scheduling authorization",
                     )
@@ -721,8 +721,8 @@ impl RuntimeConfig {
     }
 }
 
-fn config_error(field: &str, action: &str) -> PocError {
-    PocError::new(
+fn config_error(field: &str, action: &str) -> CoordinatorError {
+    CoordinatorError::new(
         "coordinator.runtime-config.refused",
         "the runtime configuration was refused",
     )

@@ -5,7 +5,7 @@ use crate::{
     definition::{Definition, Step},
     protected_state::StateKeys,
     protocol::CallRequest,
-    PocError, Result,
+    CoordinatorError, Result,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -230,18 +230,18 @@ impl Detail {
     }
 }
 
-fn unavailable(_: impl std::fmt::Display) -> PocError {
-    PocError::new(
+fn unavailable(_: impl std::fmt::Display) -> CoordinatorError {
+    CoordinatorError::new(
         "coordinator.command.store-unavailable",
         "durable state is unavailable",
     )
 }
-fn refused(code: &'static str, message: &'static str) -> PocError {
-    PocError::new(code, message)
+fn refused(code: &'static str, message: &'static str) -> CoordinatorError {
+    CoordinatorError::new(code, message)
 }
 
 impl Store {
-    /// Test-only legacy harness. Production callers must supply explicit custody
+    /// Test-only harness. Production callers must supply explicit custody
     /// and a durable audit writer through `open`.
     #[cfg(feature = "postgres-test")]
     pub async fn connect(database_url: &str, namespace: &str) -> Result<Self> {

@@ -367,7 +367,7 @@ async fn task_binding_requires_an_unexpired_approval_and_never_uses_standing_aut
         .task_authority = Some(TaskAuthorityConfig {
         base_url: server.uri().parse().unwrap(),
         issuer: "https://casework.example".into(),
-        subject: "poc-reader".into(),
+        subject: "workflow-reader".into(),
         exchange_audience: issuer.issuer(),
         bootstrap_resource: "urn:example:applications".into(),
     });
@@ -404,7 +404,7 @@ async fn authority_deadline_mismatch_and_revocation_never_reach_breg() {
         .task_authority = Some(TaskAuthorityConfig {
         base_url: authority.uri().parse().unwrap(),
         issuer: "https://casework.example".into(),
-        subject: "poc-reader".into(),
+        subject: "workflow-reader".into(),
         exchange_audience: issuer.issuer(),
         bootstrap_resource: "urn:example:applications".into(),
     });

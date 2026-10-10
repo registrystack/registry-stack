@@ -16,8 +16,8 @@ struct ForeignDocument {
 
 #[test]
 fn foreign_json_nested_nulls_are_values_only_inside_the_explicit_subtree() {
-    // The former serde_json::Value path still refuses null. This establishes
-    // the actual reader gap without relaxing ordinary configuration decoding.
+    // An ordinary serde_json::Value member refuses null. Only the explicit
+    // foreign subtree reads it, so ordinary configuration decoding stays strict.
     let report = refusal::<ForeignDocument>("value: {}\nordinary: {nested: [null]}\n");
     assert_eq!(codes(&report), ["config.null-value"]);
     assert_eq!(report.diagnostics()[0].path, "/ordinary/nested/0");

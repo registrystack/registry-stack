@@ -156,13 +156,13 @@ impl Breg {
             json!({
                 "apiVersion":"id.registrystack.org/formats/breg/journeys/v1", "kind":"BRegJourneys",
                 "journeys":[{"id":"fixture-empty", "steps":[{"id":"list", "entity":"item", "accessProfile":"writer",
-                    "claims":{"principal":"poc-reader", "scopes":["applications:read"], "actorKind":"service", "requesterClient":"application-reader", "directClaims":{"sub":"poc-reader"}},
+                    "claims":{"principal":"workflow-reader", "scopes":["applications:read"], "actorKind":"service", "requesterClient":"application-reader", "directClaims":{"sub":"workflow-reader"}},
                     "request":{"type":"list"}, "expect":{"outcome":"success", "status":200, "count":0}}]}]
             }),
         );
         let token = issuer.issue_access_token(
             "application-reader",
-            "poc-reader",
+            "workflow-reader",
             "urn:example:applications",
             "applications:read",
             chrono::Utc::now().timestamp() + 300,
@@ -306,7 +306,7 @@ impl Breg {
     pub fn client(&self, issuer: &TestAuthorizationServer) -> BaseRegistryClient {
         let token = issuer.issue_access_token(
             "application-reader",
-            "poc-reader",
+            "workflow-reader",
             "urn:example:applications",
             "applications:read",
             chrono::Utc::now().timestamp() + 300,

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Coordinator authoring, activation and authenticated operation.
 use crate::{
-    definition::Definition, deployment, http, project, runtime::RuntimeConfig, scenarios, PocError,
-    Result,
+    definition::Definition, deployment, http, project, runtime::RuntimeConfig, scenarios,
+    CoordinatorError, Result,
 };
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use serde_json::{json, Value};
@@ -240,7 +240,7 @@ fn check(
 ) -> Result<Value> {
     use registry_platform_yaml::{Report, Severity};
     if project.is_none() && runtime.is_none() {
-        return Err(PocError::new(
+        return Err(CoordinatorError::new(
             "coordinator.command.usage",
             "check requires a project or runtime configuration",
         )
@@ -270,7 +270,7 @@ fn check(
         exit_code = exit_code.max(project_exit);
     }
     if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
-        return Err(PocError::from_report(report).with_exit(exit_code));
+        return Err(CoordinatorError::from_report(report).with_exit(exit_code));
     }
     let mut result = match definition {
         Some(definition) if explain => definition.explain()?,
@@ -294,13 +294,13 @@ fn read(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     std::fs::File::open(path)
         .and_then(|f| f.take(maximum as u64 + 1).read_to_end(&mut bytes))
         .map_err(|_| {
-            PocError::new(
+            CoordinatorError::new(
                 "coordinator.command.input-invalid",
                 "cannot read bounded local input",
             )
         })?;
     if bytes.len() > maximum {
-        return Err(PocError::new(
+        return Err(CoordinatorError::new(
             "coordinator.command.input-invalid",
             "local input exceeds its bound",
         ));
@@ -311,7 +311,7 @@ fn text_file(path: &Path, maximum: usize) -> Result<String> {
     String::from_utf8(read(path, maximum)?)
         .map(|s| s.trim_end_matches(['\r', '\n']).into())
         .map_err(|_| {
-            PocError::new(
+            CoordinatorError::new(
                 "coordinator.command.input-invalid",
                 "supply bounded UTF-8 text",
             )
@@ -319,7 +319,7 @@ fn text_file(path: &Path, maximum: usize) -> Result<String> {
 }
 fn runtime(cli: &Cli) -> Result<RuntimeConfig> {
     RuntimeConfig::load(cli.runtime_config.as_deref().ok_or_else(|| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.command.runtime-config-required",
             "supply --runtime-config FILE",
         )
@@ -333,7 +333,7 @@ async fn remote(
     key: Option<&str>,
 ) -> Result<Value> {
     let mut url = cli.url.clone().ok_or_else(|| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.command.service-required",
             "supply --url with the authenticated Coordinator origin",
         )
@@ -350,7 +350,7 @@ async fn remote(
         || url.fragment().is_some()
         || url.path() != "/"
     {
-        return Err(PocError::new(
+        return Err(CoordinatorError::new(
             "coordinator.command.service-invalid",
             "use an HTTPS origin or explicit loopback HTTP origin",
         ));
@@ -360,14 +360,14 @@ async fn remote(
         .as_deref()
         .filter(|p| p.is_absolute())
         .ok_or_else(|| {
-            PocError::new(
+            CoordinatorError::new(
                 "coordinator.command.token-file-required",
                 "supply an absolute --token-file with a current access token",
             )
         })?;
     let token = zeroize::Zeroizing::new(text_file(token_path, 16_384)?);
     registry_platform_authcommon::validate_compact_access_token(&token).map_err(|_| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.command.token-invalid",
             "the token file must contain one compact access token",
         )
@@ -380,7 +380,7 @@ async fn remote(
         .connect_timeout(Duration::from_secs(5))
         .build()
         .map_err(|_| {
-            PocError::new(
+            CoordinatorError::new(
                 "coordinator.command.service-unavailable",
                 "cannot initialize the HTTP client",
             )
@@ -393,7 +393,7 @@ async fn remote(
         request = request.header("idempotency-key", key);
     }
     let response = request.send().await.map_err(|_| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.command.service-unavailable",
             "the service could not answer; inspect the original run before retrying",
         )
@@ -402,13 +402,13 @@ async fn remote(
     let bytes = registry_platform_httputil::read_bounded(response, 1_048_576)
         .await
         .map_err(|_| {
-            PocError::new(
+            CoordinatorError::new(
                 "coordinator.command.service-unavailable",
                 "the service response exceeded its bound",
             )
         })?;
     let value = registry_platform_canonical_json::parse_json_strict(&bytes).map_err(|_| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.command.service-unavailable",
             "the service response was not bounded JSON",
         )
@@ -427,7 +427,7 @@ async fn remote(
                 "inspect caller policy and current run status before repeating the operation",
             )
         };
-        return Err(PocError::new(
+        return Err(CoordinatorError::new(
             code,
             value["message"]
                 .as_str()
@@ -466,7 +466,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
             let store = deployment::open_ctl(&r, matches!(cli.command, Command::Apply)).await?;
             if matches!(cli.command, Command::Apply) {
                 serde_json::to_value(deployment::apply(&store, &r, &p).await?)
-                    .map_err(|_| PocError::new("coordinator.command.output-unavailable", "cannot encode activation"))
+                    .map_err(|_| CoordinatorError::new("coordinator.command.output-unavailable", "cannot encode activation"))
             } else {
                 deployment::plan(&store, &r, &p.digest).await
             }
@@ -487,7 +487,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
             key_file,
         } => {
             let input = registry_platform_canonical_json::parse_json_strict(&read(input, 65_536)?)
-                .map_err(|_| PocError::new("coordinator.command.input-invalid", "input must be unambiguous JSON"))?;
+                .map_err(|_| CoordinatorError::new("coordinator.command.input-invalid", "input must be unambiguous JSON"))?;
             let key = text_file(key_file, 256)?;
             remote(
                 cli,
@@ -587,7 +587,7 @@ pub async fn run() -> std::process::ExitCode {
             return std::process::ExitCode::SUCCESS;
         }
         Err(_) => {
-            let error = PocError::new("coordinator.cli.usage", "the command line is incomplete or contains an unsupported argument")
+            let error = CoordinatorError::new("coordinator.cli.usage", "the command line is incomplete or contains an unsupported argument")
                 .suggest("Run coordinatorctl --help or coordinatorctl COMMAND --help for accepted arguments.");
             let arguments = std::env::args().collect::<Vec<_>>();
             let json = arguments
@@ -649,7 +649,7 @@ pub async fn run() -> std::process::ExitCode {
     }
 }
 
-fn failure_value(error: &PocError, exit: u8) -> Value {
+fn failure_value(error: &CoordinatorError, exit: u8) -> Value {
     json!({"status": match exit { 2 => "usage-error", 3 => "operational-failure", _ => "domain-refusal" }, "diagnostics":error.report().to_json_value()})
 }
 

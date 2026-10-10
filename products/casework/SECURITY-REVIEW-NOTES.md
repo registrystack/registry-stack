@@ -531,8 +531,8 @@ subject facts before assertion release, and checks again after source I/O.
 Retained work-item grants reuse the existing item and directory invalidation
 triggers. A release withdraws authority permanently in its task transaction,
 before any later reclaim, while a benign revision alone does not. Assignment
-owner and absence metadata alone are not legacy grant eligibility inputs; the
-existing contract continues to govern the current holder and template eligibility.
+owner and absence metadata alone are not eligibility inputs for a retained
+work-item grant; its contract governs the current holder and template eligibility.
 
 Deferred review grants bind a monotonic assignment generation maintained by a
 task-row trigger. Responsibility changes increment it; draft revision changes

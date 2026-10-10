@@ -6,7 +6,7 @@ use crate::{
     protocol::AdapterSet,
     runtime::RuntimeConfig,
     store::{RunStatus, Store},
-    PocError, Result,
+    CoordinatorError, Result,
 };
 use axum::{
     body::Bytes,
@@ -103,7 +103,7 @@ pub fn router(state: HttpState) -> Router {
         ))
         .with_state(state)
 }
-fn problem(error: PocError) -> Response {
+fn problem(error: CoordinatorError) -> Response {
     let status = match error.code.as_str() {
         "coordinator.access.unauthenticated" => StatusCode::UNAUTHORIZED,
         "coordinator.access.unavailable" => StatusCode::SERVICE_UNAVAILABLE,
@@ -139,13 +139,13 @@ async fn caller(s: &HttpState, headers: &HeaderMap) -> Result<Caller> {
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .ok_or_else(|| {
-            PocError::new(
+            CoordinatorError::new(
                 "coordinator.access.unauthenticated",
                 "a verified access token is required",
             )
         })?;
     let token = registry_platform_authcommon::parse_bearer_token(value).map_err(|_| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.access.unauthenticated",
             "a verified access token is required",
         )
@@ -201,7 +201,7 @@ mod readiness_tests {
             !cache
                 .check(|| {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    std::future::ready(Err(PocError::new(
+                    std::future::ready(Err(CoordinatorError::new(
                         "coordinator.command.live-binding-conflict",
                         "test refusal",
                     )))
@@ -296,7 +296,7 @@ mod problem_tests {
             ),
             ("coordinator.request.invalid", StatusCode::BAD_REQUEST, None),
         ] {
-            let response = problem(PocError::new(code, "synthetic boundary refusal"));
+            let response = problem(CoordinatorError::new(code, "synthetic boundary refusal"));
             assert_eq!(response.status(), status);
             assert_eq!(
                 response
@@ -335,19 +335,19 @@ mod problem_tests {
 type BoundedBody = std::result::Result<Bytes, axum::extract::rejection::BytesRejection>;
 fn request_body<T: DeserializeOwned>(body: BoundedBody) -> Result<T> {
     let bytes = body.map_err(|_| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.request.invalid",
             "supply a bounded JSON object",
         )
     })?;
     let value = registry_platform_canonical_json::parse_json_strict(&bytes).map_err(|_| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.request.invalid",
             "supply unambiguous bounded JSON",
         )
     })?;
     serde_json::from_value(value).map_err(|_| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.request.invalid",
             "supply the declared JSON object fields",
         )
@@ -357,7 +357,7 @@ fn request_body<T: DeserializeOwned>(body: BoundedBody) -> Result<T> {
 // caller authentication and action/ownership authorization have succeeded.
 async fn json_body<T: DeserializeOwned>(headers: &HeaderMap, body: BoundedBody) -> Result<T> {
     let bytes = body.map_err(|_| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.request.invalid",
             "supply a bounded JSON object",
         )
@@ -368,7 +368,7 @@ async fn json_body<T: DeserializeOwned>(headers: &HeaderMap, body: BoundedBody) 
         Json::<Value>::from_request(request, &()).await,
         Err(JsonRejection::MissingJsonContentType(_))
     ) {
-        return Err(PocError::new(
+        return Err(CoordinatorError::new(
             "coordinator.request.content-type-invalid",
             "supply application/json or an application media type ending in +json",
         ));
@@ -382,14 +382,14 @@ async fn start(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBody
         let body: Start = json_body(&headers, body).await?;
         c.authorize(Action::Start, Some(&body.flow))?;
         if s.recovery_only {
-            return Err(PocError::new(
+            return Err(CoordinatorError::new(
                 "coordinator.command.recovery-only",
                 "admissions are disabled in recovery-only service mode",
             )
             .suggest("establish persistent recovery hold before resuming an ordinary service"));
         }
         if body.flow != s.package.definition.workflow.id {
-            return Err(PocError::new(
+            return Err(CoordinatorError::new(
                 "coordinator.access.denied",
                 "the caller policy does not authorize this operation",
             ));
@@ -400,7 +400,7 @@ async fn start(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBody
             .and_then(|v| v.to_str().ok())
             .filter(|key| !key.is_empty() && key.len() <= 256)
             .ok_or_else(|| {
-                PocError::new(
+                CoordinatorError::new(
                     "coordinator.command.start-key-invalid",
                     "supply Idempotency-Key within 1..=256 bytes",
                 )
@@ -421,7 +421,7 @@ async fn start(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBody
             .await?;
         s.store.status_owned(id, &c.actor).await.and_then(|v| {
             serde_json::to_value(v).map_err(|_| {
-                PocError::new(
+                CoordinatorError::new(
                     "coordinator.command.status-unavailable",
                     "cannot encode status",
                 )
@@ -441,27 +441,29 @@ async fn run_caller(
     let c = caller(s, headers).await?;
     c.authorize(action, None)?;
     let Path(run) = run.map_err(|_| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.request.invalid",
             "supply a bounded UUID run identifier",
         )
     })?;
-    // Business parsing follows authentication and action policy. Preserve the
-    // UUID forms accepted by the former typed extractor, within their bound.
+    // Business parsing follows authentication and action policy. Every textual
+    // UUID form is accepted, within the bound of its longest spelling.
     let run = if run.len() <= 45 {
         Uuid::parse_str(&run).ok()
     } else {
         None
     }
     .ok_or_else(|| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.request.invalid",
             "supply a bounded UUID run identifier",
         )
     })?;
     let status = s.store.status_owned(run, &c.actor).await?;
     c.authorize(action, Some(&status.workflow_id))
-        .map_err(|_| PocError::new("coordinator.command.run-absent", "run was not found"))?;
+        .map_err(|_| {
+            CoordinatorError::new("coordinator.command.run-absent", "run was not found")
+        })?;
     Ok((c, status))
 }
 fn answer(result: Result<Value>) -> Response {
@@ -479,7 +481,7 @@ fn answer(result: Result<Value>) -> Response {
 }
 fn encode(value: impl serde::Serialize) -> Result<Value> {
     serde_json::to_value(value).map_err(|_| {
-        PocError::new(
+        CoordinatorError::new(
             "coordinator.command.status-unavailable",
             "cannot encode protected result",
         )
@@ -504,13 +506,13 @@ async fn list(
             let c = caller(&s, &headers).await?;
             let flows = c.authorized_flows(Action::Status)?;
             let Query(q) = query.map_err(|_| {
-                PocError::new(
+                CoordinatorError::new(
                     "coordinator.request.invalid",
                     "supply the declared bounded list query",
                 )
             })?;
             if !(1..=100).contains(&q.limit) {
-                return Err(PocError::new(
+                return Err(CoordinatorError::new(
                     "coordinator.request.invalid",
                     "limit must be between 1 and 100",
                 ));

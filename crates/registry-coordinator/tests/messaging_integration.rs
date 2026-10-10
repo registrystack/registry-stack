@@ -242,7 +242,7 @@ async fn maintained_client_replays_one_real_messaging_postgres_submission() {
     let expires = chrono::Utc::now().timestamp() + 300;
     let signed = issuer.issue_access_token(
         "case-system",
-        "poc-sender",
+        "workflow-sender",
         "urn:example:messaging",
         "messaging:send",
         expires,
@@ -258,7 +258,7 @@ async fn maintained_client_replays_one_real_messaging_postgres_submission() {
         (
             issuer.issue_access_token(
                 "case-system",
-                "poc-sender",
+                "workflow-sender",
                 "urn:example:applications",
                 "messaging:send",
                 expires,
@@ -268,7 +268,7 @@ async fn maintained_client_replays_one_real_messaging_postgres_submission() {
         (
             issuer.issue_access_token(
                 "application-reader",
-                "poc-reader",
+                "workflow-reader",
                 "urn:example:messaging",
                 "messaging:send",
                 expires,
@@ -278,7 +278,7 @@ async fn maintained_client_replays_one_real_messaging_postgres_submission() {
         (
             issuer.issue_access_token(
                 "case-system",
-                "poc-sender",
+                "workflow-sender",
                 "urn:example:messaging",
                 "other:scope",
                 expires,

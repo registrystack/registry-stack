@@ -51,7 +51,7 @@ impl Messaging {
         let base = std::env::var("COORDINATOR_MESSAGING_TEST_DATABASE_URL").expect(
             "COORDINATOR_MESSAGING_TEST_DATABASE_URL must name a separate disposable database",
         );
-        let schema = format!("poc_messaging_{}", uuid::Uuid::new_v4().simple());
+        let schema = format!("coordinator_messaging_{}", uuid::Uuid::new_v4().simple());
         let mut database = url::Url::parse(&base).expect("disposable database URL");
         database
             .query_pairs_mut()

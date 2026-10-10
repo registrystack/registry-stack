@@ -31,14 +31,14 @@ pub async fn issuer() -> TestAuthorizationServer {
                 .with_public_jwk(public.clone())
                 .with_resource("urn:example:messaging")
                 .with_actor_kind(TestActorKind::Service)
-                .with_service_subject("poc-sender"),
+                .with_service_subject("workflow-sender"),
         )
         .client(
             TestClient::new("application-reader")
                 .with_public_jwk(public)
                 .with_resource("urn:example:applications")
                 .with_actor_kind(TestActorKind::Service)
-                .with_service_subject("poc-reader"),
+                .with_service_subject("workflow-reader"),
         )
         .start()
         .await

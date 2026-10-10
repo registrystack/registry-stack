@@ -9,7 +9,7 @@ use rhai::packages::{
 use rhai::{Dynamic, Engine, AST};
 use serde_json::Value;
 
-use crate::{PocError, Result};
+use crate::{CoordinatorError, Result};
 
 /// Changing this identity requires a new definition digest.
 pub const INTERPRETER_ABI: &str = "coordinator/pure-rhai-1.26.1/v1;raw-arithmetic-logic-string-array-map-iterator;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32";
@@ -58,7 +58,7 @@ impl Functions {
                     platform::RhaiCompileError::Parse(position) => ("function source has invalid or disabled syntax".to_owned(), format!("line {} column {}", position.line().unwrap_or(0), position.position().unwrap_or(0))),
                     platform::RhaiCompileError::Entrypoint => (format!("declare one public function with {} parameter(s); function names cannot be overloaded", mapping.arguments.len()), format!("function {}", mapping.function)),
                 };
-                PocError::new("coordinator.function.definition", message).at("functions.rhai", field).suggest("Correct the named function or syntax position, then rerun check.")
+                CoordinatorError::new("coordinator.function.definition", message).at("functions.rhai", field).suggest("Correct the named function or syntax position, then rerun check.")
             })?;
             ast.get_or_insert(checked);
         }
@@ -147,8 +147,8 @@ pub(crate) fn check_value(value: &Value) -> Result<()> {
     Ok(())
 }
 
-fn failure(code: &'static str) -> PocError {
-    PocError::new(code, match code {
+fn failure(code: &'static str) -> CoordinatorError {
+    CoordinatorError::new(code, match code {
         "coordinator.function.resource-limit" => "the function exceeded its operation, call-depth or value-size budget",
         "coordinator.function.value-limit" => "the structured value exceeded its size or depth budget",
         "coordinator.function.execution" => "the function could not evaluate its supplied values",

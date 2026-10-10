@@ -42,7 +42,7 @@ fn load(text: &str) -> registry_coordinator::Result<RuntimeConfig> {
     fs::write(&path, text).unwrap();
     RuntimeConfig::load(&path)
 }
-fn refused(text: &str) -> registry_coordinator::PocError {
+fn refused(text: &str) -> registry_coordinator::CoordinatorError {
     match load(text) {
         Ok(_) => panic!("configuration must refuse"),
         Err(error) => error,

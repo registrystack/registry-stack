@@ -6,7 +6,7 @@ use crate::{
     protocol::AdapterSet,
     runtime::RuntimeConfig,
     worker::Worker,
-    PocError, Result,
+    CoordinatorError, Result,
 };
 use clap::{CommandFactory, Parser};
 use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
@@ -53,7 +53,7 @@ async fn execute(cli: Cli) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(d.listener.bind.socket_addr())
         .await
         .map_err(|_| {
-            PocError::new(
+            CoordinatorError::new(
                 "coordinator.command.listener-unavailable",
                 "cannot bind the configured private listener",
             )
@@ -70,7 +70,7 @@ async fn execute(cli: Cli) -> Result<()> {
         let _ = tokio::signal::ctrl_c().await;
     });
     tokio::select! {
-     result=server=>result.map_err(|_|PocError::new("coordinator.command.listener-unavailable","the private listener stopped")),
+     result=server=>result.map_err(|_|CoordinatorError::new("coordinator.command.listener-unavailable","the private listener stopped")),
      result=worker_loop(
          Duration::from_millis(cli.poll_ms),
          cli.recovery_only,
@@ -177,7 +177,7 @@ mod tests {
             Duration::from_millis(100),
             false,
             || {
-                std::future::ready(Err(PocError::new(
+                std::future::ready(Err(CoordinatorError::new(
                     "coordinator.command.deployment-invalid",
                     "test refusal",
                 )))
@@ -229,7 +229,7 @@ mod tests {
             false,
             || async { panic!("the cached deployment check is not yet due") },
             || {
-                std::future::ready(Err(PocError::new(
+                std::future::ready(Err(CoordinatorError::new(
                     "coordinator.command.worker-unavailable",
                     "test fence refusal",
                 )))

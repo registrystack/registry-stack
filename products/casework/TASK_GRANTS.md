@@ -143,7 +143,7 @@ Scheduling deployments using deferred work configure `taskGrantStatus` and
 check fresh exact status before every capacity command and receipt replay.
 With no status registry, Scheduling permits only authorization with at most
 900 seconds remaining; the final fifteen minutes of a deferred grant can also
-use this legacy offline path, with that bounded stale-authority window.
+use this offline path, with that bounded stale-authority window.
 A configured registry never falls back when status is unavailable or inactive.
 There is no distributed transaction between a status observation and a resource
 commit. Scheduling also rechecks the earlier execution-token and grant expiry

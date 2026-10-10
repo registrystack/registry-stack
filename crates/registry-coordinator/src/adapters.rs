@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::{
     protocol::{AdapterSet, CallOutcome, CallRequest, Operation, ReconciliationOutcome},
-    PocError, Result,
+    CoordinatorError, Result,
 };
 
 const FILE_BOUND: u64 = 65_536;
@@ -73,8 +73,8 @@ pub struct HttpAdapters {
     config: RuntimeConfig,
 }
 
-fn config_error() -> PocError {
-    PocError::new(
+fn config_error() -> CoordinatorError {
+    CoordinatorError::new(
         "coordinator.adapter.configuration",
         "product binding or secret-file configuration is invalid",
     )

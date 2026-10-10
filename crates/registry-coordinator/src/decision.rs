@@ -17,7 +17,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use url::{Host, Url};
 
-use crate::{protocol::CallOutcome, PocError, Result};
+use crate::{protocol::CallOutcome, CoordinatorError, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -89,7 +89,7 @@ impl DecisionConfig {
         self.findings("").into_iter().next().map_or(Ok(()), Err)
     }
 
-    pub fn findings(&self, prefix: &str) -> Vec<PocError> {
+    pub fn findings(&self, prefix: &str) -> Vec<CoordinatorError> {
         let loopback = match self.base_url.host() {
             Some(Host::Ipv4(ip)) => ip.is_loopback(),
             Some(Host::Ipv6(ip)) => ip.is_loopback(),
@@ -103,7 +103,7 @@ impl DecisionConfig {
                 format!("{prefix}.{field}")
             };
             errors.push(
-                PocError::new(
+                CoordinatorError::new(
                     "coordinator.decision.configuration",
                     "the configured decision service was refused",
                 )
@@ -212,13 +212,13 @@ impl DecisionConnection {
             DecisionProtocol::OpenaiDecisions => "v1/decisions",
         };
         let base = ServiceBaseUrl::new(config.base_url.clone()).map_err(|_| {
-            PocError::new(
+            CoordinatorError::new(
                 "coordinator.decision.configuration",
                 "invalid decision service URL",
             )
         })?;
         let endpoint = base.join(path).map_err(|_| {
-            PocError::new(
+            CoordinatorError::new(
                 "coordinator.decision.configuration",
                 "invalid decision service URL",
             )

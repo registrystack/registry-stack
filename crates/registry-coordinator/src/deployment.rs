@@ -6,7 +6,7 @@ use crate::{
     protected_state::StateKeys,
     runtime::RuntimeConfig,
     store::{Store, StoreSecurity, AUDIT_SCHEMA},
-    PocError, Result,
+    CoordinatorError, Result,
 };
 use registry_platform_activation::{self as activation, Layout, NewActivation, RoleMode};
 use registry_platform_audit::{AuditDestination, AuditProfile, AuditWriter, FileDestination};
@@ -107,7 +107,7 @@ impl DeploymentConfig {
             .next()
             .map_or(Ok(()), Err)
     }
-    pub(crate) fn findings(&self, secrets: &SecretProvidersConfig) -> Vec<PocError> {
+    pub(crate) fn findings(&self, secrets: &SecretProvidersConfig) -> Vec<CoordinatorError> {
         let mut errors = Vec::new();
         if let Err(error) = self.package.check() {
             errors.push(config_fail(
@@ -196,15 +196,15 @@ fn valid_identifier(s: &str) -> bool {
             .enumerate()
             .all(|(i, b)| b == b'_' || b.is_ascii_lowercase() || i > 0 && b.is_ascii_digit())
 }
-fn fail(advice: &str) -> PocError {
-    PocError::new(
+fn fail(advice: &str) -> CoordinatorError {
+    CoordinatorError::new(
         "coordinator.deployment.refused",
         "the deployment contract was refused",
     )
     .suggest(advice)
 }
-fn config_fail(field: &str, advice: &str) -> PocError {
-    PocError::new(
+fn config_fail(field: &str, advice: &str) -> CoordinatorError {
+    CoordinatorError::new(
         "coordinator.deployment.configuration",
         "the deployment configuration was refused",
     )

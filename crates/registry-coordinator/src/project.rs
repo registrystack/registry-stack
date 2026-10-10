@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A minimal editable starter. Local runtime setup never becomes portable authority.
-use crate::{PocError, Result};
+use crate::{CoordinatorError, Result};
 use std::{io::Write as _, path::Path};
 
 const WORKFLOW: &str =
@@ -81,8 +81,8 @@ pub fn init(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn failure(path: &Path, action: &str) -> PocError {
-    PocError::new(
+fn failure(path: &Path, action: &str) -> CoordinatorError {
+    CoordinatorError::new(
         "coordinator.project.init",
         "the starter project could not be created",
     )

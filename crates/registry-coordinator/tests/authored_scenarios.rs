@@ -66,7 +66,7 @@ fn authored_outcome_omission_and_explicit_absence_are_distinct() {
 }
 
 #[test]
-fn authored_scenarios_refuse_legacy_unions_unknown_members_and_substitution() {
+fn authored_scenarios_refuse_untagged_replies_unknown_members_and_substitution() {
     for (text, code, pointer) in [
         (
             source("{success: {}}", ""),

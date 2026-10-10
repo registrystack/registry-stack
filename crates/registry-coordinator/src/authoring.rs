@@ -13,7 +13,7 @@ use serde::Deserialize;
 use crate::{
     definition::{Call, Mapping, Step, Workflow},
     protocol::Operation,
-    PocError, Result,
+    CoordinatorError, Result,
 };
 
 pub const API_VERSION: &str = "id.registrystack.org/formats/coordinator/project/v1alpha1";
@@ -179,8 +179,8 @@ pub fn parse_project(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(Workflow, 
     let document = Reader::new(path.to_string_lossy())
         .with_hook(&mut expressions)
         .read(bytes.as_ref(), &Expect::one(&FORMAT))
-        .map_err(PocError::from_report)?;
-    let project: CoordinatorProject = document.decode().map_err(PocError::from_report)?;
+        .map_err(CoordinatorError::from_report)?;
+    let project: CoordinatorProject = document.decode().map_err(CoordinatorError::from_report)?;
     let workflow = Workflow {
         id: project.project.id.into_string(),
         version: project.project.version,
@@ -209,7 +209,7 @@ pub fn parse_project(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(Workflow, 
 
 /// Project execution checks refer to the stable IR. Point their diagnostics
 /// back at the corresponding member in the authored document.
-pub(crate) fn positioned(document: &Document, error: PocError) -> PocError {
+pub(crate) fn positioned(document: &Document, error: CoordinatorError) -> CoordinatorError {
     if !error.diagnostics.is_empty() {
         return error;
     }
@@ -223,7 +223,7 @@ pub(crate) fn positioned(document: &Document, error: PocError) -> PocError {
         error
             .file
             .get_or_insert_with(|| Path::new("functions.rhai").into());
-        return PocError::from_report(error.report());
+        return CoordinatorError::from_report(error.report());
     }
     let field = error.field.as_deref().unwrap_or("");
     let mut pointer = if field.starts_with('/') {
@@ -250,7 +250,7 @@ pub(crate) fn positioned(document: &Document, error: PocError) -> PocError {
             parts.join("/")
         }
     };
-    PocError::from_diagnostics(&[document.diagnostic_at_value(
+    CoordinatorError::from_diagnostics(&[document.diagnostic_at_value(
         Severity::Error,
         &error.code,
         &pointer,

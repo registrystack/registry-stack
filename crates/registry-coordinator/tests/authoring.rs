@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use chrono::{DateTime, Utc};
-use registry_coordinator::{definition::Definition, PocError};
+use registry_coordinator::{definition::Definition, CoordinatorError};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, fs};
 use tempfile::TempDir;
@@ -29,7 +29,7 @@ fn input() -> Value {
 fn instant(text: &str) -> DateTime<Utc> {
     text.parse().unwrap()
 }
-fn refused(result: registry_coordinator::Result<Definition>) -> PocError {
+fn refused(result: registry_coordinator::Result<Definition>) -> CoordinatorError {
     match result {
         Ok(_) => panic!("definition must refuse"),
         Err(error) => error,
