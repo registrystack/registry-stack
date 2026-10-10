@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- `registry-platform-oidc` adds `task_grant`, the task-grant status
+  transport the Base Registry Engine and Scheduling share:
+  `TaskGrantStatusConfig`, `TaskGrantStatusRegistry` (with
+  `validate_configuration`, `activate`, and `contains`),
+  `TaskGrantStatusClient`, `TaskGrantStatusBinding`, and `TaskGrantError`.
+  One check is bounded to ten seconds including its service token, reads at
+  most 64 KiB, and caches no answer.
+- `registry-platform-httputil` adds `PrivateKeyJwtConfig::check_identity`
+  and exports `validate_requested_scopes`: the checks of a `private_key_jwt`
+  client identity, its token endpoint, and a requested scope list, with no
+  key import and no network access.
+- `registry-platform-yaml` adds `ForeignValue`, a complete JSON tree another
+  specification defines, decoded under its own value rules (CFG-EMBED-2).
+  `CONFIG-CONVENTIONS.md` lists every foreign specification the conventions
+  lint skips.
+- `registry-platform-dispatch` adds the `write_replay` hook, a no-op by
+  default, and `JobTable::shape_predicate()`.
+- `registry-platform-crypto` adds `sealed_value`: authenticated encryption
+  of one value under a `Context` of domain, scope, and key version, for a
+  plaintext of at most 16 MiB (`MAX_PLAINTEXT_BYTES`).
+- `registry-platform-config` adds `SecretResolver::resolve_binary_reference`.
+- `registry-platform-testing` adds `with_signing_key` and
+  `sign_compact_jwt_with_key`.
 - BREAKING: `registry-platform-httputil` writes four error words in
   kebab-case (CFG-NAME-2): `TransportKind::kind()` returns
   `response-too-large` (was `response_too_large`), `TokenError::kind()`

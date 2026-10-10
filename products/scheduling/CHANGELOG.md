@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- BREAKING: a runtime with no `taskGrantStatus` entry accepts a task grant
+  offline only when the grant has at most 900 seconds left at request entry.
+  A grant with more time left is refused as `operation.not-authorized`, where
+  any unexpired grant was accepted. A grant Casework issued before this
+  release never had more than 900 seconds, so the refusal is met by a grant
+  from a `deferred` task template. Migration: configure `taskGrantStatus`
+  for the grant's source issuer, or keep the task template `immediate`.
+- The runtime file accepts `taskGrantStatus`, the task-grant status block
+  the Base Registry Engine reads as well: at most 32 entries, each with
+  `sourceIssuer`, `baseUrl`, `tokenEndpoint`, `clientAssertionAudience`,
+  `clientId`, `privateKeyRef`, `caseworkResource`, and an optional
+  `caBundleRef`. A block the status client would refuse is refused when the
+  file is read, as `scheduling.runtime.invalid-task-grant-status` at
+  `/taskGrantStatus`. Once any entry exists, the offline path is closed for
+  every source: every capacity commitment and every idempotent replay needs
+  a fresh exact status answer from Casework before the capacity transaction
+  opens. An inactive, mismatched, or incompletely bound grant, and a grant
+  from a source no entry lists, answers `operation.not-authorized`; an
+  authority or credential outage, an HTTP 401 or 403 from the status
+  endpoint included, answers `service.unavailable`. One check is bounded to
+  ten seconds and no answer is cached. The member defaults to an empty list.
+- The capacity transaction re-checks the earlier of the access token's
+  expiry and the grant's deadline immediately before the claim commits,
+  where it re-checked the grant's deadline.
+- `POST /v1/appointments/receipt` returns the receipt of an earlier
+  commitment without repeating it. The request carries the original body
+  and `Idempotency-Key` under ordinary read authority. The same verified
+  issuer and subject receive `200` with the original receipt. A receipt
+  that is missing, expired, or changed answers `409 receipt.unresolved`, a
+  new problem code that does not prove no effect occurred. The read writes
+  the audit event `scheduling.appointment.receipt-read`. The Rust client
+  adds `appointment_receipt`, the Node.js client `appointmentReceipt`, and
+  the Python client `appointment_receipt`.
 - BREAKING: the Node.js and Python clients write five error words in
   kebab-case (CFG-NAME-2): kind `invalid-request` (was `invalid_request`);
   the protocol failures `header-bounds`, `trace-context`, and `media-type`

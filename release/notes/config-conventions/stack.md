@@ -30,7 +30,7 @@ every word they list changed with no alias.
 
 | Product | Breaking items | Fragment |
 |---|---|---|
-| Base Registry Engine | 70 | `breg.md` |
+| Base Registry Engine | 71 | `breg.md` |
 | Casework | 43 | `casework.md` |
 | Discovery | 9 | `discovery.md` |
 | Evidence | 68 | `evidence.md` |
@@ -39,7 +39,7 @@ every word they list changed with no alias.
 | Platform files and tooling | 16 | `platform.md` |
 | Render | 11 | `render.md` |
 | Scheduling | 16 | `scheduling.md` |
-| Total | 260 | |
+| Total | 261 | |
 
 A fragment's "Stable move" section holds the respellings and retaggings this
 release makes with no alias, and its `BREAKING` headings are counted like any
@@ -47,6 +47,10 @@ other.
 
 Each fragment gives the final v0.40.0 spelling and diagnostic code beside the
 earlier form it replaces. Apply those final forms when rewriting a project.
+
+Registry Coordinator is new in this release. It has no earlier form, so it
+has no fragment and no breaking item; `products/coordinator/CHANGELOG.md`
+lists what it adds.
 
 ### Changes stated in more than one fragment
 
@@ -163,12 +167,23 @@ file an adopter writes.
    `required-one-or-more`, `requires-all`, and `mutually-exclusive`.
    Migration: none outside the docs site generator, its only reader.
 
+### Scheduling
+
+1. **An offline task grant has at most 900 seconds left.** A runtime with no
+   `taskGrantStatus` entry accepts a task grant without asking Casework only
+   when the grant has at most 900 seconds left at request entry, and refuses
+   a longer one as `operation.not-authorized`. A grant Casework issued before
+   this release never had more than 900 seconds, so the refusal is met by a
+   grant from a `deferred` task template. Migration: configure
+   `taskGrantStatus` for the grant's source issuer, or keep the task template
+   `immediate`.
+
 ## Reconciliation
 
 The counts above come from the fragments. The `Unreleased` section of each
 product changelog lists its own number of `BREAKING:` bullets (Base Registry
-Engine 62, Casework 43, Discovery 8, Evidence 48, Manifest 7, Messaging 16,
-Platform 17, Render 8, Scheduling 14; 223 in all). The two numbers differ for
+Engine 63, Casework 43, Discovery 8, Evidence 48, Manifest 7, Messaging 16,
+Platform 17, Render 8, Scheduling 15; 225 in all). The two numbers differ for
 a product because a fragment item is one migration step and a changelog bullet
 often covers several, and because a changelog also lists the items no fragment
 states. Those items are the ones in "Breaking changes outside the program

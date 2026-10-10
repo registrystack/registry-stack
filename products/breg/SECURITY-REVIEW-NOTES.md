@@ -2376,9 +2376,9 @@ unknown key inside a platform block (`package`, `authentication.oidc`,
 ## Runtime references and URLs typed by the shared reader
 
 Every `*Ref` member of `runtime.yaml` is decoded as the shared
-`SecretReference`, and the URLs a runtime calls or compares (`listener.publicOrigin`,
+`SecretReference`, and the URLs a runtime calls (`listener.publicOrigin`,
 an Evidence provider's `baseUrl`, the task-grant status `baseUrl` and
-`sourceIssuer`) as the shared `Url`. It touches secret reference handling,
+`tokenEndpoint`) as the shared `Url`. It touches secret reference handling,
 outbound endpoints, and the value-free reporting of operator configuration.
 
 ### Threat
@@ -2406,10 +2406,23 @@ tell which value to fix.
 - `Url` (`crates/registry-platform-yaml`) refuses anything but an absolute
   `http` or `https` URL with a host and no user information, of at most 2048
   characters. The product checks that follow are unchanged: `publicOrigin`,
-  an Evidence `baseUrl`, and a task-grant `baseUrl` are `https`, with `http`
-  only for a loopback host. `sourceIssuer` is compared with the Casework
-  issuer and never fetched, so `http` stays accepted there; a non-URL issuer
-  such as a `urn:` is now refused.
+  an Evidence `baseUrl`, and a task-grant `baseUrl` and `tokenEndpoint` are
+  `https`, with `http` only for a loopback host. The task-grant status
+  `sourceIssuer` is compared with the Casework issuer and never fetched. It
+  is the shared `ExternalId` and must be an absolute URI, so an `http` URL
+  and an absolute URN are both accepted there.
+- The task-grant status block is the one Scheduling reads
+  (`registry_platform_oidc::task_grant`). `clientId`,
+  `clientAssertionAudience`, and `caseworkResource` are `ExternalId`. The
+  structural checks (at most 32 entries, no repeated `sourceIssuer`,
+  absolute resource identifiers, a safe `baseUrl` and `tokenEndpoint`, a
+  non-empty client and assertion audience) run when the file is read, as
+  `breg.runtime.invalid-task-grant-status` at `/taskGrantStatus`, without
+  resolving a secret or calling an endpoint, and again at startup with the
+  credential material. An HTTP 401 or 403 from the status endpoint answers
+  unavailable and never establishes that a grant is active or inactive; one
+  check, including its service token, is bounded to ten seconds, and no
+  positive answer is cached.
 - An empty `authentication.oidc.assertionIssuers` mapping is refused: it
   restricts which authority each client may exchange from, and omitting the
   member is how a file applies no assertion-issuer rule (CFG-EMPTY-2). A

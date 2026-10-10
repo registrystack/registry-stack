@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `POST /v1/messages/receipt` (`readMessageReceipt`) returns the receipt of
+  an earlier submission without submitting again. The request carries the
+  original body and `Idempotency-Key`. The caller that owns the submission
+  receives `200` with the original `MessageReceipt`. A receipt that is
+  missing, expired, or changed answers `409 receipt.unresolved`, a new
+  problem code that does not prove no effect occurred. The read spends no
+  submission rate budget and writes the audit event
+  `messaging.message.receipt-read`. The Rust client adds `message_receipt`,
+  the Node.js client `messageReceipt`, and the Python client
+  `message_receipt`.
 - BREAKING: the Node.js and Python clients write five error words in
   kebab-case (CFG-NAME-2): kind `invalid-request` (was `invalid_request`);
   the protocol failures `header-bounds`, `trace-context`, and `media-type`

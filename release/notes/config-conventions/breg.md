@@ -221,8 +221,7 @@ appended to the message.
 | `runtime_config.invalid_audit` for an `audit.hashKeyRef` that is not a secret reference | `config.invalid-value` at `/audit/hashKeyRef` | Writing `secret:file/NAME` or `secret:env/NAME`. |
 | `runtime_config.invalid_database` for `database.url`, `database.password`, or `database.plaintext` | `config.removed-key`, naming `database.runtimeUrlRef` and `database.migrationUrlRef` | Deleting the member; the connection URL, password included, is named by secret reference in `database.runtimeUrlRef` and `database.migrationUrlRef`. |
 | `runtime_config.invalid_database`, `runtime_config.invalid_cursor`, `runtime_config.invalid_binding`, or the block's own refusal (event destination, attachment storage or verification, field encryption, Evidence provider, task-grant status) for a `*Ref` member that is not a secret reference | `config.invalid-value` at the member, such as `/database/runtimeUrlRef` or `/eventDestinations/<id>/hmacSha256KeyRef` | Writing `secret:file/NAME` or `secret:env/NAME`. A reference that names a provider `secretProviders` does not enable is still refused with the block's own code. |
-| `runtime_config.invalid_listener` for a `listener.publicOrigin`, `runtime_config.invalid_binding` for an Evidence provider `baseUrl`, or the task-grant configuration refusal at startup for a `taskGrantStatus` `baseUrl` or `sourceIssuer`, that is not an absolute `http` or `https` URL with a host and no user information | `config.invalid-value` at the member | Writing an absolute URL such as `https://registry.example`. `publicOrigin` and both `baseUrl` members are still `https`, with `http` only for a loopback host. |
-| a task-grant status `sourceIssuer` that is not an `http` or `https` URL, such as `urn:casework:issuer`, which was accepted | `config.invalid-value` at `/taskGrantStatus/<index>/sourceIssuer` | Writing the Casework task authority's issuer as Casework states it, an `https` URL. |
+| `runtime_config.invalid_listener` for a `listener.publicOrigin`, `runtime_config.invalid_binding` for an Evidence provider `baseUrl`, or the task-grant configuration refusal at startup for a `taskGrantStatus` `baseUrl` or `tokenEndpoint`, that is not an absolute `http` or `https` URL with a host and no user information | `config.invalid-value` at the member | Writing an absolute URL such as `https://registry.example`. `publicOrigin`, both `baseUrl` members, and `tokenEndpoint` are still `https`, with `http` only for a loopback host. |
 | `authentication.oidc.assertionIssuers: {}`, which applied no assertion-issuer rule | `config.invalid-value` at `/authentication/oidc/assertionIssuers` | Deleting the member: omitting it applies no assertion-issuer rule. |
 
 In `bregctl --format json` output, a reader refusal was reported under the
@@ -239,6 +238,39 @@ lower bound, and the file carries no inline documents. The separate bound on
 the document after `${...}` substitution is gone: a substituted value is held
 to the bound of the member it fills, and the environment is operator-held, as
 the file is.
+
+### BREAKING: the `taskGrantStatus` block is typed member by member and checked when read
+
+`taskGrantStatus` in `runtime.yaml` is the task-grant status block Scheduling
+reads as well. Its members are the shared types, and the checks `breg` made
+of the block at startup also run when the file is read, by `breg` and by
+every `bregctl` command that takes `--runtime-config`.
+
+| Member | Type | Is refused when read |
+|---|---|---|
+| `sourceIssuer` | `ExternalId` | A value of more than 512 characters or with a control character, as `config.invalid-value` at the member. A value that is not an absolute URI, as `breg.runtime.invalid-task-grant-status`. An absolute URN such as `urn:casework:issuer` is accepted, as it was. |
+| `baseUrl` | `Url` | A value that is not an absolute `http` or `https` URL with a host and no user information, as `config.invalid-value` at the member. `http` for a host that is not loopback, as `breg.runtime.invalid-task-grant-status`. |
+| `tokenEndpoint` | `Url` | The same as `baseUrl`. A value with surrounding whitespace, a scheme not written `scheme://`, an `@` in the authority, or more than 2048 characters was decided at startup and is now `config.invalid-value` at the member. |
+| `clientId`, `clientAssertionAudience` | `ExternalId` | A value of more than 512 characters or with a control character, as `config.invalid-value` at the member. An empty value, as `breg.runtime.invalid-task-grant-status`. |
+| `caseworkResource` | `ExternalId` | A value of more than 512 characters or with a control character, as `config.invalid-value` at the member. A value that is not an absolute URI, as `breg.runtime.invalid-task-grant-status`. |
+| `privateKeyRef`, `caBundleRef` | `SecretReference` | Unchanged: a value that is not `secret:file/NAME` or `secret:env/NAME`, as `config.invalid-value` at the member. |
+
+`breg.runtime.invalid-task-grant-status` is reported at `/taskGrantStatus`
+and has no earlier spelling: the block's refusals were reported at startup
+only. It also covers more than 32 entries, a repeated `sourceIssuer`, and an
+`authentication.oidc.audience` that is not an absolute URI while the block
+has an entry. The read resolves no secret and calls no endpoint; startup
+repeats the checks and then verifies the credential material.
+
+A `sourceIssuer` is compared with the `taskGrant.sourceIssuer` of each access
+profile and never fetched. A profile's `taskGrant.sourceIssuer` is still an
+`https` URL (see "project URLs and module digests are typed by the shared
+reader"), and startup still refuses a task profile whose issuer has no entry
+here.
+
+Migrate by writing `tokenEndpoint` as a plain absolute URL and keeping each
+identifier within 512 characters. A script that matched the startup refusal
+of this block matches `breg.runtime.invalid-task-grant-status`.
 
 ### The runtime `database` block takes a trusted root and a test-only plaintext switch
 

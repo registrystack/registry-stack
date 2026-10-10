@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- A task template accepts `authorizationMode`. `immediate`, the default,
+  keeps `lifetimeSeconds` at 900 or less; `deferred` allows up to 604800
+  (seven days). A preview and a grant view carry `authorizationMode` when it
+  is `deferred`. The project schema and the OpenAPI document state the
+  member, and the Rust, Node.js, and Python clients export
+  `TaskAuthorizationMode`. No project that omits the member changes meaning.
+- Schema revision 26 (`0026_review_assignment_generation.sql`) adds the
+  authorization-window constraints on `casework_task_grants` and
+  `casework_review_task_grants`, and the column
+  `casework_review_tasks.assignment_generation` with its trigger
+  `casework_review_assignment_generation`.
+- The Rust client adds `CaseworkTaskAssertionSource`, a task-assertion
+  credential source for a product client: a 4xx answer from the exchange is
+  an invalid credential with fixed text, and a 408, a 429, a 5xx, or a
+  transport failure is transient.
+- `caseworkctl dev` names five refusals of a local session's configuration
+  and exits 1 for them, where it reported `caseworkctl.operational-failure`
+  and exited 3: `caseworkctl.dev.integrations-invalid`,
+  `caseworkctl.dev.shared-client-mismatch`,
+  `caseworkctl.dev.shared-task-authority-mismatch`,
+  `caseworkctl.dev.source-binding-invalid`, and
+  `caseworkctl.dev.borrowed-principal-invalid`. Each names the file and
+  member to fix and repeats no private cause. A script matching the earlier
+  code or exit status for these failures sees the new ones.
 - BREAKING: `caseworkctl simulate` takes its file as `--simulation FILE`
   (was `--fixture FILE`): the command reads a `CaseworkSimulation`, and a
   fixture is the other file kind `caseworkctl test` runs. There is no alias,

@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+- BREAKING: `taskGrantStatus` in `runtime.yaml` is the task-grant status
+  block Scheduling reads as well, with every member typed by the shared
+  reader. `tokenEndpoint` is a `Url`: a value with surrounding whitespace, a
+  scheme not written `scheme://`, an `@` in the authority, or more than 2048
+  characters is refused as `config.invalid-value` at
+  `/taskGrantStatus/<index>/tokenEndpoint`. `clientId`,
+  `clientAssertionAudience`, and `caseworkResource` are `ExternalId`: a value
+  of more than 512 characters or with a control character is refused the
+  same way at its member. `sourceIssuer` is an `ExternalId` that must be an
+  absolute URI, so an issuer written as a `urn:` is accepted. The checks
+  `breg` made of the block at startup also run when the file is read, as
+  `breg.runtime.invalid-task-grant-status` at `/taskGrantStatus`: more than
+  32 entries, a repeated `sourceIssuer`, a `sourceIssuer`,
+  `caseworkResource`, or `authentication.oidc.audience` that is not an
+  absolute URI, a `baseUrl` or `tokenEndpoint` that is not `https` (`http`
+  only for a loopback host), and an empty `clientId` or
+  `clientAssertionAudience`. No secret is resolved and no endpoint is called
+  by the read; startup repeats the checks. Migration: write the token
+  endpoint as a plain absolute URL, and keep each identifier within 512
+  characters. A script that matched the startup refusal of this block
+  matches the new code. See `release/notes/config-conventions/breg.md`.
+- The task-grant status check uses the transport Scheduling shares
+  (`registry_platform_oidc::task_grant`). An HTTP 401 or 403 from the
+  Casework status endpoint means the status credential was rejected and
+  answers unavailable, where it was a failed precondition; a 404 is still a
+  failed precondition. One check, including the acquisition of its service
+  token, is bounded to ten seconds, and the request's user agent is
+  `registry-task-status` (was `registry-breg-task-status`). No positive
+  answer is cached, as before.
+- `bregctl dev` binds local task-grant status services. `dev-clients.yaml`
+  accepts `taskGrantStatus`, a mapping of up to eight bindings keyed by a
+  local id, each with a `sourceIssuer`, a numeric loopback HTTP `baseUrl`,
+  and a declared machine `client` scoped only to `casework:grants:status`;
+  the generated runtime file carries one `taskGrantStatus` entry for each.
+  A machine client accepts `grants`, explicit scopes on a declared audience:
+  up to seven distinct audiences of 1 to 32 scopes each, declared on the
+  issuer owner. The generated runtime maps the principal from the one claim
+  the project's access profiles name, where it wrote `registry_principal`;
+  a project whose profiles name more than one principal claim is refused. A
+  journey for a `sub` profile writes `claims.principal` as
+  `$localClientSubject`. For a client mapped through
+  `issuer.clientResources`, the client export's `resource` and `audience`
+  name that client's registered audience. `DEV.md` has the steps.
 - BREAKING: the Rust, Node.js, and Python clients write eight error words in
   kebab-case (CFG-NAME-2): kind `invalid-request` (was `invalid_request`);
   the `protocol` codes `header-bounds`, `trace-context`, and `media-type`
@@ -271,9 +314,8 @@
 - BREAKING: `runtime.yaml` secret references and URLs are typed by the shared
   reader. A `*Ref` member that is not `secret:file/NAME` or `secret:env/NAME`,
   and a `publicOrigin`, Evidence provider `baseUrl`, or task-grant status
-  `baseUrl` or `sourceIssuer` that is not an absolute `http` or `https` URL,
-  is refused as `config.invalid-value` at the member. A task-grant status
-  `sourceIssuer` written as a `urn:` was accepted and is refused, and
+  `baseUrl` or `tokenEndpoint` that is not an absolute `http` or `https` URL,
+  is refused as `config.invalid-value` at the member, and
   `authentication.oidc.assertionIssuers: {}` is refused: delete the member to
   apply no assertion-issuer rule. Migration steps are in
   `release/notes/config-conventions/breg.md`.
