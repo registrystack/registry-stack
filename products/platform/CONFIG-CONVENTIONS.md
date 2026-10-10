@@ -532,7 +532,9 @@ omit the key. An optional block whose presence turns a feature on is written
 `{}` when it has no members; `null` or `true` in its place is refused, naming
 `{}`. A format that compares record values may accept null as a record value
 only through the shared `DataLiteral` type, recorded in the exceptions
-register (`stable-move`) until the format states unset values explicitly.
+register (`stable-move`) until the format states unset values explicitly. An
+embedded foreign document (CFG-EMBED-2) is the second position where `null`
+may appear: its interior is read by its own rules.
 *Why:* the audit found `null` meaning absent, empty, the text `"null"`, and an
 error, depending on the member; and an empty value after a key is more often
 an unfinished edit or an empty template variable than a choice.
@@ -640,9 +642,14 @@ WASM modules, message templates, and Typst sources. Regular-expression
 patterns and JSON Schema fragments may be written inline.
 
 **CFG-EMBED-2 (MUST). An embedded foreign document (a JSON Schema, an
-OpenAPI fragment) is read by its own rules, not ours,** and the schema marks
-the member with `x-registry-foreign: <specification>` (`json-schema-2020-12`,
-`openapi-3.1`), which the convention lint reads to skip its interior. An
+OpenAPI fragment, an arbitrary JSON document) is read by its own rules, not
+ours,** and the schema marks the member with
+`x-registry-foreign: <specification>`, which the convention lint reads to skip
+its interior. The specifications are `json-schema-2020-12`, `openapi-3.1`,
+`json` (an arbitrary JSON document, read by JSON's rules), `breg-http-api` (a
+body of the Base Registry Engine's HTTP API, carried as written), and
+`casework-review-display` (a value a Casework review kind's `displaySchema`
+declares); the lint reports any other word. An
 extension keyword we add inside a foreign document follows that document's
 style (`x-registry-maxBytes` beside `maxItems`) and is listed in the
 exceptions register as `external-format`.

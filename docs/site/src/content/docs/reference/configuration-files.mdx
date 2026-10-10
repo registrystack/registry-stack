@@ -158,6 +158,14 @@ error[config.null-value] runtime.yaml:79:5 /authentication/oidc/scopeClaim
   next: Give a value, or remove the key if the member is optional.
 ```
 
+One kind of member is read differently: a member that carries a whole document under another
+specification's rules, such as the JSON `input` of a Coordinator scenario case. Inside that
+document, null is a value like any other.
+
+{/* Evidence: products/platform/CONFIG-CONVENTIONS.md, CFG-EMPTY-1 and CFG-EMBED-2;
+    crates/registry-platform-yaml/src/types.rs, ForeignValue;
+    crates/registry-coordinator/src/scenarios.rs, AuthoredScenario. */}
+
 ## Values from the environment
 
 A runtime file can take part of a text value from the runtime's environment while it is read:

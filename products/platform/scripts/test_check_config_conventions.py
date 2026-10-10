@@ -1202,6 +1202,30 @@ class EmbedTests(ConventionsTestCase):
         self.assertNoFinding(report, "CFG-QTY-4")
         self.assertNoFinding(report, "CFG-SCHEMA-4")
 
+    def test_cfg_embed_2_skips_the_interior_of_every_listed_specification(self) -> None:
+        for specification in ("json-schema-2020-12", "openapi-3.1", "json", "breg-http-api", "casework-review-display"):
+            with self.subTest(specification=specification):
+                self.repo.project["properties"]["payload"] = {
+                    "type": "object",
+                    "x-registry-foreign": specification,
+                    "properties": {"min_length": {"type": "integer"}},
+                }
+                report = self.repo.run()
+                self.assertNoFinding(report, "CFG-EMBED-2")
+                self.assertNoFinding(report, "CFG-NAME-1")
+
+    def test_cfg_embed_2_reports_an_unlisted_specification_and_reads_its_interior(self) -> None:
+        for specification in ("yaml", "", True):
+            with self.subTest(specification=specification):
+                self.repo.project["properties"]["payload"] = {
+                    "type": "object",
+                    "x-registry-foreign": specification,
+                    "properties": {"min_length": {"type": "integer"}},
+                }
+                report = self.repo.run()
+                self.assertFinding(report, "CFG-EMBED-2", P, at(PROJECT_SCHEMA, "/properties/payload"))
+                self.assertFinding(report, "CFG-NAME-1", P, at(PROJECT_SCHEMA, "/properties/payload/properties/min_length"))
+
 
 class SchemaTests(ConventionsTestCase):
     def test_cfg_schema_1_reports_a_read_format_without_an_example(self) -> None:

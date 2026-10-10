@@ -148,6 +148,9 @@ SHARED_BLOCKS = (
 )
 VALUE_TYPES = ("Url", "Digest", "LocalId", "ExternalId", "SecretReference")
 FOREIGN = "x-registry-foreign"
+# The specifications CFG-EMBED-2 lists. A member marked with one of them is
+# read by that specification's rules, so the lint does not look inside it.
+FOREIGN_SPECIFICATIONS = ("json-schema-2020-12", "openapi-3.1", "json", "breg-http-api", "casework-review-display")
 MEMBER_NAMES = "x-registry-member-names"
 # A node that passes through a payload its format does not describe or promise
 # carries this keyword, whose value is the reason sentence (CFG-SCHEMA-4).
@@ -992,7 +995,7 @@ def walk(schema: object, canonical: dict) -> list[Visit]:
         # the value an applicator branch shares with it.
         if node is True:
             node = {}
-        if not isinstance(node, dict) or FOREIGN in node:
+        if not isinstance(node, dict) or node.get(FOREIGN) in FOREIGN_SPECIFICATIONS:
             return
         if anchor is None:
             anchor = node
@@ -1732,6 +1735,9 @@ class Lint:
             numeric = bool(types_of(node) & {"integer", "number"})
             stringy = "string" in types_of(node) and "enum" not in node and "const" not in node and "$ref" not in node
             embedded = False
+            if FOREIGN in node:
+                find("CFG-EMBED-2", visit, f"{FOREIGN} does not name a listed specification",
+                     f"Name one of {', '.join(FOREIGN_SPECIFICATIONS)}, or describe the member in the schema")
             name5 = self.name5_match(key, visit.names) if key is not None else None
             if key is not None:
                 if visit.parent is None or "propertyNames" not in visit.parent:
@@ -1818,7 +1824,7 @@ class Lint:
                 if EMBED_NAME.match(key) and unconstrained(node):
                     embedded = True
                     find("CFG-EMBED-2", visit, f"{key} embeds a foreign document without the marker",
-                         "Mark the member with x-registry-foreign: json-schema-2020-12 or openapi-3.1")
+                         f"Mark the member with x-registry-foreign and the specification it holds: {', '.join(FOREIGN_SPECIFICATIONS)}")
             names = node.get("propertyNames")
             if isinstance(names, dict) and isinstance(names.get("enum"), list):
                 for value in names["enum"]:
