@@ -22,5 +22,5 @@ coordinator_test_target=$(cargo metadata --locked --no-deps --format-version 1 |
 export COORDINATOR_MESSAGING_BIN="$coordinator_test_target/debug/messaging"
 export COORDINATOR_MESSAGINGCTL_BIN="$coordinator_test_target/debug/messagingctl"
 cargo test --locked -p registry-coordinator --features postgres-test --lib \
-  --test postgres_state --test messaging_integration --test process_restart \
+  --test postgres_state --test recovery_audit --test messaging_integration --test process_restart \
   --test deployment_postgres

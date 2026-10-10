@@ -141,11 +141,17 @@ A model alias can change upstream even when the local binding is unchanged.
 Use an immutable release/deployment identifier when your provider offers one.
 No failover or model substitution occurs within an admitted command.
 
+An accepted response must include the returned model and provider usage metadata.
+OpenAI Decisions must supply its documented nonnegative token counts; malformed
+metadata leaves the result uncertain rather than advancing the workflow.
+
 If evaluation completion becomes unknown, inspection reports
 `hold-after-dispatch` and refuses `retry-same` and reconciliation. Cancellation
 sets `cancelRequested` while preserving `uncertain` and the attention state;
 it cannot undo provider processing. A separately authorized new start can evaluate
 again, with possible additional cost and a different answer. The
+same conservative hold applies to HTTP 429, including temporary rate limits with
+`Retry-After`: these bindings do not automatically resend an evaluation. The
 [decision example](examples/decision-follow-up/README.md) includes refusal and
 unknown-result cases; terminal `needs-review` returns control to the caller and
 does not create a resumable approval task.
@@ -304,7 +310,10 @@ The authenticated operator surface also exposes `doctor`, `cancel`, `reconcile`,
 `retry-same`, `restore-hold`, `release-restore-hold`,
 `release-admission-hold`, `complete-execution-recovery` and `retain`. Use the command's
 `--help` for its exact arguments. Supply a bounded investigation reference such
-as `incident-2026-10-09`; reasons must not contain personal data. Authenticated,
+as `incident-2026-10-09`; reasons must not contain personal data. The audit request
+records a keyed `reasonRef`, scoped to the logical database and shared across
+recovery actions. Raw investigation references stay outside the audit stream;
+operators retain the external investigation record. Authenticated,
 authorized requests with an empty, overlong or control-character reason, or an
 out-of-bounds retention cutoff/limit, return HTTP 400. State and recovery
 conflicts return HTTP 409. Recovery POSTs authenticate and authorize before

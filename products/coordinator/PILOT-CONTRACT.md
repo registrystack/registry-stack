@@ -77,7 +77,9 @@ replay or original-result lookup, automatic and operator replay are refused.
 A completed result is reused on restart. OpenAI per-question refusal is a typed
 answer. A System One HTTP refusal stops
 the call; it is not a negative answer or a typed review result. A malformed or
-lost reply remains an uncertain call.
+lost reply remains an uncertain call. HTTP 429 also remains held, including a
+temporary rate limit with `Retry-After`; it does not permit automatic resend.
+Accepted responses require the returned model and valid provider usage metadata.
 Pure workflow policy interprets results before a separately authorized effect.
 Model identity and native confidence are retained without claiming immutable
 weights, determinism, accuracy or interchangeable confidence calibration.
@@ -104,9 +106,10 @@ Secrets are references and never belong in authored packages.
 
 Verified caller policy and ownership govern start, progress and recovery APIs.
 Operator authority is explicit. Durable audit precedes protected actions and
-release of protected results. Retention erases eligible terminal payloads while
-keeping spent-key tombstones. Live, uncertain and restore-review work cannot be
-silently erased.
+release of protected results. Recovery investigation references are retained as
+keyed audit handles, never raw operator text. Retention erases eligible terminal
+payloads while keeping spent-key tombstones. Live, uncertain and restore-review
+work cannot be silently erased.
 
 Each deployment admits one active flow definition, while retained runs use their
 original versions. The list endpoint returns the latest caller-owned runs with
