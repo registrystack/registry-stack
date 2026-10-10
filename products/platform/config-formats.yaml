@@ -3511,7 +3511,7 @@ formats:
       file: crates/registry-evidence-oid4vci/src/config.rs
       function: load
       type: DeliveryDocument
-    check: evidence-oid4vci check --config {file}
+    check: evidence-oid4vci check --runtime-config {file}
     example: products/evidence/examples/oid4vci-runtime/runtime.yaml
     conformance:
       requiredText: /tokenClient/clientId

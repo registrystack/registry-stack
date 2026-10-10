@@ -709,6 +709,61 @@ mod tests {
     }
 
     #[test]
+    fn runtime_file_options_have_uniform_names_and_help() {
+        fn check(command: &CommandReference) {
+            for option in &command.options {
+                if option.display.starts_with("--runtime-config ") {
+                    assert!(
+                        matches!(
+                            option.display.as_str(),
+                            "--runtime-config <FILE>" | "--runtime-config <ABSOLUTE_FILE>"
+                        ),
+                        "{}: {}",
+                        command.invocation,
+                        option.display
+                    );
+                    assert!(
+                        option.description == "Runtime configuration file"
+                            || option.description
+                                == format!(
+                                    "Runtime configuration file. {}",
+                                    registry_cli_reference::SYMBOLIC_LINK_REFUSAL
+                                ),
+                        "{}: {}",
+                        command.invocation,
+                        option.description
+                    );
+                }
+            }
+            assert!(!command
+                .arguments
+                .iter()
+                .any(|argument| argument.display.contains("RUNTIME_CONFIG")));
+            for subcommand in &command.subcommands {
+                check(subcommand);
+            }
+        }
+        for command in &catalog().binaries {
+            check(command);
+        }
+    }
+
+    #[test]
+    fn package_output_choices_publish_exactly_one_constraints() {
+        let catalog = catalog();
+        for name in ["caseworkctl package", "schedulingctl package"] {
+            let command = find_command(&catalog.binaries, name);
+            assert!(
+                command.constraints.iter().any(|constraint| {
+                    constraint.kind == ConstraintKind::RequiredExactlyOne
+                        && constraint.arguments == ["--output <DIRECTORY>", "--dry-run"]
+                }),
+                "{name} must publish its output choice"
+            );
+        }
+    }
+
+    #[test]
     fn supported_cli_constraints_are_published() {
         let catalog = catalog();
         let audit_show = find_command(&catalog.binaries, "evidencectl audit show");
@@ -799,7 +854,7 @@ mod tests {
         assert!(find_command(&catalog.binaries, "evidence-oid4vci check")
             .options
             .iter()
-            .any(|argument| argument.display == "--config <CONFIG>"
+            .any(|argument| argument.display == "--runtime-config <FILE>"
                 && argument.environment.is_some()
                 && !argument.always_required));
     }

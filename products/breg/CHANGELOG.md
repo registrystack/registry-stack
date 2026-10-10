@@ -23,6 +23,10 @@ or discard of earlier rows.
   OpenAPI, registry metadata, `/v1/registry`, and audit `operationId` values.
   For example, `read_live` becomes `read-live` and `publish_release` becomes
   `publish-release`. Rebuild packages and update metadata and audit consumers.
+
+- Runtime file flags use the help text "Runtime configuration file" and
+  show `ABSOLUTE_FILE` wherever an absolute input path is required.
+
 - BREAKING: the Rust, Node.js, and Python clients write eight error words in
   kebab-case (CFG-NAME-2): kind `invalid-request` (was `invalid_request`);
   the `protocol` codes `header-bounds`, `trace-context`, and `media-type`

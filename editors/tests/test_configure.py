@@ -163,7 +163,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(marker, {"product": "evidence-oid4vci", "document": "issuer.yaml"})
         tasks = json.loads((self.workspace / ".zed/tasks.json").read_text())
         self.assertEqual(len(tasks), 2)
-        self.assertEqual(tasks[1]["args"], ["check", "--config", str(oid / "issuer.yaml")])
+        self.assertEqual(tasks[1]["args"], ["check", "--runtime-config", str(oid / "issuer.yaml")])
 
     def test_oid_setup_maps_the_runtime_schema_to_the_named_document(self):
         project = self.project(
@@ -364,7 +364,7 @@ class ConfigureTests(unittest.TestCase):
             "render": ["check", "--bundle", str(project)],
             "evidence": ["check", str(project)],
             "platform": ["dev", "check", "task-connection.yaml"],
-            "evidence-oid4vci": ["check", "--config", str(document)],
+            "evidence-oid4vci": ["check", "--runtime-config", str(document)],
             "evidence-deployment": ["check", "--runtime-config", "runtime.yaml"],
         }
         for product, args in expected.items():

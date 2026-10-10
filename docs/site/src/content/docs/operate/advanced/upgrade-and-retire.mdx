@@ -117,7 +117,7 @@ in its upgrade step. Rehearse the whole sequence on a restored copy first, as
    For v0.39.0 to v0.40.0, the new `schedulingctl` does not upgrade a database the earlier release
    wrote: `plan`, `apply`, and `records apply` refuse it as
    `schedulingctl.activation.earlier-release`. Start from a new database, then run `schedulingctl
-   apply --runtime-config FILE` and `schedulingctl records apply RUNTIME_CONFIG RECORDS` with the
+   apply --runtime-config FILE` and `schedulingctl records apply --runtime-config FILE RECORDS` with the
    files changed as the release notes list. Nothing the earlier database held carries over,
    published windows, holds, and appointments included.
 8. **Upgrade Messaging**, when it runs. Stop new submissions, let in-flight senders finish

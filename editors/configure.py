@@ -162,7 +162,7 @@ CHECKS = {
     "render": ("registry-render", "check", "--bundle", "{project}"),
     "evidence": ("evidencectl", "check", "{project}"),
     "platform": ("evidencectl", "dev", "check", "task-connection.yaml"),
-    "evidence-oid4vci": ("evidence-oid4vci", "check", "--config", "{document}"),
+    "evidence-oid4vci": ("evidence-oid4vci", "check", "--runtime-config", "{document}"),
     "evidence-deployment": ("evidence", "check", "--runtime-config", "runtime.yaml"),
 }
 

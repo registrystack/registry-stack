@@ -45,4 +45,4 @@ EXPOSE 8090
 # The adapter serves GET /health and GET /ready. Distroless has no shell or
 # HTTP client, so the deployment platform owns the probe.
 ENTRYPOINT ["/usr/local/bin/evidence-oid4vci"]
-CMD ["serve", "--config", "/etc/registry-evidence-oid4vci/runtime.yaml"]
+CMD ["serve", "--runtime-config", "/etc/registry-evidence-oid4vci/runtime.yaml"]

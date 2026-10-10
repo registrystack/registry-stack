@@ -19,7 +19,7 @@ mod report;
 mod templates;
 
 use anyhow::Result;
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_platform_audit::AuditUnavailable;
 use registry_platform_yaml::{Diagnostic, Report};
 use registry_scheduling::config::RuntimeConfigError;
@@ -91,10 +91,7 @@ struct CheckArgs {
     /// Exit 1 when a warning is reported.
     #[arg(long)]
     deny_warnings: bool,
-    /// Runtime file to check offline against PROJECT, as `scheduling serve`
-    /// reads it, with no package, database, network, or secret material
-    /// (`package.root` is not read; `scheduling serve` verifies the package at
-    /// startup).
+    /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
     /// Fill `${NAME}` expressions in the runtime file from the process
@@ -112,15 +109,16 @@ struct ProjectArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(ArgGroup::new("package_output").required(true).multiple(false).args(["output", "dry_run"])))]
 struct PackageArgs {
     /// Authored scheduling project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
     /// New directory for the verified package. Required unless --dry-run.
-    #[arg(long, value_name = "DIRECTORY", required_unless_present = "dry_run")]
+    #[arg(long, value_name = "DIRECTORY")]
     output: Option<PathBuf>,
     /// Report the same packageDigest and files a package would produce, without writing one.
-    #[arg(long, conflicts_with = "output", required_unless_present = "output")]
+    #[arg(long)]
     dry_run: bool,
     /// Free-text revision recorded in the package's REVISION file and covered by its digest.
     #[arg(long, value_name = "TEXT")]
@@ -129,14 +127,14 @@ struct PackageArgs {
 
 #[derive(Debug, Args)]
 struct ActivationArgs {
-    /// Runtime configuration document of the deployment.
+    /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
 }
 
 #[derive(Debug, Args)]
 struct ApplyArgs {
-    /// Runtime configuration document of the deployment to activate.
+    /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
     /// Change or ticket reference; recorded only as a keyed hash.
@@ -161,8 +159,8 @@ enum RecordsCommand {
 
 #[derive(Debug, Args)]
 struct RecordsApplyArgs {
-    /// Runtime configuration document of the deployment to write.
-    #[arg(value_name = "RUNTIME_CONFIG")]
+    /// Runtime configuration file.
+    #[arg(long = "runtime-config", value_name = "FILE")]
     config: PathBuf,
     /// Environment records document: locations, pools, and exceptions.
     #[arg(value_name = "RECORDS")]
@@ -171,8 +169,8 @@ struct RecordsApplyArgs {
 
 #[derive(Debug, Args)]
 struct IntentsArgs {
-    /// Runtime configuration document of the deployment to read.
-    #[arg(value_name = "RUNTIME_CONFIG")]
+    /// Runtime configuration file.
+    #[arg(long = "runtime-config", value_name = "FILE")]
     config: PathBuf,
     /// Most intents to list.
     #[arg(long, default_value_t = 50)]
@@ -848,6 +846,40 @@ mod tests {
     }
 
     #[test]
+    fn runtime_inputs_require_the_named_flag() {
+        for args in [
+            vec![
+                "schedulingctl",
+                "records",
+                "apply",
+                "--runtime-config",
+                "/runtime.yaml",
+                "/records.yaml",
+            ],
+            vec![
+                "schedulingctl",
+                "intents",
+                "--runtime-config",
+                "/runtime.yaml",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        for args in [
+            vec![
+                "schedulingctl",
+                "records",
+                "apply",
+                "/runtime.yaml",
+                "/records.yaml",
+            ],
+            vec!["schedulingctl", "intents", "/runtime.yaml"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
     fn a_successful_report_names_its_status() {
         let (_root, project) = initialized("standalone-exact-time");
         let project = project.to_str().unwrap();
@@ -1347,6 +1379,7 @@ mod tests {
             "schedulingctl",
             "records",
             "apply",
+            "--runtime-config",
             "/runtime.yaml",
             "/records.yaml",
         ])
@@ -1365,16 +1398,28 @@ mod tests {
             Cli::try_parse_from(["schedulingctl", "records", "apply", "/runtime.yaml"]).is_err()
         );
 
-        let cli = Cli::try_parse_from(["schedulingctl", "intents", "/runtime.yaml"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "schedulingctl",
+            "intents",
+            "--runtime-config",
+            "/runtime.yaml",
+        ])
+        .unwrap();
         let Command::Intents(args) = cli.command else {
             panic!("expected intents")
         };
         assert_eq!(args.config, PathBuf::from("/runtime.yaml"));
         assert_eq!(args.limit, 50);
 
-        let cli =
-            Cli::try_parse_from(["schedulingctl", "intents", "/runtime.yaml", "--limit", "10"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "schedulingctl",
+            "intents",
+            "--runtime-config",
+            "/runtime.yaml",
+            "--limit",
+            "10",
+        ])
+        .unwrap();
         let Command::Intents(args) = cli.command else {
             panic!("expected intents")
         };
@@ -1719,7 +1764,7 @@ mod tests {
     }
 
     #[test]
-    fn check_help_says_the_runtime_check_does_not_read_the_package() {
+    fn check_help_names_the_runtime_configuration_file() {
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
         let exit = main_entry_from(
             ["schedulingctl", "check", "--help"],
@@ -1729,7 +1774,7 @@ mod tests {
         assert_eq!(exit, ExitCode::SUCCESS);
         let help = String::from_utf8(stdout).unwrap().replace("\n  ", " ");
         assert!(
-            help.contains("`package.root` is not read; `scheduling serve` verifies the package"),
+            help.contains("--runtime-config <FILE>") && help.contains("Runtime configuration file"),
             "{help}"
         );
     }
@@ -1972,6 +2017,7 @@ mod tests {
         let (exit, report, stderr) = run_json(&[
             "records",
             "apply",
+            "--runtime-config",
             config_path.to_str().unwrap(),
             records_path.to_str().unwrap(),
         ]);

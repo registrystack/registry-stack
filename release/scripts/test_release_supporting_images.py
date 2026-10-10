@@ -19,7 +19,7 @@ SUPPORTING_IMAGES = {
     },
     "evidence-oid4vci": {
         "workdir": "/var/lib/registry-evidence-oid4vci",
-        "command": 'CMD ["serve", "--config", "/etc/registry-evidence-oid4vci/runtime.yaml"]',
+        "command": 'CMD ["serve", "--runtime-config", "/etc/registry-evidence-oid4vci/runtime.yaml"]',
     },
     "messaging": {
         "workdir": "/var/lib/registry-messaging",
@@ -74,7 +74,7 @@ class SupportingReleaseImageTests(unittest.TestCase):
         self.assertNotIn("/var/lib/registry-evidence-oid4vci/audit", dockerfile)
         self.assertNotIn("/var/lib/registry-evidence-oid4vci/state", dockerfile)
         self.assertIn(
-            'CMD ["serve", "--config", '
+            'CMD ["serve", "--runtime-config", '
             '"/etc/registry-evidence-oid4vci/runtime.yaml"]',
             dockerfile,
         )

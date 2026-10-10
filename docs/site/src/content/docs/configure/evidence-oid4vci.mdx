@@ -129,7 +129,7 @@ published, no public image exists under that name. The image runs
 and mount the client key as one file under `secretProviders.file.root`: a regular file owned by
 UID 65532, mode `0400` or `0600`, with exactly one hard link. Startup refuses any other key file. To
 retain another runtime
-file path, override the image command with `serve --config <file>`. The image packages the existing
+file path, override the image command with `serve --runtime-config <file>`. The image packages the existing
 adapter binary, so it keeps the same frozen profile and single-replica limit described on this
 page. Follow the release
 verification procedure at
@@ -275,7 +275,7 @@ offer survives before it locks out for the rest of its life, to `1..=10`.
 Check the deployment before opening a socket:
 
 ```sh
-evidence-oid4vci check --config /etc/evidence-oid4vci/oid4vci.yaml
+evidence-oid4vci check --runtime-config /etc/evidence-oid4vci/oid4vci.yaml
 ```
 
 `check` reads the configuration exactly as `serve` reads it and applies every rule `serve`
@@ -288,7 +288,7 @@ when it breaks a rule, `2` for an invalid command line, and `3` when the file ca
 An old `mint:` block is refused with an instruction to use `tokenClient:`.
 Configure `resource` and `scopes` to match the issuer's registered client and Evidence Gateway
 authorization profile. `check`, `inspect`, and `serve` accept
-`EVIDENCE_OID4VCI_CONFIG` in place of `--config`.
+`EVIDENCE_OID4VCI_RUNTIME_CONFIG` in place of `--runtime-config`.
 
 Inspect the metadata derived from the validated configuration and authenticated Evidence
 discovery before routing traffic:
@@ -296,7 +296,7 @@ discovery before routing traffic:
 ```sh
 umask 077
 evidence-oid4vci inspect \
-  --config /etc/evidence-oid4vci/oid4vci.yaml \
+  --runtime-config /etc/evidence-oid4vci/oid4vci.yaml \
   > oid4vci-metadata.json
 ```
 
@@ -336,7 +336,7 @@ This command needs no deployment configuration and performs no network request.
 Run exactly one serving process for the deployment:
 
 ```sh
-evidence-oid4vci serve --config /etc/evidence-oid4vci/oid4vci.yaml
+evidence-oid4vci serve --runtime-config /etc/evidence-oid4vci/oid4vci.yaml
 ```
 
 Every field in the configuration document is startup-only; changing the credential issuer, the

@@ -12,7 +12,7 @@ use clap::{CommandFactory, Parser};
     version = registry_platform_buildinfo::DISPLAY_VERSION
 )]
 pub struct Arguments {
-    /// Absolute path to the runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long = "runtime-config", value_name = "ABSOLUTE_FILE")]
     pub runtime_config: PathBuf,
 }

@@ -92,10 +92,7 @@ pub fn command() -> Command {
             Arg::new("runtime-config")
                 .long("runtime-config")
                 .value_name("FILE")
-                .help(
-                    "Review page runtime file. `serve` requires an absolute path; `check` also \
-                     accepts a relative one",
-                )
+                .help("Runtime configuration file")
                 .required(true)
                 .value_parser(value_parser!(PathBuf)),
         )

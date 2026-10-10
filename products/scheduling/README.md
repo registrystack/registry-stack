@@ -74,7 +74,7 @@ Then activate the package, apply the live environment records, and start:
 ```sh
 schedulingctl plan --runtime-config "$PWD/runtime.yaml"
 schedulingctl apply --runtime-config "$PWD/runtime.yaml" --operator-reference CHG-1234
-schedulingctl records apply "$PWD/runtime.yaml" "$PWD/records.yaml"
+schedulingctl records apply --runtime-config "$PWD/runtime.yaml" "$PWD/records.yaml"
 scheduling --runtime-config "$PWD/runtime.yaml" serve
 ```
 

@@ -38,10 +38,11 @@ fn write(text: &str) -> (tempfile::TempDir, PathBuf) {
 fn check(path: &Path, extra: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_evidence-oid4vci"))
         .arg("check")
-        .arg("--config")
+        .arg("--runtime-config")
         .arg(path)
         .args(extra)
         .env_remove("EVIDENCE_OID4VCI_CONFIG")
+        .env_remove("EVIDENCE_OID4VCI_RUNTIME_CONFIG")
         .output()
         .expect("the binary runs")
 }
@@ -156,6 +157,7 @@ fn an_invalid_command_line_exits_two() {
     let output = Command::new(env!("CARGO_BIN_EXE_evidence-oid4vci"))
         .args(["check", "--format", "yaml"])
         .env_remove("EVIDENCE_OID4VCI_CONFIG")
+        .env_remove("EVIDENCE_OID4VCI_RUNTIME_CONFIG")
         .output()
         .expect("the binary runs");
     assert_eq!(output.status.code(), Some(2));
@@ -191,4 +193,25 @@ fn the_check_reads_no_secret_material() {
     assert!(!Path::new("/run/secrets/evidence-oid4vci/delivery-client.jwk.json").exists());
     let output = check(&path, &["--format", "json"]);
     assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn only_the_runtime_config_environment_variable_selects_the_file() {
+    let (_root, path) = write(&example());
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence-oid4vci"))
+        .args(["check", "--format", "json"])
+        .env_remove("EVIDENCE_OID4VCI_CONFIG")
+        .env_remove("EVIDENCE_OID4VCI_RUNTIME_CONFIG")
+        .env("EVIDENCE_OID4VCI_RUNTIME_CONFIG", &path)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(json(&output)["ok"], true);
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence-oid4vci"))
+        .arg("check")
+        .env_remove("EVIDENCE_OID4VCI_RUNTIME_CONFIG")
+        .env("EVIDENCE_OID4VCI_CONFIG", &path)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
 }

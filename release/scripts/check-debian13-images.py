@@ -163,7 +163,7 @@ HTTP_PROBE_DOCKERFILES = {
     Path("release/docker/Dockerfile.evidence-oid4vci"): {
         "binary": "evidence-oid4vci",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/evidence-oid4vci"]',
-        "command": 'CMD ["serve", "--config", "/etc/registry-evidence-oid4vci/runtime.yaml"]',
+        "command": 'CMD ["serve", "--runtime-config", "/etc/registry-evidence-oid4vci/runtime.yaml"]',
     },
     Path("release/docker/Dockerfile.registry-render"): {
         "binary": "registry-render",

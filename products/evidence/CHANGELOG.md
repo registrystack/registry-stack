@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: `evidence-oid4vci check`, `inspect`, and `serve` take
+  `--runtime-config FILE` instead of `--config FILE`, and
+  `EVIDENCE_OID4VCI_RUNTIME_CONFIG` instead of `EVIDENCE_OID4VCI_CONFIG`.
+  Replace the flag and variable in scripts and deployment configuration.
+  Neither old spelling is accepted.
+
 ### Protocol words
 
 - BREAKING: four transport and token words the Node.js and Python clients

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Runtime file flags use the help text "Runtime configuration file" and
+  show `ABSOLUTE_FILE` wherever an absolute input path is required.
+
 - A label table with no envelope is told the whole shape: after the envelope
   lines, write the label keys as a mapping under `labels:`.
 - BREAKING: `manifest.yaml` opens with

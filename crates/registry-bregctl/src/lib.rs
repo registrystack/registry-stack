@@ -286,7 +286,7 @@ struct FieldEncryptionKeygenArgs {
 
 #[derive(Debug, Args)]
 struct FieldEncryptionPreflightArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -298,7 +298,7 @@ struct FieldEncryptionPreflightArgs {
 
 #[derive(Debug, Args)]
 struct FieldEncryptionEraseHistoryArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -325,8 +325,8 @@ enum EvidenceRetentionCommand {
 
 #[derive(Debug, Args)]
 struct EvidenceRetentionEraseArgs {
-    /// Absolute runtime configuration path containing the migration connection binding.
-    #[arg(long)]
+    /// Runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
     /// RFC 3339 expiry cutoff, no later than the current time.
     #[arg(long)]
@@ -347,8 +347,8 @@ enum IdempotencyRetentionCommand {
 
 #[derive(Debug, Args)]
 struct IdempotencyRetentionEraseArgs {
-    /// Absolute runtime configuration path containing the migration connection binding.
-    #[arg(long)]
+    /// Runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
     /// RFC 3339 cutoff, no later than the current time; responses whose horizon passed before it are dropped.
     #[arg(long)]
@@ -422,9 +422,7 @@ struct CheckArgs {
     /// Exit 1 when a warning is reported.
     #[arg(long)]
     deny_warnings: bool,
-    /// Runtime file to check offline against PROJECT, as `breg` reads it, with no
-    /// package, database, network, or secret material (`package.root` is not read;
-    /// `breg` verifies the package at startup).
+    /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
     /// Fill `${NAME}` expressions in the runtime file from the process environment and
@@ -588,7 +586,7 @@ struct ExplainArgs {
 
 #[derive(Debug, Args)]
 struct DoctorArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 }
@@ -647,7 +645,7 @@ struct TestArgs {
     #[command(flatten)]
     candidate: PackageCandidateArgs,
 
-    /// Absolute runtime configuration for test database access and secret resolution.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -677,7 +675,7 @@ struct TestArgs {
 
 #[derive(Debug, Args)]
 struct ApplyArgs {
-    /// Absolute runtime configuration for deployment identity, roles, and database access.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -704,7 +702,7 @@ struct ApplyArgs {
 
 #[derive(Debug, Args)]
 struct PlanArgs {
-    /// Absolute runtime configuration for deployment identity, roles, and database access.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -723,14 +721,14 @@ struct PlanArgs {
 
 #[derive(Debug, Args)]
 struct StatusArgs {
-    /// Absolute runtime configuration for deployment identity, roles, and database access.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 }
 
 #[derive(Debug, Args)]
 struct VerifyArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 }
@@ -791,14 +789,14 @@ enum RequestRetentionCommand {
 
 #[derive(Debug, Args)]
 struct AttachmentCleanupArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 }
 
 #[derive(Debug, Args)]
 struct RequestRetentionListArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -817,7 +815,7 @@ struct RequestRetentionListArgs {
 
 #[derive(Debug, Args)]
 struct RequestRetentionExactArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -852,7 +850,7 @@ enum ReviewRecoveryCommand {
 
 #[derive(Debug, Args)]
 struct ReviewRecoveryExactArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -908,14 +906,14 @@ enum InstanceClaimCommand {
 
 #[derive(Debug, Args)]
 struct InstanceClaimStatusArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 }
 
 #[derive(Debug, Args)]
 struct InstanceClaimAdoptArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -932,7 +930,7 @@ struct InstanceClaimAdoptArgs {
 
 #[derive(Debug, Args)]
 struct ImportAuthorityOpenArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -971,7 +969,7 @@ struct ImportAuthorityOpenArgs {
 
 #[derive(Debug, Args)]
 struct ImportAuthorityCloseArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -990,7 +988,7 @@ struct ImportAuthorityCloseArgs {
 
 #[derive(Debug, Args)]
 struct ImportAuthorityRuntimeArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 }
@@ -1008,7 +1006,7 @@ struct WebhookSampleArgs {
 
 #[derive(Debug, Args)]
 struct WebhookListArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -1019,7 +1017,7 @@ struct WebhookListArgs {
 
 #[derive(Debug, Args)]
 struct WebhookReplayArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -1038,7 +1036,7 @@ struct WebhookReplayArgs {
 
 #[derive(Debug, Args)]
 struct WebhookDiscardArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -1314,14 +1312,14 @@ enum HistoryCommand {
 
 #[derive(Debug, Args)]
 struct MigrationExplainArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 }
 
 #[derive(Debug, Args)]
 struct MigrationReconcileArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -1340,7 +1338,7 @@ struct MigrationReconcileArgs {
 
 #[derive(Debug, Args)]
 struct HistoryEraseArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -1362,7 +1360,7 @@ struct HistoryEraseArgs {
 
 #[derive(Debug, Args)]
 struct HistoryRebaselineArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
@@ -1387,7 +1385,7 @@ struct DiffArgs {
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
 
-    /// Absolute runtime configuration whose configured package is the baseline.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: Option<PathBuf>,
 

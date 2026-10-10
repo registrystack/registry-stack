@@ -15,8 +15,8 @@ use tracing_subscriber::prelude::*;
     version = registry_platform_buildinfo::DISPLAY_VERSION
 )]
 struct Arguments {
-    /// Absolute path of the runtime file naming the listener, index, and limits
-    #[arg(long = "runtime-config", value_name = "FILE")]
+    /// Runtime configuration file.
+    #[arg(long = "runtime-config", value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 }
 

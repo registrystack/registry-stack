@@ -26,8 +26,12 @@ pub enum Command {
     /// --deny-warnings, a warning is reported, 2 when the command line is
     /// invalid, and 3 when the file cannot be read.
     Check {
-        /// Wallet-delivery runtime file.
-        #[arg(long, env = "EVIDENCE_OID4VCI_CONFIG")]
+        /// Runtime configuration file.
+        #[arg(
+            long = "runtime-config",
+            value_name = "FILE",
+            env = "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
+        )]
         config: PathBuf,
         /// Emit the selected command's report in this format.
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
@@ -43,8 +47,12 @@ pub enum Command {
     },
     /// Validate the deployment and print its derived protocol metadata.
     Inspect {
-        /// Wallet-delivery runtime file.
-        #[arg(long, env = "EVIDENCE_OID4VCI_CONFIG")]
+        /// Runtime configuration file.
+        #[arg(
+            long = "runtime-config",
+            value_name = "FILE",
+            env = "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
+        )]
         config: PathBuf,
     },
     /// Render the deterministic OpenAPI 3.1 contract, then exit.
@@ -55,8 +63,12 @@ pub enum Command {
     },
     /// Serve the delivery endpoints until terminated.
     Serve {
-        /// Wallet-delivery runtime file.
-        #[arg(long, env = "EVIDENCE_OID4VCI_CONFIG")]
+        /// Runtime configuration file.
+        #[arg(
+            long = "runtime-config",
+            value_name = "FILE",
+            env = "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
+        )]
         config: PathBuf,
     },
 }
@@ -83,6 +95,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn runtime_inputs_use_the_named_flag_and_environment() {
+        for name in ["check", "inspect", "serve"] {
+            assert!(Cli::try_parse_from([
+                "evidence-oid4vci",
+                name,
+                "--runtime-config",
+                "runtime.yaml"
+            ])
+            .is_ok());
+            assert!(
+                Cli::try_parse_from(["evidence-oid4vci", name, "--config", "runtime.yaml"])
+                    .is_err()
+            );
+            let tree = command();
+            let option = tree
+                .find_subcommand(name)
+                .unwrap()
+                .get_arguments()
+                .find(|argument| argument.get_long() == Some("runtime-config"))
+                .unwrap();
+            assert_eq!(option.get_env().unwrap(), "EVIDENCE_OID4VCI_RUNTIME_CONFIG");
+        }
+    }
+
+    #[test]
     fn every_config_option_has_public_help() {
         let command = command();
         for name in ["check", "inspect", "serve"] {
@@ -96,7 +133,7 @@ mod tests {
                     .get_long_help()
                     .or_else(|| config.get_help())
                     .is_some_and(|help| !help.to_string().trim().is_empty()),
-                "{name} --config lacks public help"
+                "{name} --runtime-config lacks public help"
             );
         }
     }

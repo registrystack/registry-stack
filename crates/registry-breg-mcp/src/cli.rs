@@ -16,8 +16,7 @@ use crate::check::OutputFormat;
     about = "Serve a citizen-facing MCP gateway over a Base Registry Engine"
 )]
 pub struct Cli {
-    /// Gateway runtime file. `serve` requires an absolute path; `check` also
-    /// accepts a relative one.
+    /// Runtime configuration file.
     #[arg(long = "runtime-config", value_name = "FILE")]
     pub runtime_config: PathBuf,
     #[command(subcommand)]

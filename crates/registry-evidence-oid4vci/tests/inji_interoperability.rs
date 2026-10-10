@@ -846,7 +846,7 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
     let binary = adapter_binary();
     let check = Command::new(&binary)
         .env("RUST_LOG", "off")
-        .args(["check", "--config"])
+        .args(["check", "--runtime-config"])
         .arg(&config_path)
         .output()
         .expect("run the real check command");
@@ -878,7 +878,7 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
     let inspect = Command::new(&binary)
         .env("RUST_LOG", "off")
         .env(CLIENT_KEY_VARIABLE, &client_identity.private)
-        .args(["inspect", "--config"])
+        .args(["inspect", "--runtime-config"])
         .arg(&config_path)
         .output()
         .expect("run the real inspect command");
@@ -899,7 +899,7 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
         Command::new(&binary)
             .env("RUST_LOG", "off")
             .env(CLIENT_KEY_VARIABLE, &client_identity.private)
-            .args(["serve", "--config"])
+            .args(["serve", "--runtime-config"])
             .arg(&config_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())

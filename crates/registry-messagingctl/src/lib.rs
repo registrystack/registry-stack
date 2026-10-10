@@ -132,7 +132,7 @@ enum RetentionCommand {
 
 #[derive(Debug, Args)]
 struct EraseExpiredArgs {
-    /// Absolute path to the runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
     /// The RFC 3339 instant every retention period is counted back from. It
@@ -166,7 +166,7 @@ enum MessagesCommand {
 
 #[derive(Debug, Args)]
 struct ListArgs {
-    /// Absolute path to the runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
     /// Only messages with this status.
@@ -180,7 +180,7 @@ struct ListArgs {
 
 #[derive(Debug, Args)]
 struct MessageArgs {
-    /// Absolute path to the runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
     /// The message id the runtime returned on acceptance.
@@ -274,7 +274,7 @@ struct PackageArgs {
 #[derive(Debug, Args)]
 #[command(group(ArgGroup::new("source").required(true).multiple(false)))]
 struct PackageSource {
-    /// Absolute path to the runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE", group = "source")]
     runtime_config: Option<PathBuf>,
     /// The package directory holding messaging.yaml.
@@ -296,8 +296,7 @@ struct PackageSource {
         .args(["runtime_config", "package", "project"])
 ))]
 struct CheckArgs {
-    /// Runtime file to check offline against the package --package or
-    /// --project names, or else the one its `package.root` names.
+    /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
     /// The package directory holding messaging.yaml.
@@ -348,7 +347,7 @@ struct ApplyArgs {
 
 #[derive(Debug, Args)]
 struct ActivationArgs {
-    /// Absolute path to the runtime configuration file.
+    /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 }
