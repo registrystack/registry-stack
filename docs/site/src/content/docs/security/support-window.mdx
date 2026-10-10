@@ -33,10 +33,14 @@ The rest of the lifecycle policy is designed to make rolling forward cheap:
 - Within a major line, upgrades are backward compatible per the
   [compatibility promise](../../reference/api-stability/). Evidence Gateway and Registry Manifest
   have no migrated state, so moving to the fixed release needs no migration step for them. Base
-  Registry Engine, Casework, and Scheduling each own migrated PostgreSQL state; moving to the fixed
-  release for one of them can require running the migration command its release notes name
-  (`bregctl apply`, `caseworkctl apply`, or `schedulingctl apply`). Before 1.0, a release reads only
-  the state its immediate predecessor wrote, so upgrade one release at a time.
+  Registry Engine, Casework, Scheduling, and Messaging each own migrated PostgreSQL state;
+  moving to the fixed release for one of them can require running the migration command its
+  release notes name (`bregctl apply`, `caseworkctl apply`, `schedulingctl apply`, or
+  `messagingctl apply`). Before 1.0, a release reads only
+  the state its immediate predecessor wrote, so upgrade one release at a time. `v0.40.0` is the
+  exception: it does not upgrade `v0.39.0` state in place, and its release notes have you apply it
+  to new databases, as the [upgrade runbook](../../operate/advanced/upgrade-and-retire/#upgrade-in-this-order)
+  describes.
 - Patch releases contain fixes only, so a security patch is a minimal, low-risk step.
 
 What this means for an institution: plan to apply patch releases of your deployed line

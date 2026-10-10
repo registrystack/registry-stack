@@ -9,9 +9,10 @@ The HTTP contract does not change. The public policy view, the appointment
 and hold documents, and the Rust, Node.js, and Python clients keep
 `maxRecipients`, `minutesBefore`, and `schedulingId`.
 
-The items of this fragment were written as each change was made, and where
-two of them disagree about a spelling or a diagnostic code, the one further
-down states what v0.40.0 reads and reports.
+This fragment describes the final v0.40.0 interface. An `Old` or `Before`
+example is a v0.39.0 file, request, response, or value to replace. Reauthor the
+files, build the package with v0.40.0, and apply it to a new database;
+v0.40.0 does not read a v0.39.0 Scheduling database in place.
 
 ## BREAKING: the authored files are read by the shared configuration reader
 
@@ -515,16 +516,3 @@ Migration:
    that call this deployment.
 2. Write a client the list repeats once.
 3. Run `schedulingctl check PROJECT --runtime-config runtime.yaml`.
-
-### BREAKING: `schedulingctl test` reports `proofBoundary: offline-synthetic`
-
-The value of `proofBoundary` in the report `schedulingctl test` writes is
-lowercase kebab-case (CFG-NAME-2), the spelling `caseworkctl test` writes.
-The JSON report and the human output carry the same value.
-
-| Old spelling | New spelling | Migration |
-|---|---|---|
-| `proofBoundary: offline_synthetic` | `proofBoundary: offline-synthetic` | A script that compares the value reads the new spelling. |
-
-The member name, the other members of the report, and the exit status are
-unchanged. No file an adopter writes changes.
