@@ -143,9 +143,25 @@ def database_environment(database, base):
 class LostResponseProxy:
     """Forward exact private fixture commands, dropping the first committed reply."""
     def __init__(self, origin, mutation_path):
+        try:
+            parts = urllib.parse.urlsplit(origin)
+            valid_origin = (parts.scheme == "http" and parts.username is None
+                and parts.password is None and parts.port is not None
+                and 1 <= parts.port <= 65535 and not parts.path
+                and not parts.query and not parts.fragment
+                and "?" not in origin and "#" not in origin
+                and not any(ord(char) <= 32 or ord(char) == 127 for char in origin)
+                and ipaddress.ip_address(parts.hostname).is_loopback)
+        except ValueError:
+            valid_origin = False
+        if not valid_origin:
+            raise ValueError("fixture proxy origin must be an HTTP numeric loopback origin with an explicit port")
         self.commands = []
         self.lost = False
         proxy = self
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
         class Handler(http_server.BaseHTTPRequestHandler):
             def log_message(self, *_args):
                 pass
@@ -154,12 +170,20 @@ class LostResponseProxy:
             def do_POST(self):
                 self.forward()
             def forward(self):
+                # BaseHTTPRequestHandler normalizes leading // in self.path.
+                target = self.requestline.split()[1]
+                if (not target.startswith("/") or target.startswith("//")
+                    or "#" in target
+                    or any(ord(char) <= 32 or ord(char) == 127 for char in target)):
+                    self.send_error(400, "fixture proxy requires an origin-form request target")
+                    self.close_connection = True
+                    return
                 length = int(self.headers.get("Content-Length", "0"))
                 assert 0 <= length <= 131_072
                 body = self.rfile.read(length) if length else None
                 fields = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "connection", "content-length")}
-                request = urllib.request.Request(origin + self.path, data=body, headers=fields, method=self.command)
-                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                request = urllib.request.Request(origin + target, data=body, headers=fields, method=self.command)
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
                 try:
                     response = opener.open(request, timeout=10)
                 except urllib.error.HTTPError as error:
