@@ -5518,12 +5518,10 @@ impl RequirementConfig {
                 return invalid("requirement subject roles must be unique");
             }
         }
-        validate_strings(
-            &self.reference_frameworks,
+        validate_len(
+            self.reference_frameworks.len(),
             1,
             16,
-            1,
-            512,
             "reference frameworks",
         )?;
         for reference in &self.reference_frameworks {
@@ -5876,7 +5874,7 @@ pub struct DisclosureGuard {
 
 impl DisclosureGuard {
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_strings(&self.families, 1, 16, 1, 512, "disclosure families")?;
+        validate_len(self.families.len(), 1, 16, "disclosure families")?;
         for family in &self.families {
             validate_uri(family)?;
         }
@@ -6903,14 +6901,25 @@ fn compare_decimal_text(left: &str, right: &str) -> std::cmp::Ordering {
 /// family. Reading that rule from the profile instead of restating a narrower
 /// `is_ascii_whitespace` test here keeps the bundle and its projection on one
 /// definition, so no scalar can be accepted at load and then refused when the
-/// same bytes are published. The 512-byte bound stays local because the
+/// same bytes are published. The 512-character bound stays local because the
 /// profile's own bound is the far looser public-text one.
 fn validate_uri(value: &str) -> Result<(), ConfigError> {
-    validate_string(value, 1, 512, "URI")?;
+    if !(1..=512).contains(&value.chars().count()) {
+        return invalid("string length is outside Version 1 bounds");
+    }
     if !registry_discovery_profile::is_valid_identifier(value) {
         return invalid("URI is invalid");
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn uri_validation_counts_unicode_characters() {
+    let boundary = format!("urn:example:{}", "é".repeat(500));
+    assert_eq!(boundary.chars().count(), 512);
+    validate_uri(&boundary).expect("512 Unicode characters");
+    assert!(validate_uri(&format!("{boundary}é")).is_err());
 }
 
 fn validate_absolute_path(value: &str) -> Result<(), ConfigError> {
@@ -7146,6 +7155,43 @@ mod tests {
         reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
     )]
     use super::*;
+
+    #[test]
+    fn reference_frameworks_accept_unicode_at_the_character_bound_through_the_bundle_reader() {
+        assert_uri_array_character_bound("/requirements/0/referenceFrameworks");
+    }
+
+    #[test]
+    fn disclosure_families_accept_unicode_at_the_character_bound_through_the_bundle_reader() {
+        assert_uri_array_character_bound("/requirements/0/disclosureGuard/families");
+    }
+
+    fn assert_uri_array_character_bound(pointer: &str) {
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("fixture validates");
+        let mut projection = serde_json::to_value(config).expect("configuration serializes");
+        EvidenceConfig::parse_projection(&projection).expect("the valid baseline reads");
+        let boundary = format!("urn:example:{}", "é".repeat(500));
+        *projection.pointer_mut(pointer).expect("URI array exists") = serde_json::json!([boundary]);
+        EvidenceConfig::parse_projection(&projection)
+            .expect("the complete bundle reader accepts a 512-character URI");
+        for rejected in [
+            serde_json::json!([format!("{boundary}é")]),
+            serde_json::json!([]),
+            serde_json::json!([boundary, boundary]),
+            serde_json::json!((0..17)
+                .map(|index| format!("urn:example:{index}"))
+                .collect::<Vec<_>>()),
+        ] {
+            *projection.pointer_mut(pointer).expect("URI array exists") = rejected;
+            assert!(
+                EvidenceConfig::parse_projection(&projection).is_err(),
+                "{pointer}"
+            );
+        }
+    }
 
     #[test]
     fn a_repeated_string_in_a_set_is_refused_at_the_repeated_item() {
@@ -7556,10 +7602,14 @@ mod tests {
         ))
         .expect("strict fixture validates");
         config.assurance_profile = AssuranceProfile::Local;
-        config.authentication.oidc.provider.issuer = "http://127.0.0.1:8081".to_owned();
+        config.authentication.oidc.provider.issuer =
+            registry_platform_yaml::Url::new("http://127.0.0.1:8081").expect("valid URL");
         config.authentication.oidc.provider.jwks_source =
             registry_platform_config::JwksSource::Uri {
-                uri: "http://127.0.0.1:8081/.well-known/jwks.json".to_owned(),
+                uri: registry_platform_yaml::Url::new(
+                    "http://127.0.0.1:8081/.well-known/jwks.json",
+                )
+                .expect("valid URL"),
             };
         config
             .validate()
@@ -7567,12 +7617,17 @@ mod tests {
         // The JWKS path is the configured issuer's to choose.
         config.authentication.oidc.provider.jwks_source =
             registry_platform_config::JwksSource::Uri {
-                uri: "http://127.0.0.1:8081/oauth2/jwks".to_owned(),
+                uri: registry_platform_yaml::Url::new("http://127.0.0.1:8081/oauth2/jwks")
+                    .expect("valid URL"),
             };
         config
             .validate()
             .expect("local profile accepts any same-origin absolute JWKS path");
 
+        EvidenceConfig::parse_projection(
+            &serde_json::to_value(&config).expect("configuration serializes"),
+        )
+        .expect("the valid configuration round-trips before invalid values are substituted");
         for invalid in [
             "http://localhost:8081",
             "http://127.0.0.2:8081",
@@ -7583,10 +7638,10 @@ mod tests {
             "http://user@127.0.0.1:8081",
             "http://127.0.0.1:8081/",
         ] {
-            let mut candidate = config.clone();
-            candidate.authentication.oidc.provider.issuer = invalid.to_owned();
+            let mut candidate = serde_json::to_value(&config).expect("configuration serializes");
+            candidate["authentication"]["oidc"]["issuer"] = serde_json::json!(invalid);
             assert!(
-                candidate.validate().is_err(),
+                EvidenceConfig::parse_projection(&candidate).is_err(),
                 "local assurance accepted issuer {invalid}"
             );
         }
@@ -7603,13 +7658,10 @@ mod tests {
             "http://127.0.0.1:8081/oauth2/jwks#fragment",
             "http://user@127.0.0.1:8081/oauth2/jwks",
         ] {
-            let mut candidate = config.clone();
-            candidate.authentication.oidc.provider.jwks_source =
-                registry_platform_config::JwksSource::Uri {
-                    uri: invalid.to_owned(),
-                };
+            let mut candidate = serde_json::to_value(&config).expect("configuration serializes");
+            candidate["authentication"]["oidc"]["jwksSource"]["uri"] = serde_json::json!(invalid);
             assert!(
-                candidate.validate().is_err(),
+                EvidenceConfig::parse_projection(&candidate).is_err(),
                 "local assurance accepted JWKS URI {invalid}"
             );
         }
@@ -7657,10 +7709,14 @@ mod tests {
 
         let mut local = config.clone();
         local.assurance_profile = AssuranceProfile::Local;
-        local.authentication.oidc.provider.issuer = "http://127.0.0.1:8081".to_owned();
+        local.authentication.oidc.provider.issuer =
+            registry_platform_yaml::Url::new("http://127.0.0.1:8081").expect("valid URL");
         local.authentication.oidc.provider.jwks_source =
             registry_platform_config::JwksSource::Uri {
-                uri: "http://127.0.0.1:8081/.well-known/jwks.json".to_owned(),
+                uri: registry_platform_yaml::Url::new(
+                    "http://127.0.0.1:8081/.well-known/jwks.json",
+                )
+                .expect("valid URL"),
             };
         assert!(matches!(
             local.validate(),
@@ -11327,14 +11383,14 @@ outboundTls:
         ))
         .expect("fixture validates");
         config.authentication.oidc.provider.issuer =
-            "https://identity.example.test/realms/registry".to_owned();
+            registry_platform_yaml::Url::new("https://identity.example.test/realms/registry")
+                .expect("valid URL");
         assert!(config.validate().is_ok());
-        config
-            .authentication
-            .oidc
-            .provider
-            .issuer
-            .push_str("?tenant=wrong");
+        config.authentication.oidc.provider.issuer = registry_platform_yaml::Url::new(format!(
+            "{}?tenant=wrong",
+            config.authentication.oidc.provider.issuer
+        ))
+        .expect("query-bearing URL is syntactically valid");
         assert!(config.validate().is_err());
     }
 

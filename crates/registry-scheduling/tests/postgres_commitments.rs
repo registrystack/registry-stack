@@ -430,7 +430,7 @@ async fn fixture_publishing_with_hook_url(
 fn authenticator() -> SchedulingAuthenticator {
     let oidc = OidcConfig {
         provider: OidcIssuerConfig {
-            issuer: ISSUER.to_owned(),
+            issuer: registry_platform_yaml::Url::new(ISSUER).expect("valid issuer URL"),
             audience: AUDIENCE.to_owned(),
             jwks_source: JwksSource::Discovery {},
         },

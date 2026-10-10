@@ -188,7 +188,7 @@ impl Digest {
 text_newtype!(Digest);
 
 /// An absolute `http` or `https` URL with a host, no user information, no
-/// whitespace or control character, and at most 2048 characters (CFG-VAL-7),
+/// backslash, whitespace or control character, and at most 2048 characters (CFG-VAL-7),
 /// kept as written. Whether a position also refuses `http` is the owning
 /// product's decision: it checks [`Url::is_https`] and says so in the
 /// member's schema description. Schema name `Url`.
@@ -205,9 +205,10 @@ impl Url {
         // drops a tab or line break anywhere, without an error. Refusing
         // them here keeps the text as written and the URL as parsed the same
         // URL.
-        if text
-            .chars()
-            .any(|character| character.is_whitespace() || character.is_control())
+        if text.contains('\\')
+            || text
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_control())
         {
             return Err(rule(EXPECT_URL));
         }
@@ -220,16 +221,39 @@ impl Url {
         // The authority as written, up to the first `/`, `?`, or `#`, as the
         // schema's pattern reads it: the parser reports no user information
         // for an empty one, and the pattern refuses any `@` there.
-        let authority_has_at = text.get(parsed.scheme().len() + 3..).is_some_and(|rest| {
+        let authority = text.get(parsed.scheme().len() + 3..).map(|rest| {
             let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-            rest[..end].contains('@')
+            &rest[..end]
+        });
+        let host_matches = authority.is_some_and(|authority| {
+            // DNS case is immaterial; every other parser rewrite, including
+            // IDNA conversion and percent decoding, changes the written host.
+            // IPv6 has several ordinary spellings of the same numeric address.
+            let written = if authority.starts_with('[') {
+                authority.find(']').map(|end| &authority[..=end])
+            } else {
+                authority.split(':').next()
+            };
+            match (written, parsed.host()) {
+                (Some(written), Some(url::Host::Domain(host))) => {
+                    written.eq_ignore_ascii_case(host)
+                }
+                (Some(written), Some(url::Host::Ipv4(host))) => written == host.to_string(),
+                (Some(written), Some(url::Host::Ipv6(host))) => written
+                    .strip_prefix('[')
+                    .and_then(|text| text.strip_suffix(']'))
+                    .and_then(|text| text.parse::<std::net::Ipv6Addr>().ok())
+                    .is_some_and(|written| written == host),
+                _ => false,
+            }
         });
         let valid = matches!(parsed.scheme(), "http" | "https")
             && scheme_written
             && parsed.host_str().is_some_and(|host| !host.is_empty())
             && parsed.username().is_empty()
             && parsed.password().is_none()
-            && !authority_has_at;
+            && authority.is_some_and(|authority| !authority.contains('@'))
+            && host_matches;
         if valid {
             Ok(Url(text))
         } else {
@@ -655,6 +679,8 @@ mod schema {
     /// The class in [`URL_PATTERN`] lists every character that
     /// `char::is_whitespace` or `char::is_control` accepts, by code point, so
     /// that every regular expression engine reads the same set.
+    // Keep this definition identical to the frozen Version 1 contracts.
+    // The reader additionally refuses backslashes and rewritten hosts.
     const URL_PATTERN: &str = "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$";
 
     impl JsonSchema for Url {
@@ -795,6 +821,44 @@ mod tests {
         assert!(Url::new(long).is_err());
         assert!(Url::new("https://issuer.example").unwrap().is_https());
         assert!(!Url::new("http://issuer.example").unwrap().is_https());
+    }
+
+    #[test]
+    fn cfg_val_7_url_refuses_backslashes() {
+        for text in [
+            "https://issuer.example\\other",
+            "https://issuer.example/a\\b",
+            "https://issuer.example?x=\\y",
+            "https://issuer.example#\\fragment",
+        ] {
+            assert!(Url::new(text).is_err(), "{text}");
+        }
+        assert!(Url::new("https://issuer.example/a%5Cb").is_ok());
+    }
+
+    #[test]
+    fn cfg_val_7_url_refuses_a_host_the_parser_rewrites() {
+        for text in [
+            "https://iss\u{200b}uer.example",
+            "https://iss\u{ad}uer.example",
+            "https://iss\u{feff}uer.example",
+            "https://issuer\u{3002}example",
+            "https://caf\u{e9}.example",
+            "https://%69ssuer.example",
+            "https://127.1",
+        ] {
+            assert!(Url::new(text).is_err(), "{text}");
+        }
+        for text in [
+            "https://issuer.example/path",
+            "HTTPS://Issuer.Example/path",
+            "https://xn--caf-dma.example/path",
+            "http://127.0.0.1:8080/path",
+            "https://[::1]:8443/path",
+            "https://[2001:0DB8:0:0:0:0:0:1]/path",
+        ] {
+            assert_eq!(Url::new(text).expect("unchanged host").as_str(), text);
+        }
     }
 
     #[test]

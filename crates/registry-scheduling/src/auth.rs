@@ -252,7 +252,7 @@ mod tests {
     fn oidc() -> OidcConfig {
         OidcConfig {
             provider: crate::config::OidcIssuerConfig {
-                issuer: ISSUER.to_owned(),
+                issuer: registry_platform_yaml::Url::new(ISSUER).expect("valid issuer URL"),
                 audience: AUDIENCE.to_owned(),
                 jwks_source: crate::config::JwksSource::Discovery {},
             },

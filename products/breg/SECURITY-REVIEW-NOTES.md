@@ -2321,8 +2321,9 @@ unknown key inside a platform block (`package`, `authentication.oidc`,
 Every `*Ref` member of `runtime.yaml` is decoded as the shared
 `SecretReference`, and the URLs a runtime calls or compares (`listener.publicOrigin`,
 an Evidence provider's `baseUrl`, the task-grant status `baseUrl` and
-`sourceIssuer`) as the shared `Url`. It touches secret reference handling,
-outbound endpoints, and the value-free reporting of operator configuration.
+`sourceIssuer`, and the OIDC issuer and explicit JWKS URI) as the shared `Url`.
+It touches secret reference handling, outbound endpoints, and the value-free
+reporting of operator configuration.
 
 ### Threat
 
@@ -2362,6 +2363,17 @@ tell which value to fix.
   `$ref: SecretReference`, each URL `$ref: Url`, and an optional reference,
   path, or retention member publishes no `default: null` and says what
   omitting it means.
+
+The shared issuer and explicit JWKS URI now refuse backslashes and host text
+that the URL parser rewrites, with value-free `config.invalid-value` at the
+member. Ordinary ASCII DNS case differences, punycode and IPv6 literals remain
+accepted. Issuer comparison stays textual, and the existing HTTPS and
+loopback rules still run after decode. The shared
+`issuer_and_jwks_uri_are_checked_urls_when_read` test pins those refusals and
+ordinary inputs. Base Registry Engine's `oidc_issuer_and_audience_follow_the_shared_issuer_block`
+and `jwks_source_uri_kind_skips_discovery_under_the_shared_rules` in
+`crates/registry-breg/tests/runtime_config.rs` pin the retained policy and
+member-level typed refusals.
 
 ### Tests
 

@@ -1366,8 +1366,8 @@ fn cfg_diag_6_a_refused_value_with_an_unspaced_hash_says_where_comments_start() 
             "config.invalid-value",
             "/url",
             6,
-            "expected an absolute http or https URL with a host, no user information, no whitespace or control character, and at most 2048 characters",
-            "Write an absolute URL starting with `https://` or `http://`, without user information, spaces, tabs, or line breaks.",
+            "expected an absolute http or https URL with its written host, no user information, no backslash, whitespace or control character, and at most 2048 characters",
+            "Write an absolute URL starting with `https://` or `http://`, with an ASCII or punycode host or an IPv6 literal, without user information, backslashes, spaces, tabs, or line breaks.",
         ),
     ] {
         let report = refusal::<Everything>(body);
@@ -2487,8 +2487,8 @@ fn cfg_val_7_a_url_is_absolute_with_a_host_and_no_user_information() {
             "config.invalid-value",
             "/url",
             (3, 6),
-            "expected an absolute http or https URL with a host, no user information, no whitespace or control character, and at most 2048 characters",
-            "Write an absolute URL starting with `https://` or `http://`, without user information, spaces, tabs, or line breaks.",
+            "expected an absolute http or https URL with its written host, no user information, no backslash, whitespace or control character, and at most 2048 characters",
+            "Write an absolute URL starting with `https://` or `http://`, with an ASCII or punycode host or an IPv6 literal, without user information, backslashes, spaces, tabs, or line breaks.",
         );
     }
 }
@@ -2524,12 +2524,12 @@ fn cfg_val_7_a_url_holds_no_whitespace_and_no_control_character() {
         assert_eq!(diagnostic.path, "/url", "{case}");
         assert_eq!(
             diagnostic.message,
-            "expected an absolute http or https URL with a host, no user information, no whitespace or control character, and at most 2048 characters",
+            "expected an absolute http or https URL with its written host, no user information, no backslash, whitespace or control character, and at most 2048 characters",
             "{case}"
         );
         assert_eq!(
             diagnostic.suggested_action,
-            "Write an absolute URL starting with `https://` or `http://`, without user information, spaces, tabs, or line breaks.",
+            "Write an absolute URL starting with `https://` or `http://`, with an ASCII or punycode host or an IPv6 literal, without user information, backslashes, spaces, tabs, or line breaks.",
             "{case}"
         );
     }

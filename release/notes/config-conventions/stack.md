@@ -33,13 +33,13 @@ every word they list changed with no alias.
 | Base Registry Engine | 74 | `breg.md` |
 | Casework | 43 | `casework.md` |
 | Discovery | 9 | `discovery.md` |
-| Evidence | 69 | `evidence.md` |
+| Evidence | 70 | `evidence.md` |
 | Manifest | 6 | `manifest.md` |
 | Messaging | 21 | `messaging.md` |
 | Platform files and tooling | 16 | `platform.md` |
 | Render | 11 | `render.md` |
 | Scheduling | 17 | `scheduling.md` |
-| Total | 266 | |
+| Total | 267 | |
 
 A fragment's "Stable move" section holds the respellings and retaggings this
 release makes with no alias, and its `BREAKING` headings are counted like any
@@ -167,8 +167,8 @@ file an adopter writes.
 
 The counts above come from the fragments. The `Unreleased` section of each
 product changelog lists its own number of `BREAKING:` bullets (Base Registry
-Engine 66, Casework 43, Discovery 8, Evidence 49, Manifest 8, Messaging 16,
-Platform 28, Render 8, Scheduling 15; 241 in all). The two numbers differ for
+Engine 66, Casework 43, Discovery 8, Evidence 50, Manifest 8, Messaging 16,
+Platform 28, Render 8, Scheduling 15; 242 in all). The two numbers differ for
 a product because a fragment item is one migration step and a changelog bullet
 often covers several, and because a changelog also lists the items no fragment
 states. Those items are the ones in "Breaking changes outside the program

@@ -219,6 +219,17 @@ destination's and the operator's collection pipeline's, not the runtime's.
 Nine changes to the authenticator, the configuration reader, and the HTTP
 edge, in the file's threat / default / test shape.
 
+The configured issuer and explicit JWKS URI use the shared checked `Url`
+before authentication is constructed, refusing backslashes and host text the
+URL parser rewrites with value-free `config.invalid-value` at the member.
+ASCII DNS case differences, punycode and IPv6 literals remain accepted; issuer
+comparison stays textual. Existing HTTPS policy and supervised development
+loopback permission are unchanged. The shared
+`issuer_and_jwks_uri_are_checked_urls_when_read` test pins the new refusals and
+ordinary inputs. Scheduling's `the_oidc_issuer_and_clients_are_the_shared_blocks`
+in `crates/registry-scheduling/src/config.rs` pins the remote HTTP refusal at
+`/authentication/oidc/issuer`.
+
 **A. Only the RFC 9068 access-token type is admitted.** *Threat:* the
 accepted `typ` set included plain `JWT`, so an identity token, or any
 other JWT the same issuer signs for another audience, satisfied the

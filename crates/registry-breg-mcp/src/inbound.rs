@@ -513,7 +513,7 @@ mod tests {
             resource: ConfigUrl::new(RESOURCE).expect("resource"),
             issuer: ConfigUrl::new(issuer).expect("issuer"),
             jwks_source: JwksSource::Uri {
-                uri: jwks.to_owned(),
+                uri: ConfigUrl::new(jwks).expect("valid JWKS URL"),
             },
             algorithms: UniqueList::new(vec![AccessTokenAlgorithm::EdDSA]).expect("algorithms"),
             allowed_clients: UniqueList::new(vec![ExternalId::new(CHAT_HOST).expect("client")])

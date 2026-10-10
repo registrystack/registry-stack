@@ -114,9 +114,16 @@
   inside is refused with `config.invalid-value` at `/uri`; it was accepted and
   kept as written while the URI parser read it without the character. An
   identifier of at most 512 characters that takes more than 512 bytes is now
-  read; a `bucketScheme` that cites one is still held to 512 bytes.
+  read; a `bucketScheme` that cites one uses the same character bound.
   Migration: remove the character from the identifier, regenerate
   `SHA256SUMS`, and re-pin `configurationRevision`.
+- BREAKING: bundle URI validation and client profile URI identities count
+  at most 512 Unicode characters, matching the frozen Version 1 `uri` schema.
+  Code list versions count 1 through 128 characters and refuse control
+  characters, also stated in their authoring schema. Valid multibyte values
+  within those bounds are accepted; frozen schemas and request preparation
+  bounds are unchanged. Migration: remove controls from versions, regenerate
+  `SHA256SUMS`, and update package and configuration pins.
 - BREAKING: the policy files `evidence verify --policy` and `evidence
   verify-presentation --policy` read open with `apiVersion` and `kind`
   (`id.registrystack.org/formats/evidence/verification-policy/v1` with

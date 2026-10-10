@@ -958,7 +958,7 @@ fn generated_operator_config_loads_through_the_runtime_contract() {
     );
     assert!(config.sources.is_empty());
     assert_eq!(
-        config.authentication.oidc.provider.issuer,
+        config.authentication.oidc.provider.issuer.as_str(),
         state.issuer_origin()
     );
     assert_eq!(

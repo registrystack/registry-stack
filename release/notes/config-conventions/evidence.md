@@ -961,11 +961,25 @@ character, so no member that cites a code list changes.
 The limit of 512 is counted in characters, as the schema states it with
 `maxLength`. It was counted in bytes, so an identifier written outside ASCII
 was refused before it reached 512 characters. A `bucketScheme` that cites a
-code list by its identifier is still held to 512 bytes.
+code list by its identifier is held to the same 512-character bound.
 
 Migration: remove the character from the identifier, then regenerate the
 package `SHA256SUMS`, update `package.expectedDigest` where the runtime file
 pins it, and re-pin `configurationRevision`.
+
+### BREAKING: URI and code list version bounds count characters
+
+Bundle URI validation and client profile URI identities now count Unicode
+characters, matching the frozen Version 1 `uri` schema's `maxLength: 512`.
+A URI of at most 512 characters that takes more than 512 bytes is accepted;
+513 characters are refused. Code list versions likewise count 1 through 128
+characters and now refuse control characters. Their authoring schema states
+that refusal. The frozen Version 1 schemas are unchanged.
+
+Migration: remove control characters from code list versions, then regenerate
+package `SHA256SUMS`, update `package.expectedDigest` where pinned, and re-pin
+`configurationRevision`. No spelling change is needed for a valid multibyte
+URI or version. Request preparation retains its existing identifier bounds.
 
 ### BREAKING: the two verification policy files have an envelope
 

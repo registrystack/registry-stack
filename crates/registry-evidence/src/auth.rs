@@ -820,9 +820,10 @@ mod tests {
     }
 
     fn set_issuer(config: &mut OidcAuthenticationConfig, issuer: &str, jwks_uri: &str) {
-        config.provider.issuer = issuer.to_owned();
+        config.provider.issuer =
+            registry_platform_yaml::Url::new(issuer).expect("valid issuer URL");
         config.provider.jwks_source = registry_platform_config::JwksSource::Uri {
-            uri: jwks_uri.to_owned(),
+            uri: registry_platform_yaml::Url::new(jwks_uri).expect("valid JWKS URL"),
         };
     }
 

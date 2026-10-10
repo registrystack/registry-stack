@@ -22,13 +22,12 @@ use serde::{Deserialize, Deserializer};
 
 use crate::{
     definitions::EVIDENCE_DEFINITIONS_SCHEMA_V1,
-    prepare::MAXIMUM_IDENTIFIER_BYTES,
     profile::{
         strict_fetch_refuses_literal_origin, ContractsProfile, ExpectedDefinitionProfile,
         ExpectedServiceProfile, OauthProfile, PrivateKeyReference, TrustProfile,
         VerificationProfile, DEFAULT_METADATA_CACHE_SECONDS, EVIDENCE_CLIENT_CONTRACTS_API_VERSION,
         EVIDENCE_CLIENT_CONTRACTS_KIND, EVIDENCE_CLIENT_PROFILE_API_VERSION,
-        EVIDENCE_CLIENT_PROFILE_KIND, MAXIMUM_METADATA_CACHE_SECONDS,
+        EVIDENCE_CLIENT_PROFILE_KIND, MAXIMUM_METADATA_CACHE_SECONDS, MAXIMUM_URI_IDENTITY_CHARS,
     },
     EvidenceClientProfile, EvidenceDefinition, EvidenceDefinitionsDocument, EvidenceResponseFormat,
     ReviewedContracts,
@@ -622,9 +621,9 @@ pub(crate) struct UriIdentity(String);
 checked_text!(
     UriIdentity,
     |text| !text.is_empty()
-        && text.len() <= MAXIMUM_IDENTIFIER_BYTES
+        && text.chars().count() <= MAXIMUM_URI_IDENTITY_CHARS
         && url::Url::parse(text).is_ok_and(|url| !url.scheme().is_empty()),
-    "an absolute URI of at most 512 bytes",
+    "an absolute URI of at most 512 characters",
     "Write the identity exactly as the Evidence service publishes it, scheme included."
 );
 
@@ -793,7 +792,7 @@ mod schema {
         "type": "string",
         "format": "uri",
         "minLength": 1,
-        "maxLength": MAXIMUM_IDENTIFIER_BYTES,
+        "maxLength": MAXIMUM_URI_IDENTITY_CHARS,
         "description": "An absolute URI the service states as an identity, compared exactly.",
     });
 
@@ -900,6 +899,60 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+
+    #[test]
+    fn uri_identity_counts_unicode_characters() {
+        let boundary = format!("urn:example:{}", "é".repeat(500));
+        assert_eq!(boundary.chars().count(), 512);
+        let identity: UriIdentity =
+            serde_json::from_value(json!(boundary)).expect("512 characters");
+        assert_eq!(identity.0, boundary);
+        assert!(serde_json::from_value::<UriIdentity>(json!(format!("{boundary}é"))).is_err());
+    }
+
+    #[test]
+    fn the_profile_reader_accepts_unicode_uri_identities_at_the_character_bound() {
+        let boundary = format!("urn:example:{}", "é".repeat(500));
+        for member in ["audience", "issuer", "provider"] {
+            let mut document = profile();
+            document["expected"] = json!({member: boundary});
+            read_profile(&document).expect("the complete reader accepts 512 characters");
+            document["expected"][member] = json!(format!("{boundary}é"));
+            assert_eq!(
+                finding(read_profile(&document)),
+                ("config.invalid-value".into(), format!("/expected/{member}"))
+            );
+        }
+        let mut document = profile();
+        document["oauth"] = json!({"clientAssertionAudience": boundary});
+        read_profile(&document).expect("the OAuth audience accepts 512 characters");
+        document["oauth"]["clientAssertionAudience"] = json!(format!("{boundary}é"));
+        assert_eq!(
+            finding(read_profile(&document)),
+            (
+                "config.invalid-value".into(),
+                "/oauth/clientAssertionAudience".into()
+            )
+        );
+        let mut document = profile();
+        document["expected"] = json!({"definitions": {"adult": {
+            "configurationRevision": format!("sha256:{}", "a".repeat(64)),
+            "evidenceType": boundary,
+            "purpose": "benefit.eligibility",
+            "assuranceProfile": "production",
+            "responseFormat": "signed-jws"
+        }}});
+        read_profile(&document).expect("the expected evidence type accepts 512 characters");
+        document["expected"]["definitions"]["adult"]["evidenceType"] =
+            json!(format!("{boundary}é"));
+        assert_eq!(
+            finding(read_profile(&document)),
+            (
+                "config.invalid-value".into(),
+                "/expected/definitions/adult/evidenceType".into()
+            )
+        );
+    }
 
     fn profile() -> Value {
         json!({
@@ -1296,6 +1349,6 @@ mod tests {
             registry_platform_httputil::MAXIMUM_REQUESTED_SCOPE_BYTES,
             256
         );
-        assert_eq!(MAXIMUM_IDENTIFIER_BYTES, 512);
+        assert_eq!(MAXIMUM_URI_IDENTITY_CHARS, 512);
     }
 }

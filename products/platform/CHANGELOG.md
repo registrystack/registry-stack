@@ -151,13 +151,19 @@
   `yaml.control-character`, at the key's position and at the enclosing mapping's
   pointer, so the diagnostic never repeats the key. Migration: remove the
   control character from the key.
-- BREAKING: `registry-platform-yaml` `Url` refuses a URL that holds a
-  whitespace or control character, at either end or inside, with
-  `config.invalid-value`, and its schema pattern refuses the same characters.
-  The URL parser removes a tab or a line break anywhere, and a space or
-  control character at either end, without an error, so `as_str()` and
-  `to_url()` could name different URLs. Migration: remove the character from
-  the URL, and write a space inside a path or query as `%20`.
+- BREAKING: `registry-platform-yaml` `Url` refuses a backslash, whitespace,
+  or control character anywhere with `config.invalid-value`. The schema
+  pattern continues to exclude whitespace and control characters; raw-backslash
+  schema tightening is deferred to preserve frozen Version 1 contracts. The
+  reader also refuses a host the URL parser rewrites, including Unicode and
+  percent-encoded host text. ASCII DNS case
+  differences, punycode, and IPv6 spellings remain allowed. Issuers are still
+  compared as written. Shared `OidcIssuerConfig.issuer` and `JwksSource::Uri.uri`
+  now use `Url`, matching their schemas; Rust struct-literal callers construct
+  them with `registry_platform_yaml::Url::new`. Existing HTTPS and loopback
+  policy checks still apply. Migration: remove forbidden characters, use
+  punycode for an internationalized host and a canonical IPv4 address, and
+  write a space or backslash inside a path or query as `%20` or `%5C`.
 - `registry-platform-yaml` `Debug` output for a node shows its kind and
   position and no scalar value, and an entry's key is redacted, where integers,
   floats, booleans, and keys printed.

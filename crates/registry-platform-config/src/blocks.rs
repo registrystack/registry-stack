@@ -14,6 +14,7 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
+use registry_platform_yaml::Url;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES};
@@ -313,10 +314,7 @@ pub enum JwksSource {
     // members on a unit variant of an internally tagged enum.
     Discovery {},
     /// Fetch the key set from this absolute `https` URI, skipping discovery.
-    Uri {
-        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
-        uri: String,
-    },
+    Uri { uri: Url },
     /// Read the key set from a secret, for deployments without network access
     /// to the issuer.
     Static {
@@ -333,8 +331,10 @@ impl Serialize for JwksSource {
         use serde::ser::SerializeMap;
         let (tag, member) = match self {
             Self::Discovery {} => ("discovery", None),
-            Self::Uri { uri } => ("uri", Some(("uri", uri))),
-            Self::Static { document_ref } => ("static", Some(("documentRef", document_ref))),
+            Self::Uri { uri } => ("uri", Some(("uri", uri.as_str()))),
+            Self::Static { document_ref } => {
+                ("static", Some(("documentRef", document_ref.as_str())))
+            }
         };
         let mut map = serializer.serialize_map(Some(1 + usize::from(member.is_some())))?;
         map.serialize_entry("type", tag)?;
@@ -404,10 +404,8 @@ impl JwksSource {
     }
 }
 
-fn valid_jwks_uri(value: &str, allow_loopback_http: bool) -> bool {
-    let Ok(parsed) = url::Url::parse(value) else {
-        return false;
-    };
+fn valid_jwks_uri(value: &Url, allow_loopback_http: bool) -> bool {
+    let parsed = value.to_url();
     if !parsed.username().is_empty() || parsed.password().is_some() || parsed.host().is_none() {
         return false;
     }
@@ -465,8 +463,7 @@ pub const MAX_OIDC_AUDIENCE_CHARACTERS: usize = 512;
 pub struct OidcIssuerConfig {
     /// Exact issuer accepted in access-token `iss` claims, an absolute
     /// `https` URL.
-    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
-    pub issuer: String,
+    pub issuer: Url,
     /// The audience every accepted access token must carry in `aud`.
     #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 512)))]
     pub audience: String,
@@ -484,9 +481,10 @@ impl OidcIssuerConfig {
     /// supervised local development. `field` is the dotted path of the block,
     /// such as `authentication.oidc`.
     pub fn check(&self, field: &str, allow_loopback_http: bool) -> Result<(), ConfigBlockError> {
+        let issuer = self.issuer.to_url();
         let issuer_ok = valid_jwks_uri(&self.issuer, allow_loopback_http)
-            && url::Url::parse(&self.issuer)
-                .is_ok_and(|url| url.query().is_none() && url.fragment().is_none());
+            && issuer.query().is_none()
+            && issuer.fragment().is_none();
         if !issuer_ok {
             let field = format!("{field}.issuer");
             return Err(ConfigBlockError::new(

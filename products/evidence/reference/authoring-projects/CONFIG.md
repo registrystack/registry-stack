@@ -485,13 +485,14 @@ constructing or signing Evidence.
 
 Four URIs an authoring project writes are bounded only after the form has
 accepted them. `validate_uri` in `crates/registry-evidence/src/config.rs` holds
-a URI to 1 through 512 bytes and then requires it to parse, and it is what
+a URI to 1 through 512 characters and then requires it to parse, and it is what
 reads an answer `uri`, the `$id` of the file `answers[].schema` names,
 `governance.requirement`, and `governance.evidenceType`. The form reads none of
 the four: `validate_answer` never looks at `answer.uri`, and `validate_question`
 never opens `governance` at all. A `controlled-category` answer's `uri` is
 measured twice over, because the compile derives that concept's category scheme
-as `{uri}:categories` and holds the derived URI to the same 512 bytes.
+as `{uri}:categories` and holds the derived URI to the same 512 characters. Code list versions
+use 1 through 128 Unicode characters without control characters.
 
 ### Disclosure
 
@@ -587,7 +588,7 @@ becomes `requirements[].uri`, and `governance.disclosureFamilies` becomes
 |---|---|---|
 | `governance.requirement` | with `governance` | The requirement URI this question answers. Under the deferred URI bound the Answers section states. |
 | `governance.kind` | with `governance` | `criterion`, `information-requirement`, or `constraint`. Without `governance`, a question with one boolean concept compiles as `criterion` and anything else as `information-requirement`. |
-| `governance.referenceFrameworks` | with `governance` | The governed legal or procedural framework URIs. The form itself accepts any list, an empty one included; `RequirementConfig::validate` in `crates/registry-evidence/src/config.rs` requires 1 to 16 unique entries, each an absolute URI of at most 512 bytes, so an empty list, a repeated framework, and a seventeenth entry are refused by the bundle check instead. |
+| `governance.referenceFrameworks` | with `governance` | The governed legal or procedural framework URIs. The form itself accepts any list, an empty one included; `RequirementConfig::validate` in `crates/registry-evidence/src/config.rs` requires 1 to 16 unique entries, each an absolute URI of at most 512 characters, so an empty list, a repeated framework, and a seventeenth entry are refused by the bundle check instead. |
 | `governance.evidenceType` | with `governance` | The exact Evidence Type URI. Under the same deferred URI bound. |
 | `governance.validitySeconds` | with `governance` | The assertion lifetime, in seconds. The form itself accepts any whole number; the bundle grammar bounds it to 1 through 31536000, and a deployment caps it again at its own `signing.maximumAssertionValiditySeconds`. |
 | `governance.observationTimezone` | with `governance` | The IANA timezone the derivation's legal local date and time are computed in. |

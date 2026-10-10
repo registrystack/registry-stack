@@ -224,7 +224,22 @@ mod tests {
         assert!(boundary.len() > 512, "the boundary exceeds 512 UTF-8 bytes");
         let identified =
             |scalar: &str| format!("{E}uri: {scalar}\nversion: '1'\ntype: code-list\ncodes: [A]\n");
-        let cases: [(String, &str); 19] = [
+        let versioned = |version: &str| {
+            let quoted = serde_json::to_string(version)
+                .expect("version quotes as YAML text")
+                .replace('\u{7f}', "\\u007f")
+                .replace('\u{85}', "\\u0085");
+            format!("{E}uri: urn:example:codelist:status\nversion: {quoted}\ntype: code-list\ncodes: [A]\n")
+        };
+        let cases: [(String, &str); 27] = [
+            (versioned(&"é".repeat(128)), "accepted"),
+            (versioned(&"é".repeat(129)), "refused"),
+            (versioned("v\0x"), "refused"),
+            (versioned("v\tx"), "refused"),
+            (versioned("v\nx"), "refused"),
+            (versioned("v\rx"), "refused"),
+            (versioned("v\u{7f}x"), "refused"),
+            (versioned("v\u{85}x"), "refused"),
             (identified(&boundary), "accepted"),
             (identified(&format!("{boundary}é")), "refused"),
             (identified("'urn:example:codelist:status '"), "refused"),

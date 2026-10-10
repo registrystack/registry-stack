@@ -106,7 +106,7 @@ fn cfg_id_1_identifier_and_value_types_state_their_grammar() {
 }
 
 #[test]
-fn cfg_val_7_the_url_pattern_and_the_reader_refuse_the_same_characters() {
+fn cfg_val_7_the_url_pattern_and_reader_agree_except_for_backslashes() {
     let schema = schema::<Limits>();
     let url = property(&schema, "url");
     let pattern = regex::Regex::new(url["pattern"].as_str().unwrap()).unwrap();
@@ -115,14 +115,22 @@ fn cfg_val_7_the_url_pattern_and_the_reader_refuse_the_same_characters() {
     let characters = (char::MIN..='\u{FFFF}').chain(['\u{10000}', '\u{E0001}', char::MAX]);
     for character in characters {
         let code = u32::from(character);
-        // After the authority the reader refuses a character only for being
-        // whitespace or a control character, so the two agree on every one.
+        // The frozen shared pattern retains its existing backslash acceptance;
+        // the reader refuses it. Every other path character must still agree.
         let text = format!("https://a.example/x{character}y");
-        assert_eq!(
-            pattern.is_match(&text),
-            Url::new(text.as_str()).is_ok(),
-            "U+{code:04X} in the path"
-        );
+        if character == '\\' {
+            assert!(pattern.is_match(&text), "frozen URL pattern changed");
+            assert!(
+                Url::new(text.as_str()).is_err(),
+                "reader accepted a backslash"
+            );
+        } else {
+            assert_eq!(
+                pattern.is_match(&text),
+                Url::new(text.as_str()).is_ok(),
+                "U+{code:04X} in the path"
+            );
+        }
         if character.is_whitespace() || character.is_control() {
             for (place, text) in [
                 ("before the scheme", format!("{character}https://a.example")),
@@ -137,6 +145,27 @@ fn cfg_val_7_the_url_pattern_and_the_reader_refuse_the_same_characters() {
             }
         }
     }
+}
+
+#[test]
+fn cfg_val_7_the_preserved_url_pattern_leaves_backslashes_to_the_reader() {
+    let schema = schema::<Limits>();
+    let url = property(&schema, "url");
+    let pattern = regex::Regex::new(url["pattern"].as_str().unwrap()).unwrap();
+    // Version 1 schemas retain their published pattern. The reader enforces
+    // the additional refusal, independently of a validator's format checks.
+    for text in [
+        r"https://a.example\other.example/",
+        r"https://a.example/x\y",
+        r"https://a.example?x=\y",
+        r"https://a.example#x\y",
+    ] {
+        assert!(pattern.is_match(text), "preserved URL pattern: {text}");
+        assert!(Url::new(text).is_err(), "reader accepted a backslash");
+    }
+    let encoded = "https://a.example/x%5Cy";
+    assert!(pattern.is_match(encoded));
+    assert_eq!(Url::new(encoded).unwrap().as_str(), encoded);
 }
 
 #[test]

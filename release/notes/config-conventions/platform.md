@@ -77,16 +77,22 @@ place; apply to a new database. No installation step repairs an earlier table.
    `yaml.control-character` at the key, and the diagnostic's path is the
    enclosing mapping, so it does not repeat the key. Migration: remove the
    control character from the key.
-10. **A URL holds no whitespace and no control character.** In every
-    product's files, a member typed as the shared URL that holds a space, a
-    tab, a line break, or any other whitespace or control character, at
-    either end or inside, is refused with `config.invalid-value` at the
-    member, and the `Url` definition in each schema refuses the same
-    characters. The URL parser removes a tab or a line break anywhere, and a
-    space or control character at either end, without an error, so the text
-    a product kept and the URL it parsed could differ. Migration: remove the
-    character from the URL, and write a space inside a path or query as
-    `%20`.
+10. **A URL holds no backslash, whitespace, or control character and preserves its host.**
+    In every product's files, a member typed as the shared URL refuses those
+    characters anywhere with `config.invalid-value` at the member. The schema
+    pattern continues to exclude whitespace and control characters; raw-backslash
+    schema tightening is deferred to preserve frozen Version 1 contracts. The
+    reader also refuses a host the URL parser rewrites, including Unicode host
+    names and percent-encoded host text.
+    Ordinary ASCII DNS names, case differences, punycode, and IPv6 literals
+    remain allowed. The URL stays as written; issuer equality stays textual.
+    `OidcIssuerConfig.issuer` and `JwksSource::Uri.uri` now use the checked
+    `Url` type, matching their schemas, before existing HTTPS and loopback
+    policy checks run. Rust struct-literal callers must construct those fields
+    with `registry_platform_yaml::Url::new`.
+    Migration: remove forbidden characters, write an internationalized host
+    in punycode, use a canonical IPv4 address, and write a space or backslash
+    inside a path or query as `%20` or `%5C`.
 
 ## Other changes
 

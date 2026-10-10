@@ -224,17 +224,17 @@ impl<'de> Deserialize<'de> for CodelistUri {
     }
 }
 
-/// The codelist version: from 1 to 128 bytes of text without a NUL.
+/// The codelist version: from 1 to 128 characters without control characters.
 pub(crate) struct CodelistVersion(String);
 
 impl<'de> Deserialize<'de> for CodelistVersion {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
-        if !text.is_empty() && text.len() <= 128 && !text.contains('\0') {
+        if !text.is_empty() && text.chars().count() <= 128 && !text.chars().any(char::is_control) {
             return Ok(Self(text));
         }
         Err(Invalid::expected(
-            "a version of 1 to 128 bytes without a NUL character",
+            "a version of 1 to 128 characters without control characters",
             "Write the codelist version as short text, such as '2026-01'.",
         )
         .into_error())
@@ -287,8 +287,8 @@ mod schema_impls {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 128,
-                "pattern": "^[^\\u0000]+$",
-                "description": "A version of 1 to 128 bytes without a NUL character, such as '2026-01'.",
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+                "description": "A version of 1 to 128 characters without control characters, such as '2026-01'.",
             })
         }
     }
@@ -397,6 +397,30 @@ mod tests {
                 allowed_outputs: vec!["NORTH".to_owned(), "SOUTH".to_owned()],
             }
         );
+    }
+
+    #[test]
+    fn codelist_version_counts_unicode_characters() {
+        let version = "é".repeat(128);
+        let parsed = serde_json::from_value::<CodelistVersion>(serde_json::json!(version))
+            .expect("128 Unicode characters");
+        assert_eq!(parsed.0, version);
+        assert!(
+            serde_json::from_value::<CodelistVersion>(serde_json::json!("é".repeat(129))).is_err()
+        );
+    }
+
+    #[test]
+    fn codelist_version_refuses_control_characters() {
+        for control in ['\0', '\t', '\n', '\r', '\u{7f}', '\u{85}'] {
+            assert!(
+                serde_json::from_value::<CodelistVersion>(serde_json::json!(format!(
+                    "v{control}1"
+                )))
+                .is_err()
+            );
+        }
+        assert!(serde_json::from_value::<CodelistVersion>(serde_json::json!("2026-01")).is_ok());
     }
 
     #[test]

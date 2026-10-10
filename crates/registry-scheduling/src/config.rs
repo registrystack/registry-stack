@@ -826,10 +826,12 @@ impl RuntimeConfig {
         secrets: &SecretResolver,
     ) -> Result<(TokenVerifierConfig, std::sync::Arc<JwksFetcher>), RuntimeConfigError> {
         let fetcher = match &self.authentication.oidc.provider.jwks_source {
-            JwksSource::Uri { uri } => JwksFetcher::new(uri.clone(), JwksFetcherConfig::defaults()),
+            JwksSource::Uri { uri } => {
+                JwksFetcher::new(uri.to_string(), JwksFetcherConfig::defaults())
+            }
             JwksSource::Discovery {} => {
                 let discovery_config = OidcDiscoveryConfig {
-                    issuer: self.authentication.oidc.provider.issuer.clone(),
+                    issuer: self.authentication.oidc.provider.issuer.to_string(),
                     jwks_uri_override: None,
                     discovery_timeout: Duration::from_secs(5),
                     max_doc_bytes: 1024 * 1024,
@@ -867,7 +869,7 @@ impl RuntimeConfig {
     /// another purpose book, reschedule or cancel an appointment.
     pub(crate) fn verifier_profile(&self) -> TokenVerifierConfig {
         TokenVerifierConfig::access_token_profile(
-            self.authentication.oidc.provider.issuer.clone(),
+            self.authentication.oidc.provider.issuer.to_string(),
             vec![self.authentication.oidc.provider.audience.clone()],
             vec![Algorithm::RS256, Algorithm::ES256],
             access_token_typ_set(SCHEDULING_ACCESS_TOKEN_TYPE),
