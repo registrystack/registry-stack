@@ -378,12 +378,35 @@ pub struct LostResponse {
 
 impl LostResponse {
     pub fn start(origin: &str) -> Self {
+        Self::start_for(
+            origin,
+            "/v1/actions/update-item?accessProfile=writer",
+            false,
+        )
+    }
+
+    pub fn observe_action(origin: &str) -> Self {
+        Self::start_for(origin, "/v1/actions/update-item?accessProfile=writer", true)
+    }
+
+    pub fn start_notice(origin: &str) -> Self {
+        Self::start_for(origin, "/v1/messages", false)
+    }
+
+    fn start_for(origin: &str, mutation_path: &str, observe_only: bool) -> Self {
         let script = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/coordinator/scripts/test-breg-action.py");
-        let mut child = Command::new("python3")
+        let mut command = Command::new("python3");
+        command
             .arg(script)
             .arg("--proxy-origin")
             .arg(origin)
+            .arg("--mutation-path")
+            .arg(mutation_path);
+        if observe_only {
+            command.arg("--observe-only");
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
