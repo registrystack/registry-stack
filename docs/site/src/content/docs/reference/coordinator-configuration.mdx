@@ -42,11 +42,124 @@ virtual clock; passing scenarios do not prove a live deployment or provider deli
 JSON Schema fragments and scenario payloads are foreign JSON trees: they can contain null values.
 Ordinary optional configuration members are omitted rather than written as null.
 
+YAML declares the finite graph, calls and durable waits.
+Use pure Rhai to map fields and choose among those authored branches.
+Functions cannot acquire credentials, contact services or add steps to the graph.
+
 {/* Evidence: crates/registry-coordinator/src/authoring.rs, CoordinatorProject;
     crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
     crates/registry-coordinator/src/scenarios.rs, CoordinatorScenarios;
     crates/registry-coordinator/src/project_check.rs;
     crates/registry-platform-yaml/src/types.rs, ForeignValue. */}
+
+## Supported operations
+
+| Operation | Connection type | Effect | Recovery |
+| --- | --- | --- | --- |
+| `read-record` | `breg` | Read | Read again |
+| `submit-message` | `messaging` | Mutation | Same command and read-only receipt |
+| `read-scheduling` | `scheduling` | Read | Read again |
+| `read-availability` | `scheduling` | Read | Read again |
+| `create-appointment` | `scheduling` | Mutation | Same command and read-only receipt |
+| `invoke-breg-action` | `breg` | Mutation | Same prepared command; no read-only receipt |
+| `external-get` | `external-http` | Read | Read again |
+
+These seven identifiers are the complete inventory.
+There is no arbitrary HTTP method, SQL step or dynamic call destination.
+
+`invoke-breg-action` accepts `action` and an object-valued `input`.
+Its BReg runtime connection requires a standing service `authorization` and an explicitly permitted `profile` for the immediate action.
+It accepts no grant field and cannot use `authorization.taskAuthority`.
+The maintained Base Registry Engine (BReg) client validates metadata and prepares the conditional request without mutation.
+Coordinator saves the exact preparation and key before dispatch.
+Later attempts check current metadata and fresh authority while retaining the saved conditions and key.
+Changed contracts, stale conditions, denied authority, cancellation, recovery holds and the original deadline stop unsafe dispatch.
+An uncertain result remains unresolved by `reconcile`, because BReg has no read-only action receipt.
+An ordinary record read is not evidence that the original action succeeded.
+Task-bound operations retain their original approval deadlines across waits and retries.
+
+Version 4 execution snapshots pin the capabilities of each used operation.
+Existing version 3 snapshots retain their original bytes and five-operation contract during restore.
+Package commands remain unchanged, but a changed digest needs a new workflow version when the same ID and version exists in retained history.
+
+{/* Evidence: crates/registry-coordinator/src/operations.rs, CATALOG, LEGACY_CATALOG;
+    crates/registry-coordinator/src/breg_action.rs, prepare, execute;
+    crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
+    crates/registry-coordinator/src/definition.rs, Definition;
+    crates/registry-coordinator/src/worker.rs;
+    crates/registry-coordinator/tests/operation_compatibility.rs. */}
+
+## External HTTP reads
+
+Declare `external-http` as the project's logical connection type, then bind that name under `runtime.externalHttpConnections`.
+Product bindings remain under `runtime.connections`; the names across both maps must be distinct, with at most 16 connections in total.
+Omitting `externalHttpConnections` disables external reads.
+
+This runtime fragment permits one public directory path and one query parameter:
+
+```yaml
+externalHttpConnections:
+  directory:
+    baseUrl: https://directory.example.org/directory
+    paths: [offices]
+    queryParameters: [district]
+    responseSchema:
+      type: object
+      additionalProperties: false
+      required: [status, body]
+      properties:
+        status:
+          const: 200
+        body:
+          type: object
+```
+
+The call input is an object containing `path` and an optional `query` object of string values.
+Here, the mapped input could select `path: offices` and a `district` query value.
+It cannot supply a URL, method, headers or body.
+The service preserves the configured base path and issues GET with JSON acceptance.
+
+| Runtime member | Contract |
+| --- | --- |
+| `baseUrl` | Required absolute HTTPS URL, or numeric loopback HTTP; no credentials, query or fragment |
+| `paths` | Required 1 to 16 unique exact relative paths; no empty or dot segments, query, fragment or backslashes |
+| `queryParameters` | Optional 1 to 16 unique names; omission permits no query parameters |
+| `authorization` | Optional separately configured service identity; omission means a public read |
+| `responseSchema` | Required local JSON Schema for the complete `{status, body}` response; no external references or schema resource identifiers |
+| `attemptTimeoutMilliseconds` | 1 to 2000, default 2000; covers destination resolution, credentials and HTTP |
+| `maximumResponseBytes` | 1 to 65,536, default 65,536 |
+
+Each query value is at most 1024 bytes and cannot contain control characters.
+Authorization uses the ordinary service fields `tokenEndpoint`, `clientId`, `signingKeyRef`, `resource` and `scopes`.
+The optional `clientAssertionAudience` defaults to the token endpoint.
+It does not accept `taskAuthority`, inherit product authorization or forward the caller's credential.
+
+Redirects and prohibited destinations are refused.
+The adapter accepts an empty response body as null; a nonempty body must be valid JSON within the byte limit.
+The configured schema decides which HTTP statuses and body shapes are accepted, including any permitted non-success statuses.
+An invalid body or schema mismatch stops the read with `external-invalid-response`.
+A timeout or unavailable service is retryable as `external-unavailable` within the existing workflow deadline.
+GET endpoints must implement read semantics; there is no external mutation or receipt recovery contract.
+
+The maintained [external directory project](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/external-directory) includes mappings and deterministic scenarios.
+Those scenarios and mock HTTP adapter checks do not prove a live institutional integration.
+
+{/* Evidence: crates/registry-coordinator/src/external_http.rs, ExternalHttpConfig, GetRequest, ExternalHttpConnection;
+    crates/registry-coordinator/src/runtime.rs, AuthorizationConfig, RuntimeConfig;
+    crates/registry-coordinator/tests/external_http.rs;
+    crates/registry-coordinator/tests/external_runtime.rs;
+    products/coordinator/examples/external-directory/runtime.yaml. */}
+
+## Application integration
+
+Each deployment admits one active flow definition; existing runs retain their original definitions.
+The authenticated list API returns the latest caller-owned runs with `limit` from 1 to 100, defaulting to 20, without pagination.
+No Coordinator export is available in `@registrystack/client` yet.
+Applications compose through the authenticated HTTP API and the owning Casework, BReg and optional Messaging APIs.
+
+{/* Evidence: crates/registry-coordinator/src/http.rs, HttpState, List;
+    crates/registry-coordinator/src/service.rs;
+    crates/CLIENTS.md. */}
 
 ## Check commands
 
