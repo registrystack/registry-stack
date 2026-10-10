@@ -31,11 +31,13 @@ fn authored_project_converts_to_the_versioned_snapshot_abi() {
     let definition = Definition::load(root.path()).unwrap();
     let snapshot = definition.snapshot().unwrap();
     let frozen: Value = serde_json::from_str(&snapshot).unwrap();
-    assert_eq!(frozen["workflow"]["kind"], "Workflow");
     assert_eq!(
-        frozen["workflow"]["apiVersion"],
-        "registry.registrystack.org/coordinator/v1alpha1"
+        frozen["apiVersion"],
+        "id.registrystack.org/formats/coordinator/definition-snapshot/v1alpha1"
     );
+    assert_eq!(frozen["kind"], "CoordinatorDefinitionSnapshot");
+    assert!(frozen["workflow"].get("apiVersion").is_none());
+    assert!(frozen["workflow"].get("kind").is_none());
     assert_eq!(frozen["workflow"]["steps"]["done"]["finish"], "accepted");
     assert!(frozen["workflow"]["steps"]["done"].get("type").is_none());
     assert_eq!(
@@ -52,6 +54,31 @@ fn authored_project_converts_to_the_versioned_snapshot_abi() {
             .unwrap(),
         json!({"optional":null})
     );
+}
+
+#[test]
+fn a_snapshot_without_its_envelope_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    write_project(root.path(), &project(), "fn identity(input) { input }");
+    let snapshot = Definition::load(root.path()).unwrap().snapshot().unwrap();
+    let frozen: Value = serde_json::from_str(&snapshot).unwrap();
+    let refused = |change: &dyn Fn(&mut Value)| {
+        let mut changed = frozen.clone();
+        change(&mut changed);
+        let error = Definition::from_snapshot(&changed.to_string())
+            .err()
+            .expect("the envelope is required");
+        assert_eq!(error.code, "definition.snapshot");
+    };
+    refused(&|value| {
+        value.as_object_mut().unwrap().remove("apiVersion");
+    });
+    refused(&|value| {
+        value.as_object_mut().unwrap().remove("kind");
+    });
+    refused(&|value| value["apiVersion"] = json!(authoring::API_VERSION));
+    refused(&|value| value["kind"] = json!(authoring::KIND));
+    refused(&|value| value["workflow"]["kind"] = json!("Workflow"));
 }
 
 #[test]

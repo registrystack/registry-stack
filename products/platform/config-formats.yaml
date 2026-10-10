@@ -4169,10 +4169,14 @@ formats:
     stability: unpromised
     buildArtifact: true
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
-    target: none
+      apiVersion: id.registrystack.org/formats/coordinator/definition-snapshot/v1alpha1
+      kind: CoordinatorDefinitionSnapshot
+      checkedBy:
+        file: crates/registry-coordinator/src/definition.rs
+        symbol: SNAPSHOT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/coordinator/definition-snapshot/v1alpha1
+      kind: CoordinatorDefinitionSnapshot
     schema: none
     reader:
       crate: registry-coordinator

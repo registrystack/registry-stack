@@ -182,8 +182,6 @@ pub fn parse_project(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(Workflow, 
         .map_err(PocError::from_report)?;
     let project: CoordinatorProject = document.decode().map_err(PocError::from_report)?;
     let workflow = Workflow {
-        api_version: "registry.registrystack.org/coordinator/v1alpha1".into(),
-        kind: "Workflow".into(),
         id: project.project.id.into_string(),
         version: project.project.version,
         input: project.input.into_value(),

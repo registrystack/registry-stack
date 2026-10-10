@@ -21,7 +21,9 @@ use crate::{
     PocError, Result,
 };
 
-const API_VERSION: &str = "registry.registrystack.org/coordinator/v1alpha1";
+pub const SNAPSHOT_API_VERSION: &str =
+    "id.registrystack.org/formats/coordinator/definition-snapshot/v1alpha1";
+pub const SNAPSHOT_KIND: &str = "CoordinatorDefinitionSnapshot";
 const ADAPTER_ABI: &str = "coordinator/product-operations/v4";
 const SCHEMA_ABI: &str = "coordinator/jsonschema-0.18/draft202012/formats-asserted+uuid/v1";
 const MAX_DOCUMENT_BYTES: usize = 1_048_576;
@@ -41,8 +43,6 @@ pub struct Definition {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Workflow {
-    pub api_version: String,
-    pub kind: String,
     pub id: String,
     pub version: String,
     pub input: Value,
@@ -113,6 +113,8 @@ impl Step {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Snapshot {
+    api_version: String,
+    kind: String,
     workflow: Workflow,
     source: String,
     adapter_abi: String,
@@ -156,6 +158,8 @@ impl Definition {
             crate::authoring::positioned(&document, error.at(&path, "functions")).with_exit(exit)
         })?;
         Self::restore(Snapshot {
+            api_version: SNAPSHOT_API_VERSION.into(),
+            kind: SNAPSHOT_KIND.into(),
             operation_identities: operation_identities(&workflow),
             workflow,
             source,
@@ -177,6 +181,9 @@ impl Definition {
     }
 
     fn restore(frozen: Snapshot) -> Result<Self> {
+        if frozen.api_version != SNAPSHOT_API_VERSION || frozen.kind != SNAPSHOT_KIND {
+            return Err(fail("definition.snapshot"));
+        }
         if frozen.adapter_abi != ADAPTER_ABI
             || frozen.operation_identities != operation_identities(&frozen.workflow)
             || !frozen
@@ -455,9 +462,7 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
             "Set start to one declared step ID.",
         ));
     }
-    if flow.api_version != API_VERSION
-        || flow.kind != "Workflow"
-        || !valid_name(&flow.id)
+    if !valid_name(&flow.id)
         || flow.functions != "functions.rhai"
         || !flow.steps.contains_key(&flow.start)
     {

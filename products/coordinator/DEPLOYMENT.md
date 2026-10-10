@@ -70,7 +70,8 @@ coordinatorctl check --project ./follow-up --explain
 coordinatorctl package --project ./follow-up --output ./follow-up-package
 ```
 
-`package` writes one immutable `definition.json` snapshot and `SHA256SUMS`.
+`package` writes one immutable `definition.json` snapshot, a
+`CoordinatorDefinitionSnapshot` document, and `SHA256SUMS`.
 Install the directory read-only, record the returned package digest, and pin it
 in `deployment.package.expectedDigest`. Runtime files, endpoints, credentials,
 state keys and audit custody are deployment configuration, outside the package.
