@@ -268,7 +268,7 @@ async fn invalid_references_and_foreign_owners_cannot_authorize_recovery() {
                 .await
                 .unwrap_err()
                 .code,
-            "reason-invalid"
+            "coordinator.command.reason-invalid"
         );
     }
     assert!(h.capture.entries().is_empty());
@@ -278,7 +278,7 @@ async fn invalid_references_and_foreign_owners_cannot_authorize_recovery() {
             .await
             .unwrap_err()
             .code,
-        "access.denied"
+        "coordinator.access.denied"
     );
     assert!(h.capture.entries().is_empty());
     let foreign = actor("foreign", false);
@@ -288,7 +288,7 @@ async fn invalid_references_and_foreign_owners_cannot_authorize_recovery() {
             .await
             .unwrap_err()
             .code,
-        "run-absent"
+        "coordinator.command.run-absent"
     );
     let reference = profile()
         .key_hasher()
@@ -316,7 +316,7 @@ async fn recovery_audit_failure_preserves_request_and_response_release_gates() {
             .await
             .unwrap_err()
             .code,
-        "audit-unavailable"
+        "coordinator.command.audit-unavailable"
     );
     assert_eq!(
         failing
@@ -324,7 +324,7 @@ async fn recovery_audit_failure_preserves_request_and_response_release_gates() {
             .await
             .unwrap_err()
             .code,
-        "audit-unavailable"
+        "coordinator.command.audit-unavailable"
     );
     assert!(h.capture.entries().is_empty());
     assert_eq!(h.store.status(h.run).await.unwrap().state, "running");
@@ -341,7 +341,7 @@ async fn recovery_audit_failure_preserves_request_and_response_release_gates() {
             .await
             .unwrap_err()
             .code,
-        "audit-response-unavailable"
+        "coordinator.command.audit-response-unavailable"
     );
     let entries = h.capture.entries();
     assert_eq!(entries.len(), 3, "operator intent and completed cancellation transition remain, but operator terminal release fails");

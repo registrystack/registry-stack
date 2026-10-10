@@ -132,7 +132,7 @@ async fn unknown_decision_completion_cannot_retry_reconcile_or_release_restore_h
             .await
             .unwrap_err()
             .code,
-        "evaluation-uncertain"
+        "coordinator.command.evaluation-uncertain"
     );
     let operator = actor("operator", true);
     assert_eq!(
@@ -147,7 +147,7 @@ async fn unknown_decision_completion_cannot_retry_reconcile_or_release_restore_h
             .await
             .unwrap_err()
             .code,
-        "reconciliation-unavailable"
+        "coordinator.command.reconciliation-unavailable"
     );
     assert!(!Worker::new(reopened.clone(), fake.clone())
         .tick()
@@ -167,7 +167,7 @@ async fn unknown_decision_completion_cannot_retry_reconcile_or_release_restore_h
             .await
             .unwrap_err()
             .code,
-        "restore-unresolved"
+        "coordinator.command.restore-unresolved"
     );
     assert_eq!(fake.calls.lock().unwrap().len(), 1);
     assert_eq!(fake.preparations.load(Ordering::SeqCst), 1);
@@ -390,7 +390,7 @@ async fn cancelled_unknown_decision_requires_review_then_releases_only_its_resto
             .await
             .unwrap_err()
             .code,
-        "restore-unresolved"
+        "coordinator.command.restore-unresolved"
     );
     h.store
         .complete_execution_recovery(&operator, "complete-history-fenced", true, true)
@@ -454,7 +454,7 @@ async fn cancelled_unknown_decision_requires_review_then_releases_only_its_resto
             .await
             .unwrap_err()
             .code,
-        "restore-unresolved"
+        "coordinator.command.restore-unresolved"
     );
     h.store
         .complete_execution_recovery(&operator, "second-complete-history-fenced", true, true)
@@ -504,7 +504,7 @@ async fn cancelled_evaluation_active_lease_blocks_review_and_late_reply_cannot_a
                 .await
                 .unwrap_err()
                 .code,
-            "restore-unresolved"
+            "coordinator.command.restore-unresolved"
         );
         if late_success {
             fake.release.as_ref().unwrap().add_permits(1);
@@ -563,7 +563,7 @@ async fn cancelled_unknown_mutation_still_blocks_restore_release() {
             .await
             .unwrap_err()
             .code,
-        "restore-unresolved"
+        "coordinator.command.restore-unresolved"
     );
     assert!(h.store.status(run).await.unwrap().uncertain);
     assert!(h.store.status(run).await.unwrap().restore_review_required);

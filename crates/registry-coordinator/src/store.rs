@@ -231,7 +231,10 @@ impl Detail {
 }
 
 fn unavailable(_: impl std::fmt::Display) -> PocError {
-    PocError::new("store-unavailable", "durable state is unavailable")
+    PocError::new(
+        "coordinator.command.store-unavailable",
+        "durable state is unavailable",
+    )
 }
 fn refused(code: &'static str, message: &'static str) -> PocError {
     PocError::new(code, message)
@@ -267,7 +270,7 @@ impl Store {
     ) -> Result<Self> {
         if !namespace.starts_with("coordinator_") || namespace.len() > 60 {
             return Err(refused(
-                "namespace-invalid",
+                "coordinator.command.namespace-invalid",
                 "use a dedicated coordinator_ lowercase SQL namespace",
             ));
         }
@@ -287,11 +290,11 @@ impl Store {
         if tls.is_none() && !local
             || tls.is_some() && config.get_ssl_mode() != tokio_postgres::config::SslMode::Require
         {
-            return Err(refused("database-tls-required", "use verified TLS with sslmode=require for PostgreSQL; plaintext is restricted to an explicit local connection"));
+            return Err(refused("coordinator.command.database-tls-required", "use verified TLS with sslmode=require for PostgreSQL; plaintext is restricted to an explicit local connection"));
         }
         if security.database_id.is_empty() || security.database_id.len() > 128 {
             return Err(refused(
-                "database-identity-invalid",
+                "coordinator.command.database-identity-invalid",
                 "configure a bounded persistent deployment database identity",
             ));
         }
@@ -299,7 +302,7 @@ impl Store {
             .get_dbname()
             .ok_or_else(|| {
                 refused(
-                    "database-invalid",
+                    "coordinator.command.database-invalid",
                     "name the PostgreSQL database explicitly",
                 )
             })?
@@ -323,7 +326,7 @@ impl Store {
             .get(0);
         if version < 170000 {
             return Err(refused(
-                "database-version",
+                "coordinator.command.database-version",
                 "PostgreSQL 17 or later is required",
             ));
         }
@@ -383,7 +386,7 @@ impl Store {
         match marker {
             Some(row) if row.get::<_, Option<String>>(0).as_deref() != Some(NAMESPACE_MARKER) => {
                 return Err(refused(
-                    "namespace-occupied",
+                    "coordinator.command.namespace-occupied",
                     "choose an unused Coordinator namespace; existing data was not changed",
                 ));
             }
@@ -404,12 +407,12 @@ impl Store {
         if custody.get::<_, String>(0) != self.security.database_id
             || custody.get::<_, String>(1) != self.admission_key_marker()
         {
-            return Err(refused("state-key-custody","preserve the deployment database identity and stable admission key; recover original custody before apply"));
+            return Err(refused("coordinator.command.state-key-custody","preserve the deployment database identity and stable admission key; recover original custody before apply"));
         }
         // A store is created at one revision and is never changed in place.
         if custody.get::<_, i32>(3) != SCHEMA_VERSION {
             return Err(refused(
-                "schema-version",
+                "coordinator.command.schema-version",
                 "this database records another Coordinator schema revision; apply to a new database, existing data was not changed",
             ));
         }
@@ -560,20 +563,20 @@ impl Store {
             || binding_digest.len() > 256
         {
             return Err(refused(
-                "admission-invalid",
+                "coordinator.command.admission-invalid",
                 "producer, start key and binding digest must be bounded nonempty values",
             ));
         }
         crate::functions::check_value(&input).map_err(|_| {
             refused(
-                "input-invalid",
+                "coordinator.command.input-invalid",
                 "input must fit the documented structured value bounds",
             )
         })?;
         let input_bytes = zeroize::Zeroizing::new(
             registry_platform_canonical_json::canonicalize_json(&input).map_err(|_| {
                 refused(
-                    "input-invalid",
+                    "coordinator.command.input-invalid",
                     "input must have an unambiguous canonical JSON representation",
                 )
             })?,
@@ -616,7 +619,7 @@ impl Store {
             .map_err(unavailable)?
             .get(0);
         if held {
-            return Err(refused("restore-admissions-held","recover complete admission history before enabling starts; inspect known runs while ingress is held"));
+            return Err(refused("coordinator.command.restore-admissions-held","recover complete admission history before enabling starts; inspect known runs while ingress is held"));
         }
         if let Some(runtime) = runtime {
             self.check_live_bindings(&tx, runtime).await?;
@@ -635,7 +638,7 @@ impl Store {
         {
             if row.get::<_, String>(1) != input_digest {
                 return Err(refused(
-                    "start-conflict",
+                    "coordinator.command.start-conflict",
                     "this producer, workflow and start key already names different admitted work",
                 ));
             }
@@ -700,12 +703,12 @@ impl Store {
             .is_some_and(|expected| row.get::<_, Option<String>>(1).as_ref() != Some(expected))
         {
             return Err(refused(
-                "activation-changed",
+                "coordinator.command.activation-changed",
                 "start the service with the currently activated package",
             ));
         }
         if held {
-            return Err(refused("restore-hold", "execution is held until the prior deployment is externally fenced and recovery is reviewed"));
+            return Err(refused("coordinator.command.restore-hold", "execution is held until the prior deployment is externally fenced and recovery is reviewed"));
         }
         Ok(())
     }
@@ -723,7 +726,7 @@ impl Store {
             )
             .await
             .map_err(unavailable)?
-            .ok_or_else(|| refused("run-absent", "run was not found"))?;
+            .ok_or_else(|| refused("coordinator.command.run-absent", "run was not found"))?;
         self.status_from_row(&row)
     }
 
@@ -731,7 +734,7 @@ impl Store {
     pub async fn list_runs(&self, limit: u32) -> Result<Vec<RunStatus>> {
         if !(1..=100).contains(&limit) {
             return Err(refused(
-                "list-limit-invalid",
+                "coordinator.command.list-limit-invalid",
                 "choose a run list limit between 1 and 100",
             ));
         }
@@ -786,12 +789,12 @@ impl Store {
             )
             .await
             .map_err(unavailable)?
-            .ok_or_else(|| refused("run-absent", "run was not found"))?;
+            .ok_or_else(|| refused("coordinator.command.run-absent", "run was not found"))?;
         let status = self.status_from_row(&row)?;
         let rows = tx.query(&format!("SELECT step,state,generation,attempt,next_attempt_at,lease_expires_at,command IS NOT NULL,uncertain,receipt_expired,failure_code FROM {}.jobs WHERE run_id=$1 ORDER BY updated_at,step LIMIT 65", self.namespace), &[&run]).await.map_err(unavailable)?;
         if rows.len() > 64 {
             return Err(refused(
-                "run-state-invalid",
+                "coordinator.command.run-state-invalid",
                 "durable step state exceeds the workflow bound",
             ));
         }
@@ -827,7 +830,7 @@ impl Store {
                     "",
                     sealed.as_ref().ok_or_else(|| {
                         refused(
-                            "payload-erased",
+                            "coordinator.command.payload-erased",
                             "this run retains only its spent-key tombstone",
                         )
                     })?,
@@ -895,7 +898,7 @@ impl Store {
         let status = self.status(run).await?;
         if status.binding_digest != binding_digest {
             return Err(refused(
-                "binding-conflict",
+                "coordinator.command.binding-conflict",
                 "retry requires the original connection binding",
             ));
         }
@@ -911,7 +914,7 @@ impl Store {
             .map_err(unavailable)?;
         if row.get::<_, bool>(0) {
             return Err(refused(
-                "receipt-expired",
+                "coordinator.command.receipt-expired",
                 "receipt recovery expired; this run remains held for attention",
             ));
         }
@@ -921,14 +924,17 @@ impl Store {
             "snapshot",
             "",
             sealed.as_ref().ok_or_else(|| {
-                refused("payload-erased", "only the spent-key tombstone is retained")
+                refused(
+                    "coordinator.command.payload-erased",
+                    "only the spent-key tombstone is retained",
+                )
             })?,
         )?;
-        let definition = Definition::from_snapshot(&snapshot).map_err(|_| refused("definition-incompatible", "this binary cannot safely interpret the pinned run snapshot; retain its compatible worker"))?;
+        let definition = Definition::from_snapshot(&snapshot).map_err(|_| refused("coordinator.command.definition-incompatible", "this binary cannot safely interpret the pinned run snapshot; retain its compatible worker"))?;
         if row.get::<_, bool>(3)
             && matches!(definition.workflow.steps.get(&status.step), Some(Step::Call {call, ..}) if !call.operation.can_retry_after_unknown())
         {
-            return Err(refused("evaluation-uncertain", "the evaluation may have completed remotely; preserve its original request and inspect or cancel the held run without reevaluating"));
+            return Err(refused("coordinator.command.evaluation-uncertain", "the evaluation may have completed remotely; preserve its original request and inspect or cancel the held run without reevaluating"));
         }
         let generation: i64 = row.get(1);
         tx.commit().await.map_err(unavailable)?;
@@ -943,7 +949,7 @@ impl Store {
             .await
             .map_err(|_| {
                 refused(
-                    "retry-refused",
+                    "coordinator.command.retry-refused",
                     "only held work before its deadline can retry its original command",
                 )
             })?;
@@ -990,7 +996,7 @@ impl Store {
         let mut client = self.client().await.map_err(unavailable)?;
         let tx = client.transaction().await.map_err(unavailable)?;
         let fence = job.fence();
-        let row = tx.query_opt(&format!("SELECT command FROM {}.jobs WHERE run_id=$1 AND step=$2 AND generation=$3 AND attempt=$4 AND lease_token=$5 AND state='leased' AND lease_expires_at>transaction_timestamp() FOR UPDATE", self.namespace), &[&fence.id, &fence.part, &fence.generation, &fence.attempt, &fence.lease_token]).await.map_err(unavailable)?.ok_or_else(|| refused("lease-stale", "the worker no longer owns this step"))?;
+        let row = tx.query_opt(&format!("SELECT command FROM {}.jobs WHERE run_id=$1 AND step=$2 AND generation=$3 AND attempt=$4 AND lease_token=$5 AND state='leased' AND lease_expires_at>transaction_timestamp() FOR UPDATE", self.namespace), &[&fence.id, &fence.part, &fence.generation, &fence.attempt, &fence.lease_token]).await.map_err(unavailable)?.ok_or_else(|| refused("coordinator.command.lease-stale", "the worker no longer owns this step"))?;
         let existing: Option<Value> = row.get(0);
         let value = if let Some(value) = existing {
             value
@@ -1145,7 +1151,12 @@ impl Store {
         // truthful winner; effects already past this fence remain uncertain.
         match self.require_unheld(&tx).await {
             Ok(()) => {}
-            Err(error) if matches!(error.code.as_str(), "restore-hold" | "activation-changed") => {
+            Err(error)
+                if matches!(
+                    error.code.as_str(),
+                    "coordinator.command.restore-hold" | "coordinator.command.activation-changed"
+                ) =>
+            {
                 return Ok(false);
             }
             Err(error) => return Err(error),

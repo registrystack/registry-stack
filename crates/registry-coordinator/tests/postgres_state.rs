@@ -382,7 +382,7 @@ async fn admission_is_atomic_deduplicates_equal_input_and_rejects_changed_input(
             .await
             .expect_err("conflict")
             .code,
-        "start-conflict"
+        "coordinator.command.start-conflict"
     );
 }
 
@@ -525,7 +525,7 @@ async fn later_refusal_and_receipt_expiry_keep_uncertainty_and_never_create_fres
             .await
             .expect_err("expired receipts cannot replay")
             .code,
-        "receipt-expired"
+        "coordinator.command.receipt-expired"
     );
     let keys = fake
         .requests
@@ -592,7 +592,7 @@ async fn immutable_versions_and_per_run_retry_bindings_are_preserved() {
             .await
             .expect_err("definition conflict")
             .code,
-        "workflow-version-conflict"
+        "coordinator.command.workflow-version-conflict"
     );
     assert_eq!(
         h.store
@@ -600,7 +600,7 @@ async fn immutable_versions_and_per_run_retry_bindings_are_preserved() {
             .await
             .expect_err("original binding required")
             .code,
-        "binding-conflict"
+        "coordinator.command.binding-conflict"
     );
 }
 
@@ -637,7 +637,7 @@ async fn unrelated_admission_does_not_prevent_original_bound_replay() {
     h.store.retry_same(run, "binding-a").await.unwrap();
     assert_eq!(
         h.store.retry_same(run, "binding-b").await.unwrap_err().code,
-        "binding-conflict"
+        "coordinator.command.binding-conflict"
     );
 }
 
@@ -713,7 +713,7 @@ async fn replay_does_not_deadlock_activation_or_lose_its_guard_on_caller_cancell
     .expect("Dispatch's owned replay commits despite caller cancellation");
     assert_eq!(
         h.store.retry_same(run, "binding-b").await.unwrap_err().code,
-        "binding-conflict"
+        "coordinator.command.binding-conflict"
     );
 }
 
@@ -766,7 +766,7 @@ async fn occupied_namespace_is_refused_without_touching_existing_tables() {
         .await;
     assert_eq!(
         h.store.migrate().await.expect_err("foreign namespace").code,
-        "namespace-occupied"
+        "coordinator.command.namespace-occupied"
     );
     assert!(Store::connect(&h.url, "public").await.is_err());
 }
@@ -968,7 +968,7 @@ async fn a_start_key_returns_its_original_version_before_new_schema_validation()
             .await
             .unwrap_err()
             .code,
-        "definition.input"
+        "coordinator.definition.input"
     );
     let mut changed = original.clone();
     changed["id"] = json!("changed");
@@ -978,7 +978,7 @@ async fn a_start_key_returns_its_original_version_before_new_schema_validation()
             .await
             .unwrap_err()
             .code,
-        "start-conflict"
+        "coordinator.command.start-conflict"
     );
     assert_eq!(
         h.store
@@ -1016,7 +1016,7 @@ async fn same_version_mutation_is_refused_after_completion_and_on_a_duplicate_ke
                 .await
                 .unwrap_err()
                 .code,
-            "workflow-version-conflict"
+            "coordinator.command.workflow-version-conflict"
         );
     }
 }
@@ -1188,7 +1188,7 @@ async fn inspection_refuses_recovery_after_deadline_receipt_expiry_and_unsupport
             .await
             .unwrap_err()
             .code,
-        "definition-incompatible"
+        "coordinator.command.definition-incompatible"
     );
     assert_eq!(old.store.status(run).await.unwrap().state, "attention");
 
@@ -1236,7 +1236,7 @@ async fn protected_rows_enforce_owner_and_authenticate_cross_run_swaps() {
         .unwrap();
     assert_eq!(
         h.store.status_owned(run, &other).await.unwrap_err().code,
-        "run-absent"
+        "coordinator.command.run-absent"
     );
     assert!(h
         .store
@@ -1250,7 +1250,7 @@ async fn protected_rows_enforce_owner_and_authenticate_cross_run_swaps() {
             .await
             .unwrap_err()
             .code,
-        "run-absent"
+        "coordinator.command.run-absent"
     );
     let second = h
         .store
@@ -1400,7 +1400,7 @@ async fn terminal_retention_keeps_spent_start_keys_across_payload_rotation() {
             .await
             .unwrap_err()
             .code,
-        "start-conflict"
+        "coordinator.command.start-conflict"
     );
     let (client, connection) = tokio_postgres::connect(&h.url, tokio_postgres::NoTls)
         .await
@@ -1472,7 +1472,7 @@ async fn cancellation_and_restore_holds_do_not_extend_effect_authority() {
             .await
             .unwrap_err()
             .code,
-        "restore-admissions-held"
+        "coordinator.command.restore-admissions-held"
     );
     h.store
         .release_restore_hold(&operator, "fence-record")
@@ -1547,7 +1547,7 @@ async fn audit_failure_prevents_admission_and_payload_release() {
     .unwrap();
     assert_eq!(
         failing.status_owned(run, &owner).await.unwrap_err().code,
-        "audit-unavailable"
+        "coordinator.command.audit-unavailable"
     );
     assert_eq!(
         failing
@@ -1561,7 +1561,7 @@ async fn audit_failure_prevents_admission_and_payload_release() {
             .await
             .unwrap_err()
             .code,
-        "audit-unavailable"
+        "coordinator.command.audit-unavailable"
     );
     assert_eq!(
         h.store
@@ -1687,7 +1687,7 @@ async fn restore_before_command_freeze_cannot_be_cleared_by_cancellation_or_plai
             .await
             .unwrap_err()
             .code,
-        "restore-unresolved"
+        "coordinator.command.restore-unresolved"
     );
     assert!(h
         .store
@@ -1894,7 +1894,7 @@ async fn unexpired_leased_receipt_reconciliation_is_refused_before_observation()
         )
         .await
         .unwrap_err();
-    assert_eq!(error.code, "reconcile-refused");
+    assert_eq!(error.code, "coordinator.command.reconcile-refused");
     assert_eq!(*receipt.calls.lock().unwrap(), 0);
     // A malformed leased row with unknown expiry is not proven expired.
     h.sql("UPDATE {schema}.jobs SET lease_expires_at=NULL WHERE step='message'")
@@ -1910,7 +1910,7 @@ async fn unexpired_leased_receipt_reconciliation_is_refused_before_observation()
         )
         .await
         .unwrap_err();
-    assert_eq!(error.code, "reconcile-refused");
+    assert_eq!(error.code, "coordinator.command.reconcile-refused");
     assert_eq!(*receipt.calls.lock().unwrap(), 0);
     let status = h.store.status_owned(run, &operator).await.unwrap();
     assert_eq!(status.step, "message");
@@ -1956,7 +1956,7 @@ async fn lease_renewal_during_original_receipt_observation_refuses_settlement() 
         .await;
         receipt.release.as_ref().unwrap().add_permits(1);
         let error = observing.await.unwrap().unwrap_err();
-        assert_eq!(error.code, "reconcile-raced");
+        assert_eq!(error.code, "coordinator.command.reconcile-raced");
         assert_eq!(*receipt.calls.lock().unwrap(), 1);
         let status = h.store.status_owned(run, &operator).await.unwrap();
         assert_eq!(status.step, "message");
@@ -2642,7 +2642,7 @@ async fn attested_expired_safe_leases_settle_without_dispatch_and_keep_original_
                     .await
                     .unwrap_err()
                     .code,
-                "restore-review-required"
+                "coordinator.command.restore-review-required"
             );
             assert_eq!(
                 h.store
@@ -2750,7 +2750,10 @@ async fn control_lock_timeout_preserves_the_prepared_read_for_explicit_recovery(
         job["state"],
         job["failure_code"]
     );
-    assert_eq!(result.unwrap_err().code, "worker-unavailable");
+    assert_eq!(
+        result.unwrap_err().code,
+        "coordinator.command.worker-unavailable"
+    );
     assert_eq!(job["state"], "leased");
     assert_eq!(job["uncertain"], false);
     assert!(!job["command"].is_null());
@@ -2828,7 +2831,10 @@ async fn pre_io_control_refusals_and_deadlines_still_prevent_mutation_intent() {
         };
         let result = Worker::new(store, fake.clone()).tick().await;
         if guard == "activation-changed" {
-            assert_eq!(result.unwrap_err().code, "worker-unavailable");
+            assert_eq!(
+                result.unwrap_err().code,
+                "coordinator.command.worker-unavailable"
+            );
         } else {
             assert!(result.unwrap());
         }
@@ -3012,7 +3018,7 @@ async fn attested_unprepared_mutations_remain_held_until_explicit_retry_or_cance
                             .await
                             .unwrap_err()
                             .code,
-                        "restore-review-required"
+                        "coordinator.command.restore-review-required"
                     );
                     assert_eq!(restored_lease_identity(&h, run).await, identity);
                     assert_eq!(
@@ -3131,7 +3137,7 @@ async fn restored_prepared_pending_mutations_require_explicit_retry_or_cancel() 
                         .await
                         .unwrap_err()
                         .code,
-                    "restore-review-required"
+                    "coordinator.command.restore-review-required"
                 );
                 assert_eq!(restored_lease_identity(&h, run).await, identity);
             }
@@ -3352,7 +3358,7 @@ async fn active_retryable_mutation_requires_repeated_recovery_before_hold_releas
             .await
             .unwrap_err()
             .code,
-        "restore-unresolved"
+        "coordinator.command.restore-unresolved"
     );
     assert!(sending.await.unwrap().unwrap());
     let pending = restored_current_job(&h, run).await;
@@ -3373,7 +3379,7 @@ async fn active_retryable_mutation_requires_repeated_recovery_before_hold_releas
             .await
             .unwrap_err()
             .code,
-        "restore-unresolved"
+        "coordinator.command.restore-unresolved"
     );
     h.store
         .complete_execution_recovery(&operator, "retry-result-reviewed", true, true)
@@ -3458,7 +3464,7 @@ async fn attested_recovery_preserves_active_mutating_unknown_and_uncertain_lease
                 .await
                 .unwrap_err()
                 .code,
-            "restore-unresolved",
+            "coordinator.command.restore-unresolved",
             "{kind}"
         );
         let after = h.store.inspect(run, "binding-a").await.unwrap();
@@ -3599,7 +3605,7 @@ async fn incompatible_restored_lease_rolls_back_all_safe_transitions_and_review_
                 .await
                 .unwrap_err()
                 .code,
-            "restore-lease-incompatible"
+            "coordinator.command.restore-lease-incompatible"
         );
         for run in [first, second] {
             let status = h.store.status(run).await.unwrap();

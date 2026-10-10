@@ -38,12 +38,12 @@ pub(crate) struct Functions {
 impl Functions {
     pub(crate) fn compile(source: &str, mappings: &[&crate::definition::Mapping]) -> Result<Self> {
         if source.len() > PROFILE.maximum_source_bytes {
-            return Err(failure("function.source_limit").at("functions.rhai", "/"));
+            return Err(failure("coordinator.function.source-limit").at("functions.rhai", "/"));
         }
         let mut ast = None;
         for mapping in mappings {
             if mapping.arguments.len() > 16 {
-                return Err(failure("function.arity")
+                return Err(failure("coordinator.function.arity")
                     .at("functions.rhai", format!("function {}", mapping.function)));
             }
             let checked = platform::compile_entrypoint(
@@ -58,7 +58,7 @@ impl Functions {
                     platform::RhaiCompileError::Parse(position) => ("function source has invalid or disabled syntax".to_owned(), format!("line {} column {}", position.line().unwrap_or(0), position.position().unwrap_or(0))),
                     platform::RhaiCompileError::Entrypoint => (format!("declare one public function with {} parameter(s); function names cannot be overloaded", mapping.arguments.len()), format!("function {}", mapping.function)),
                 };
-                PocError::new("function.definition", message).at("functions.rhai", field).suggest("Correct the named function or syntax position, then rerun check.")
+                PocError::new("coordinator.function.definition", message).at("functions.rhai", field).suggest("Correct the named function or syntax position, then rerun check.")
             })?;
             ast.get_or_insert(checked);
         }
@@ -69,7 +69,7 @@ impl Functions {
             ast = Some(
                 engine
                     .compile(source)
-                    .map_err(|_| failure("function.definition"))?,
+                    .map_err(|_| failure("coordinator.function.definition"))?,
             );
         }
         let mut names = std::collections::BTreeSet::new();
@@ -79,7 +79,7 @@ impl Functions {
             .flat_map(|ast| ast.iter_functions())
         {
             if !names.insert(function.name.to_owned()) || names.len() > 128 {
-                return Err(failure("function.definition"));
+                return Err(failure("coordinator.function.definition"));
             }
         }
         Ok(Self { ast })
@@ -90,22 +90,25 @@ impl Functions {
             .into_iter()
             .map(|value| {
                 check_value(value)?;
-                rhai::serde::to_dynamic(value).map_err(|_| failure("function.input"))
+                rhai::serde::to_dynamic(value).map_err(|_| failure("coordinator.function.input"))
             })
             .collect::<Result<Vec<Dynamic>>>()?;
         let engine = platform::build_engine(&PROFILE, None, register_pure_packages);
         let ast = self
             .ast
             .as_ref()
-            .ok_or_else(|| failure("function.definition"))?;
+            .ok_or_else(|| failure("coordinator.function.definition"))?;
         let value =
             platform::call_with_fresh_scope(&engine, ast, name, arguments).map_err(|error| {
                 failure(match platform::classify_failure(&error) {
-                    platform::RhaiFailureCategory::ResourceExhausted => "function.resource_limit",
-                    platform::RhaiFailureCategory::Other => "function.execution",
+                    platform::RhaiFailureCategory::ResourceExhausted => {
+                        "coordinator.function.resource-limit"
+                    }
+                    platform::RhaiFailureCategory::Other => "coordinator.function.execution",
                 })
             })?;
-        let value = rhai::serde::from_dynamic(&value).map_err(|_| failure("function.output"))?;
+        let value = rhai::serde::from_dynamic(&value)
+            .map_err(|_| failure("coordinator.function.output"))?;
         check_value(&value)?;
         Ok(value)
     }
@@ -134,22 +137,22 @@ pub(crate) fn check_value(value: &Value) -> Result<()> {
         }
     }
     if !walk(value, 0, &mut 0) {
-        return Err(failure("function.value_limit"));
+        return Err(failure("coordinator.function.value-limit"));
     }
     let bytes = registry_platform_canonical_json::canonicalize_json(value)
-        .map_err(|_| failure("function.json"))?;
+        .map_err(|_| failure("coordinator.function.json"))?;
     if bytes.len() > 131_072 {
-        return Err(failure("function.value_limit"));
+        return Err(failure("coordinator.function.value-limit"));
     }
     Ok(())
 }
 
 fn failure(code: &'static str) -> PocError {
     PocError::new(code, match code {
-        "function.resource_limit" => "the function exceeded its operation, call-depth or value-size budget",
-        "function.value_limit" => "the structured value exceeded its size or depth budget",
-        "function.execution" => "the function could not evaluate its supplied values",
-        "function.source_limit" => "functions.rhai exceeds the 65536-byte source budget",
+        "coordinator.function.resource-limit" => "the function exceeded its operation, call-depth or value-size budget",
+        "coordinator.function.value-limit" => "the structured value exceeded its size or depth budget",
+        "coordinator.function.execution" => "the function could not evaluate its supplied values",
+        "coordinator.function.source-limit" => "functions.rhai exceeds the 65536-byte source budget",
         _ => "the pure function boundary refused the definition or value",
     }).suggest("Inspect the named mapping and reduce bounded work or correct its declared arguments; runtime values are omitted.")
 }

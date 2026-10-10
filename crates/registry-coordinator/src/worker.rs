@@ -29,7 +29,7 @@ impl Worker {
             .await
             .map_err(|_| {
                 PocError::new(
-                    "worker-unavailable",
+                    "coordinator.command.worker-unavailable",
                     "the durable worker could not complete this tick",
                 )
             })?;

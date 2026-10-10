@@ -434,7 +434,8 @@ fn decision_result(result) { result }
                 !retry.status.success(),
                 "uncertain decision must not be reissued"
             );
-            assert!(String::from_utf8_lossy(&retry.stderr).contains("evaluation-uncertain"));
+            assert!(String::from_utf8_lossy(&retry.stderr)
+                .contains("coordinator.command.evaluation-uncertain"));
         } else {
             let completed = status_until(&runtime, &run, "finished").await;
             assert_eq!(completed["output"]["returnedModel"], "fixture-model-1");

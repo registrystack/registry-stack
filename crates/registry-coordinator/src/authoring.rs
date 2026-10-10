@@ -213,10 +213,10 @@ pub(crate) fn positioned(document: &Document, error: PocError) -> PocError {
     if !error.diagnostics.is_empty() {
         return error;
     }
-    if error.code.starts_with("function.")
+    if error.code.starts_with("coordinator.function.")
         && !matches!(
             error.code.as_str(),
-            "function.value_limit" | "function.json"
+            "coordinator.function.value-limit" | "coordinator.function.json"
         )
     {
         let mut error = error;
@@ -250,10 +250,9 @@ pub(crate) fn positioned(document: &Document, error: PocError) -> PocError {
             parts.join("/")
         }
     };
-    let code = format!("coordinator.{}", error.code.replace('_', "-"));
     PocError::from_diagnostics(&[document.diagnostic_at_value(
         Severity::Error,
-        &code,
+        &error.code,
         &pointer,
         &error.message,
         error

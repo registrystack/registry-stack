@@ -55,13 +55,48 @@ async fn remote_admission_reports_outages_separately_without_repeating_the_reque
     let guidance =
         "Inspect the original run and use its same-command recovery; never substitute a fresh key.";
     for (status, exit, classification, code) in [
-        (503, 3, "operational-failure", "service-unavailable"),
-        (500, 3, "operational-failure", "service-unavailable"),
-        (502, 3, "operational-failure", "service-unavailable"),
-        (504, 3, "operational-failure", "service-unavailable"),
-        (401, 1, "domain-refusal", "service-refused"),
-        (403, 1, "domain-refusal", "service-refused"),
-        (409, 1, "domain-refusal", "service-refused"),
+        (
+            503,
+            3,
+            "operational-failure",
+            "coordinator.command.service-unavailable",
+        ),
+        (
+            500,
+            3,
+            "operational-failure",
+            "coordinator.command.service-unavailable",
+        ),
+        (
+            502,
+            3,
+            "operational-failure",
+            "coordinator.command.service-unavailable",
+        ),
+        (
+            504,
+            3,
+            "operational-failure",
+            "coordinator.command.service-unavailable",
+        ),
+        (
+            401,
+            1,
+            "domain-refusal",
+            "coordinator.command.service-refused",
+        ),
+        (
+            403,
+            1,
+            "domain-refusal",
+            "coordinator.command.service-refused",
+        ),
+        (
+            409,
+            1,
+            "domain-refusal",
+            "coordinator.command.service-refused",
+        ),
     ] {
         receiver(
             &server,
@@ -79,10 +114,7 @@ async fn remote_admission_reports_outages_separately_without_repeating_the_reque
         assert_eq!(report["command"], "start");
         assert_eq!(report["ok"], false);
         assert_eq!(report["status"], classification);
-        assert_eq!(
-            report["diagnostics"][0]["code"],
-            format!("coordinator.command.{code}")
-        );
+        assert_eq!(report["diagnostics"][0]["code"], code);
         assert_eq!(report["diagnostics"][0]["suggestedAction"], guidance);
         assert!(!String::from_utf8_lossy(&output.stdout).contains(TOKEN));
         server.verify().await;

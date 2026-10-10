@@ -201,7 +201,7 @@ outcomes: {accepted: {type: 'null'}}
             .await
             .unwrap_err()
             .code,
-        "restore-unresolved"
+        "coordinator.command.restore-unresolved"
     );
     assert!(restored
         .admit_owned(&definition, submission(), &owner, "unknown-start", &binding)

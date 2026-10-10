@@ -210,16 +210,17 @@ pub struct ScenarioReport {
 }
 
 pub fn load(path: &Path) -> Result<ScenarioDocument> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|_| error("scenario.read"))?;
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|_| error("coordinator.scenario.read"))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(error("scenario.bound"));
+        return Err(error("coordinator.scenario.bound"));
     }
     let mut source = Vec::new();
     std::fs::File::open(path)
-        .map_err(|_| error("scenario.read"))?
+        .map_err(|_| error("coordinator.scenario.read"))?
         .take(MAX_SCENARIO_BYTES + 1)
         .read_to_end(&mut source)
-        .map_err(|_| error("scenario.read"))?;
+        .map_err(|_| error("coordinator.scenario.read"))?;
     decode_bytes(&source, &path.display().to_string())
 }
 
@@ -401,15 +402,15 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
     definition.validate_input(&scenario.input)?;
     for step in scenario.replies.keys() {
         if !matches!(definition.workflow.steps.get(step), Some(Step::Call { .. })) {
-            return Err(error("scenario.reply-step"));
+            return Err(error("coordinator.scenario.reply-step"));
         }
     }
     for (step, recovery) in &scenario.recovery {
         let Some(Step::Call { call, .. }) = definition.workflow.steps.get(step) else {
-            return Err(error("scenario.recovery"));
+            return Err(error("coordinator.scenario.recovery"));
         };
         if matches!(recovery, Recovery::Reconcile) && !call.operation.supports_read_receipt() {
-            return Err(error("scenario.recovery"));
+            return Err(error("coordinator.scenario.recovery"));
         }
     }
     let deadline = definition.deadline_at(scenario.admitted_at)?;
@@ -436,7 +437,7 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
             .workflow
             .steps
             .get(&step)
-            .ok_or_else(|| error("scenario.step"))?
+            .ok_or_else(|| error("coordinator.scenario.step"))?
         {
             Step::WaitUntil { next, .. } => {
                 now = now
@@ -451,8 +452,12 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
             Step::Choose { cases, .. } => {
                 let choice = definition.evaluate(&step, &scenario.input, &outputs)?;
                 step = cases
-                    .get(choice.as_str().ok_or_else(|| error("scenario.branch"))?)
-                    .ok_or_else(|| error("scenario.branch"))?
+                    .get(
+                        choice
+                            .as_str()
+                            .ok_or_else(|| error("coordinator.scenario.branch"))?,
+                    )
+                    .ok_or_else(|| error("coordinator.scenario.branch"))?
                     .clone();
             }
             Step::Finish { finish, output } => {
@@ -486,14 +491,15 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                 };
                 // Keep this value for every recovery reply: mapping evaluation and
                 // authority selection never run again for a prepared mutation.
-                let frozen = serde_json::to_vec(&command).map_err(|_| error("scenario.command"))?;
+                let frozen = serde_json::to_vec(&command)
+                    .map_err(|_| error("coordinator.scenario.command"))?;
                 if command.operation.has_dispatch_risk() {
                     report.frozen_commands += 1;
                 }
                 let replies = scenario
                     .replies
                     .get(&step)
-                    .ok_or_else(|| error("scenario.reply"))?;
+                    .ok_or_else(|| error("coordinator.scenario.reply"))?;
                 let recovery = scenario.recovery.get(&step);
                 let mut prior_unknown = false;
                 let mut success = None;
@@ -501,13 +507,13 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                     if command.operation.is_evaluation()
                         && matches!(reply, Reply::ReceiptExpired { .. })
                     {
-                        return Err(error("scenario.reply"));
+                        return Err(error("coordinator.scenario.reply"));
                     }
                     if index > 0 && recovery.is_none() {
-                        return Err(error("scenario.recovery"));
+                        return Err(error("coordinator.scenario.recovery"));
                     }
                     if index > 0 && prior_unknown && !command.operation.can_retry_after_unknown() {
-                        return Err(error("scenario.recovery"));
+                        return Err(error("coordinator.scenario.recovery"));
                     }
                     // Receipt observation can resolve an unknown mutation,
                     // never create success after a definite retryable rejection.
@@ -515,15 +521,15 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                         && matches!(recovery, Some(Recovery::Reconcile))
                         && (!command.operation.supports_read_receipt() || !prior_unknown)
                     {
-                        return Err(error("scenario.recovery"));
+                        return Err(error("coordinator.scenario.recovery"));
                     }
-                    let same: CallRequest =
-                        serde_json::from_slice(&frozen).map_err(|_| error("scenario.command"))?;
+                    let same: CallRequest = serde_json::from_slice(&frozen)
+                        .map_err(|_| error("coordinator.scenario.command"))?;
                     if same.operation != command.operation
                         || same.input != command.input
                         || same.idempotency_key != command.idempotency_key
                     {
-                        return Err(error("scenario.command"));
+                        return Err(error("coordinator.scenario.command"));
                     }
                     *report.call_attempts.entry(step.clone()).or_default() += 1;
                     match reply {
@@ -543,13 +549,13 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                             // original command after expiry. Neither retry nor
                             // reconciliation may consume a later synthetic reply.
                             if index + 1 < replies.len() {
-                                return Err(error("scenario.receipt-expired"));
+                                return Err(error("coordinator.scenario.receipt-expired"));
                             }
                             break;
                         }
                         Reply::ReceiptExpired {
                             receipt_expired: false,
-                        } => return Err(error("scenario.reply")),
+                        } => return Err(error("coordinator.scenario.reply")),
                         Reply::Refused { .. } => {
                             report.state = if prior_unknown {
                                 "uncertain"
@@ -581,7 +587,7 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
     }
     report.elapsed_seconds = (now - scenario.admitted_at).num_seconds();
     if report.state == "running" {
-        return Err(error("scenario.bound"));
+        return Err(error("coordinator.scenario.bound"));
     }
     if report.path != scenario.expect.path
         || report.state != scenario.expect.state
@@ -596,7 +602,7 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
             .elapsed_seconds
             .is_some_and(|expected| report.elapsed_seconds != expected)
     {
-        return Err(error("scenario.expectation"));
+        return Err(error("coordinator.scenario.expectation"));
     }
     Ok(report)
 }

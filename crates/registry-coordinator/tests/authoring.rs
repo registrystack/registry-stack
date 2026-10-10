@@ -128,7 +128,7 @@ fn shared_mapping_is_validated_only_for_the_executing_branch() {
         let error = definition
             .evaluate(&wrong_step, &scenario.input, &BTreeMap::new())
             .unwrap_err();
-        assert_eq!(error.code, "definition.outcome");
+        assert_eq!(error.code, "coordinator.definition.outcome");
         assert_eq!(
             error.field.as_deref(),
             Some(format!("steps.{wrong_step}.output").as_str())
@@ -274,7 +274,7 @@ fn branch_timestamp_schema_and_missing_values_refuse_without_values() {
     let error = definition
         .evaluate("permission", &input(), &outputs)
         .unwrap_err();
-    assert_eq!(error.code, "mapping.branch");
+    assert_eq!(error.code, "coordinator.mapping.branch");
     assert!(!error.to_string().contains(CANARY));
     let definition = fixture();
     assert_eq!(
@@ -282,13 +282,13 @@ fn branch_timestamp_schema_and_missing_values_refuse_without_values() {
             .evaluate("notify", &input(), &BTreeMap::new())
             .unwrap_err()
             .code,
-        "mapping.missing_output"
+        "coordinator.mapping.missing-output"
     );
     let outputs = BTreeMap::from([("notify".into(), json!({"id": CANARY}))]);
     let error = definition
         .evaluate("accepted", &input(), &outputs)
         .unwrap_err();
-    assert_eq!(error.code, "definition.outcome");
+    assert_eq!(error.code, "coordinator.definition.outcome");
     assert!(!error.to_string().contains(CANARY));
     assert!(definition
         .validate_input(&json!({"applicationId": CANARY, "sendAfter": CANARY}))
@@ -300,7 +300,7 @@ fn branch_timestamp_schema_and_missing_values_refuse_without_values() {
             .initial_due(&input(), instant("2026-10-09T09:00:00Z"))
             .unwrap_err()
             .code,
-        "mapping.timestamp"
+        "coordinator.mapping.timestamp"
     );
 }
 
@@ -313,7 +313,7 @@ fn pure_profile_has_no_clock_sleep_or_io_and_limits_computation() {
                 .evaluate("due", &input(), &BTreeMap::new())
                 .unwrap_err()
                 .code,
-            "function.execution"
+            "coordinator.function.execution"
         );
     }
     for expression in [
@@ -327,7 +327,7 @@ fn pure_profile_has_no_clock_sleep_or_io_and_limits_computation() {
                 .evaluate("due", &input(), &BTreeMap::new())
                 .unwrap_err()
                 .code,
-            "function.resource_limit"
+            "coordinator.function.resource-limit"
         );
     }
     let definition = load(
@@ -349,7 +349,7 @@ fn snapshots_refuse_unsupported_abi_duplicate_fields_and_mutation() {
     value["interpreterAbi"] = json!("unknown");
     assert_eq!(
         refused(Definition::from_snapshot(&value.to_string())).code,
-        "definition.abi"
+        "coordinator.definition.abi"
     );
     value = serde_json::from_str(&snapshot).unwrap();
     value["workflow"]["steps"]["due"]["next"] = json!("due");
@@ -362,11 +362,11 @@ fn snapshots_refuse_unsupported_abi_duplicate_fields_and_mutation() {
     definition.workflow.deadline = "1d".into();
     assert_eq!(
         definition.snapshot().unwrap_err().code,
-        "definition.changed"
+        "coordinator.definition.changed"
     );
     assert_eq!(
         definition.validate_input(&input()).unwrap_err().code,
-        "definition.changed"
+        "coordinator.definition.changed"
     );
 }
 
@@ -403,14 +403,14 @@ fn resource_limits_include_recursion_input_values_and_non_object_commands() {
             .evaluate("due", &input(), &BTreeMap::new())
             .unwrap_err()
             .code,
-        "function.resource_limit"
+        "coordinator.function.resource-limit"
     );
     let definition = fixture();
     let mut excessive = input();
     excessive["sendAfter"] = json!("x".repeat(16385));
     assert_eq!(
         definition.validate_input(&excessive).unwrap_err().code,
-        "function.value_limit"
+        "coordinator.function.value-limit"
     );
     let definition = load(
         WORKFLOW,
@@ -425,7 +425,7 @@ fn resource_limits_include_recursion_input_values_and_non_object_commands() {
             .evaluate("read-application", &input(), &BTreeMap::new())
             .unwrap_err()
             .code,
-        "mapping.call_shape"
+        "coordinator.mapping.call-shape"
     );
 }
 
@@ -639,7 +639,7 @@ fn scenario_waits_expire_at_the_workflow_deadline_without_executing_next_steps()
                     .err()
                     .unwrap()
                     .code,
-                "scenario.expectation"
+                "coordinator.scenario.expectation"
             );
         }
     }
@@ -704,7 +704,7 @@ fn scenario_recovery_is_explicit_and_freezes_each_mutation_once() {
             .err()
             .unwrap()
             .code,
-        "scenario.recovery"
+        "coordinator.scenario.recovery"
     );
 }
 
@@ -735,7 +735,7 @@ fn receipt_expiry_forbids_later_scenario_replies_for_retry_and_reconciliation() 
         let refused = registry_coordinator::scenarios::run(&definition, case)
             .err()
             .expect("an expired receipt cannot be followed by synthetic success");
-        assert_eq!(refused.code, "scenario.receipt-expired");
+        assert_eq!(refused.code, "coordinator.scenario.receipt-expired");
         assert_eq!(refused.field.as_deref(), Some("cases"));
         assert!(refused
             .suggested_action
@@ -813,7 +813,7 @@ fn canonical_snapshot_boundary_and_fitting_noncanonical_inputs_restore_unchanged
         } else {
             assert_eq!(
                 refused(Definition::from_snapshot(&format!("{snapshot} "))).code,
-                "definition.snapshot_limit"
+                "coordinator.definition.snapshot-limit"
             );
         }
     }
@@ -834,7 +834,7 @@ fn bounded_noncanonical_input_cannot_expand_into_an_unrestorable_snapshot() {
     assert!(compact.len() <= snapshot_boundary::SNAPSHOT_BOUND);
     assert_eq!(
         refused(Definition::from_snapshot(&compact)).code,
-        "definition.snapshot_limit"
+        "coordinator.definition.snapshot-limit"
     );
 }
 
@@ -863,7 +863,7 @@ fn scenario_reconciliation_requires_an_uncertain_mutation() {
     let refused = registry_coordinator::scenarios::run(&definition, case)
         .err()
         .expect("a definite retryable rejection has no success receipt to observe");
-    assert_eq!(refused.code, "scenario.recovery");
+    assert_eq!(refused.code, "coordinator.scenario.recovery");
 
     case.replies.get_mut("book").unwrap()[0] = Reply::Uncertain {
         uncertain: "transport-uncertain".into(),

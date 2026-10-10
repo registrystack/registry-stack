@@ -54,7 +54,7 @@ async fn execute(cli: Cli) -> Result<()> {
         .await
         .map_err(|_| {
             PocError::new(
-                "listener-unavailable",
+                "coordinator.command.listener-unavailable",
                 "cannot bind the configured private listener",
             )
         })?;
@@ -70,7 +70,7 @@ async fn execute(cli: Cli) -> Result<()> {
         let _ = tokio::signal::ctrl_c().await;
     });
     tokio::select! {
-     result=server=>result.map_err(|_|PocError::new("listener-unavailable","the private listener stopped")),
+     result=server=>result.map_err(|_|PocError::new("coordinator.command.listener-unavailable","the private listener stopped")),
      result=worker_loop(
          Duration::from_millis(cli.poll_ms),
          cli.recovery_only,
@@ -176,7 +176,12 @@ mod tests {
         let task = tokio::spawn(worker_loop(
             Duration::from_millis(100),
             false,
-            || std::future::ready(Err(PocError::new("deployment-invalid", "test refusal"))),
+            || {
+                std::future::ready(Err(PocError::new(
+                    "coordinator.command.deployment-invalid",
+                    "test refusal",
+                )))
+            },
             {
                 let ticks = ticks.clone();
                 move || {
@@ -187,7 +192,10 @@ mod tests {
         ));
         tokio::task::yield_now().await;
         tokio::time::advance(DEPLOYMENT_RECHECK_INTERVAL).await;
-        assert_eq!(task.await.unwrap().unwrap_err().code, "deployment-invalid");
+        assert_eq!(
+            task.await.unwrap().unwrap_err().code,
+            "coordinator.command.deployment-invalid"
+        );
         assert_eq!(ticks.load(Ordering::SeqCst), 1);
     }
 
@@ -222,12 +230,15 @@ mod tests {
             || async { panic!("the cached deployment check is not yet due") },
             || {
                 std::future::ready(Err(PocError::new(
-                    "worker-unavailable",
+                    "coordinator.command.worker-unavailable",
                     "test fence refusal",
                 )))
             },
         ));
-        assert_eq!(task.await.unwrap().unwrap_err().code, "worker-unavailable");
+        assert_eq!(
+            task.await.unwrap().unwrap_err().code,
+            "coordinator.command.worker-unavailable"
+        );
     }
 
     #[cfg(feature = "postgres-test")]
@@ -278,6 +289,6 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(error.code, "worker-unavailable");
+        assert_eq!(error.code, "coordinator.command.worker-unavailable");
     }
 }

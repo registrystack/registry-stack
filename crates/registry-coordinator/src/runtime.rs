@@ -528,7 +528,7 @@ impl RuntimeConfig {
             if product == "decision" {
                 if !self.decision_connections.contains_key(name) {
                     return Err(PocError::new(
-                        "workflow-binding",
+                        "coordinator.runtime.workflow-binding",
                         "the declared workflow connection has no matching decision binding",
                     )
                     .at("runtime.yaml", format!("decisionConnections.{name}"))
@@ -541,7 +541,7 @@ impl RuntimeConfig {
             if product == "external-http" {
                 if !self.external_http_connections.contains_key(name) {
                     return Err(PocError::new(
-                        "workflow-binding",
+                        "coordinator.runtime.workflow-binding",
                         "the declared workflow connection has no matching external HTTP binding",
                     )
                     .at("runtime.yaml", format!("externalHttpConnections.{name}"))
@@ -568,7 +568,7 @@ impl RuntimeConfig {
                 .is_some_and(|b| b.product == expected)
             {
                 return Err(PocError::new(
-                    "workflow-binding",
+                    "coordinator.runtime.workflow-binding",
                     "the declared workflow connection has no matching product binding",
                 )
                 .at("workflow.yaml", format!("connections.{name}"))
@@ -585,7 +585,7 @@ impl RuntimeConfig {
                         .get(&call.connection)
                         .is_some_and(|binding| binding.authorization.task_authority.is_some())
                 {
-                    return Err(PocError::new("workflow-binding", "governed action invocation requires an explicitly permitted BReg service profile")
+                    return Err(PocError::new("coordinator.runtime.workflow-binding", "governed action invocation requires an explicitly permitted BReg service profile")
                         .at("workflow.yaml", format!("steps.{name}.call"))
                         .suggest("Use a separately authorized BReg connection without taskAuthority for this operation; task authority cannot fall back to service authority."));
                 }
@@ -596,7 +596,7 @@ impl RuntimeConfig {
                         .is_some_and(|binding| binding.authorization.task_authority.is_none())
                 {
                     return Err(PocError::new(
-                        "workflow-binding",
+                        "coordinator.runtime.workflow-binding",
                         "appointment creation requires task-bound Scheduling authorization",
                     )
                     .at("workflow.yaml", format!("steps.{name}.call"))

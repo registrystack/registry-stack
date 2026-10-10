@@ -218,9 +218,9 @@ must agree. It uses runtime credentials only, never migration
 credentials, and does not migrate, activate or change recovery holds. JSON output
 returns `status: checked`, `databaseId`, `packageDigest`, `schemaVersion`,
 `runtimeRole` and the checked `active` activation. Refused checks exit nonzero
-with `deployment.refused` for deployment-contract refusals or
-`live-binding-conflict` for incompatible retained bindings, with operator recovery
-advice. This report does not
+with `coordinator.deployment.refused` for deployment-contract refusals or
+`coordinator.command.live-binding-conflict` for incompatible retained bindings,
+with operator recovery advice. This report does not
 replace the service's audit and recovery readiness checks.
 
 Startup verifies package closure, checksum pin, executable ABI, active package,

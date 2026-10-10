@@ -300,7 +300,7 @@ impl Caller {
             || flow.is_some_and(|flow| !self.policy.flows.iter().any(|f| f == flow))
         {
             return Err(PocError::new(
-                "access.denied",
+                "coordinator.access.denied",
                 "the caller policy does not authorize this operation",
             ));
         }
@@ -336,7 +336,7 @@ impl Authenticator {
                 | OidcError::EmptyKeySet
                 | OidcError::MissingIssuer
                 | OidcError::ConflictingEndpointConfiguration => PocError::new(
-                    "access.unavailable",
+                    "coordinator.access.unavailable",
                     "the configured verifier cannot answer",
                 ),
                 _ => unauthenticated(),
@@ -372,7 +372,7 @@ impl Authenticator {
             })
             .ok_or_else(|| {
                 PocError::new(
-                    "access.denied",
+                    "coordinator.access.denied",
                     "the caller policy does not authorize this operation",
                 )
             })?;
@@ -389,7 +389,7 @@ impl Authenticator {
 }
 fn refused() -> PocError {
     PocError::new(
-        "access.configuration",
+        "coordinator.access.configuration",
         "configure an exact OIDC issuer, admitted clients and one bounded policy per client",
     )
 }
@@ -403,7 +403,7 @@ fn access_error(field: &str, advice: &str) -> PocError {
 }
 fn unauthenticated() -> PocError {
     PocError::new(
-        "access.unauthenticated",
+        "coordinator.access.unauthenticated",
         "a verified access token is required",
     )
 }

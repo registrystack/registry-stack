@@ -293,10 +293,15 @@ fn read(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
         .and_then(|f| f.take(maximum as u64 + 1).read_to_end(&mut bytes))
-        .map_err(|_| PocError::new("input-invalid", "cannot read bounded local input"))?;
+        .map_err(|_| {
+            PocError::new(
+                "coordinator.command.input-invalid",
+                "cannot read bounded local input",
+            )
+        })?;
     if bytes.len() > maximum {
         return Err(PocError::new(
-            "input-invalid",
+            "coordinator.command.input-invalid",
             "local input exceeds its bound",
         ));
     }
@@ -305,14 +310,20 @@ fn read(path: &Path, maximum: usize) -> Result<Vec<u8>> {
 fn text_file(path: &Path, maximum: usize) -> Result<String> {
     String::from_utf8(read(path, maximum)?)
         .map(|s| s.trim_end_matches(['\r', '\n']).into())
-        .map_err(|_| PocError::new("input-invalid", "supply bounded UTF-8 text"))
+        .map_err(|_| {
+            PocError::new(
+                "coordinator.command.input-invalid",
+                "supply bounded UTF-8 text",
+            )
+        })
 }
 fn runtime(cli: &Cli) -> Result<RuntimeConfig> {
-    RuntimeConfig::load(
-        cli.runtime_config.as_deref().ok_or_else(|| {
-            PocError::new("runtime-config-required", "supply --runtime-config FILE")
-        })?,
-    )
+    RuntimeConfig::load(cli.runtime_config.as_deref().ok_or_else(|| {
+        PocError::new(
+            "coordinator.command.runtime-config-required",
+            "supply --runtime-config FILE",
+        )
+    })?)
 }
 async fn remote(
     cli: &Cli,
@@ -323,7 +334,7 @@ async fn remote(
 ) -> Result<Value> {
     let mut url = cli.url.clone().ok_or_else(|| {
         PocError::new(
-            "service-required",
+            "coordinator.command.service-required",
             "supply --url with the authenticated Coordinator origin",
         )
     })?;
@@ -340,7 +351,7 @@ async fn remote(
         || url.path() != "/"
     {
         return Err(PocError::new(
-            "service-invalid",
+            "coordinator.command.service-invalid",
             "use an HTTPS origin or explicit loopback HTTP origin",
         ));
     }
@@ -350,14 +361,14 @@ async fn remote(
         .filter(|p| p.is_absolute())
         .ok_or_else(|| {
             PocError::new(
-                "token-file-required",
+                "coordinator.command.token-file-required",
                 "supply an absolute --token-file with a current access token",
             )
         })?;
     let token = zeroize::Zeroizing::new(text_file(token_path, 16_384)?);
     registry_platform_authcommon::validate_compact_access_token(&token).map_err(|_| {
         PocError::new(
-            "token-invalid",
+            "coordinator.command.token-invalid",
             "the token file must contain one compact access token",
         )
     })?;
@@ -368,7 +379,12 @@ async fn remote(
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(5))
         .build()
-        .map_err(|_| PocError::new("service-unavailable", "cannot initialize the HTTP client"))?;
+        .map_err(|_| {
+            PocError::new(
+                "coordinator.command.service-unavailable",
+                "cannot initialize the HTTP client",
+            )
+        })?;
     let mut request = client.request(method, url).bearer_auth(token.as_str());
     if let Some(body) = body {
         request = request.json(&body);
@@ -378,7 +394,7 @@ async fn remote(
     }
     let response = request.send().await.map_err(|_| {
         PocError::new(
-            "service-unavailable",
+            "coordinator.command.service-unavailable",
             "the service could not answer; inspect the original run before retrying",
         )
     })?;
@@ -387,26 +403,26 @@ async fn remote(
         .await
         .map_err(|_| {
             PocError::new(
-                "service-unavailable",
+                "coordinator.command.service-unavailable",
                 "the service response exceeded its bound",
             )
         })?;
     let value = registry_platform_canonical_json::parse_json_strict(&bytes).map_err(|_| {
         PocError::new(
-            "service-unavailable",
+            "coordinator.command.service-unavailable",
             "the service response was not bounded JSON",
         )
     })?;
     if !status.is_success() {
         let (code, message, action) = if status.is_server_error() {
             (
-                "service-unavailable",
+                "coordinator.command.service-unavailable",
                 "the service could not complete the operation",
                 "restore service availability and inspect the original run before attempting same-command recovery",
             )
         } else {
             (
-                "service-refused",
+                "coordinator.command.service-refused",
                 "the authenticated service refused the operation",
                 "inspect caller policy and current run status before repeating the operation",
             )
@@ -450,7 +466,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
             let store = deployment::open_ctl(&r, matches!(cli.command, Command::Apply)).await?;
             if matches!(cli.command, Command::Apply) {
                 serde_json::to_value(deployment::apply(&store, &r, &p).await?)
-                    .map_err(|_| PocError::new("output-unavailable", "cannot encode activation"))
+                    .map_err(|_| PocError::new("coordinator.command.output-unavailable", "cannot encode activation"))
             } else {
                 deployment::plan(&store, &r, &p.digest).await
             }
@@ -471,7 +487,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
             key_file,
         } => {
             let input = registry_platform_canonical_json::parse_json_strict(&read(input, 65_536)?)
-                .map_err(|_| PocError::new("input-invalid", "input must be unambiguous JSON"))?;
+                .map_err(|_| PocError::new("coordinator.command.input-invalid", "input must be unambiguous JSON"))?;
             let key = text_file(key_file, 256)?;
             remote(
                 cli,

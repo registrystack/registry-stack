@@ -68,7 +68,7 @@ fn a_snapshot_without_its_envelope_is_refused() {
         let error = Definition::from_snapshot(&changed.to_string())
             .err()
             .expect("the envelope is required");
-        assert_eq!(error.code, "definition.snapshot");
+        assert_eq!(error.code, "coordinator.definition.snapshot");
     };
     refused(&|value| {
         value.as_object_mut().unwrap().remove("apiVersion");

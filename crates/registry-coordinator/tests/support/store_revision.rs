@@ -86,7 +86,10 @@ async fn a_store_recording_another_revision_is_refused_unchanged() {
         .await;
         for _ in 0..2 {
             let error = h.store.migrate().await.unwrap_err();
-            assert_eq!(error.code, "schema-version", "revision {other}");
+            assert_eq!(
+                error.code, "coordinator.command.schema-version",
+                "revision {other}"
+            );
             assert!(
                 error.message.contains("apply to a new database"),
                 "revision {other}"

@@ -327,7 +327,7 @@ async fn workflow_connections_are_checked_without_product_calls() {
             .validate_workflow(&definition.workflow)
             .unwrap_err()
             .code,
-        "workflow-binding"
+        "coordinator.runtime.workflow-binding"
     );
     config.connections.remove("notices");
     assert_eq!(
@@ -335,7 +335,7 @@ async fn workflow_connections_are_checked_without_product_calls() {
             .validate_workflow(&definition.workflow)
             .unwrap_err()
             .code,
-        "workflow-binding"
+        "coordinator.runtime.workflow-binding"
     );
     assert!(server.received_requests().await.unwrap().is_empty());
     issuer.stop().await;

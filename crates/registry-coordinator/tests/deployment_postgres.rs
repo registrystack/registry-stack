@@ -70,7 +70,7 @@ async fn assert_status_audit(
         assert_eq!(body["runId"], run);
         assert_eq!(body["workflowId"], "delayed-follow-up");
     } else {
-        assert_eq!(body["code"], "run-absent");
+        assert_eq!(body["code"], "coordinator.command.run-absent");
         assert!(body.get("runId").is_none());
     }
     let entries = fs::read_to_string(audit_path)
@@ -143,7 +143,7 @@ async fn assert_authenticated_run_validation(
                     assert_eq!(response.headers()["cache-control"], "no-store");
                     assert_eq!(
                         response.json::<Value>().await.unwrap()["code"],
-                        "access.unauthenticated"
+                        "coordinator.access.unauthenticated"
                     );
                 }
             }
@@ -162,7 +162,7 @@ async fn assert_authenticated_run_validation(
                 assert_eq!(response.status(), 400);
                 assert!(response.headers().get("www-authenticate").is_none());
                 let problem = response.json::<Value>().await.unwrap();
-                assert_eq!(problem["code"], "request.invalid");
+                assert_eq!(problem["code"], "coordinator.request.invalid");
                 assert!(!problem.to_string().contains(id));
             }
             if !suffix.is_empty() {
@@ -179,7 +179,7 @@ async fn assert_authenticated_run_validation(
                 assert!(response.headers().get("www-authenticate").is_none());
                 assert_eq!(
                     response.json::<Value>().await.unwrap()["code"],
-                    "access.denied"
+                    "coordinator.access.denied"
                 );
             }
         }
@@ -191,9 +191,13 @@ async fn assert_authenticated_run_validation(
             "limit=1&limit=2",
         ] {
             for (credential, expected, code) in [
-                (None, 401, "access.unauthenticated"),
-                (Some("not.a.valid-token"), 401, "access.unauthenticated"),
-                (Some(operator), 400, "request.invalid"),
+                (None, 401, "coordinator.access.unauthenticated"),
+                (
+                    Some("not.a.valid-token"),
+                    401,
+                    "coordinator.access.unauthenticated",
+                ),
+                (Some(operator), 400, "coordinator.request.invalid"),
             ] {
                 let mut request = http.get(format!("{origin}/v1/runs?{query}"));
                 if let Some(credential) = credential {
@@ -472,12 +476,12 @@ async fn assert_other_revision_refused(
                 "UPDATE {namespace}.control SET schema_version=4 WHERE id;
                 ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=4)"
             ),
-            "schema-version",
+            "coordinator.command.schema-version",
         ),
         (
             format!("INSERT INTO {namespace}.coordinator_migrations VALUES(3)"),
             format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=3"),
-            "deployment.refused",
+            "coordinator.deployment.refused",
         ),
     ] {
         admin.batch_execute(&damage).await.unwrap();
@@ -954,9 +958,9 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     let long_key = "x".repeat(257);
     for key in [None, Some(""), Some(long_key.as_str())] {
         for (credential, expected, code) in [
-            (None, 401, "access.unauthenticated"),
-            (Some(&op), 403, "access.denied"),
-            (Some(&a), 400, "start-key-invalid"),
+            (None, 401, "coordinator.access.unauthenticated"),
+            (Some(&op), 403, "coordinator.access.denied"),
+            (Some(&a), 400, "coordinator.command.start-key-invalid"),
         ] {
             let mut request = http
                 .post(format!("{origin}/v1/runs"))
@@ -1034,9 +1038,9 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             "{".to_string(),
         ] {
             for (credential, expected, code) in [
-                (None, 401, "access.unauthenticated"),
-                (Some(&op), 403, "access.denied"),
-                (Some(&a), 415, "request.content-type-invalid"),
+                (None, 401, "coordinator.access.unauthenticated"),
+                (Some(&op), 403, "coordinator.access.denied"),
+                (Some(&a), 415, "coordinator.request.content-type-invalid"),
             ] {
                 let mut request = http
                     .post(format!("{origin}/v1/runs"))
@@ -1083,7 +1087,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(wrong_flow.status(), 403);
     assert_eq!(
         wrong_flow.json::<Value>().await.unwrap()["code"],
-        "access.denied"
+        "coordinator.access.denied"
     );
     // Exercise the actual post-commit audit failure, rather than constructing a
     // problem code: intent is accepted, admission commits, then response audit
@@ -1167,7 +1171,10 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         let status = response.status();
         assert_eq!(response.headers()["cache-control"], "no-store");
         let problem: Value = response.json().await.unwrap();
-        assert_eq!(problem["code"], "audit-response-unavailable");
+        assert_eq!(
+            problem["code"],
+            "coordinator.command.audit-response-unavailable"
+        );
         assert_eq!(
             problem["message"],
             "the operation may have completed; recover its original identity before trying again"
@@ -1252,7 +1259,10 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         assert_eq!(response.status(), 503);
         assert_eq!(response.headers()["cache-control"], "no-store");
         let problem: Value = response.json().await.unwrap();
-        assert_eq!(problem["code"], "audit-response-unavailable");
+        assert_eq!(
+            problem["code"],
+            "coordinator.command.audit-response-unavailable"
+        );
         assert!(problem.get("runId").is_none());
         {
             let entries = status_attempts.lock().unwrap();
@@ -1386,7 +1396,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
                     assert_eq!(response.headers()["cache-control"], "no-store");
                     assert_eq!(
                         response.json::<Value>().await.unwrap()["code"],
-                        "reason-invalid"
+                        "coordinator.command.reason-invalid"
                     );
                 }
             }
@@ -1407,7 +1417,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             if expected == 400 {
                 assert_eq!(
                     response.json::<Value>().await.unwrap()["code"],
-                    "retention-invalid"
+                    "coordinator.command.retention-invalid"
                 );
             }
         }
@@ -1491,7 +1501,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         assert_eq!(response.status(), 400);
         assert_eq!(
             response.json::<Value>().await.unwrap()["code"],
-            "reason-invalid"
+            "coordinator.command.reason-invalid"
         );
     }
     // Observe this exact namespace's binding check waiting on the same guard
@@ -1522,7 +1532,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     lock.rollback().await.unwrap();
     assert_eq!(
         checking.await.unwrap().unwrap_err().code,
-        "live-binding-conflict"
+        "coordinator.command.live-binding-conflict"
     );
     // Simulate the listener opened after the compatible empty startup above.
     // HTTP admission must rescan inside its insertion transaction, not rely on
@@ -1552,7 +1562,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(refused.status(), 409);
     assert_eq!(
         refused.json::<Value>().await.unwrap()["code"],
-        "live-binding-conflict"
+        "coordinator.command.live-binding-conflict"
     );
     assert_eq!(
         admin
@@ -1632,7 +1642,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         let mut stderr = String::new();
         std::io::Read::read_to_string(child.stderr.as_mut().unwrap(), &mut stderr).unwrap();
         assert!(
-            stderr.contains("live-binding-conflict"),
+            stderr.contains("coordinator.command.live-binding-conflict"),
             "bounded startup refusal: {stderr}"
         );
         assert!(stderr.contains("--recovery-only"));
@@ -1688,7 +1698,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(recovery_start.status(), 409);
     assert_eq!(
         recovery_start.json::<Value>().await.unwrap()["code"],
-        "recovery-only"
+        "coordinator.command.recovery-only"
     );
     let protected = http
         .get(format!("{service_origin}/v1/runs/{id}/inspect"))
@@ -1735,7 +1745,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             .await
             .unwrap_err()
             .code,
-        "live-binding-conflict"
+        "coordinator.command.live-binding-conflict"
     );
     // Model the two cancellation states that still require recovery. These
     // flags do not create product effects, and apply must preserve their binding.
@@ -1753,7 +1763,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
                 .await
                 .unwrap_err()
                 .code,
-            "live-binding-conflict"
+            "coordinator.command.live-binding-conflict"
         );
     }
     admin
@@ -2078,7 +2088,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
                 .await
                 .unwrap_err()
                 .code,
-            "live-binding-conflict"
+            "coordinator.command.live-binding-conflict"
         );
     }
     admin.execute(&format!("UPDATE {namespace}.runs SET state='cancelled',cancel_requested=true,restore_review_required=false WHERE run_id=$1"), &[&retired_run]).await.unwrap();
@@ -2207,7 +2217,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .await
         .unwrap_err()
         .code,
-        "workflow-version-conflict"
+        "coordinator.command.workflow-version-conflict"
     );
     let count_after: i64 = admin
         .query_one(

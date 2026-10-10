@@ -75,7 +75,7 @@ pub struct HttpAdapters {
 
 fn config_error() -> PocError {
     PocError::new(
-        "adapter.configuration",
+        "coordinator.adapter.configuration",
         "product binding or secret-file configuration is invalid",
     )
 }

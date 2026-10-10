@@ -33,7 +33,7 @@ impl Store {
             .any(|v| v.is_empty() || v.len() > 512)
         {
             return Err(refused(
-                "access.denied",
+                "coordinator.access.denied",
                 "verified bounded caller identity is required",
             ));
         }
@@ -61,14 +61,17 @@ impl Store {
             .map_err(unavailable)?
             .is_none()
         {
-            return Err(refused("run-absent", "run was not found"));
+            return Err(refused(
+                "coordinator.command.run-absent",
+                "run was not found",
+            ));
         }
         Ok(())
     }
     fn operator(actor: &Actor) -> Result<()> {
         if !actor.operator {
             return Err(refused(
-                "access.denied",
+                "coordinator.access.denied",
                 "this operation requires the configured operator policy",
             ));
         }
@@ -77,7 +80,7 @@ impl Store {
     fn reason(reason: &str) -> Result<()> {
         if reason.is_empty() || reason.len() > 256 || reason.chars().any(char::is_control) {
             return Err(refused(
-                "reason-invalid",
+                "coordinator.command.reason-invalid",
                 "supply a bounded reference to the operation's reason or evidence",
             ));
         }
@@ -111,7 +114,12 @@ impl Store {
                 json!({"action":action,"outcome":"unknown"}),
             )
             .await
-            .map_err(|_| refused("audit-unavailable", "durable audit is unavailable"))
+            .map_err(|_| {
+                refused(
+                    "coordinator.command.audit-unavailable",
+                    "durable audit is unavailable",
+                )
+            })
     }
     async fn audited<T>(
         &self,
@@ -123,7 +131,7 @@ impl Store {
     ) -> Result<T> {
         let request = self.audit_begin(action, actor, run, reason).await?;
         let result = work.await;
-        request.finish(json!({"action":action,"outcome":if result.is_ok(){"accepted"}else{"unknown"}})).await.map_err(|_|refused("audit-response-unavailable","the operation may have completed; recover its original identity before trying again"))?;
+        request.finish(json!({"action":action,"outcome":if result.is_ok(){"accepted"}else{"unknown"}})).await.map_err(|_|refused("coordinator.command.audit-response-unavailable","the operation may have completed; recover its original identity before trying again"))?;
         result
     }
     pub async fn admit_owned(
@@ -201,7 +209,7 @@ impl Store {
                 "",
                 sealed.as_ref().ok_or_else(|| {
                     refused(
-                        "payload-erased",
+                        "coordinator.command.payload-erased",
                         "this terminal run retains only its spent-key tombstone",
                     )
                 })?,
@@ -217,8 +225,8 @@ impl Store {
         allowed_flows: &[String],
     ) -> Result<Vec<RunStatus>> {
         self.audited("list",actor,None, None,async {
-            if !(1..=100).contains(&limit){return Err(refused("list-limit-invalid","choose a run list limit between 1 and 100"));}
-            if allowed_flows.len()>64 || allowed_flows.iter().any(|flow|flow.is_empty() || flow.len()>128){return Err(refused("list-flow-invalid","choose at most 64 bounded nonempty workflow identities"));}
+            if !(1..=100).contains(&limit){return Err(refused("coordinator.command.list-limit-invalid","choose a run list limit between 1 and 100"));}
+            if allowed_flows.len()>64 || allowed_flows.iter().any(|flow|flow.is_empty() || flow.len()>128){return Err(refused("coordinator.command.list-flow-invalid","choose at most 64 bounded nonempty workflow identities"));}
             let mut client=self.client().await.map_err(unavailable)?;
             let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
@@ -310,11 +318,11 @@ impl Store {
             self.authorize_run(&tx,run,actor).await?;
             let row=tx.query_one(&format!("SELECT r.step,r.snapshot,j.command,j.generation,j.state,r.outputs,r.binding_digest,j.lease_expires_at>clock_timestamp() FROM {}.runs r JOIN {}.jobs j ON j.run_id=r.run_id AND j.step=r.step WHERE r.run_id=$1",self.namespace,self.namespace),&[&run]).await.map_err(unavailable)?;
             let step:String=row.get(0);let generation:i64=row.get(3);
-            if row.get::<_,String>(6)!=binding || row.get::<_,String>(4)=="leased" && row.get::<_,Option<bool>>(7).unwrap_or(true){return Err(refused("reconcile-refused","preserve the original binding and wait for the active lease to settle"));}
+            if row.get::<_,String>(6)!=binding || row.get::<_,String>(4)=="leased" && row.get::<_,Option<bool>>(7).unwrap_or(true){return Err(refused("coordinator.command.reconcile-refused","preserve the original binding and wait for the active lease to settle"));}
             let sealed:Option<Value>=row.get(2);
-            let command:FrozenCommand=self.open_value(run,"command",&step,sealed.as_ref().ok_or_else(||refused("reconcile-refused","the run has no prepared product command"))?)?;
-            if command.request().operation.is_read(){return Err(refused("reconcile-refused","use same-command retry for a read operation"));}
-            if !command.request().operation.supports_read_receipt(){return Err(refused("reconciliation-unavailable","this operation has no authoritative original-result lookup; inspect its declared recovery capability or cancel the held run"));}
+            let command:FrozenCommand=self.open_value(run,"command",&step,sealed.as_ref().ok_or_else(||refused("coordinator.command.reconcile-refused","the run has no prepared product command"))?)?;
+            if command.request().operation.is_read(){return Err(refused("coordinator.command.reconcile-refused","use same-command retry for a read operation"));}
+            if !command.request().operation.supports_read_receipt(){return Err(refused("coordinator.command.reconciliation-unavailable","this operation has no authoritative original-result lookup; inspect its declared recovery capability or cancel the held run"));}
             let snapshot:String=self.open_value(run,"snapshot","",&row.get::<_,Value>(1))?;
             let definition=Definition::from_snapshot(&snapshot)?;
             let outputs:BTreeMap<String,Value>=self.open_value(run,"outputs","",&row.get::<_,Value>(5))?;
@@ -329,9 +337,9 @@ impl Store {
                 // cannot race receipt observation and settle active work.
                 let current=tx.query_one(&format!("SELECT j.generation,j.state,r.step,j.command,r.cancel_requested,j.lease_expires_at>clock_timestamp() FROM {}.jobs j JOIN {}.runs r ON r.run_id=j.run_id WHERE j.run_id=$1 AND j.step=$2 FOR UPDATE OF j,r",self.namespace,self.namespace),&[&run,&step]).await.map_err(unavailable)?;
                 if current.get::<_,i64>(0)!=generation || current.get::<_,String>(2)!=step || current.get::<_,Option<Value>>(3)!=sealed || current.get::<_,String>(1)=="leased" && current.get::<_,Option<bool>>(5).unwrap_or(true) {
-                    return Err(refused("reconcile-raced","run progress changed; inspect its current state"));
+                    return Err(refused("coordinator.command.reconcile-raced","run progress changed; inspect its current state"));
                 }
-                let Some(Step::Call{next,..})=definition.workflow.steps.get(&step) else{return Err(refused("definition-invalid","pinned step is not a product call"));};
+                let Some(Step::Call{next,..})=definition.workflow.steps.get(&step) else{return Err(refused("coordinator.command.definition-invalid","pinned step is not a product call"));};
                 let input_row=tx.query_one(&format!("SELECT input FROM {}.runs WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 let input:Value=self.open_value(run,"input","",&input_row.get::<_,Value>(0))?;
                 let payload=Payload{snapshot,input,outputs,command:Some(command)};
@@ -355,7 +363,7 @@ impl Store {
         definition: &Definition,
     ) -> Result<()> {
         if tx.query_opt(&format!("SELECT 1 FROM {}.runs WHERE workflow_id=$1 AND workflow_version=$2 AND definition_digest<>$3 LIMIT 1", self.namespace), &[&definition.workflow.id, &definition.workflow.version, &definition.digest]).await.map_err(unavailable)?.is_some() {
-            return Err(refused("workflow-version-conflict", "this workflow version already names another immutable definition; give the changed definition a new version"));
+            return Err(refused("coordinator.command.workflow-version-conflict", "this workflow version already names another immutable definition; give the changed definition a new version"));
         }
         Ok(())
     }
@@ -407,9 +415,9 @@ impl Store {
                 let advice = "a live run requires its original connections; restore those bindings before normal serving or apply, or start --recovery-only to investigate without admissions or dispatch";
                 let digest = runtime
                     .binding_digest_for(&definition.workflow)
-                    .map_err(|_| refused("live-binding-conflict", advice))?;
+                    .map_err(|_| refused("coordinator.command.live-binding-conflict", advice))?;
                 if digest != row.get::<_, String>(2) {
-                    return Err(refused("live-binding-conflict", advice));
+                    return Err(refused("coordinator.command.live-binding-conflict", advice));
                 }
                 after = id;
             }
@@ -504,7 +512,7 @@ impl Store {
             // Serialize release with restore/cancellation I/O fences. No replay
             // is triggered by releasing this deployment-wide hold.
             tx.query_one(&format!("SELECT id FROM {}.control WHERE id FOR UPDATE",self.namespace),&[]).await.map_err(unavailable)?;
-            if self.restore_has_unresolved_work(&tx).await? {return Err(refused("restore-unresolved","wait for active leases, complete fenced execution recovery for safe expired leases or cancelled evaluations, and reconcile uncertain mutations before releasing the restore hold"));}
+            if self.restore_has_unresolved_work(&tx).await? {return Err(refused("coordinator.command.restore-unresolved","wait for active leases, complete fenced execution recovery for safe expired leases or cancelled evaluations, and reconcile uncertain mutations before releasing the restore hold"));}
             tx.execute(&format!("UPDATE {}.control SET restore_hold=false,restore_evidence_hash=$1 WHERE id AND restore_hold",self.namespace),&[&self.reference("restore-evidence-v1",evidence)]).await.map_err(unavailable)?;
             tx.commit().await.map_err(unavailable)
         }).await
@@ -522,13 +530,13 @@ impl Store {
         Self::operator(actor)?;
         Self::reason(recovery_reference)?;
         if !execution_history_complete || !prior_deployment_fenced {
-            return Err(refused("restore-review-required","recover complete execution history and fence the prior deployment before clearing review"));
+            return Err(refused("coordinator.command.restore-review-required","recover complete execution history and fence the prior deployment before clearing review"));
         }
         self.audited("complete-execution-recovery",actor,None, Some(recovery_reference),async {
             let mut client=self.client().await.map_err(unavailable)?;let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
             let held:bool=tx.query_one(&format!("SELECT restore_hold FROM {}.control WHERE id FOR UPDATE",self.namespace),&[]).await.map_err(unavailable)?.get(0);
-            if !held{return Err(refused("restore-hold-required","enter recovery hold before attesting recovered execution history"));}
+            if !held{return Err(refused("coordinator.command.restore-hold-required","enter recovery hold before attesting recovered execution history"));}
             self.hold_attested_recovery_work(&tx).await?;
             self.review_cancelled_evaluations(&tx).await?;
             // Keep review on work that can still change after this attestation.
@@ -645,7 +653,7 @@ impl Store {
     async fn hold_attested_recovery_work(&self, tx: &Transaction<'_>) -> Result<()> {
         let invalid = || {
             refused(
-                "restore-lease-incompatible",
+                "coordinator.command.restore-lease-incompatible",
                 "restore the exact protected snapshot and command before completing lease recovery",
             )
         };
@@ -779,7 +787,7 @@ impl Store {
         Self::reason(recovery_reference)?;
         if !admission_history_complete || !prior_deployment_fenced {
             return Err(refused(
-                "restore-admissions-held",
+                "coordinator.command.restore-admissions-held",
                 "complete admission history and fence the prior deployment before enabling starts",
             ));
         }
@@ -787,7 +795,7 @@ impl Store {
             let mut client=self.client().await.map_err(unavailable)?;let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
             let row=tx.query_one(&format!("SELECT restore_hold FROM {}.control WHERE id FOR UPDATE",self.namespace),&[]).await.map_err(unavailable)?;
-            if row.get::<_,bool>(0){return Err(refused("restore-hold","reconcile known work and release the execution hold first"));}
+            if row.get::<_,bool>(0){return Err(refused("coordinator.command.restore-hold","reconcile known work and release the execution hold first"));}
             tx.execute(&format!("UPDATE {}.control SET admissions_hold=false,admission_recovery_hash=$1 WHERE id",self.namespace),&[&self.reference("admission-recovery-v1",recovery_reference)]).await.map_err(unavailable)?;
             tx.commit().await.map_err(unavailable)
         }).await
@@ -801,7 +809,7 @@ impl Store {
     ) -> Result<u64> {
         Self::operator(actor)?;
         self.audited("retention",actor,None, None,async {
-            if !(1..=100).contains(&limit)||before>Utc::now(){return Err(refused("retention-invalid","choose a past cutoff and a limit between 1 and 100"));}
+            if !(1..=100).contains(&limit)||before>Utc::now(){return Err(refused("coordinator.command.retention-invalid","choose a past cutoff and a limit between 1 and 100"));}
             let mut client=self.client().await.map_err(unavailable)?;let tx=client.transaction().await.map_err(unavailable)?;
             self.verify_transaction(&tx).await.map_err(unavailable)?;
             let rows=tx.query(&format!("SELECT r.run_id FROM {}.runs r WHERE r.completed_at<$1 AND {} AND r.payload_erased_at IS NULL AND NOT r.restore_review_required ORDER BY r.completed_at,r.run_id LIMIT $2",self.namespace,self.terminal_retention_predicate()),&[&before,&i64::from(limit)]).await.map_err(unavailable)?;

@@ -64,7 +64,7 @@ pub(crate) fn check_runtime(
                     });
                 let mut diagnostic = checked.error_at(
                     runtime::KIND,
-                    "coordinator.runtime.workflow-binding",
+                    &error.code,
                     &pointer,
                     error.message,
                     error.suggested_action.unwrap_or_else(|| {
@@ -81,13 +81,7 @@ pub(crate) fn check_runtime(
                     let mut container = pointer.as_str();
                     while let Some((parent, _)) = container.rsplit_once('/') {
                         let source = checked
-                            .error_at(
-                                runtime::KIND,
-                                "coordinator.runtime.workflow-binding",
-                                parent,
-                                "",
-                                "",
-                            )
+                            .error_at(runtime::KIND, &error.code, parent, "", "")
                             .source;
                         if source.as_ref().is_some_and(|source| source.line.is_some()) {
                             diagnostic.source = source;

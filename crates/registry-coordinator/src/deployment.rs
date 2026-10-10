@@ -197,7 +197,11 @@ fn valid_identifier(s: &str) -> bool {
             .all(|(i, b)| b == b'_' || b.is_ascii_lowercase() || i > 0 && b.is_ascii_digit())
 }
 fn fail(advice: &str) -> PocError {
-    PocError::new("deployment.refused", "the deployment contract was refused").suggest(advice)
+    PocError::new(
+        "coordinator.deployment.refused",
+        "the deployment contract was refused",
+    )
+    .suggest(advice)
 }
 fn config_fail(field: &str, advice: &str) -> PocError {
     PocError::new(

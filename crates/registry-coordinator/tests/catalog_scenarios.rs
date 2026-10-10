@@ -80,7 +80,7 @@ fn action_scenarios_cannot_invent_a_read_only_receipt() {
     let error = scenarios::run(&definition, case)
         .err()
         .expect("the action client has no authoritative receipt-read contract");
-    assert_eq!(error.code, "scenario.recovery");
+    assert_eq!(error.code, "coordinator.scenario.recovery");
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn missing_synthetic_directory_reply_stops_without_live_fallback() {
     let error = scenarios::run(&definition, &document.cases[0])
         .err()
         .expect("a live configured endpoint must not fill a missing fixture");
-    assert_eq!(error.code, "scenario.reply");
+    assert_eq!(error.code, "coordinator.scenario.reply");
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn scenario_recovery_and_reply_names_must_resolve_to_call_steps() {
     case.recovery.insert("lookup".into(), Recovery::Reconcile);
     assert_eq!(
         scenarios::run(&definition, case).err().unwrap().code,
-        "scenario.recovery"
+        "coordinator.scenario.recovery"
     );
     case.recovery.clear();
     case.replies.insert(
@@ -149,7 +149,7 @@ fn scenario_recovery_and_reply_names_must_resolve_to_call_steps() {
     );
     assert_eq!(
         scenarios::run(&definition, case).err().unwrap().code,
-        "scenario.reply-step"
+        "coordinator.scenario.reply-step"
     );
 }
 
@@ -210,12 +210,12 @@ fn decision_scenarios_allow_only_proven_non_dispatch_retries() {
     };
     assert_eq!(
         scenarios::run(&definition, case).err().unwrap().code,
-        "scenario.recovery"
+        "coordinator.scenario.recovery"
     );
     case.recovery.insert("lookup".into(), Recovery::Reconcile);
     assert_eq!(
         scenarios::run(&definition, case).err().unwrap().code,
-        "scenario.recovery"
+        "coordinator.scenario.recovery"
     );
     case.recovery.clear();
     case.replies.get_mut("lookup").unwrap().truncate(1);
@@ -224,7 +224,7 @@ fn decision_scenarios_allow_only_proven_non_dispatch_retries() {
     };
     assert_eq!(
         scenarios::run(&definition, case).err().unwrap().code,
-        "scenario.reply"
+        "coordinator.scenario.reply"
     );
     case.replies.get_mut("lookup").unwrap()[0] = Reply::Uncertain {
         uncertain: "decision-uncertain".into(),

@@ -86,7 +86,7 @@ async fn restored_pre_command_pending_work_requires_explicit_retry_or_cancel() {
                         .await
                         .unwrap_err()
                         .code,
-                    "restore-review-required"
+                    "coordinator.command.restore-review-required"
                 );
                 assert_eq!(restored_lease_identity(&h, run).await, identity);
                 assert_eq!(restored_current_job(&h, run).await, original);

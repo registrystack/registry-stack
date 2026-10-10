@@ -16,7 +16,10 @@ pub struct PocError {
 }
 
 impl PocError {
+    /// `code` is written in the one form every surface carries:
+    /// `coordinator.<area>.<condition>`, each segment kebab-case.
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        debug_assert!(is_product_code(code), "malformed code {code}");
         Self {
             code: code.into(),
             message: message.into(),
@@ -25,7 +28,9 @@ impl PocError {
             suggested_action: None,
             diagnostics: Box::default(),
             exit_code: match code {
-                "service-unavailable" | "output-unavailable" | "definition.read" => 3,
+                "coordinator.command.service-unavailable"
+                | "coordinator.command.output-unavailable"
+                | "coordinator.definition.read" => 3,
                 _ => 1,
             },
         }
@@ -70,13 +75,6 @@ impl PocError {
         if !self.diagnostics.is_empty() {
             return Report::new(self.diagnostics.to_vec());
         }
-        let code = if self.code.matches('.').count() == 1 {
-            format!("coordinator.{}", self.code.replace('_', "-"))
-        } else if self.code.contains('.') {
-            self.code.clone()
-        } else {
-            format!("coordinator.command.{}", self.code.replace('_', "-"))
-        };
         let field = self.field.as_deref().unwrap_or("");
         let source_position = field
             .strip_prefix("line ")
@@ -93,7 +91,7 @@ impl PocError {
                 format!("/{}", field.replace(['.', '['], "/").replace(']', ""))
             };
         let mut diagnostic = Diagnostic::error(
-            code,
+            &self.code,
             pointer,
             &self.message,
             self.suggested_action.as_deref().unwrap_or(
@@ -144,3 +142,54 @@ impl PocError {
 }
 
 pub type Result<T> = std::result::Result<T, PocError>;
+
+fn is_product_code(code: &str) -> bool {
+    let mut segments = code.split('.');
+    segments.next() == Some("coordinator")
+        && segments.clone().count() == 2
+        && segments.all(|segment| {
+            segment.split('-').all(|word| {
+                !word.is_empty()
+                    && word
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            })
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_code_names_the_product_an_area_and_a_condition_in_kebab_case() {
+        for code in [
+            "coordinator.access.denied",
+            "coordinator.definition.snapshot-limit",
+            "coordinator.command.database-tls-required",
+        ] {
+            assert!(is_product_code(code), "{code}");
+        }
+        for code in [
+            "access.denied",
+            "run-absent",
+            "coordinator.run-absent",
+            "coordinator.definition.snapshot_limit",
+            "coordinator.definition.snapshot.limit",
+            "coordinator.definition.",
+            "coordinator.Definition.read",
+            "coordinator.definition.-read",
+        ] {
+            assert!(!is_product_code(code), "{code}");
+        }
+    }
+
+    #[test]
+    fn a_report_carries_the_code_exactly_as_it_was_written() {
+        let error = PocError::new("coordinator.command.run-absent", "no such run");
+        assert_eq!(error.report().diagnostics()[0].code, error.code);
+        assert!(error
+            .to_string()
+            .starts_with("coordinator.command.run-absent: "));
+    }
+}

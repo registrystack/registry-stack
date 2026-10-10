@@ -803,7 +803,7 @@ fn appointment_workflow_refuses_ordinary_authority_before_admission_or_activatio
         .observation_authorization = None;
     config.validate().unwrap();
     let error = config.validate_workflow(&definition.workflow).unwrap_err();
-    assert_eq!(error.code, "workflow-binding");
+    assert_eq!(error.code, "coordinator.runtime.workflow-binding");
     assert_eq!(error.field.as_deref(), Some("steps.book.call"));
     assert!(error
         .suggested_action

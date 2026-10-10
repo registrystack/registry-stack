@@ -82,7 +82,10 @@ pub fn init(path: &Path) -> Result<()> {
     Ok(())
 }
 fn failure(path: &Path, action: &str) -> PocError {
-    PocError::new("project.init", "the starter project could not be created")
-        .at(path, "/")
-        .suggest(action)
+    PocError::new(
+        "coordinator.project.init",
+        "the starter project could not be created",
+    )
+    .at(path, "/")
+    .suggest(action)
 }

@@ -141,7 +141,7 @@ impl Definition {
     pub fn load(project: &Path) -> Result<Self> {
         let project = project
             .canonicalize()
-            .map_err(|_| fail("definition.read").at(project, ""))?;
+            .map_err(|_| fail("coordinator.definition.read").at(project, ""))?;
         let path = project.join("workflow.yaml");
         let bytes = read_bytes(&path, MAX_DOCUMENT_BYTES)?;
         let (workflow, document) = crate::authoring::parse_project(&path, &bytes)?;
@@ -150,7 +150,7 @@ impl Definition {
         if workflow.functions != "functions.rhai" {
             return Err(crate::authoring::positioned(
                 &document,
-                fail("definition.functions_file").at(&path, "functions"),
+                fail("coordinator.definition.functions-file").at(&path, "functions"),
             ));
         }
         let source = read_text(&project.join(&workflow.functions), 65_536).map_err(|error| {
@@ -172,17 +172,18 @@ impl Definition {
 
     pub fn from_snapshot(snapshot: &str) -> Result<Self> {
         if snapshot.len() > MAX_SNAPSHOT_BYTES {
-            return Err(fail("definition.snapshot_limit"));
+            return Err(fail("coordinator.definition.snapshot-limit"));
         }
         let value = registry_platform_canonical_json::parse_json_strict(snapshot.as_bytes())
-            .map_err(|_| fail("definition.snapshot"))?;
-        let frozen = serde_json::from_value(value).map_err(|_| fail("definition.snapshot"))?;
+            .map_err(|_| fail("coordinator.definition.snapshot"))?;
+        let frozen =
+            serde_json::from_value(value).map_err(|_| fail("coordinator.definition.snapshot"))?;
         Self::restore(frozen)
     }
 
     fn restore(frozen: Snapshot) -> Result<Self> {
         if frozen.api_version != SNAPSHOT_API_VERSION || frozen.kind != SNAPSHOT_KIND {
-            return Err(fail("definition.snapshot"));
+            return Err(fail("coordinator.definition.snapshot"));
         }
         if frozen.adapter_abi != ADAPTER_ABI
             || frozen.operation_identities != operation_identities(&frozen.workflow)
@@ -193,7 +194,7 @@ impl Definition {
             || frozen.interpreter_abi != INTERPRETER_ABI
             || frozen.schema_abi != SCHEMA_ABI
         {
-            return Err(fail("definition.abi"));
+            return Err(fail("coordinator.definition.abi"));
         }
         validate_workflow(&frozen.workflow)?;
         let mappings = frozen
@@ -228,7 +229,7 @@ impl Definition {
             } = step
             {
                 if !outcome_schemas[finish].is_valid(&Value::Null) {
-                    return Err(fail("definition.outcome"));
+                    return Err(fail("coordinator.definition.outcome"));
                 }
             }
         }
@@ -247,7 +248,7 @@ impl Definition {
         if self.workflow != self.frozen.workflow
             || self.digest != sha256_uri(&snapshot_bytes(&self.frozen)?)
         {
-            return Err(fail("definition.changed"));
+            return Err(fail("coordinator.definition.changed"));
         }
         Ok(())
     }
@@ -286,7 +287,8 @@ impl Definition {
 
     pub fn snapshot(&self) -> Result<String> {
         self.check_integrity()?;
-        String::from_utf8(snapshot_bytes(&self.frozen)?).map_err(|_| fail("definition.snapshot"))
+        String::from_utf8(snapshot_bytes(&self.frozen)?)
+            .map_err(|_| fail("coordinator.definition.snapshot"))
     }
 
     pub fn validate_input(&self, input: &Value) -> Result<()> {
@@ -298,7 +300,7 @@ impl Definition {
                 .next()
                 .map(|error| format!("input{}", error.schema_path))
                 .unwrap_or_else(|| "input".into());
-            return Err(fail("definition.input").at("workflow.yaml", field)
+            return Err(fail("coordinator.definition.input").at("workflow.yaml", field)
                 .suggest("Correct the input JSON to satisfy the named authored schema rule; rejected values are omitted."));
         }
         Ok(())
@@ -310,14 +312,14 @@ impl Definition {
         let schema = self
             .outcome_schemas
             .get(outcome)
-            .ok_or_else(|| fail("definition.outcome"))?;
+            .ok_or_else(|| fail("coordinator.definition.outcome"))?;
         if let Err(errors) = schema.validate(output) {
             let field = errors
                 .into_iter()
                 .next()
                 .map(|error| format!("outcomes.{outcome}{}", error.schema_path))
                 .unwrap_or_else(|| format!("outcomes.{outcome}"));
-            return Err(fail("definition.outcome").at("workflow.yaml", field)
+            return Err(fail("coordinator.definition.outcome").at("workflow.yaml", field)
                 .suggest("Correct the final output mapping to satisfy its authored schema; rejected values are omitted."));
         }
         Ok(())
@@ -334,8 +336,10 @@ impl Definition {
             .workflow
             .steps
             .get(name)
-            .ok_or_else(|| fail("mapping.unknown"))?;
-        let mapping = step.mapping().ok_or_else(|| fail("mapping.unknown"))?;
+            .ok_or_else(|| fail("coordinator.mapping.unknown"))?;
+        let mapping = step
+            .mapping()
+            .ok_or_else(|| fail("coordinator.mapping.unknown"))?;
         let arguments = mapping
             .arguments
             .iter()
@@ -345,10 +349,10 @@ impl Definition {
                 }
                 let step = reference
                     .strip_suffix(".output")
-                    .ok_or_else(|| fail("mapping.reference"))?;
+                    .ok_or_else(|| fail("coordinator.mapping.reference"))?;
                 outputs
                     .get(step)
-                    .ok_or_else(|| fail("mapping.missing_output"))
+                    .ok_or_else(|| fail("coordinator.mapping.missing-output"))
             })
             .collect::<Result<Vec<_>>>()?;
         let role = match step {
@@ -369,14 +373,14 @@ impl Definition {
                 parse_timestamp(&value).map_err(|error| error.at("workflow.yaml", &field))?;
             }
             Step::Call { .. } if !value.is_object() => {
-                return Err(fail("mapping.call_shape").at("workflow.yaml", &field))
+                return Err(fail("coordinator.mapping.call-shape").at("workflow.yaml", &field))
             }
             Step::Choose { cases, .. }
                 if !value
                     .as_str()
                     .is_some_and(|label| cases.contains_key(label)) =>
             {
-                return Err(fail("mapping.branch").at("workflow.yaml", &field))
+                return Err(fail("coordinator.mapping.branch").at("workflow.yaml", &field))
             }
             Step::Finish { finish, .. } => self
                 .validate_outcome(finish, &value)
@@ -390,7 +394,7 @@ impl Definition {
         self.check_integrity()?;
         admitted_at
             .checked_add_signed(parse_duration(&self.workflow.deadline)?)
-            .ok_or_else(|| fail("definition.deadline"))
+            .ok_or_else(|| fail("coordinator.definition.deadline"))
     }
 
     pub fn initial_due(
@@ -414,11 +418,12 @@ impl Definition {
 }
 
 fn snapshot_bytes(snapshot: &Snapshot) -> Result<Vec<u8>> {
-    let value = serde_json::to_value(snapshot).map_err(|_| fail("definition.snapshot"))?;
+    let value =
+        serde_json::to_value(snapshot).map_err(|_| fail("coordinator.definition.snapshot"))?;
     let bytes = registry_platform_canonical_json::canonicalize_json(&value)
-        .map_err(|_| fail("definition.canonical"))?;
+        .map_err(|_| fail("coordinator.definition.canonical"))?;
     if bytes.len() > MAX_SNAPSHOT_BYTES {
-        return Err(fail("definition.snapshot_limit"));
+        return Err(fail("coordinator.definition.snapshot-limit"));
     }
     Ok(bytes)
 }
@@ -439,7 +444,7 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
     ] {
         if !(minimum..=maximum).contains(&size) {
             return Err(authored(
-                "definition.shape",
+                "coordinator.definition.shape",
                 field,
                 &format!("expected {minimum} to {maximum} entries"),
                 "Adjust the number of entries within the stated bound.",
@@ -448,7 +453,7 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
     }
     if !valid_name(&flow.version) {
         return Err(authored(
-            "definition.shape",
+            "coordinator.definition.shape",
             "version",
             "expected 1 to 64 ASCII letters, digits, hyphens or underscores",
             "Use a bounded version identifier, such as v1.",
@@ -456,7 +461,7 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
     }
     if !flow.steps.contains_key(&flow.start) {
         return Err(authored(
-            "definition.shape",
+            "coordinator.definition.shape",
             "start",
             "start does not name a declared step",
             "Set start to one declared step ID.",
@@ -466,7 +471,7 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
         || flow.functions != "functions.rhai"
         || !flow.steps.contains_key(&flow.start)
     {
-        return Err(fail("definition.shape"));
+        return Err(fail("coordinator.definition.shape"));
     }
     parse_duration(&flow.deadline).map_err(|error| error.at("workflow.yaml", "deadline"))?;
     for (name, kind) in &flow.connections {
@@ -475,7 +480,9 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
                 .iter()
                 .any(|operation| operation.product == kind)
         {
-            return Err(fail("definition.connection").at("workflow.yaml", "connections"));
+            return Err(
+                fail("coordinator.definition.connection").at("workflow.yaml", "connections")
+            );
         }
     }
     let mut incoming: BTreeMap<&str, Vec<&str>> =
@@ -483,14 +490,14 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
     let mut outcomes = BTreeSet::new();
     for (name, step) in &flow.steps {
         if !valid_name(name) || name == "input" {
-            return Err(fail("definition.step"));
+            return Err(fail("coordinator.definition.step"));
         }
         for target in step.targets() {
             incoming
                 .get_mut(target)
                 .ok_or_else(|| {
                     authored(
-                        "definition.target",
+                        "coordinator.definition.target",
                         &format!(
                             "steps.{name}.{}",
                             if matches!(step, Step::Choose { .. }) {
@@ -508,24 +515,23 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
         match step {
             Step::Call { call, .. } => {
                 let kind = flow.connections.get(&call.connection).ok_or_else(|| {
-                    fail("definition.connection")
+                    fail("coordinator.definition.connection")
                         .at("workflow.yaml", format!("steps.{name}.call.connection"))
                 })?;
                 if kind != call.operation.product() {
-                    return Err(fail("definition.operation")
+                    return Err(fail("coordinator.definition.operation")
                         .at("workflow.yaml", format!("steps.{name}.call.operation")));
                 }
             }
             Step::Choose { cases, .. }
                 if cases.is_empty() || cases.len() > 32 || !cases.keys().all(|k| valid_name(k)) =>
             {
-                return Err(
-                    fail("definition.cases").at("workflow.yaml", format!("steps.{name}.cases"))
-                )
+                return Err(fail("coordinator.definition.cases")
+                    .at("workflow.yaml", format!("steps.{name}.cases")))
             }
             Step::Finish { finish, .. } => {
                 if !flow.outcomes.contains_key(finish) {
-                    return Err(fail("definition.outcome"));
+                    return Err(fail("coordinator.definition.outcome"));
                 }
                 outcomes.insert(finish);
             }
@@ -533,7 +539,7 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
         }
     }
     if outcomes.len() != flow.outcomes.len() || !flow.outcomes.keys().all(|k| valid_name(k)) {
-        return Err(fail("definition.outcome"));
+        return Err(fail("coordinator.definition.outcome"));
     }
     // Topological traversal proves finiteness. Dominators are the intersection
     // of predecessors' dominators, so a reference exists on every route.
@@ -554,9 +560,8 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
             dominators[first].clone()
         } else {
             if name != flow.start {
-                return Err(
-                    fail("definition.unreachable").at("workflow.yaml", format!("steps.{name}"))
-                );
+                return Err(fail("coordinator.definition.unreachable")
+                    .at("workflow.yaml", format!("steps.{name}")));
             }
             BTreeSet::new()
         };
@@ -568,7 +573,8 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
         }
         if let Some(mapping) = flow.steps[name].mapping() {
             if !valid_name(&mapping.function) {
-                return Err(fail("mapping.function").at("workflow.yaml", format!("steps.{name}")));
+                return Err(fail("coordinator.mapping.function")
+                    .at("workflow.yaml", format!("steps.{name}")));
             }
             for (index, reference) in mapping.arguments.iter().enumerate() {
                 if reference == "input" {
@@ -583,11 +589,11 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
                 let field = format!("steps.{name}.{role}.arguments[{index}]");
                 let prior = reference
                     .strip_suffix(".output")
-                    .ok_or_else(|| authored("mapping.reference", &field, "the argument is not a whole-value reference", "Use input or a preceding call's step-id.output; select fields inside the Rhai function."))?;
+                    .ok_or_else(|| authored("coordinator.mapping.reference", &field, "the argument is not a whole-value reference", "Use input or a preceding call's step-id.output; select fields inside the Rhai function."))?;
                 if !dominates.contains(prior)
                     || !matches!(flow.steps.get(prior), Some(Step::Call { .. }))
                 {
-                    return Err(authored("mapping.dominance", &field, "the referenced call output is not available on every incoming path", "Move the call before the branch or pass a value available on every route to this step."));
+                    return Err(authored("coordinator.mapping.dominance", &field, "the referenced call output is not available on every incoming path", "Move the call before the branch or pass a value available on every route to this step."));
                 }
             }
         }
@@ -597,7 +603,7 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
         for next in flow.steps[name].targets() {
             let count = pending
                 .get_mut(next)
-                .ok_or_else(|| fail("definition.target"))?;
+                .ok_or_else(|| fail("coordinator.definition.target"))?;
             *count -= 1;
             if *count == 0 {
                 ready.push(next);
@@ -605,7 +611,7 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
         }
     }
     if visited.len() != flow.steps.len() {
-        return Err(fail("definition.cycle").at("workflow.yaml", "steps"));
+        return Err(fail("coordinator.definition.cycle").at("workflow.yaml", "steps"));
     }
     Ok(())
 }
@@ -614,30 +620,38 @@ fn parse_duration(text: &str) -> Result<Duration> {
     let end = text
         .len()
         .checked_sub(1)
-        .ok_or_else(|| fail("definition.deadline"))?;
-    let digits = text.get(..end).ok_or_else(|| fail("definition.deadline"))?;
-    let unit = text.get(end..).ok_or_else(|| fail("definition.deadline"))?;
+        .ok_or_else(|| fail("coordinator.definition.deadline"))?;
+    let digits = text
+        .get(..end)
+        .ok_or_else(|| fail("coordinator.definition.deadline"))?;
+    let unit = text
+        .get(end..)
+        .ok_or_else(|| fail("coordinator.definition.deadline"))?;
     let amount = digits
         .parse::<i64>()
-        .map_err(|_| fail("definition.deadline"))?;
+        .map_err(|_| fail("coordinator.definition.deadline"))?;
     let multiplier = match unit {
         "s" => 1,
         "m" => 60,
         "h" => 3600,
         "d" => 86400,
-        _ => return Err(fail("definition.deadline")),
+        _ => return Err(fail("coordinator.definition.deadline")),
     };
     let seconds = amount
         .checked_mul(multiplier)
         .filter(|s| *s > 0 && *s <= 31_536_000)
-        .ok_or_else(|| fail("definition.deadline"))?;
+        .ok_or_else(|| fail("coordinator.definition.deadline"))?;
     Ok(Duration::seconds(seconds))
 }
 
 pub(crate) fn parse_timestamp(value: &Value) -> Result<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(value.as_str().ok_or_else(|| fail("mapping.timestamp"))?)
-        .map(|value| value.with_timezone(&Utc))
-        .map_err(|_| fail("mapping.timestamp"))
+    DateTime::parse_from_rfc3339(
+        value
+            .as_str()
+            .ok_or_else(|| fail("coordinator.mapping.timestamp"))?,
+    )
+    .map(|value| value.with_timezone(&Utc))
+    .map_err(|_| fail("coordinator.mapping.timestamp"))
 }
 
 struct NoRemoteSchemas;
@@ -673,7 +687,7 @@ pub(crate) fn compile_schema(schema: &Value) -> Result<JSONSchema> {
     }
     check_value(schema)?;
     if !(schema.is_object() || schema.is_boolean()) || !local(schema, 0) {
-        return Err(fail("definition.schema"));
+        return Err(fail("coordinator.definition.schema"));
     }
     JSONSchema::options()
         .with_draft(Draft::Draft202012)
@@ -684,48 +698,49 @@ pub(crate) fn compile_schema(schema: &Value) -> Result<JSONSchema> {
         .with_format("uuid", |value| uuid::Uuid::parse_str(value).is_ok())
         .with_resolver(NoRemoteSchemas)
         .compile(schema)
-        .map_err(|_| fail("definition.schema"))
+        .map_err(|_| fail("coordinator.definition.schema"))
 }
 
 fn read_text(path: &Path, maximum: usize) -> Result<String> {
     let bytes = read_bytes(path, maximum)?;
     if bytes.len() > maximum {
-        return Err(fail("definition.file").at(path, ""));
+        return Err(fail("coordinator.definition.file").at(path, ""));
     }
-    String::from_utf8(bytes).map_err(|_| fail("definition.read").at(path, ""))
+    String::from_utf8(bytes).map_err(|_| fail("coordinator.definition.read").at(path, ""))
 }
 
 fn read_bytes(path: &Path, maximum: usize) -> Result<Vec<u8>> {
-    let metadata =
-        std::fs::symlink_metadata(path).map_err(|_| fail("definition.read").at(path, ""))?;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| fail("coordinator.definition.read").at(path, ""))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(fail("definition.file").at(path, ""));
+        return Err(fail("coordinator.definition.file").at(path, ""));
     }
-    let file = std::fs::File::open(path).map_err(|_| fail("definition.read").at(path, ""))?;
+    let file =
+        std::fs::File::open(path).map_err(|_| fail("coordinator.definition.read").at(path, ""))?;
     let mut bytes = Vec::new();
     // Keep one lookahead byte so the owning decoder can diagnose its bound.
     file.take(maximum as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| fail("definition.read").at(path, ""))?;
+        .map_err(|_| fail("coordinator.definition.read").at(path, ""))?;
     Ok(bytes)
 }
 
 fn fail(code: &'static str) -> PocError {
-    if code == "definition.snapshot_limit" {
+    if code == "coordinator.definition.snapshot-limit" {
         return PocError::new(code, "the workflow snapshot exceeds the 393216-byte limit")
             .suggest("Reduce workflow/schema annotations or functions.rhai source until the canonical snapshot is at most 393216 bytes, then rerun check and package. Admitted runs keep their original snapshot.");
     }
     PocError::new(code, match code {
-        "definition.cycle" => "the graph contains a cycle",
-        "definition.unreachable" => "a step is not reachable from start",
-        "definition.deadline" => "deadline must be a positive s, m, h or d duration no longer than 365 days",
-        "mapping.branch" => "the function did not return a declared branch label",
-        "mapping.timestamp" => "waitUntil did not return an RFC 3339 instant",
-        "mapping.missing_output" => "a declared prior call output is absent",
-        "mapping.call_shape" => "the call input function did not return an object",
-        "definition.input" => "the start input does not satisfy its authored schema",
-        "definition.outcome" => "the final output does not satisfy the declared outcome schema",
-        "definition.schema" => "the schema is invalid or uses an unsupported format or external reference",
+        "coordinator.definition.cycle" => "the graph contains a cycle",
+        "coordinator.definition.unreachable" => "a step is not reachable from start",
+        "coordinator.definition.deadline" => "deadline must be a positive s, m, h or d duration no longer than 365 days",
+        "coordinator.mapping.branch" => "the function did not return a declared branch label",
+        "coordinator.mapping.timestamp" => "waitUntil did not return an RFC 3339 instant",
+        "coordinator.mapping.missing-output" => "a declared prior call output is absent",
+        "coordinator.mapping.call-shape" => "the call input function did not return an object",
+        "coordinator.definition.input" => "the start input does not satisfy its authored schema",
+        "coordinator.definition.outcome" => "the final output does not satisfy the declared outcome schema",
+        "coordinator.definition.schema" => "the schema is invalid or uses an unsupported format or external reference",
         _ => "the workflow definition or mapping was refused",
     }).suggest("Inspect the authored field and function, correct the definition, then rerun check. Admitted runs keep their original snapshot.")
 }
