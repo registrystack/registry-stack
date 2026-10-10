@@ -1833,6 +1833,15 @@ impl Metadata {
             .transpose()
     }
 
+    /// Validated caller-filtered statistical dataset descriptions, without entity authority.
+    #[getter]
+    fn statistical_datasets<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        self.inner
+            .statistical_datasets()
+            .map(|value| json_to_python(py, value))
+            .transpose()
+    }
+
     #[getter]
     fn immediate_actions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         json_to_python(

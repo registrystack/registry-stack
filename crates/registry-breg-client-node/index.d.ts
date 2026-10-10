@@ -270,6 +270,8 @@ export declare class BRegMetadata {
   get immediateActions(): any
   /** Original caller-filtered action metadata as exact JSON text. */
   get actionsJson(): string | null
+  /** Validated caller-filtered statistical dataset descriptions, without entity authority. */
+  get statisticalDatasets(): any | null
   /** Descriptive change-request capability for one entity, when advertised. */
   changeRequestCapability(entityIdentifier: string): any | null
   get registryIdentifier(): string

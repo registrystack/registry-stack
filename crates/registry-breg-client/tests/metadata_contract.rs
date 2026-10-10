@@ -232,6 +232,259 @@ fn parse(value: &Value) -> BRegMetadata {
         .bind_source("https://registry.example/v1/".to_owned())
 }
 
+fn statistical_dataset() -> Value {
+    json!({
+        "id": "company-counts",
+        "unit": "company",
+        "periodKind": "flow",
+        "granularity": "month",
+        "firstPeriod": "2025-01",
+        "dimensions": [{
+            "field": "category",
+            "vocabulary": "company-category",
+            "codes": ["Registered", "other", "_U", "_T"]
+        }],
+        "definitionDigest": REVISION,
+        "operations": ["read_live", "list_releases", "read_latest_release", "read_release_version", "read_released_series"]
+    })
+}
+
+#[test]
+fn runtime_v1_accepts_statistical_datasets_without_adding_entity_authority() {
+    let mut mixed = fixture();
+    mixed["statisticalDatasets"] = json!([statistical_dataset()]);
+    let metadata = parse(&mixed);
+    assert_eq!(
+        metadata.statistical_datasets(),
+        Some(&mixed["statisticalDatasets"])
+    );
+    assert_eq!(metadata.operations().len(), 3);
+    assert!(metadata
+        .select_direct_write("records.company.create", "company-writer")
+        .is_ok());
+
+    let mut release_only = mixed;
+    release_only["entities"] = json!([]);
+    release_only["operations"] = json!([]);
+    release_only["statisticalDatasets"][0]["operations"] = json!([
+        "list_releases",
+        "read_latest_release",
+        "read_release_version",
+        "read_released_series"
+    ]);
+    release_only.as_object_mut().unwrap().remove("actions");
+    let metadata = parse(&release_only);
+    assert!(metadata.operations().is_empty());
+    assert_eq!(
+        metadata.statistical_datasets(),
+        Some(&release_only["statisticalDatasets"])
+    );
+    assert_eq!(
+        metadata
+            .select_direct_write("records.company.create", "company-writer")
+            .unwrap_err()
+            .kind(),
+        BRegMetadataSelectionErrorKind::NotFound
+    );
+
+    let mut empty = fixture();
+    empty["statisticalDatasets"] = json!([]);
+    assert_eq!(parse(&empty).statistical_datasets(), Some(&json!([])));
+}
+
+#[test]
+fn statistical_dataset_metadata_is_closed_and_validates_domains_and_periods() {
+    type MetadataMutation = fn(&mut Value);
+    let cases: &[(&str, BRegMetadataErrorKind, MetadataMutation)] = &[
+        (
+            "non-array datasets",
+            BRegMetadataErrorKind::Shape,
+            |value| {
+                value["statisticalDatasets"] = json!({});
+            },
+        ),
+        ("null datasets", BRegMetadataErrorKind::Shape, |value| {
+            value["statisticalDatasets"] = Value::Null;
+        }),
+        (
+            "unknown dataset member",
+            BRegMetadataErrorKind::Shape,
+            |value| {
+                value["statisticalDatasets"][0]["unexpected"] = json!(true);
+            },
+        ),
+        (
+            "offline profile projection",
+            BRegMetadataErrorKind::Shape,
+            |value| {
+                value["statisticalDatasets"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("operations");
+                value["statisticalDatasets"][0]["accessProfiles"] =
+                    json!({"reader": ["read_live"]});
+            },
+        ),
+        ("missing member", BRegMetadataErrorKind::Shape, |value| {
+            value["statisticalDatasets"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("unit");
+        }),
+        (
+            "duplicate dataset",
+            BRegMetadataErrorKind::DuplicateIdentifier,
+            |value| {
+                value["statisticalDatasets"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(statistical_dataset());
+            },
+        ),
+        (
+            "unknown period kind",
+            BRegMetadataErrorKind::Shape,
+            |value| {
+                value["statisticalDatasets"][0]["periodKind"] = json!("unknown");
+            },
+        ),
+        (
+            "unknown granularity",
+            BRegMetadataErrorKind::Shape,
+            |value| {
+                value["statisticalDatasets"][0]["granularity"] = json!("week");
+            },
+        ),
+        (
+            "wrong period granularity",
+            BRegMetadataErrorKind::Shape,
+            |value| {
+                value["statisticalDatasets"][0]["firstPeriod"] = json!("2025");
+            },
+        ),
+        ("invalid month", BRegMetadataErrorKind::Shape, |value| {
+            value["statisticalDatasets"][0]["firstPeriod"] = json!("2025-13");
+        }),
+        (
+            "exclusive end outside calendar",
+            BRegMetadataErrorKind::Shape,
+            |value| {
+                value["statisticalDatasets"][0]["firstPeriod"] = json!("9999-12");
+            },
+        ),
+        ("invalid digest", BRegMetadataErrorKind::Revision, |value| {
+            value["statisticalDatasets"][0]["definitionDigest"] = json!("sha256:bad");
+        }),
+        ("null dimensions", BRegMetadataErrorKind::Shape, |value| {
+            value["statisticalDatasets"][0]["dimensions"] = Value::Null;
+        }),
+        (
+            "duplicate dimension",
+            BRegMetadataErrorKind::DuplicateIdentifier,
+            |value| {
+                let dimension = value["statisticalDatasets"][0]["dimensions"][0].clone();
+                value["statisticalDatasets"][0]["dimensions"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(dimension);
+            },
+        ),
+        (
+            "unknown dimension member",
+            BRegMetadataErrorKind::Shape,
+            |value| {
+                value["statisticalDatasets"][0]["dimensions"][0]["unexpected"] = json!(true);
+            },
+        ),
+        (
+            "duplicate code",
+            BRegMetadataErrorKind::DuplicateIdentifier,
+            |value| {
+                value["statisticalDatasets"][0]["dimensions"][0]["codes"] = json!(["_T", "_T"]);
+            },
+        ),
+        (
+            "missing total code",
+            BRegMetadataErrorKind::Shape,
+            |value| {
+                value["statisticalDatasets"][0]["dimensions"][0]["codes"] = json!(["other"]);
+            },
+        ),
+        (
+            "unknown reserved code",
+            BRegMetadataErrorKind::Shape,
+            |value| {
+                value["statisticalDatasets"][0]["dimensions"][0]["codes"] = json!(["_X", "_T"]);
+            },
+        ),
+        ("empty operations", BRegMetadataErrorKind::Shape, |value| {
+            value["statisticalDatasets"][0]["operations"] = json!([]);
+        }),
+        (
+            "duplicate operation",
+            BRegMetadataErrorKind::DuplicateIdentifier,
+            |value| {
+                value["statisticalDatasets"][0]["operations"] = json!(["read_live", "read_live"]);
+            },
+        ),
+        ("unknown operation", BRegMetadataErrorKind::Shape, |value| {
+            value["statisticalDatasets"][0]["operations"] = json!(["unrestricted"]);
+        }),
+    ];
+    for (name, kind, change) in cases {
+        let mut value = fixture();
+        value["statisticalDatasets"] = json!([statistical_dataset()]);
+        change(&mut value);
+        assert_eq!(
+            BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
+                .unwrap_err()
+                .kind(),
+            *kind,
+            "{name}"
+        );
+    }
+
+    for (granularity, period) in [
+        ("day", "2024-02-29"),
+        ("month", "9999-11"),
+        ("quarter", "9999-Q3"),
+        ("year", "9998"),
+    ] {
+        let mut value = fixture();
+        let mut dataset = statistical_dataset();
+        dataset["granularity"] = json!(granularity);
+        dataset["firstPeriod"] = json!(period);
+        dataset["dimensions"] = json!([]);
+        dataset["operations"] = json!(["read_live"]);
+        value["statisticalDatasets"] = json!([dataset]);
+        parse(&value);
+    }
+}
+
+#[test]
+fn statistical_dataset_metadata_retains_duplicate_member_and_resource_bounds() {
+    let mut value = fixture();
+    value["statisticalDatasets"] = json!([statistical_dataset()]);
+    let bytes = serde_json::to_string(&value).unwrap().replace(
+        "\"firstPeriod\":\"2025-01\"",
+        "\"firstPeriod\":\"2025-01\",\"firstPeriod\":\"2025-01\"",
+    );
+    assert_eq!(
+        BRegMetadata::from_slice(bytes.as_bytes())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::DuplicateMember
+    );
+
+    value["statisticalDatasets"][0]["dimensions"][0]["codes"] = json!(["x".repeat(65_537), "_T"]);
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&value).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Bound
+    );
+}
+
 #[test]
 fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
     let metadata = parse(&fixture());
@@ -240,6 +493,7 @@ fn runtime_v1_promotes_only_exact_direct_create_and_patch_contracts() {
     assert_eq!(metadata.registry_revision(), REVISION);
     assert_eq!(metadata.operations().len(), 3);
     assert!(metadata.actions().is_some());
+    assert!(metadata.statistical_datasets().is_none());
     assert_eq!(
         metadata.operations()[0].fields()[0].schema()["x-future-schema-key"]["kept"],
         true
@@ -837,6 +1091,10 @@ fn debug_and_errors_do_not_render_response_controlled_values() {
 
     let mut value = fixture();
     value["id"] = json!(canary);
+    let mut dataset = statistical_dataset();
+    dataset["id"] = json!(canary);
+    dataset["dimensions"][0]["codes"][0] = json!(canary);
+    value["statisticalDatasets"] = json!([dataset]);
     let metadata = parse(&value);
     let rendered = format!("{metadata:?}");
     assert!(!rendered.contains(canary));

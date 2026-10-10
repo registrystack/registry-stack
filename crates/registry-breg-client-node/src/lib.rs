@@ -2687,6 +2687,12 @@ impl Metadata {
             .map_err(|_| binding_error("protocol", "action metadata is not representable"))
     }
 
+    /// Validated caller-filtered statistical dataset descriptions, without entity authority.
+    #[napi(getter)]
+    pub fn statistical_datasets(&self) -> Option<Value> {
+        self.inner.statistical_datasets().cloned()
+    }
+
     /// Descriptive change-request capability for one entity, when advertised.
     #[napi]
     pub fn change_request_capability(&self, entity_identifier: String) -> Option<Value> {

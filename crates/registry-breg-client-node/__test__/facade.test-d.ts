@@ -63,6 +63,14 @@ declare const relationshipContinuation: RelationshipListContinuation
 declare const geoJsonContinuation: GeoJsonListContinuation
 declare const historyPage: BRegRetainedRequestHistoryPage
 
+if (metadata.statisticalDatasets !== null) {
+  const dataset = metadata.statisticalDatasets[0]
+  dataset?.id.toUpperCase()
+  dataset?.periodKind satisfies 'flow' | 'stock'
+  dataset?.granularity satisfies 'day' | 'month' | 'quarter' | 'year'
+  dataset?.dimensions[0]?.codes[0]?.toUpperCase()
+}
+
 const verifiedWebhook: VerifiedWebhookDelivery = verifyWebhookDelivery({
   method: 'POST',
   path: '/hooks/registry',
