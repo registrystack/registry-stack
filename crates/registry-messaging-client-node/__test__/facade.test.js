@@ -697,7 +697,7 @@ test('receipt observation refuses an invalid key or request before any exchange'
   const { baseUrl, requests } = await serve(context, () => ({ status: 500 }));
   const { MessagingClient } = require('../client');
   const client = new MessagingClient({ baseUrl });
-  await assert.rejects(client.messageReceipt('token', 'two words', SUBMISSION), (error) => error.kind === 'invalid_request');
-  await assert.rejects(client.messageReceipt('token', 'key', { ...SUBMISSION, extra: true }), (error) => error.kind === 'invalid_request');
+  await assert.rejects(client.messageReceipt('token', 'two words', SUBMISSION), (error) => error.kind === 'invalid-request');
+  await assert.rejects(client.messageReceipt('token', 'key', { ...SUBMISSION, extra: true }), (error) => error.kind === 'invalid-request');
   assert.equal(requests.length, 0);
 });

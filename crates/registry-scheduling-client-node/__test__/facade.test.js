@@ -815,7 +815,7 @@ test('receipt observation refuses an invalid key or request before any exchange'
   const { baseUrl, requests } = await serve(context, () => ({ status: 500 }));
   const { SchedulingClient } = require('../client');
   const client = new SchedulingClient({ baseUrl });
-  await assert.rejects(client.appointmentReceipt('token', 'two words', { admission: ADMISSION }), (error) => error.kind === 'invalid_request');
-  await assert.rejects(client.appointmentReceipt('token', 'key', { admission: ADMISSION, extra: true }), (error) => error.kind === 'invalid_request');
+  await assert.rejects(client.appointmentReceipt('token', 'two words', { admission: ADMISSION }), (error) => error.kind === 'invalid-request');
+  await assert.rejects(client.appointmentReceipt('token', 'key', { admission: ADMISSION, extra: true }), (error) => error.kind === 'invalid-request');
   assert.equal(requests.length, 0);
 });

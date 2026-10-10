@@ -447,7 +447,7 @@ class NativeRequestTests(unittest.TestCase):
         for key, request in [("two words", SUBMISSION), ("key", {**SUBMISSION, "extra": True})]:
             with self.assertRaises(MessagingClientError) as raised:
                 self.client.message_receipt("token", key, request)
-            self.assertEqual(raised.exception.kind, "invalid_request")
+            self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertEqual(_Handler.observations, [])
 
 

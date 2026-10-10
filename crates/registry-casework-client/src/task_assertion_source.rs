@@ -244,21 +244,21 @@ mod tests {
             (
                 401,
                 Some(CaseworkProblemCode::AuthenticationRefused),
-                "invalid_credential",
+                "invalid-credential",
             ),
             (
                 403,
                 Some(CaseworkProblemCode::OperationNotAuthorized),
-                "invalid_credential",
+                "invalid-credential",
             ),
             (
                 404,
                 Some(CaseworkProblemCode::RequestNotFound),
-                "invalid_credential",
+                "invalid-credential",
             ),
             // A malformed refusal still must not be retried as an outage.
-            (400, None, "invalid_credential"),
-            (403, None, "invalid_credential"),
+            (400, None, "invalid-credential"),
+            (403, None, "invalid-credential"),
             (408, None, "unavailable"),
             (429, None, "unavailable"),
             (
@@ -362,7 +362,7 @@ mod tests {
                 if matches!(status, 408 | 429 | 500..=599) {
                     "unavailable"
                 } else {
-                    "invalid_credential"
+                    "invalid-credential"
                 }
             );
             assert!(!format!("{error:?} {error}").contains("remote-private-canary"));
@@ -397,7 +397,7 @@ mod tests {
                 reason: "remote-private-canary"
             })
             .kind(),
-            "invalid_credential"
+            "invalid-credential"
         );
     }
 }
