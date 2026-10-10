@@ -2,6 +2,10 @@
 
 ## BReg authored formats
 
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
+Fresh installation creates the current schema directly. No schema step
+converts or discards rows an earlier release wrote.
+
 This section covers the formats an adopter and an operator write for the
 Base Registry Engine: `registry.yaml`, `module.yaml`, `runtime.yaml`, and the
 package a `bregctl package` run seals around them.

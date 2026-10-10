@@ -825,8 +825,8 @@ async fn deployed_policy_in(
     }))
 }
 
-/// Refuse schema version 8 while the audit outbox it drops still holds a
-/// record its publisher had not reached. Migration calls it holding the
+/// Refuse schema version 8 while an earlier audit outbox still holds a
+/// record its publisher had not reached. Apply calls it holding the
 /// table exclusively; a plan (`plan` true) reads it without a lock and
 /// passes over an outbox the planning role cannot read, which apply counts
 /// again.
@@ -916,13 +916,20 @@ pub(super) async fn apply_migrations_in(
                     .await?;
             }
             AUDIT_WRITER_MIGRATION_VERSION => {
-                // Hold the table exclusively for the rest of this transaction
-                // so no concurrent writer can insert an unpublished row
-                // between the count below and the drop the migration
-                // performs.
-                transaction
-                    .batch_execute("LOCK TABLE scheduling_audit_outbox IN ACCESS EXCLUSIVE MODE")
-                    .await?;
+                let exists: bool = transaction
+                    .query_one(
+                        "SELECT to_regclass('scheduling_audit_outbox') IS NOT NULL",
+                        &[],
+                    )
+                    .await?
+                    .get(0);
+                if exists {
+                    transaction
+                        .batch_execute(
+                            "LOCK TABLE scheduling_audit_outbox IN ACCESS EXCLUSIVE MODE",
+                        )
+                        .await?;
+                }
                 refuse_to_drop_unpublished_audit(&**transaction, false).await?;
                 transaction.batch_execute(AUDIT_WRITER_MIGRATION).await?;
             }

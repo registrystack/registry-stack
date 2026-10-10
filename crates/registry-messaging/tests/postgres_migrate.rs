@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Database-backed store tests: migrations applied concurrently and
-//! repeatedly, version 3 discarding the idempotency records scoped to the
-//! caller's pseudonym, readiness against the applied schema, a served
+//! repeatedly, caller-scoped idempotency keys, readiness against the applied
+//! schema, a served
 //! runtime answering `/ready` from a real PostgreSQL deployment, and the
 //! `messaging` binary keeping its operational logs off a `stdout` audit
 //! destination. The package ledger has its own suite, `postgres_package`.
@@ -26,10 +26,11 @@ use registry_messaging::package::{package_inputs, write_package_inputs};
 use registry_messaging::runtime::{apply_activation, serve_from_path};
 use registry_messaging::store::{PostgresStore, StoreError};
 use registry_messaging_client::{MessagingClient, MessagingClientConfig};
-use registry_messaging_core::CallerIdentity;
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
-use support::{email_submission, sender_token, Harness, ISSUER, SENDER_PRINCIPAL};
+use support::{
+    email_submission, sender_token, sender_token_for, Harness, ISSUER, SENDER_PRINCIPAL,
+};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use uuid::Uuid;
 
@@ -111,13 +112,13 @@ async fn concurrent_migrators_apply_each_version_once_and_both_succeed() {
     a.expect("the first concurrent migration");
     b.expect("the second concurrent migration");
     c.expect("the third concurrent migration");
-    assert_eq!(applied_versions(&isolated).await, [1, 2, 3]);
+    assert_eq!(applied_versions(&isolated).await, [1, 2]);
 
     first
         .migrate()
         .await
         .expect("a repeated migration applies nothing");
-    assert_eq!(applied_versions(&isolated).await, [1, 2, 3]);
+    assert_eq!(applied_versions(&isolated).await, [1, 2]);
 
     let runtime = PostgresStore::connect_runtime(&config, &secrets).expect("a runtime store");
     runtime.ready().await.expect("a migrated store is ready");
@@ -149,218 +150,6 @@ async fn a_store_carrying_an_unknown_version_is_not_ready() {
         store.ready().await,
         Err(StoreError::SchemaVersion)
     ));
-}
-
-/// Version 3 scopes every spent key to the caller's issuer and subject. It
-/// discards the records written under the caller's pseudonym, so their keys
-/// can be used again, and the runtime keys every later record by its caller.
-#[tokio::test]
-async fn version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller() {
-    let harness = Harness::start().await;
-    let sender = sender_token();
-    let (status, earlier) = harness
-        .submit(&sender, "earlier", &email_submission())
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{earlier}");
-    let pseudonym = harness
-        .audit
-        .principal_pseudonym(&CallerIdentity {
-            issuer: ISSUER.to_owned(),
-            subject: SENDER_PRINCIPAL.to_owned(),
-        })
-        .expect("the caller's pseudonym");
-
-    // Rebuild the table as version 2 left it, holding the record a runtime
-    // wrote under the caller's pseudonym and a tombstone whose message
-    // retention deleted.
-    let first_tail = include_str!("../migrations/0001_messaging.sql");
-    let first_tail = &first_tail[first_tail
-        .find("CREATE TABLE messaging_idempotency")
-        .expect("version 1 creates the idempotency table")..];
-    harness
-        .isolated
-        .admin
-        .batch_execute(&format!(
-            "CREATE TABLE version_3_scratch AS SELECT * FROM messaging_idempotency; \
-             DROP TABLE messaging_idempotency; \
-             DELETE FROM messaging_schema_migrations WHERE version >= 3; \
-             {first_tail}"
-        ))
-        .await
-        .expect("the version 2 idempotency table");
-    for statement in [
-        "INSERT INTO messaging_idempotency \
-             (principal, operation, idempotency_key, request_hash, message_id, \
-              status_code, receipt, created_at, expires_at, erased_at) \
-         SELECT $1::text, operation, idempotency_key, request_hash, message_id, \
-                status_code, receipt, created_at, expires_at, erased_at \
-           FROM version_3_scratch",
-        "INSERT INTO messaging_idempotency \
-             (principal, operation, idempotency_key, created_at, expires_at, erased_at) \
-         VALUES ($1::text, 'submit-message', 'tombstone', now() - interval '40 days', \
-                 now() - interval '10 days', now() - interval '10 days')",
-    ] {
-        harness.execute(statement, &[&pseudonym]).await;
-    }
-    harness.execute("DROP TABLE version_3_scratch", &[]).await;
-
-    let applied = apply_activation(&harness.config, &ApplyRequest::default())
-        .await
-        .expect("messagingctl apply");
-    assert_eq!(applied.schema_versions_applied, [3]);
-    assert_eq!(
-        harness
-            .count("SELECT count(*) FROM messaging_idempotency")
-            .await,
-        0
-    );
-    assert_eq!(
-        harness
-            .count(
-                "SELECT count(*) FROM information_schema.columns \
-                  WHERE table_schema = current_schema() \
-                    AND table_name = 'messaging_idempotency' AND column_name = 'principal'"
-            )
-            .await,
-        0
-    );
-
-    // Each discarded key records a new message, under the caller's issuer
-    // and subject, and is spent again.
-    for key in ["earlier", "tombstone"] {
-        let (status, receipt) = harness.submit(&sender, key, &email_submission()).await;
-        assert_eq!(status, StatusCode::ACCEPTED, "{key}: {receipt}");
-        assert_ne!(receipt["id"], earlier["id"]);
-        let replay = harness.submit(&sender, key, &email_submission()).await;
-        assert_eq!(replay, (StatusCode::ACCEPTED, receipt));
-    }
-    let mut different = email_submission();
-    different["correlationId"] = json!("case-43");
-    let (status, problem) = harness.submit(&sender, "earlier", &different).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
-    assert_eq!(problem["code"], "idempotency.key-reused");
-    let caller_keys: i64 = harness
-        .isolated
-        .admin
-        .query_one(
-            "SELECT count(*) FROM messaging_idempotency \
-              WHERE submitter_issuer = $1 AND submitter_subject = $2",
-            &[&ISSUER, &SENDER_PRINCIPAL],
-        )
-        .await
-        .expect("the caller's keys")
-        .get(0);
-    assert_eq!(caller_keys, 2);
-    // A record is found by the digest of its caller and key, which outlives
-    // the raw values once retention erases the record's receipt.
-    let primary_key: String = harness
-        .isolated
-        .admin
-        .query_one(
-            "SELECT pg_get_constraintdef(oid) FROM pg_constraint \
-              WHERE conrelid = 'messaging_idempotency'::regclass AND contype = 'p'",
-            &[],
-        )
-        .await
-        .expect("the idempotency primary key")
-        .get(0);
-    assert_eq!(primary_key, "PRIMARY KEY (key_reference)");
-    assert_eq!(
-        harness
-            .count("SELECT count(*) FROM messaging_messages")
-            .await,
-        3
-    );
-}
-
-/// An earlier runtime can still be serving when version 3 is applied. A
-/// record it commits while the upgrade waits for the idempotency table is
-/// discarded with the rest, and the upgrade completes rather than failing
-/// on a row that has no issuer or subject.
-#[tokio::test]
-async fn version_3_discards_a_record_an_earlier_runtime_commits_while_it_waits() {
-    let harness = Harness::start().await;
-    let first_tail = include_str!("../migrations/0001_messaging.sql");
-    let first_tail = &first_tail[first_tail
-        .find("CREATE TABLE messaging_idempotency")
-        .expect("version 1 creates the idempotency table")..];
-    harness
-        .isolated
-        .admin
-        .batch_execute(&format!(
-            "DROP TABLE messaging_idempotency; \
-             DELETE FROM messaging_schema_migrations WHERE version >= 3; \
-             {first_tail}"
-        ))
-        .await
-        .expect("the version 2 idempotency table");
-
-    // The earlier runtime's submission is recorded but not yet committed
-    // when the upgrade starts.
-    let base = std::env::var("MESSAGING_TEST_DATABASE_URL")
-        .expect("MESSAGING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
-    let separator = if base.contains('?') { '&' } else { '?' };
-    let scoped = format!(
-        "{base}{separator}options=-csearch_path%3D{}",
-        harness.isolated.schema
-    );
-    let (mut earlier, connection) = tokio_postgres::connect(&scoped, tokio_postgres::NoTls)
-        .await
-        .expect("connect as the earlier runtime");
-    tokio::spawn(async move { connection.await.expect("the earlier runtime's connection") });
-    let in_flight = earlier
-        .transaction()
-        .await
-        .expect("the earlier runtime's transaction");
-    in_flight
-        .execute(
-            "INSERT INTO messaging_idempotency \
-                 (principal, operation, idempotency_key, created_at, expires_at, erased_at) \
-             VALUES ('sha256:' || repeat('a', 64), 'submit-message', 'in-flight', \
-                     now(), now() + interval '30 days', now())",
-            &[],
-        )
-        .await
-        .expect("the earlier runtime's record");
-
-    let request = ApplyRequest::default();
-    let upgrade = apply_activation(&harness.config, &request);
-    let earlier_commits = async {
-        tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                let waiting: bool = harness
-                    .isolated
-                    .admin
-                    .query_one(
-                        "SELECT EXISTS (SELECT 1 FROM pg_locks \
-                          WHERE relation = 'messaging_idempotency'::regclass AND NOT granted)",
-                        &[],
-                    )
-                    .await
-                    .expect("the waiting locks")
-                    .get(0);
-                if waiting {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("the upgrade waits for the earlier runtime's transaction");
-        in_flight
-            .commit()
-            .await
-            .expect("the earlier runtime commits");
-    };
-    let (applied, ()) = tokio::join!(upgrade, earlier_commits);
-    let applied = applied.expect("messagingctl apply");
-    assert_eq!(applied.schema_versions_applied, [3]);
-    assert_eq!(
-        harness
-            .count("SELECT count(*) FROM messaging_idempotency")
-            .await,
-        0
-    );
 }
 
 /// A free loopback port, released for the runtime to bind.
@@ -596,4 +385,39 @@ async fn a_stdout_audit_destination_never_carries_operational_logs() {
             "stdout carried a log record: {line}"
         );
     }
+}
+
+/// A spent key is bound to the verified caller, independent of another caller's key.
+#[tokio::test]
+async fn the_runtime_scopes_spent_keys_to_the_verified_caller() {
+    let harness = Harness::start().await;
+    let sender = sender_token();
+    let submission = email_submission();
+    let accepted = harness.submit(&sender, "same-key", &submission).await;
+    assert_eq!(accepted.0, StatusCode::ACCEPTED, "{}", accepted.1);
+    assert_eq!(
+        harness.submit(&sender, "same-key", &submission).await,
+        accepted
+    );
+    let other = harness
+        .submit(&sender_token_for("another-sender"), "same-key", &submission)
+        .await;
+    assert_eq!(other.0, StatusCode::ACCEPTED, "{}", other.1);
+    assert_ne!(accepted.1["id"], other.1["id"]);
+    let mut changed = submission;
+    changed["correlationId"] = json!("different-body");
+    let refused = harness.submit(&sender, "same-key", &changed).await;
+    assert_eq!(refused.0, StatusCode::CONFLICT);
+    assert_eq!(refused.1["code"], "idempotency.key-reused");
+    let row = harness.isolated.admin.query_one(
+        "SELECT submitter_issuer, submitter_subject FROM messaging_idempotency WHERE message_id = $1::text::uuid",
+        &[&accepted.1["id"].as_str().unwrap()]).await.unwrap();
+    assert_eq!(row.get::<_, String>(0), ISSUER);
+    assert_eq!(row.get::<_, String>(1), SENDER_PRINCIPAL);
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        2
+    );
 }

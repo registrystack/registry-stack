@@ -47,9 +47,6 @@ CREATE TABLE IF NOT EXISTS casework_subjects (
     PRIMARY KEY (source_id, subject_kind, subject_id)
 );
 
-ALTER TABLE casework_subjects
-    ADD COLUMN IF NOT EXISTS representation_etag text;
-
 CREATE TABLE IF NOT EXISTS casework_items (
     item_id uuid PRIMARY KEY,
     source_id text NOT NULL,
@@ -59,7 +56,7 @@ CREATE TABLE IF NOT EXISTS casework_items (
     occurrence_key text NOT NULL,
     stage text,
     binding jsonb NOT NULL,
-    state text NOT NULL CHECK (state IN ('open','claimed','waiting_applicant','waiting_application','synchronizing','completed','superseded','cancelled')),
+    state text NOT NULL CHECK (state IN ('open','claimed','waiting-applicant','waiting-application','synchronizing','completed','superseded','cancelled')),
     queue_id text NOT NULL,
     holder_issuer text,
     holder_subject text,
@@ -68,17 +65,17 @@ CREATE TABLE IF NOT EXISTS casework_items (
     passive_due_at timestamptz,
     updated_at timestamptz NOT NULL
 );
-ALTER TABLE casework_items
-    ADD COLUMN IF NOT EXISTS occurrence_key text;
 DO $$
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute
+        WHERE attrelid='casework_items'::regclass AND attname='occurrence_key'
+            AND NOT attisdropped) THEN
+        RAISE EXCEPTION 'legacy Casework items require an explicit adapter occurrence key migration';
+    END IF;
     IF EXISTS (SELECT 1 FROM casework_items WHERE occurrence_key IS NULL) THEN
         RAISE EXCEPTION 'legacy Casework items require an explicit adapter occurrence key migration';
     END IF;
 END $$;
-ALTER TABLE casework_items ALTER COLUMN occurrence_key SET NOT NULL;
-ALTER TABLE casework_items
-    DROP CONSTRAINT IF EXISTS casework_items_source_id_subject_kind_subject_id_fkey;
 CREATE UNIQUE INDEX IF NOT EXISTS casework_items_occurrence_idx
     ON casework_items(source_id, subject_kind, subject_id, occurrence_key);
 CREATE INDEX IF NOT EXISTS casework_items_queue_active_idx
@@ -108,12 +105,6 @@ CREATE TABLE IF NOT EXISTS casework_events (
     actor_reference text,
     detail jsonb NOT NULL
 );
-CREATE TABLE IF NOT EXISTS casework_audit_outbox (
-    event_id uuid PRIMARY KEY,
-    audit_record jsonb NOT NULL,
-    published_at timestamptz
-);
-
 CREATE TABLE IF NOT EXISTS casework_idempotency (
     issuer text NOT NULL,
     subject text NOT NULL,

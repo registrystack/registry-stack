@@ -48,17 +48,8 @@ const AUDIT_WRITER_MIGRATION: &str = include_str!("../migrations/0017_audit_writ
 const SOURCE_RECONCILIATION_HEALTH_MIGRATION: &str =
     include_str!("../migrations/0018_source_reconciliation_health.sql");
 const ACTIVATIONS_MIGRATION: &str = include_str!("../migrations/0019_activations.sql");
-const OCCURRENCE_STATE_SPELLING_MIGRATION: &str =
-    include_str!("../migrations/0022_occurrence_state_spelling.sql");
-const REVIEW_OUTCOME_SPELLING_MIGRATION: &str =
-    include_str!("../migrations/0023_review_outcome_spelling.sql");
-const HISTORY_EVENT_SPELLING_MIGRATION: &str =
-    include_str!("../migrations/0024_history_event_spelling.sql");
-const CLOCK_STAFFING_INBOX_SPELLING_MIGRATION: &str =
-    include_str!("../migrations/0025_clock_staffing_inbox_spelling.sql");
-
 /// Every schema version in ledger order.
-pub(crate) const MIGRATIONS: [(i64, &str); 25] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 21] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -86,10 +77,6 @@ pub(crate) const MIGRATIONS: [(i64, &str); 25] = [
         21,
         include_str!("../migrations/0021_own_review_decisions.sql"),
     ),
-    (22, OCCURRENCE_STATE_SPELLING_MIGRATION),
-    (23, REVIEW_OUTCOME_SPELLING_MIGRATION),
-    (24, HISTORY_EVENT_SPELLING_MIGRATION),
-    (25, CLOCK_STAFFING_INBOX_SPELLING_MIGRATION),
 ];
 
 /// The newest schema version this binary knows how to run against.
@@ -115,8 +102,7 @@ fn applied_schema(applied: Option<i64>) -> String {
     }
 }
 
-/// The schema version that replaces the hosted work tables with unified
-/// reviews, and the tables it drops, in its drop order.
+/// The schema checkpoint that refuses retained earlier hosted work.
 const HOSTED_WORK_DROP_VERSION: i64 = 15;
 const HOSTED_WORK_TABLES: [&str; 9] = [
     "casework_hosted_idempotency_tombstones",
@@ -161,14 +147,9 @@ async fn guarded_table(
     Ok(exists)
 }
 
-/// Refuse a migration that would drop hosted work rows. The hosted tables have
-/// no successor in the unified review schema, so any row they still hold is
-/// named to the operator instead of being dropped. The caller runs this from
-/// inside the same migration transaction that would perform the drop, after
-/// it has already confirmed this version is unapplied, so the exclusive lock
-/// taken here on each table holds for the rest of that transaction and no
-/// concurrent writer can insert a row between this count and that drop.
-/// A plan reads the same refusal without the lock.
+/// Refuse retained hosted work before applying the unified review schema.
+/// The committing check locks each existing table before counting so its
+/// refusal sees concurrent writes; a read-only plan reports the same state.
 async fn refuse_to_drop_hosted_work(
     transaction: &tokio_postgres::Transaction<'_>,
     guard: DropGuard,
@@ -196,17 +177,12 @@ async fn refuse_to_drop_hosted_work(
     }
 }
 
-/// The schema version that drops the audit outbox.
+/// The schema checkpoint that refuses unpublished earlier audit state.
 const AUDIT_OUTBOX_DROP_VERSION: i64 = 17;
 
-/// Refuse a migration that would drop audit records the previous release has
-/// not yet published to its audit journal. They have no successor in the
-/// database, so the operator drains them with that release first. The caller
-/// runs this from inside the same migration transaction that would perform
-/// the drop, after it has already confirmed this version is unapplied, so the
-/// exclusive lock taken here holds for the rest of that transaction and no
-/// concurrent writer can insert a row between this count and that drop.
-/// A plan reads the same refusal without the lock.
+/// Refuse an earlier audit outbox while its publisher still owes records.
+/// Apply locks the existing table before counting; a plan reports the same
+/// refusal without a lock. Neither path discards the outbox.
 async fn refuse_to_drop_unpublished_audit(
     transaction: &tokio_postgres::Transaction<'_>,
     guard: DropGuard,
@@ -339,9 +315,8 @@ pub(crate) async fn pinned_work_inventory_in(
     Ok(inventory)
 }
 
-/// Read, without a lock or a write, the refusal each destructive migration
-/// in `pending` would meet, in migration order, so a plan names every one
-/// that apply would refuse.
+/// Read the earlier-state refusals each pending checkpoint would meet,
+/// without a lock or a write, so plan reports every refusal apply would meet.
 pub(crate) async fn pending_migration_refusals(
     transaction: &tokio_postgres::Transaction<'_>,
     pending: &[i64],
@@ -4165,7 +4140,7 @@ mod tests {
     }
 
     #[test]
-    fn migrations_are_contiguous_and_the_outbox_drop_is_the_audit_writer_migration() {
+    fn migrations_are_contiguous_and_the_audit_refusal_keeps_its_checkpoint() {
         let mut files: Vec<(i64, String)> =
             std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))
                 .expect("read the migrations directory")
@@ -4202,7 +4177,7 @@ mod tests {
         assert_eq!(
             MIGRATIONS[usize::try_from(AUDIT_OUTBOX_DROP_VERSION - 1).unwrap()].1,
             AUDIT_WRITER_MIGRATION,
-            "the outbox drop version is the migration that installs the audit writer"
+            "the audit refusal checkpoint names the audit writer schema"
         );
     }
 

@@ -5,6 +5,10 @@ step that migrates a file or a script. Registry Scheduling is experimental, so
 each normalization lands in this release rather than with the move of the
 promised formats to stable. The Scheduling `CHANGELOG.md` points here.
 
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
+Fresh installation creates the current schema directly. No schema step
+converts or discards rows an earlier release wrote.
+
 The HTTP contract does not change. The public policy view, the appointment
 and hold documents, and the Rust, Node.js, and Python clients keep
 `maxRecipients`, `minutesBefore`, and `schedulingId`.

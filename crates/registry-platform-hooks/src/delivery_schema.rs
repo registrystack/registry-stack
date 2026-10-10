@@ -7,11 +7,10 @@
 //! migration, the way a product includes a shipped migration. The statements
 //! are rendered with the adopting product's schema name.
 //!
-//! The statements are idempotent: a `CREATE ... IF NOT EXISTS` sequence, and
-//! one upgrade that adds the dead-letter reason to a delivery-state table
-//! created without it. Installing them again over the schema they created
-//! changes nothing. They are ordered: the deliveries table carries a foreign
-//! key into the outbox, so the outbox is created first.
+//! The statements are an idempotent `CREATE ... IF NOT EXISTS` sequence.
+//! Installing them again over the schema they created changes nothing. The
+//! deliveries table carries a foreign key into the outbox, so the outbox is
+//! created first.
 //!
 //! Installing the statements installs no ACL. Privileges on the delivery
 //! objects stay with the adopting product: it owns every `GRANT` and
@@ -248,45 +247,6 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                          AND proposal_summary IS NOT NULL)
                  )
              );",
-    // The dead-letter reason, for a delivery-state table created without it.
-    // The release that introduced the reason serves such a table without
-    // installing again, so the table still reaches this install without it.
-    "             ALTER TABLE {schema}.registry_webhook_delivery_state
-                 ADD COLUMN IF NOT EXISTS dead_letter_reason text;",
-    "             DO $registry_webhook_state_recovery_upgrade$
-             BEGIN
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            '{schema}.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_dead_letter_reason_values'
-                 ) THEN
-                     ALTER TABLE {schema}.registry_webhook_delivery_state
-                         ADD CONSTRAINT registry_webhook_delivery_state_dead_letter_reason_values
-                         CHECK (
-                             dead_letter_reason IS NULL OR dead_letter_reason IN (
-                                 'http-non-success', 'destination-timeout',
-                                 'invalid-remaining-timeout', 'invalid-frozen-policy',
-                                 'invalid-frozen-request', 'resolution-failed',
-                                 'resolution-capacity-unavailable', 'too-many-resolver-answers',
-                                 'no-resolver-answers', 'resolver-port-mismatch',
-                                 'resolver-address-family-mismatch', 'literal-origin-mismatch',
-                                 'cloud-metadata-denied', 'always-denied-address',
-                                 'private-address-not-allowed', 'non-global-address-denied',
-                                 'development-address-denied', 'tls-material-unavailable',
-                                 'client-build-failed', 'transport-failed',
-                                 'transport-failed-after-connect', 'deadline-exceeded',
-                                 'deadline-exceeded-after-connect', 'too-many-response-headers',
-                                 'response-header-bytes-exceeded', 'destination-policy-refused',
-                                 'destination-binding-refused', 'handler-binding-refused',
-                                 'handler-deadline', 'handler-resource', 'handler-execution',
-                                 'handler-source', 'handler-unavailable', 'payload-refused',
-                                 'worker-interrupted', 'proposal-dead-lettered'
-                             )
-                         );
-                 END IF;
-             END
-             $registry_webhook_state_recovery_upgrade$;",
     // Delivery-state work indexes.
     "             CREATE INDEX IF NOT EXISTS registry_webhook_delivery_state_due_idx
                  ON {schema}.registry_webhook_delivery_state
@@ -575,8 +535,8 @@ mod tests {
         let lists = dead_letter_reason_lists(&rendered(KERNEL_SCHEMA));
         assert_eq!(
             lists.len(),
-            2,
-            "the table and the reason upgrade each list the reasons"
+            1,
+            "fresh creation defines the dead-letter reasons once"
         );
         for list in lists {
             assert_eq!(list, spelled);
@@ -617,7 +577,7 @@ mod tests {
     #[test]
     fn every_statement_is_qualified_by_the_schema() {
         let statements = rendered(KERNEL_SCHEMA);
-        assert_eq!(statements.len(), 7);
+        assert_eq!(statements.len(), 5);
         for statement in &statements {
             assert!(
                 statement.contains(KERNEL_SCHEMA),
@@ -838,7 +798,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
-    async fn installing_over_a_table_without_dead_letter_reasons_adds_them() {
+    async fn installing_fresh_delivery_storage_twice_keeps_dead_letter_reasons() {
         let url = std::env::var("HOOKS_TEST_DATABASE_URL")
             .expect("HOOKS_TEST_DATABASE_URL is required for the real PostgreSQL test");
         let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
@@ -864,20 +824,9 @@ mod tests {
             "a fresh install has the column and its constraint"
         );
 
-        // The table as a release without dead-letter reasons left it, which
-        // the release that introduced them serves without installing again.
-        client
-            .batch_execute(&format!(
-                "ALTER TABLE {schema}.registry_webhook_delivery_state
-                     DROP COLUMN dead_letter_reason;"
-            ))
-            .await
-            .expect("shape the table without the dead-letter reason");
-        assert!(dead_letter_reason_catalog(&client, schema).await.is_empty());
-
         install(&client, schema)
             .await
-            .expect("install runs over the table without the dead-letter reason");
+            .expect("install runs again over current storage");
         assert_eq!(dead_letter_reason_catalog(&client, schema).await, installed);
         client
             .batch_execute(&format!("DROP SCHEMA {schema} CASCADE;"))

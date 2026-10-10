@@ -1,10 +1,3 @@
--- Preserve the unreleased pilot ledger as inert history outside the
--- messaging_* runtime object namespace. Nothing reads or writes it after
--- activation adoption.
-ALTER TABLE messaging_package_ledger RENAME TO legacy_messaging_package_ledger;
-ALTER SEQUENCE messaging_package_ledger_sequence_seq
-    RENAME TO legacy_messaging_package_ledger_sequence_seq;
-
 -- Append-only governed package activation history.
 CREATE TABLE IF NOT EXISTS messaging_activations (
     activation_id uuid PRIMARY KEY,

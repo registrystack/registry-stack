@@ -12,6 +12,10 @@ Machine-readable `caseworkctl --format json` output is versioned by the
 [`caseworkctl` JSON wire contract](contracts/cli/README.md). Each report carries
 an `apiVersion` and `kind` and is checked against its command-specific schema.
 
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
+Fresh installation creates the current schema directly, without conversion
+or discard of earlier rows.
+
 ## Standalone unified reviews
 
 Create the source-free starter, then check and test it:

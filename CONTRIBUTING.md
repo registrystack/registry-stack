@@ -182,13 +182,9 @@ Every pull request should make the review path clear:
   the products it rehearses. v0.40.0 is the one release that does not upgrade
   its predecessor's state in place: an operator applies it to new databases,
   as its release notes state, so it carries no v0.39.0 row forward. BReg's
-  ingestion run install discards runs stored without a verified creator, and
-  Messaging schema version 3 discards pseudonym-scoped idempotency records;
-  only a database written before v0.40.0 holds either. The tests
-  `the_upgrade_discards_runs_stored_without_a_verified_creator` and
-  `version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller`
-  prove those losses and the state each must preserve. They permit no other
-  row loss and no later-release exception.
+  fresh installations contain the current caller-scoped replay and verified
+  creator structures directly. No installation step converts or discards
+  earlier rows.
 - Before 1.0, a release reads only the state its immediate predecessor wrote,
   and an operator upgrades one release at a time. v0.40.0 is the exception: it
   does not upgrade state v0.39.0 wrote in place. It refuses a configuration
@@ -196,12 +192,8 @@ Every pull request should make the review path clear:
   (`config.removed-key`, `config.retired-api-version`), refuses a BReg or
   Messaging package the earlier release built and a Scheduling database it
   wrote, and is applied to new databases; the BREAKING sections of its release
-  notes give each step. The tests
-  `real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones_spent_rows`
-  and
-  `claim_owner_migration_keeps_existing_claims_and_refuses_a_partial_owner`
-  prove what BReg's idempotency store install and Scheduling migration 12 do
-  to the shapes they were written for. From v0.40.0 onward, keep everything
+  notes give each step. v0.40.0 does not upgrade v0.39.0 state in place;
+  apply to a new database. From v0.40.0 onward, keep everything
   the previous release could have written to a database, package,
   configuration file, or local state readable. Do not add code that reads,
   upgrades, or refuses by name the state of an older release, and remove such

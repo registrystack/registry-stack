@@ -82,7 +82,8 @@
   `delivery_mode` in a `DeliveryCapture` supplies the new word.
   `delivery_schema::install` creates the tables in the new spelling and
   respells no stored row: v0.40.0 does not upgrade v0.39.0 state in place;
-  apply to a new database.
+  apply to a new database. Installation also omits the older-table
+  dead-letter reason upgrade; fresh creation defines its column and check.
 - BREAKING: the audit query redactor reports an undecodable query with the code
   `invalid-query-encoding` (was `invalid_query_encoding`) in its `_error` object.
   No product reads the code.

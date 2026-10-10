@@ -7,11 +7,11 @@
 -- The package ledger: one row for each package a deployment activated, in
 -- activation order. The digest is the package identity the runtime verified;
 -- the runtime version is the binary that activated it.
-CREATE TABLE messaging_package_ledger (
-    sequence bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    package_digest text NOT NULL CHECK (package_digest ~ '^sha256:[0-9a-f]{64}$'),
-    runtime_version text NOT NULL CHECK (length(runtime_version) BETWEEN 1 AND 64),
-    activated_at timestamptz NOT NULL
+CREATE TABLE legacy_messaging_package_ledger (
+    sequence bigint CONSTRAINT messaging_package_ledger_sequence_not_null NOT NULL GENERATED ALWAYS AS IDENTITY CONSTRAINT messaging_package_ledger_pkey PRIMARY KEY,
+    package_digest text CONSTRAINT messaging_package_ledger_package_digest_not_null NOT NULL CONSTRAINT messaging_package_ledger_package_digest_check CHECK (package_digest ~ '^sha256:[0-9a-f]{64}$'),
+    runtime_version text CONSTRAINT messaging_package_ledger_runtime_version_not_null NOT NULL CONSTRAINT messaging_package_ledger_runtime_version_check CHECK (length(runtime_version) BETWEEN 1 AND 64),
+    activated_at timestamptz CONSTRAINT messaging_package_ledger_activated_at_not_null NOT NULL
 );
 
 -- A message row carries what the status route, the worker's policy, and
@@ -262,17 +262,12 @@ CREATE TABLE messaging_receipts (
 CREATE UNIQUE INDEX messaging_receipts_distinct_idx
     ON messaging_receipts (message_id, report, coalesce(code, ''));
 
--- The idempotency record of one submission, keyed by the caller's keyed
--- audit pseudonym rather than its issuer and subject. The request hash binds
--- the key to one body; the stored receipt answers a retry until retention
--- erases it, and the row stays so the key stays spent. When retention
--- deletes the message, it nulls the message and the request hash too: the
--- row then holds the pseudonym, the key, and its times, and a retry under
--- the key is still refused as expired.
+-- The receipt is keyed by the digest of the verified caller and key.
+-- Retention clears its raw caller and key with the receipt; the digest stays
+-- spent across audit-key rotation and after the message is erased.
 CREATE TABLE messaging_idempotency (
-    principal text NOT NULL CHECK (principal ~ '^(hmac-sha256|sha256):[0-9a-f]{64}$'),
     operation text NOT NULL CHECK (operation IN ('submit-message')),
-    idempotency_key text NOT NULL CHECK (octet_length(idempotency_key) BETWEEN 1 AND 128),
+    idempotency_key text CHECK (octet_length(idempotency_key) BETWEEN 1 AND 128),
     request_hash text CHECK (request_hash ~ '^sha256:[0-9a-f]{64}$'),
     message_id uuid,
     status_code smallint,
@@ -280,7 +275,16 @@ CREATE TABLE messaging_idempotency (
     created_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL,
     erased_at timestamptz,
-    PRIMARY KEY (principal, operation, idempotency_key),
+    key_reference text NOT NULL CHECK (key_reference ~ '^sha256:[0-9a-f]{64}$'),
+    submitter_issuer text CHECK (length(submitter_issuer) BETWEEN 1 AND 2048),
+    submitter_subject text CHECK (length(submitter_subject) BETWEEN 1 AND 1024),
+    PRIMARY KEY (key_reference),
+    CONSTRAINT messaging_idempotency_caller CHECK (
+        (erased_at IS NULL AND submitter_issuer IS NOT NULL
+            AND submitter_subject IS NOT NULL AND idempotency_key IS NOT NULL)
+        OR (erased_at IS NOT NULL AND submitter_issuer IS NULL
+            AND submitter_subject IS NULL AND idempotency_key IS NULL)
+    ),
     CONSTRAINT messaging_idempotency_erasure CHECK (
         (erased_at IS NULL AND status_code IS NOT NULL AND receipt IS NOT NULL)
         OR (erased_at IS NOT NULL AND status_code IS NULL AND receipt IS NULL)

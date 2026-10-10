@@ -324,9 +324,9 @@ decisions:
       identical key is fresh. Rotating
       audit.hashKeyRef changes pseudonyms only: an exact retry after the
       rotation replays its receipt or is refused as expired, and never sends
-      again. The audit journal keeps naming the caller by pseudonym. Schema
-      version 3 discarded every idempotency record written under the
-      pseudonym scope, so those keys are free again.
+      again. The audit journal keeps naming the caller by pseudonym. Fresh
+      creation defines this caller-scoped shape directly, without conversion
+      or discard of pseudonym-scoped records.
     reasoning: >-
       Freeing a key would turn a caller's mistaken retry into a second message
       sent to the same recipient, which is the duplicate the key exists to
@@ -346,15 +346,13 @@ decisions:
       message row already holds them, and the spent-key row holds them no
       longer. The residual is that an unkeyed digest lets anyone who reads the
       table and can guess a caller's issuer, subject, and key confirm that the
-      caller spent that key, which a random key makes impractical. Version 3
-      discarded the records it replaced rather than re-keying them because no
-      deployment held Messaging records worth keeping, and a key attributed to
-      the wrong caller would replay one caller's receipt to another.
+      caller spent that key, which a random key makes impractical. v0.40.0 does
+      not upgrade v0.39.0 state in place; apply to a new database.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_replays_one_request_and_refuses_another}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_is_scoped_to_the_issuer_as_well_as_the_subject}
-      - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller}
+      - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: the_runtime_scopes_spent_keys_to_the_verified_caller}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_submission_receipt_expires_after_its_period_and_its_key_stays_spent}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent}

@@ -598,7 +598,7 @@ async fn external_reference_migration_preserves_existing_claims_with_an_empty_se
                  policy_revision, actor)
              VALUES ('00000000-0000-4000-8000-000000001764', 'booking', 'active',
                      'registry-update-30', 'update-stations', now(), now() + interval '30 minutes',
-                     now(), now() + interval '30 minutes', 1, 1, 1, 'legacy-actor');
+                     now(), now() + interval '30 minutes', 1, 1, 1, 'ownerless-actor');
              ALTER TABLE {schema}.scheduling_claims DROP COLUMN external_references;
              DELETE FROM {schema}.scheduling_schema_migrations WHERE version=10;",
             schema = deployment.schema
@@ -620,54 +620,57 @@ async fn external_reference_migration_preserves_existing_claims_with_an_empty_se
             &[],
         )
         .await
-        .expect("the pre-migration claim remains");
+        .expect("the ownerless claim remains");
     assert_eq!(row.get::<_, String>(0), "registry-update-30");
-    assert_eq!(row.get::<_, String>(1), "legacy-actor");
+    assert_eq!(row.get::<_, String>(1), "ownerless-actor");
     assert_eq!(row.get::<_, Value>(2), serde_json::json!([]));
 
     deployment.drop().await;
 }
 
-/// Migration 11 re-keys every stored attempt under the digest the runtime
-/// computes, so a key spent before the upgrade stays spent after it, and
-/// clears the raw caller and key from a receipt the sweep had already erased.
+/// Fresh attempt storage keeps spent caller-scoped digests and enforces raw
+/// caller retention and erasure without converting older rows.
 #[tokio::test]
-async fn attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_callers() {
+async fn fresh_attempt_storage_preserves_digests_and_refuses_partial_erasure() {
     let deployment = Deployment::single("activation_attempt_key_reference").await;
     let first = deployment.package("first", POLICY);
-    let second = deployment.package("second", &successor_policy());
     let first_config = deployment.config("first.yaml", &first, ConfigOptions::default());
-    let second_config = deployment.config("second.yaml", &second, ConfigOptions::default());
     apply(&first_config).expect("the initial package activates");
 
+    let live_reference = attempt_key_reference(
+        "https://issuer.test",
+        "subject-é",
+        "appointment:create",
+        "fresh-live",
+    );
+    let erased_reference = attempt_key_reference(
+        "https://issuer.test",
+        "subject-é",
+        "hold:create",
+        "fresh-erased",
+    );
     deployment
         .admin
-        .batch_execute(&format!(
-            "ALTER TABLE {schema}.scheduling_attempts
-                 DROP CONSTRAINT scheduling_attempts_raw_caller_check,
-                 DROP COLUMN key_reference,
-                 ALTER COLUMN actor_issuer SET NOT NULL,
-                 ALTER COLUMN actor_subject SET NOT NULL,
-                 ALTER COLUMN idempotency_key SET NOT NULL,
-                 ADD UNIQUE (actor_issuer, actor_subject, scope, idempotency_key);
-             DELETE FROM {schema}.scheduling_schema_migrations WHERE version=11;
-             INSERT INTO {schema}.scheduling_attempts
-                 (attempt_id, actor_issuer, actor_subject, scope, idempotency_key,
-                  request_hash, state, status_code, receipt, expires_at, erased_at)
-             VALUES
-                 ('00000000-0000-4000-8000-000000001101', 'https://issuer.test',
-                  'subject-é', 'appointment:create', 'legacy-live', 'sha256:live',
-                  'completed', 201, '{{}}'::jsonb, now() + interval '1 day', NULL),
-                 ('00000000-0000-4000-8000-000000001102', 'https://issuer.test',
-                  'subject-é', 'hold:create', 'legacy-erased', 'sha256:erased',
-                  'refused', 409, NULL, now() - interval '1 day', now());",
-            schema = deployment.schema
-        ))
+        .execute(
+            &format!(
+                "INSERT INTO {schema}.scheduling_attempts
+                     (attempt_id, key_reference, actor_issuer, actor_subject, scope,
+                      idempotency_key, request_hash, state, status_code, receipt,
+                      expires_at, erased_at)
+                 VALUES
+                     ('00000000-0000-4000-8000-000000001101', $1, 'https://issuer.test',
+                      'subject-é', 'appointment:create', 'fresh-live', 'sha256:live',
+                      'completed', 201, '{{}}'::jsonb, now() + interval '1 day', NULL),
+                     ('00000000-0000-4000-8000-000000001102', $2, NULL,
+                      NULL, 'hold:create', NULL, 'sha256:erased',
+                      'refused', 409, NULL, now() - interval '1 day', now());",
+                schema = deployment.schema
+            ),
+            &[&live_reference, &erased_reference],
+        )
         .await
-        .expect("simulate stored attempts immediately before migration 11");
+        .expect("store retained and erased attempts in fresh storage");
 
-    let report = apply(&second_config).expect("the successor applies migration 11");
-    assert_eq!(report["schemaVersionsApplied"], serde_json::json!([11]));
     let rows = deployment
         .admin
         .query(
@@ -690,9 +693,9 @@ async fn attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_cal
             "https://issuer.test",
             "subject-é",
             "appointment:create",
-            "legacy-live"
+            "fresh-live"
         ),
-        "the migration's digest is the runtime's"
+        "fresh storage retains the caller-scoped runtime digest"
     );
     assert_eq!(
         live.get::<_, Option<String>>(2).as_deref(),
@@ -704,7 +707,7 @@ async fn attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_cal
     );
     assert_eq!(
         live.get::<_, Option<String>>(4).as_deref(),
-        Some("legacy-live")
+        Some("fresh-live")
     );
 
     let erased = &rows[1];
@@ -714,7 +717,7 @@ async fn attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_cal
             "https://issuer.test",
             "subject-é",
             "hold:create",
-            "legacy-erased"
+            "fresh-erased"
         ),
         "an erased key stays spent under its digest"
     );
@@ -732,7 +735,7 @@ async fn attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_cal
         "UPDATE {schema}.scheduling_attempts \
          SET actor_issuer=NULL, actor_subject=NULL, idempotency_key=NULL \
          WHERE attempt_id='00000000-0000-4000-8000-000000001101'",
-        "UPDATE {schema}.scheduling_attempts SET idempotency_key='legacy-erased' \
+        "UPDATE {schema}.scheduling_attempts SET idempotency_key='fresh-erased' \
          WHERE attempt_id='00000000-0000-4000-8000-000000001102'",
     ] {
         let error = deployment
@@ -751,44 +754,63 @@ async fn attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_cal
         );
     }
 
+    for (value, expected_code, expected_constraint) in [
+        ("NULL", "23502", None),
+        (
+            "'sha256:invalid'",
+            "23514",
+            Some("scheduling_attempts_key_reference_check"),
+        ),
+        (
+            "(SELECT key_reference FROM {schema}.scheduling_attempts \
+             WHERE attempt_id='00000000-0000-4000-8000-000000001101')",
+            "23505",
+            Some("scheduling_attempts_key_reference_key"),
+        ),
+    ] {
+        let statement = format!(
+            "UPDATE {{schema}}.scheduling_attempts SET key_reference={value} \
+             WHERE attempt_id='00000000-0000-4000-8000-000000001102'"
+        )
+        .replace("{schema}", &deployment.schema);
+        let error = deployment
+            .admin
+            .batch_execute(&statement)
+            .await
+            .expect_err("a missing, malformed, or already-spent digest is refused");
+        let error = error
+            .as_db_error()
+            .expect("a database constraint refuses it");
+        assert_eq!(error.code().code(), expected_code, "{statement}");
+        assert_eq!(error.constraint(), expected_constraint, "{statement}");
+    }
+
     deployment.drop().await;
 }
 
-/// Migration 12 adds the verified owner beside the pseudonym. A claim
-/// written before it recorded only the pseudonym, so it keeps its capacity,
-/// its pseudonym, and its state with no owner, and the constraint holds every
-/// owner as a whole non-empty pair.
+/// Fresh claim storage accepts no owner or one complete non-empty owner pair.
 #[tokio::test]
-async fn claim_owner_migration_keeps_existing_claims_and_refuses_a_partial_owner() {
+async fn fresh_claim_storage_refuses_a_partial_owner() {
     let deployment = Deployment::single("activation_claim_owner").await;
     let first = deployment.package("first", POLICY);
-    let second = deployment.package("second", &successor_policy());
     let first_config = deployment.config("first.yaml", &first, ConfigOptions::default());
-    let second_config = deployment.config("second.yaml", &second, ConfigOptions::default());
     apply(&first_config).expect("the initial package activates");
 
     deployment
         .admin
         .batch_execute(&format!(
-            "ALTER TABLE {schema}.scheduling_claims
-                 DROP CONSTRAINT scheduling_claims_owner_check,
-                 DROP COLUMN owner_issuer,
-                 DROP COLUMN owner_subject;
-             DELETE FROM {schema}.scheduling_schema_migrations WHERE version=12;
-             INSERT INTO {schema}.scheduling_claims
+            "INSERT INTO {schema}.scheduling_claims
                 (claim_id, kind, state, offering, supply_id, displayed_start,
                  displayed_end, occupied_start, occupied_end, units, revision,
                  policy_revision, actor)
              VALUES ('00000000-0000-4000-8000-000000001930', 'booking', 'active',
                      'registry-update-30', 'update-stations', now(), now() + interval '30 minutes',
-                     now(), now() + interval '30 minutes', 1, 1, 1, 'legacy-actor');",
+                     now(), now() + interval '30 minutes', 1, 1, 1, 'ownerless-actor');",
             schema = deployment.schema
         ))
         .await
-        .expect("simulate a populated schema immediately before migration 12");
+        .expect("store a fresh claim without an owner");
 
-    let report = apply(&second_config).expect("the successor applies migration 12");
-    assert_eq!(report["schemaVersionsApplied"], serde_json::json!([12]));
     let row = deployment
         .admin
         .query_one(
@@ -801,9 +823,9 @@ async fn claim_owner_migration_keeps_existing_claims_and_refuses_a_partial_owner
             &[],
         )
         .await
-        .expect("the pre-migration claim remains");
+        .expect("the ownerless claim remains");
     assert_eq!(row.get::<_, String>(0), "active");
-    assert_eq!(row.get::<_, String>(1), "legacy-actor");
+    assert_eq!(row.get::<_, String>(1), "ownerless-actor");
     assert_eq!(row.get::<_, Option<String>>(2), None);
     assert_eq!(row.get::<_, Option<String>>(3), None);
 

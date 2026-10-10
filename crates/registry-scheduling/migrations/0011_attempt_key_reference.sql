@@ -8,20 +8,6 @@ LOCK TABLE scheduling_attempts IN ACCESS EXCLUSIVE MODE;
 
 ALTER TABLE scheduling_attempts ADD COLUMN key_reference text;
 
-UPDATE scheduling_attempts
-   SET key_reference = 'sha256:' || encode(sha256(
-           int8send(octet_length(convert_to('scheduling-idempotency-key-v1', 'UTF8'))::bigint)
-        || convert_to('scheduling-idempotency-key-v1', 'UTF8')
-        || int8send(octet_length(convert_to(actor_issuer, 'UTF8'))::bigint)
-        || convert_to(actor_issuer, 'UTF8')
-        || int8send(octet_length(convert_to(actor_subject, 'UTF8'))::bigint)
-        || convert_to(actor_subject, 'UTF8')
-        || int8send(octet_length(convert_to(scope, 'UTF8'))::bigint)
-        || convert_to(scope, 'UTF8')
-        || int8send(octet_length(convert_to(idempotency_key, 'UTF8'))::bigint)
-        || convert_to(idempotency_key, 'UTF8')
-       ), 'hex');
-
 ALTER TABLE scheduling_attempts
     DROP CONSTRAINT scheduling_attempts_actor_issuer_actor_subject_scope_idempo_key,
     ALTER COLUMN key_reference SET NOT NULL,
@@ -31,12 +17,6 @@ ALTER TABLE scheduling_attempts
     ADD CONSTRAINT scheduling_attempts_key_reference_key UNIQUE (key_reference),
     ADD CONSTRAINT scheduling_attempts_key_reference_check
         CHECK (key_reference ~ '^sha256:[0-9a-f]{64}$');
-
--- A receipt already erased drops its raw caller and key now, as the sweep
--- does from here on.
-UPDATE scheduling_attempts
-   SET actor_issuer = NULL, actor_subject = NULL, idempotency_key = NULL
- WHERE erased_at IS NOT NULL;
 
 -- The raw caller and key are present exactly while the receipt is: all three
 -- non-empty on a row not yet erased, and all three cleared on an erased one.

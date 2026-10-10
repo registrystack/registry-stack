@@ -37,7 +37,6 @@ CREATE FUNCTION casework_invalidate_ineligible_tasks(target_item uuid) RETURNS v
 LANGUAGE plpgsql AS $$
 DECLARE
     lost record;
-    event uuid;
 BEGIN
     FOR lost IN
         UPDATE casework_task_grants g
@@ -68,11 +67,8 @@ BEGIN
           )
         RETURNING g.grant_id, i.item_id, i.revision
     LOOP
-        event := gen_random_uuid();
         INSERT INTO casework_history(event_id,item_id,item_revision,kind,occurred_at,profile_id,detail)
-        VALUES(event,lost.item_id,lost.revision,'task_invalidated',now(),'system:task-grants',jsonb_build_object('grantId',lost.grant_id));
-        INSERT INTO casework_audit_outbox(event_id,audit_record)
-        VALUES(event,jsonb_build_object('event','casework.task_invalidated','eventId',event,'itemId',lost.item_id,'grantId',lost.grant_id,'profileId','system:task-grants'));
+        VALUES(gen_random_uuid(),lost.item_id,lost.revision,'task-invalidated',now(),'system:task-grants',jsonb_build_object('grantId',lost.grant_id));
     END LOOP;
 END;
 $$;

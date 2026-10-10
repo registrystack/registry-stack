@@ -195,8 +195,8 @@ standard output, that fails closed at the request boundary.
 - `schedulingctl records apply` writes to a sibling file for its role,
   never into the runtime's file, and refuses to replace records when that
   file cannot be opened.
-- Schema version 8 drops the outbox and refuses while it holds a record
-  its publisher had not reached, so an upgrade cannot silently lose one.
+- Schema version 8 refuses an earlier outbox while it holds an unpublished
+  record, and preserves the table even after its records are published.
 
 Entries are no longer chained. Tamper evidence for the audit file is the
 destination's and the operator's collection pipeline's, not the runtime's.
@@ -208,7 +208,7 @@ destination's and the operator's collection pipeline's, not the runtime's.
 `refusals_decided_inside_the_capacity_transaction_write_their_audit_rows`,
 `a_permission_refused_before_the_transaction_writes_its_audit_row`,
 `hook_delivery_audit_failure_prevents_egress`, and
-`migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox`
+`migration_refuses_unpublished_audit_and_preserves_a_drained_outbox`
 (`crates/registry-scheduling/tests/postgres_commitments.rs`);
 `records_apply_replaces_facts_wholesale_and_audits_each_write` and
 `records_apply_rejects_a_different_deployment_identity_without_writing`
@@ -458,10 +458,10 @@ empty, or without SELECT on `scheduling_activations` or
 `scheduling_schema_migrations`, as a rotated runtime role before apply grants
 it. The refusal names `schedulingctl apply --runtime-config FILE`, then `plan`
 again. A database with no ledger is not refused. When schema migration 8 is
-pending, `plan` counts the unpublished audit outbox rows it would drop without
+pending, `plan` counts unpublished rows in an earlier audit outbox without
 a lock, passing over an outbox the runtime role cannot read, and reports
 `schedulingctl.activation.unpublished-audit`; apply counts them again under an
-exclusive lock inside its transaction before the drop. Plan also resolves the
+exclusive lock inside its transaction. Neither path drops the outbox. Plan also resolves the
 candidate's hook destinations and signing material as apply does before it
 writes anything, and reports `schedulingctl.activation.hook-destinations` when
 one cannot run. It resolves a key only to learn that it exists at a usable
@@ -749,12 +749,11 @@ built for.
 **Tests.** `release/scripts/test_check_debian13_images.py`:
 `test_operator_tools_cannot_be_optional`.
 
-**Accepted residual.** The runtime still guards state older than v0.38.0:
-the audit-outbox drop guard in `crates/registry-scheduling/src/store/activation.rs`
-(SCHEDULING-SEC-14) and the removed-key refusals stay as they are. Removing
-the guard needs a decision on a schema floor, because without one an
-unsupported upgrade from before the audit writer would drop unpublished
-audit rows silently.
+**Accepted residual.** The unpublished-audit guard in
+`crates/registry-scheduling/src/store/activation.rs` (SCHEDULING-SEC-14)
+and the removed-key refusals remain. Installation neither creates nor drops
+an audit outbox, and refuses an existing outbox with unpublished records.
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
 
 ## Grant status stays out of the capacity transaction
 
@@ -834,9 +833,8 @@ The replay lookup and the unique constraint use only that reference.
 drops the receipt and clears the raw issuer, subject, and key in one
 statement, and `scheduling_attempts_raw_caller_check` holds all three
 non-empty while the receipt is retained and all three NULL once it is
-erased. Migration 11 computes the same digest in SQL for every existing
-row, so a key spent before the upgrade stays spent, and clears the raw
-values from rows already erased.
+erased. Fresh installation establishes the digest and raw-caller constraints
+before attempts can be stored. It does not convert older attempt rows.
 
 **Tests.** `crates/registry-scheduling/tests/postgres_commitments.rs`:
 `a_spent_key_forgets_its_raw_caller_after_the_receipt_horizon_and_stays_spent`
@@ -846,10 +844,10 @@ and a row inside its horizon is untouched).
 `crates/registry-scheduling/src/store/attempt_key.rs`:
 `the_attempt_key_reference_is_a_length_prefixed_domain_digest`.
 `crates/registry-schedulingctl/tests/activation_postgres.rs`:
-`attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_callers`
-(the SQL digest equals the Rust one, including for a non-ASCII subject,
-and the constraint refuses a raw caller on an erased row or a cleared one
-on a live row).
+`fresh_attempt_storage_preserves_digests_and_refuses_partial_erasure`
+(fresh storage retains caller-scoped runtime digests, including for a
+non-ASCII subject; refuses missing, malformed, or duplicate digests; and
+refuses a raw caller on an erased row or a cleared one on a live row).
 
 **Accepted residual.** The reference is an unkeyed digest, kept forever.
 Anyone who can read the table and already knows a caller's issuer,
@@ -899,16 +897,16 @@ claim serializes exactly as an unowned one).
 `projections_disclose_only_the_requested_closed_fields` (owner canaries
 never reach a projection).
 `crates/registry-schedulingctl/tests/activation_postgres.rs`:
-`claim_owner_migration_keeps_existing_claims_and_refuses_a_partial_owner`.
+`fresh_claim_storage_refuses_a_partial_owner`.
 
 **Accepted residual.** The raw issuer and subject stay on the claim for as
 long as it exists, and claims have no retention sweep (SCHEDULING-DEF-06);
 a future claim retention must clear both columns, which the constraint
-allows. A claim written before migration 12 recorded only the pseudonym,
-from which the owner cannot be recovered: it keeps its capacity and
-history and is owned by no caller, so no API caller can read, confirm,
-reschedule, cancel, or release it. Before 1.0 there are no adopters whose
-claims this strands.
+allows. A fresh ownerless claim is owned by no caller, so no API caller can
+read, confirm, reschedule, cancel, or release it. Earlier claims are not
+converted: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
+database.
+
 
 ## Known deferrals
 
@@ -941,3 +939,15 @@ relations, including an empty database. Older servers refuse with an upgrade
 instruction before migrations or activation writes. The shared
 `postgres_version_floor_precedes_missing_ledger_observation` database test
 covers that entry point; unit tests pin the 16/17 version boundary.
+
+## Fresh attempt keys and claim ownership
+
+Threat and enforcement: Installation must not rewrite the identity of a spent attempt or invent a claim owner. The live attempt-reference and owner constraints remain; the attempt digest backfill and erased-receipt caller rewrite are removed. Fresh creation omits the obsolete audit outbox, and installation never drops an existing one. Its unpublished-record refusal remains. The stored-policy reader does not discard obsolete windows, same-policy publication does not reconstruct a missing document, and window-head creation does not copy earlier window rows. Capacity transactions, whole owner-pair checks, audit rotation, caller replay, and retention behavior are unchanged.
+
+Verification: `registry-scheduling/tests/postgres_commitments.rs::rotating_the_audit_key_keeps_existing_claims_with_their_owner` and `registry-schedulingctl/tests/activation_postgres.rs::fresh_claim_storage_refuses_a_partial_owner`. Schema-only dumps of separate fresh
+installations are compared before and after, with no ledger data.
+
+Evidence also includes `a_retained_policy_with_obsolete_windows_is_not_reinterpreted` and `reapplying_a_policy_does_not_reconstruct_a_missing_retained_document` in `postgres_commitments.rs`.
+
+Residual: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
+database. No compatibility reader or migration of earlier state is provided.

@@ -54,14 +54,11 @@ pub(crate) async fn install(
              detail_erased_at timestamptz,
              created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
              updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-             PRIMARY KEY (request_entity_id, request_id)
-         );
-         ALTER TABLE registry_internal.registry_request_state
-             DROP CONSTRAINT IF EXISTS registry_request_state_detail_erasure_terminal;
-         ALTER TABLE registry_internal.registry_request_state
-             ADD CONSTRAINT registry_request_state_detail_erasure_terminal CHECK (
+             PRIMARY KEY (request_entity_id, request_id),
+             CONSTRAINT registry_request_state_detail_erasure_terminal CHECK (
                  detail_erased_at IS NULL OR state IN ('cancelled','applied')
-             );
+             )
+         );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_request_intake_presence (
              request_entity_id text NOT NULL CHECK (request_entity_id <> ''),
              request_id uuid NOT NULL,
@@ -131,19 +128,15 @@ pub(crate) async fn install(
              effect_digest text NOT NULL CHECK (effect_digest ~ '^sha256:[0-9a-f]{64}$'),
              applied_by text NOT NULL CHECK (applied_by <> ''),
              applied_at timestamptz NOT NULL,
+             reason text,
+             reason_present boolean NOT NULL DEFAULT false,
+             CONSTRAINT registry_request_application_reason_bound CHECK (
+                 reason IS NULL OR (char_length(reason) <= 4096 AND reason_present)
+             ),
              PRIMARY KEY (request_entity_id, request_id, proposal_version),
              FOREIGN KEY (request_entity_id, request_id, proposal_version)
                  REFERENCES registry_internal.registry_request_proposals
          );
-         ALTER TABLE registry_internal.registry_request_applications
-             ADD COLUMN IF NOT EXISTS reason text,
-             ADD COLUMN IF NOT EXISTS reason_present boolean NOT NULL DEFAULT false;
-         ALTER TABLE registry_internal.registry_request_applications
-             DROP CONSTRAINT IF EXISTS registry_request_application_reason_bound;
-         ALTER TABLE registry_internal.registry_request_applications
-             ADD CONSTRAINT registry_request_application_reason_bound CHECK (
-                 reason IS NULL OR (char_length(reason) <= 4096 AND reason_present)
-             );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_request_evidence_uses (
              application_id uuid NOT NULL REFERENCES
                  registry_internal.registry_request_applications(application_id)

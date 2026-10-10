@@ -1772,11 +1772,10 @@ and release provenance (the release image and the upgrade rehearsal).
   stored value is `WorkflowError::InvalidRestoredState`, which the API
   reports as the generic service-unavailable problem. No row is read past the
   refusal and the response names no stored value.
-- Schema install is `CREATE ... IF NOT EXISTS` plus the steps a database
-  v0.38.0 can serve still needs. One of them is the dead-letter reason: v0.38.0
-  introduced the column and its constraint and tolerates a delivery-state
-  table without them, so install still adds both to such a table. Installing
-  over an installed schema changes nothing.
+- Schema install creates current columns and constraints directly. The
+  webhook dead-letter reason is defined in fresh creation; installation
+  does not add it to an earlier table. Reinstalling current storage changes
+  nothing.
 - The retired package flags are no longer defined, so the argument parser
   refuses them as unknown arguments with exit status 2 before any file or
   database is read. Dev state is read strictly: a version other than the
@@ -1831,7 +1830,7 @@ and release provenance (the release image and the upgrade rehearsal).
    `scheduling-postgres` job of `.github/workflows/ci.yml` does, failing
    unless at least one of them passes:
    `installing_over_an_installed_schema_changes_nothing`,
-   `installing_over_a_table_without_dead_letter_reasons_adds_them`.
+   `installing_fresh_delivery_storage_twice_keeps_dead_letter_reasons`.
 2. `crates/registry-breg/src/request_workflow.rs`:
    `unknown_stored_request_states_are_invalid`.
 3. `crates/registry-bregctl/tests/cli.rs`:
@@ -2000,8 +1999,7 @@ and adds the operator command `bregctl idempotency-retention erase-expired`
 may replay a held response), data minimization (raw caller identifiers are
 persisted until the operator drops the receipt, and cleared then), audit
 integrity (what rotating `audit.hashKeyRef` changes), and deployment defaults
-(a seven-day horizon and an upgrade that turns earlier spent keys into
-tombstones no caller can find). The invariants are BREG-SEC-162 through
+(a seven-day horizon and caller-scoped receipt storage on fresh installation). The invariants are BREG-SEC-162 through
 BREG-SEC-166.
 
 ### Threat
@@ -2088,30 +2086,9 @@ BREG-SEC-166.
   (`breg-idempotency-retention-audit/v1`) is accepted before the transaction
   opens and the response records the count; a commit that returned an error
   is read back on a fresh connection before the outcome is recorded.
-- **Upgrade.** The engine feature `caller_scoped_idempotency` makes a
-  rebuilt v0.39.0 package an engine-capability successor, so the apply runs
-  the schema install. When `registry_idempotency` lacks the caller columns,
-  the install adds them and converts every existing row into a tombstone.
-  The conversion deletes no row and empties no table; the same install
-  discards stored ingestion runs, as the BREG-SEC-167 notes below record. A
-  tombstone keeps its
-  `key_reference` (the earlier audit-keyed `hmac-sha256:` digest), binding,
-  result kind, result references, erasure time, and commit time. It is
-  written already dropped: no raw issuer, subject, or key, the `mutation`
-  scope, a null held response body and an empty set of headers,
-  `receipt_dropped_at` at the upgrade time, and a horizon that ends one
-  microsecond after its commit. `registry_immediate_action_results`,
-  `registry_immediate_action_applications`,
-  `registry_action_evidence_uses`, and
-  `registry_request_idempotency_links` keep every row. The stored action
-  results are what keep a revision an engine before v0.39.0 journaled under
-  a compiled effect identifier readable in history; emptying them made that
-  read answer `503 source.unavailable`. No caller reaches a tombstone: lookup
-  is by a `sha256:` key reference, which never equals an `hmac-sha256:` one,
-  and a tombstone has no raw caller for the unique index to match. The kept
-  request idempotency links are read only by request retention, which counts
-  and erases held bodies a tombstone no longer has, and by the replay check
-  of a key that was found, which a tombstone never is.
+- **Installation.** Fresh creation defines the caller-scoped columns and
+  constraints directly. It converts no audit-keyed spent row. The generic
+  successor capability mechanism remains available for later releases.
 
 ### Data minimization
 
@@ -2142,22 +2119,7 @@ tombstones and leaves the spent row.
   one 409, and another caller's identical key executes as its own),
   `real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spent_key`
   (a held and an erased receipt are both cleared and both stay spent: the
-  held key's exact retry answers 410 and the erased key's 409), and
-  `real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones_spent_rows`
-  (tombstones carry no raw caller, and the table check refuses a cleared row
-  that is still held, a partly cleared row, a dropped row that keeps its raw
-  caller, and a keyless row).
-- `tests/postgres_migration.rs`:
-  `a_pre_caller_scoped_empty_successor_tombstones_audit_keyed_spent_keys`
-  applies a package without the engine feature, restores the old table
-  shape with a held row, and proves the successor apply keeps it as a
-  tombstone without its held response and verifies the catalog.
-- `tests/postgres_immediate_actions.rs`:
-  `the_caller_scoped_idempotency_upgrade_keeps_legacy_action_revisions_readable`
-  restores the old table shape under a committed immediate action whose
-  revision carries the compiled effect identifier, installs the caller
-  shape, and proves the revision still reads, every spent key, application,
-  and action result is kept, and the exact retry runs as a fresh request.
+  held key's exact retry answers 410 and the erased key's 409).
 - `src/idempotency.rs`:
   `a_policy_refuses_every_issuer_the_engine_reserves`.
 - `tests/postgres_batch.rs` proves over HTTP that another principal's batch
@@ -2170,12 +2132,11 @@ tombstones and leaves the spent row.
 
 ### Accepted residuals
 
-- **The upgrade forgets which caller spent each key.** A tombstone is never
-  found again, so a request committed before the upgrade and retried after
-  it executes again, and a hook delivery in flight across the upgrade can
-  apply its proposal again. Nobody runs Base Registry Engine in production
-  yet, so no earlier key is carried over. Entity uniqueness constraints still
-  refuse a duplicate create where the project declares them.
+- **Earlier spent keys do not carry into a fresh database.** v0.40.0 does
+  not upgrade v0.39.0 state in place; apply to a new database. Resolve
+  uncertain writes and stop earlier hook workers before moving callers.
+  Entity uniqueness constraints refuse a duplicate create where the project
+  declares them.
 - **Issuer or principal mapping changes re-scope keys.** A retry across a
   change of `authentication.oidc.issuer` or of the principal claim is another
   caller's fresh request. The operator guide says to resolve uncertain writes
@@ -2200,8 +2161,8 @@ verified caller (#1930; `crates/registry-breg/src/ingestion_store.rs`,
 `crates/registry-breg/src/postgres/mutation.rs`). It touches authorization
 (who may list, read, continue, recover, or cancel a run), data minimization
 (the raw issuer and principal are persisted on the run row), audit integrity
-(what rotating `audit.hashKeyRef` changes), and deployment defaults (an
-upgrade that discards stored runs). The invariant is BREG-SEC-167.
+(what rotating `audit.hashKeyRef` changes), and fresh storage defaults.
+The invariant is BREG-SEC-167.
 
 ### Threat
 
@@ -2233,16 +2194,8 @@ upgrade that discards stored runs). The invariant is BREG-SEC-167.
   `created_principal_reference` stays on the run and on its audit records as
   the creator's pseudonym; rotating the key changes it for later audit
   records only.
-- **Upgrade.** `ingestion_store::install` runs on every schema install,
-  including an engine-capability successor apply. When the run table lacks
-  `created_issuer`, it deletes every stored run, which cascades to
-  `registry_ingestion_run_chunks` and `registry_ingestion_run_chunk_records`,
-  and adds both columns `NOT NULL`. A run stored before names no verified
-  creator, so none is guessed. Committed records and revisions stay, and an
-  import authority keeps the volume its runs consumed, because that count
-  lives on the authority row. The server-derived chunk idempotency keys the
-  discarded runs spent stay spent; a new run has a new run id and so new
-  keys.
+- **Installation.** `ingestion_store::install` creates the verified creator
+  columns directly and converts or discards no stored run.
 
 ### Data minimization
 
@@ -2263,11 +2216,6 @@ against it; that reader already sees the raw principal beside it.
   one, recovers and replays its committed chunk, completes it, and cancels
   the other, while another principal lists none and gets 404 on read,
   receipt, chunk, and cancel without a write;
-  `the_upgrade_discards_runs_stored_without_a_verified_creator` restores the
-  run table without the creator columns under a run with a committed chunk,
-  reinstalls, and proves the run, its chunks, and its receipt links are gone,
-  the committed record stays, both columns are `NOT NULL`, and a new run is
-  stored with its creator and listed; and
   `run_access_is_creator_scoped_and_possession_grants_nothing`.
 - `src/ingestion_store.rs`: `a_run_without_its_verified_creator_is_refused`.
 - `src/postgres/mutation.rs`:
@@ -2276,11 +2224,6 @@ against it; that reader already sees the raw principal beside it.
 
 ### Accepted residuals
 
-- **The upgrade discards stored runs.** An import interrupted across the
-  upgrade cannot resume its run; its committed records stay, and the
-  operator imports only the uncommitted remainder under a fresh checkpoint
-  path, as after a closed import authority. Nobody runs Base Registry Engine
-  in production yet.
 - **Issuer or principal mapping changes re-scope runs.** After a change of
   `authentication.oidc.issuer` or of the principal claim, an open run belongs
   to no current caller; finish or cancel open runs before such a change.
@@ -2681,3 +2624,13 @@ project compiles to different access than before.
 - **A package is rebuilt.** A package holds the project as written, so its
   digest changes while its registry revision does not. This release already
   refuses every package an earlier release built.
+
+## Fresh storage and caller replay
+
+Threat and enforcement: The installer must not invent an owner, free a spent key, or discard accountability. Fresh creation defines the verified ingestion creator and caller-scoped receipt columns directly. Installation contains no conversion of audit-keyed rows and no discard of creatorless runs. Request reasons, revision erasure bounds, review-result bounds, and field-encryption receipt checks are defined at creation; shared webhook installation does not repair an earlier table. Replay lookup, receipt retention, creator concealment, action-result provenance, and audit ordering are unchanged. Generic verified successors remain available for releases from v0.40.0 onward.
+
+Verification: `tests/postgres_ingestion_runs.rs::an_audit_key_rotation_keeps_every_run_with_its_verified_creator` and `tests/postgres_mutation.rs::real_postgres_exact_retry_after_audit_key_rotation_replays_and_never_reexecutes`. Schema-only dumps of separate fresh
+installations are compared before and after, with no ledger data.
+
+Residual: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
+database. No compatibility reader or migration of earlier state is provided.

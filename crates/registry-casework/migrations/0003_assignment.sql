@@ -21,27 +21,13 @@ ALTER TABLE casework_items ADD COLUMN IF NOT EXISTS assigned_by_issuer text;
 ALTER TABLE casework_items ADD COLUMN IF NOT EXISTS assigned_by_subject text;
 ALTER TABLE casework_items ADD COLUMN IF NOT EXISTS assignment_absence_ids uuid[] NOT NULL DEFAULT '{}';
 ALTER TABLE casework_items ADD COLUMN IF NOT EXISTS staffing_diagnostic text
-    CHECK (staffing_diagnostic IS NULL OR staffing_diagnostic = 'no_cover_available');
+    CHECK (staffing_diagnostic IS NULL OR staffing_diagnostic = 'no-cover-available');
 CREATE INDEX IF NOT EXISTS casework_items_holder_caseload_idx
     ON casework_items(holder_issuer, holder_subject, queue_id, item_id)
     WHERE state NOT IN ('completed','superseded','cancelled');
 CREATE INDEX IF NOT EXISTS casework_items_holder_caseload_all_idx
     ON casework_items(holder_issuer, holder_subject, item_id, queue_id)
     WHERE state NOT IN ('completed','superseded','cancelled');
-
-ALTER TABLE casework_hosted_items ADD COLUMN IF NOT EXISTS assignment_owner_issuer text;
-ALTER TABLE casework_hosted_items ADD COLUMN IF NOT EXISTS assignment_owner_subject text;
-ALTER TABLE casework_hosted_items ADD COLUMN IF NOT EXISTS assigned_by_issuer text;
-ALTER TABLE casework_hosted_items ADD COLUMN IF NOT EXISTS assigned_by_subject text;
-ALTER TABLE casework_hosted_items ADD COLUMN IF NOT EXISTS assignment_absence_ids uuid[] NOT NULL DEFAULT '{}';
-ALTER TABLE casework_hosted_items ADD COLUMN IF NOT EXISTS staffing_diagnostic text
-    CHECK (staffing_diagnostic IS NULL OR staffing_diagnostic = 'no_cover_available');
-CREATE INDEX IF NOT EXISTS casework_hosted_items_holder_caseload_idx
-    ON casework_hosted_items(holder_issuer, holder_subject, queue_id, item_id)
-    WHERE state IN ('open','claimed');
-CREATE INDEX IF NOT EXISTS casework_hosted_items_holder_caseload_all_idx
-    ON casework_hosted_items(holder_issuer, holder_subject, item_id, queue_id)
-    WHERE state IN ('open','claimed');
 
 CREATE TABLE IF NOT EXISTS casework_assignment_cursors (
     cursor_id uuid PRIMARY KEY,
@@ -57,7 +43,4 @@ CREATE INDEX IF NOT EXISTS casework_assignment_cursors_expiry_idx
 
 CREATE INDEX IF NOT EXISTS casework_items_assignment_reconciliation_idx
     ON casework_items(item_id, queue_id, holder_issuer, holder_subject)
-    WHERE state = 'claimed' AND holder_issuer IS NOT NULL;
-CREATE INDEX IF NOT EXISTS casework_hosted_items_assignment_reconciliation_idx
-    ON casework_hosted_items(item_id, queue_id, holder_issuer, holder_subject)
     WHERE state = 'claimed' AND holder_issuer IS NOT NULL;

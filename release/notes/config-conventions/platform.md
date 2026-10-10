@@ -9,6 +9,10 @@ development session state file, `session.json`, that a development session
 writes and reads back. Both are read by the shared Registry Stack reader and
 open with `apiVersion` and `kind`.
 
+Shared webhook delivery installation creates the current dead-letter reason
+column and constraint directly. v0.40.0 does not upgrade v0.39.0 state in
+place; apply to a new database. No installation step repairs an earlier table.
+
 ## BREAKING changes
 
 1. **A task connection file opens with `apiVersion` and `kind`.** It begins

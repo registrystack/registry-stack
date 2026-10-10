@@ -344,16 +344,14 @@ address. The raw values are accepted for at most
 message row already holds the issuer and subject for
 (`recordRetentionDays`). The residual is the digest itself: it is not keyed,
 because a keyed digest would let a key rotation free every spent key, the
-duplicate-send failure the pseudonym scope had before schema version 3.
+duplicate-send failure of the pseudonym scope.
 Anyone who reads the table and can guess a caller's issuer, subject, and key
 can therefore confirm that the caller spent that key. A random key makes the
 guess impractical, and the API reference tells callers to choose one; a
 short or predictable key does not. The audit journal and the rate limiter
-keep the pseudonym. Schema version 3 discarded every idempotency record
-written under the pseudonym scope, request hashes and receipts included, so
-no pseudonym-keyed row survives the upgrade and every key spent before it is
-free again (`postgres_migrate.rs`,
-`version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller`).
+keep the pseudonym. Fresh installation creates this caller-scoped shape
+directly. No installation step discards pseudonym-scoped records.
+
 
 Tests: MESSAGING-SEC-01, -02, and -11 in
 `contracts/security-test-traceability.yaml`.
@@ -956,3 +954,13 @@ relations, including an empty database. Older servers refuse with an upgrade
 instruction before migrations or activation writes. The shared
 `postgres_version_floor_precedes_missing_ledger_observation` database test
 covers that entry point; unit tests pin the 16/17 version boundary.
+
+## Fresh caller-scoped replay storage
+
+Threat and enforcement: Installation must not free a caller’s spent key or silently delete its stored receipt. The base schema creates the caller-scoped digest, raw caller fields, and erasure constraints directly. The pseudonym-record discard and the release rehearsal’s empty-table exception are removed. Authorization still runs before replay, audit rotation frees no key, and retention clears raw caller fields while preserving spent digests.
+
+Verification: `tests/postgres_migrate.rs::the_runtime_scopes_spent_keys_to_the_verified_caller` and `tests/postgres_migrate.rs::concurrent_migrators_apply_each_version_once_and_both_succeed`. Schema-only dumps of separate fresh
+installations are compared before and after, with no ledger data.
+
+Residual: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
+database. No compatibility reader or migration of earlier state is provided.

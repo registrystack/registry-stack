@@ -173,6 +173,6 @@ entries:
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: the_schema_refuses_a_spent_key_that_keeps_part_of_its_caller}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_replays_one_request_and_refuses_another}
-      - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller}
+      - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: the_runtime_scopes_spent_keys_to_the_verified_caller}
       - {path: crates/registry-messaging/src/messages.rs, name: a_key_reference_digests_a_domain_and_the_length_prefixed_caller_operation_and_key}
       - {path: crates/registry-messaging/src/messages.rs, name: a_key_reference_keeps_every_caller_and_key_apart}

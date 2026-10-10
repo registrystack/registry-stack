@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
+Fresh installation creates the current schema directly, without conversion
+or discard of earlier rows.
+
 - BREAKING: `caseworkctl simulate` takes its file as `--simulation FILE`
   (was `--fixture FILE`): the command reads a `CaseworkSimulation`, and a
   fixture is the other file kind `caseworkctl test` runs. There is no alias,
@@ -71,19 +75,12 @@
   `GET /v1/directory/targets` is `absence-person` or `absence-cover`. A
   request naming a view or a purpose in the old spelling is refused. The
   OpenAPI document, the Rust client, and the Node.js and Python
-  declarations carry the new values. Migration
-  `0025_clock_staffing_inbox_spelling.sql` rewrites the stored clock
-  occurrence states, staffing diagnostics, and review task assignment
-  kinds, replaces the `CHECK` constraints and the two partial indexes that
-  name them, and rewrites the same words inside stored review history
-  details, retained work item idempotency responses, and stored inbox
-  cursors; no row is removed, no request hash changes, and a reason a
-  caller wrote is never touched. A directory target cursor issued before
-  the upgrade for `absence_person` or `absence_cover` is refused after it:
-  start that listing again. Migration: run `caseworkctl plan` then
-  `caseworkctl apply` with the previous release's runtime stopped, and
-  update a caller that sends or compares one of these values. See
-  `release/notes/config-conventions/casework.md`, "Protocol words".
+  declarations carry the new values. Fresh creation defines the constraints
+  and partial indexes with the new words; no stored clock, staffing, history,
+  replay, or cursor value is rewritten. v0.40.0 does not upgrade v0.39.0
+  state in place; apply to a new database. Update callers that send or compare
+  these values. See `release/notes/config-conventions/casework.md`,
+  "Protocol words".
 - BREAKING: the history, event, and audit words are kebab-case (CFG-NAME-2).
   The `kind` of a work item history entry (`caseload-moved`, `draft-saved`,
   `task-approved`, `task-revoked`, `task-invalidated`, `attempt-reserved`,
@@ -105,16 +102,12 @@
   in the `caseworkctl attempt settle` report, and a release Casework records
   during reconciliation gives its `reason` as `source-observation` or
   `directory-membership-changed`. The OpenAPI document, the Rust client, and
-  the Node.js and Python declarations carry the new values. Migration
-  `0024_history_event_spelling.sql` rewrites the stored history, durable
-  event, and directory event kinds, the two values above inside stored
-  details, and the retained idempotency operation `item.caseload-moved`,
-  and replaces the task invalidation function and its partial index; no row
-  is removed, no request hash changes, and a reason a caller wrote is never
-  touched. Audit records already written keep their spelling. Migration:
-  run `caseworkctl plan` then `caseworkctl apply` with the previous
-  release's runtime stopped, and update a caller that compares a history
-  `kind` or selects audit records by event name. See
+  the Node.js and Python declarations carry the new values. Fresh creation
+  defines the task invalidation function and its index with the new word;
+  no stored history, event, or replay response is rewritten. Audit records
+  already written keep their spelling. v0.40.0 does not upgrade v0.39.0 state
+  in place; apply to a new database. Update callers that compare a history
+  `kind` or select audit records by event name. See
   `release/notes/config-conventions/casework.md`, "Protocol words".
 - BREAKING: the validation reason of a refused review submission is
   kebab-case (CFG-NAME-2). The `Registry-Casework-Validation-Reason`
@@ -152,18 +145,12 @@
   sends the decision type in the old spelling is refused as
   `request.unprocessable`: there is no alias. The OpenAPI document, the Rust
   clients, and the Node.js and Python declarations carry the new values.
-  Migration `0023_review_outcome_spelling.sql` rewrites the stored request
-  lifecycles, decisions, results, accountability records, history details,
-  and retained replay responses, and replaces the five `CHECK` constraints
-  that named the old value; no row is removed and no request hash changes.
-  A `changes-requested` decision retried after the upgrade under the
-  idempotency key of a decision sent before it is therefore refused as
-  `idempotency.key-reused` and commits no second decision: the first
-  decision stands.
-  Audit records already written keep their spelling. Migration: run
-  `caseworkctl plan` then `caseworkctl apply` with the previous release's
-  runtime stopped, and update a caller that compares one of these values.
-  See `release/notes/config-conventions/casework.md`, "Protocol words".
+  Fresh creation defines the constraints with the new words. No stored
+  request, decision, result, accountability, history, or replay response is
+  rewritten. Audit records already written keep their spelling. v0.40.0 does
+  not upgrade v0.39.0 state in place; apply to a new database. Update callers
+  that compare these values. See
+  `release/notes/config-conventions/casework.md`, "Protocol words".
 - BREAKING: `caseworkctl lifecycle` spells the `id` of every enforcement
   layer in lowercase kebab-case, as `bregctl explain lifecycle` spells its
   own: every underscore became a hyphen, so `caller_authentication` is
@@ -268,11 +255,11 @@
   `config.unknown-variant`. The same spelling is stored and returned as the
   `state` of a work item in every response that carries one, printed as
   `itemState` by `caseworkctl attempt`, and listed by `caseworkctl
-  lifecycle`; the client types follow. Schema migration 22 respells the
-  stored work items, the stored task template documents, and the template in
-  each task grant record, so a live grant stays valid; `caseworkctl apply`
-  runs it. Migration: respell the two values in `casework.yaml` without
-  changing a template's `version`, then package, plan, and apply. See
+  lifecycle`; the client types follow. Fresh creation defines the new values
+  directly. No stored work item, template, or grant is rewritten. v0.40.0
+  does not upgrade v0.39.0 state in place; apply to a new database. Respell
+  the two values in `casework.yaml` without changing a template's `version`,
+  then package, plan, and apply. See
   `release/notes/config-conventions/casework.md`.
 - BREAKING: a clock in `casework.yaml` is tagged by `type` (CFG-ID-7), where
   the member was `scope`, and its four values are kebab-case (CFG-NAME-2):

@@ -421,7 +421,7 @@ async fn plan_against_an_empty_database_writes_nothing() {
     assert_eq!(plan.database_id_check, DatabaseIdCheck::NotRecorded);
     assert_eq!(plan.plan_kind, PlanKind::Initial);
     assert_eq!(plan.schema_version, None);
-    assert_eq!(plan.pending_schema_versions.len(), 25);
+    assert_eq!(plan.pending_schema_versions.len(), 21);
     assert!(plan.changes_pending, "{:?}", plan.refusals);
     assert_eq!(
         fixture.relation_count().await,
@@ -447,7 +447,7 @@ async fn initial_apply_records_the_package_and_a_previous_package_reapplies_as_a
     assert_eq!(applied.activation.role_mode, RoleMode::Single);
     assert_eq!(
         applied.schema_versions_applied,
-        (1..=25).collect::<Vec<_>>()
+        (1..=21).collect::<Vec<_>>()
     );
     fixture
         .apply(&candidate(&project, &second, &[]))
@@ -1449,10 +1449,7 @@ async fn an_apply_waiting_for_a_runtime_directory_lock_holds_no_migration_lock()
     );
     let applied = applied.expect("the first apply adopts the migrated database");
     assert_eq!(applied.activation.plan_kind, PlanKind::Initial);
-    assert_eq!(
-        applied.schema_versions_applied,
-        [19, 20, 21, 22, 23, 24, 25]
-    );
+    assert_eq!(applied.schema_versions_applied, [19, 20, 21]);
 }
 
 /// A runtime role that owns a Casework table can attach a trigger that fires

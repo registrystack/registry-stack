@@ -1534,15 +1534,12 @@ pub(crate) async fn install(
                  UNIQUE (authority, result_id),
                  FOREIGN KEY (request_entity_id, request_id, proposal_version)
                      REFERENCES registry_internal.registry_request_review_submissions,
-                 CHECK (available_until > completed_at)
-             );
-             ALTER TABLE registry_internal.registry_request_review_results
-                 DROP CONSTRAINT IF EXISTS registry_request_review_results_result_size;
-             ALTER TABLE registry_internal.registry_request_review_results
-                 ADD CONSTRAINT registry_request_review_results_result_size CHECK (
+                 CHECK (available_until > completed_at),
+                 CONSTRAINT registry_request_review_results_result_size CHECK (
                      jsonb_typeof(result)='object'
                      AND octet_length(result::text)<=1048576
-                 );
+                 )
+             );
              CREATE TABLE IF NOT EXISTS registry_internal.registry_request_review_feed_checkpoints (
                  authority text PRIMARY KEY CHECK (authority <> '' AND octet_length(authority) <= 128),
                  cursor uuid,

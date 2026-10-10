@@ -24,7 +24,7 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
-use registry_breg::mutation::{install_mutation_schema, MutationFaultPoint};
+use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
@@ -607,118 +607,6 @@ async fn an_audit_key_rotation_keeps_every_run_with_its_verified_creator() {
     assert_eq!(cancelled.status(), StatusCode::OK);
     assert_eq!(body_json(cancelled).await["run"]["status"], "cancelled");
     assert_eq!(durable_widget_count(&harness).await, 2);
-}
-
-/// A run table from before runs stored their verified creator found runs by
-/// the keyed audit pseudonym alone. The upgrade discards those runs, with
-/// their chunks and receipt links, rather than inventing an owner; the
-/// records their committed chunks wrote stay, and the upgraded table opens,
-/// lists, and keeps runs by the verified creator.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_upgrade_discards_runs_stored_without_a_verified_creator() {
-    let harness = IngestionHarness::create().await;
-    let claims = operator_claims(PRINCIPAL, "zone-a");
-    let chunks = plan_chunks(&announce_items("pseudonymous-run", 2), 1);
-    let pseudonymous = harness.create_run(&claims, &chunks).await;
-    let first = harness
-        .post_json(
-            &format!("/v1/records/widgets/ingestion-runs/{pseudonymous}/chunks"),
-            &claims,
-            chunk_body(&chunks, 0),
-        )
-        .await;
-    assert_eq!(first.status(), StatusCode::OK);
-
-    let (migration, migration_task) = harness.database.connect_migration().await;
-    migration
-        .batch_execute(
-            "ALTER TABLE registry_internal.registry_ingestion_runs
-                 DROP COLUMN created_issuer,
-                 DROP COLUMN created_subject",
-        )
-        .await
-        .expect("test restores the run table without a verified creator");
-    install_mutation_schema(&migration, &harness.database.runtime_role)
-        .await
-        .expect("the mutation schema upgrades the run table");
-    let creator_columns = migration
-        .query(
-            "SELECT attname::text, attnotnull
-               FROM pg_catalog.pg_attribute
-              WHERE attrelid = 'registry_internal.registry_ingestion_runs'::regclass
-                AND attname IN ('created_issuer', 'created_subject')
-                AND NOT attisdropped
-              ORDER BY attname",
-            &[],
-        )
-        .await
-        .expect("migration reads the run table columns")
-        .iter()
-        .map(|row| (row.get::<_, String>(0), row.get::<_, bool>(1)))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        creator_columns,
-        vec![
-            ("created_issuer".to_owned(), true),
-            ("created_subject".to_owned(), true),
-        ]
-    );
-    assert_eq!(stored_run_count(&harness).await, 0);
-    for table in [
-        "registry_ingestion_run_chunks",
-        "registry_ingestion_run_chunk_records",
-    ] {
-        let remaining: i64 = harness
-            .database
-            .admin
-            .query_one(
-                &format!("SELECT count(*) FROM registry_internal.{table}"),
-                &[],
-            )
-            .await
-            .unwrap_or_else(|error| panic!("administrator counts {table}: {error}"))
-            .get(0);
-        assert_eq!(remaining, 0, "{table} rows go with their discarded run");
-    }
-    assert_eq!(durable_widget_count(&harness).await, 1);
-    let discarded = harness
-        .get_json(
-            &format!("/v1/records/widgets/ingestion-runs/{pseudonymous}"),
-            &claims,
-        )
-        .await;
-    assert_eq!(discarded.status(), StatusCode::NOT_FOUND);
-
-    let upgraded = harness
-        .create_run(&claims, &plan_chunks(&announce_items("upgraded-run", 1), 1))
-        .await;
-    install_mutation_schema(&migration, &harness.database.runtime_role)
-        .await
-        .expect("a repeated install keeps the upgraded run table");
-    migration_task.abort();
-    let creator = harness
-        .database
-        .admin
-        .query_one(
-            "SELECT created_subject FROM registry_internal.registry_ingestion_runs
-              WHERE run_id = $1::text::uuid",
-            &[&upgraded],
-        )
-        .await
-        .expect("administrator reads the upgraded run creator");
-    assert_eq!(creator.get::<_, String>(0), PRINCIPAL);
-    let listed = harness
-        .get_json("/v1/records/widgets/ingestion-runs", &claims)
-        .await;
-    assert_eq!(listed.status(), StatusCode::OK);
-    let listed = body_json(listed).await;
-    let listed_ids = listed["runs"]
-        .as_array()
-        .expect("runs")
-        .iter()
-        .map(|run| run["runId"].as_str().expect("run id").to_owned())
-        .collect::<Vec<_>>();
-    assert_eq!(listed_ids, vec![upgraded]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

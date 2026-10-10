@@ -113,19 +113,15 @@ pub async fn install_mutation_schema(
                  erased_at timestamptz,
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  PRIMARY KEY (entity_id, record_id, record_revision),
-                 CHECK (predecessor_revision IS NULL OR predecessor_revision < record_revision)
-             );
-            ALTER TABLE registry_internal.registry_revisions
-                 DROP CONSTRAINT IF EXISTS registry_revisions_snapshot_bounds,
-                 DROP CONSTRAINT IF EXISTS registry_revisions_erasure_shape;
-             ALTER TABLE registry_internal.registry_revisions
-                 ADD CONSTRAINT registry_revisions_snapshot_bounds CHECK (
+                 CHECK (predecessor_revision IS NULL OR predecessor_revision < record_revision),
+                 CONSTRAINT registry_revisions_snapshot_bounds CHECK (
                      snapshot IS NULL OR
                      (octet_length(snapshot) > 0 AND octet_length(snapshot) <= {MAX_HISTORY_SNAPSHOT_BYTES})
                  ),
-                 ADD CONSTRAINT registry_revisions_erasure_shape CHECK (
+                 CONSTRAINT registry_revisions_erasure_shape CHECK (
                      (snapshot IS NULL) = (erased_at IS NOT NULL)
-                 )"
+                 )
+             );"
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -143,14 +139,47 @@ pub async fn install_mutation_schema(
                      CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'release', 'erased')),
                  record_reference text CHECK (record_reference <> ''),
                  record_revision bigint CHECK (record_revision > 0),
-                 result_count smallint CHECK (result_count BETWEEN 1 AND 100 OR
-                     (result_kind = 'immediate_action' AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS})),
+                 result_count smallint
+                     CONSTRAINT registry_idempotency_result_count_check CHECK (
+                         result_count IS NULL OR result_count BETWEEN 1 AND 100 OR
+                         (result_kind = 'immediate_action'
+                             AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS})),
                  proposal_version bigint CHECK (proposal_version > 0),
                  response_status smallint NOT NULL CHECK (response_status BETWEEN 200 AND 299),
-                 response_body bytea NOT NULL
-                     CHECK (octet_length(response_body) > 0 AND octet_length(response_body) <= {MAX_HELD_BODY_BYTES}),
+                 response_body bytea
+                     CONSTRAINT registry_idempotency_response_body_bounds CHECK (
+                         response_body IS NULL OR
+                         (octet_length(response_body) > 0
+                             AND octet_length(response_body) <= {MAX_HELD_BODY_BYTES})),
                  response_headers bytea NOT NULL CHECK (octet_length(response_headers) <= 65536),
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 erased_at timestamptz,
+                 caller_issuer text,
+                 caller_subject text,
+                 key_scope text NOT NULL,
+                 idempotency_key text,
+                 receipt_expires_at timestamptz NOT NULL,
+                 receipt_dropped_at timestamptz,
+                 CONSTRAINT registry_idempotency_caller_shape CHECK (
+                     key_scope IN ('mutation', 'ingestion_chunk', 'hook_proposal')
+                     AND receipt_expires_at > created_at
+                     AND (
+                         (receipt_dropped_at IS NULL
+                             AND caller_issuer IS NOT NULL AND caller_subject IS NOT NULL
+                             AND idempotency_key IS NOT NULL
+                             AND caller_issuer <> '' AND caller_subject <> ''
+                             AND idempotency_key <> ''
+                             AND octet_length(idempotency_key) <= {MAX_IDEMPOTENCY_KEY_BYTES})
+                         OR
+                         (receipt_dropped_at IS NOT NULL
+                             AND caller_issuer IS NULL AND caller_subject IS NULL
+                             AND idempotency_key IS NULL)
+                     )
+                 ),
+                 CONSTRAINT registry_idempotency_erasure_shape CHECK (
+                     (response_body IS NULL) =
+                         (erased_at IS NOT NULL OR receipt_dropped_at IS NOT NULL)
+                 ),
                  CONSTRAINT registry_idempotency_result_shape CHECK (
                      (result_kind = 'record' AND record_reference IS NOT NULL
                          AND record_revision IS NOT NULL AND result_count IS NULL
@@ -179,6 +208,9 @@ pub async fn install_mutation_schema(
                          AND proposal_version IS NULL)
                  )
              );
+             CREATE UNIQUE INDEX IF NOT EXISTS registry_idempotency_caller_key
+                 ON registry_internal.registry_idempotency
+                     (caller_issuer, caller_subject, key_scope, idempotency_key);
              CREATE TABLE IF NOT EXISTS registry_internal.registry_immediate_action_results (
                  key_reference text NOT NULL
                      REFERENCES registry_internal.registry_idempotency(key_reference)
@@ -229,142 +261,6 @@ pub async fn install_mutation_schema(
                  registry_internal.registry_idempotency,
                  registry_internal.registry_immediate_action_results,
                  registry_internal.registry_immediate_action_applications FROM PUBLIC;",
-        ))
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    // The receipt erasure column and the result count, response body, erasure,
-    // result kind, and result shape constraints are installed after creation, so
-    // a reinstall replaces each constraint under its stable name. The inline
-    // result count check spans two columns, so PostgreSQL names it
-    // `registry_idempotency_check`; it is replaced by
-    // `registry_idempotency_result_count_check`.
-    migration
-        .batch_execute(&format!(
-            "ALTER TABLE registry_internal.registry_idempotency
-                 ADD COLUMN IF NOT EXISTS erased_at timestamptz;
-             ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_check;
-             ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_count_check;
-             ALTER TABLE registry_internal.registry_idempotency
-                 ADD CONSTRAINT registry_idempotency_result_count_check
-                     CHECK (result_count IS NULL OR result_count BETWEEN 1 AND 100 OR
-                         (result_kind = 'immediate_action' AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}));
-             ALTER TABLE registry_internal.registry_idempotency
-                 ALTER COLUMN response_body DROP NOT NULL;
-             ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_response_body_check,
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_response_body_bounds,
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_erasure_shape;
-             ALTER TABLE registry_internal.registry_idempotency
-                 ADD CONSTRAINT registry_idempotency_response_body_bounds CHECK (
-                     response_body IS NULL OR
-                     (octet_length(response_body) > 0 AND octet_length(response_body) <= {MAX_HELD_BODY_BYTES})
-                 );
-             ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_values,
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_shape;
-             ALTER TABLE registry_internal.registry_idempotency
-                 ADD CONSTRAINT registry_idempotency_result_kind_values
-                     CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'release', 'erased')),
-                 ADD CONSTRAINT registry_idempotency_result_shape CHECK (
-                     (result_kind = 'record' AND record_reference IS NOT NULL
-                         AND record_revision IS NOT NULL AND result_count IS NULL
-                         AND proposal_version IS NULL)
-                     OR
-                     (result_kind = 'batch' AND record_reference IS NULL
-                         AND record_revision IS NULL AND result_count IS NOT NULL
-                         AND proposal_version IS NULL)
-                     OR
-                     (result_kind = 'application' AND record_reference IS NOT NULL
-                         AND record_revision IS NOT NULL AND result_count IS NOT NULL
-                         AND result_count BETWEEN 1 AND 16
-                         AND proposal_version IS NOT NULL)
-                     OR
-                     (result_kind = 'immediate_action' AND record_reference IS NULL
-                         AND record_revision IS NULL AND result_count IS NOT NULL
-                         AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}
-                         AND proposal_version IS NULL)
-                     OR
-                     (result_kind = 'release' AND record_reference IS NOT NULL
-                         AND record_revision IS NOT NULL AND result_count IS NULL
-                         AND proposal_version IS NULL)
-                     OR
-                     (result_kind = 'erased' AND record_reference IS NULL
-                         AND record_revision IS NULL AND result_count IS NULL
-                         AND proposal_version IS NULL)
-                 );",
-        ))
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    // A spent key is found by its digest over the verified issuer and subject,
-    // the key scope, and the key. The raw issuer, subject, and key are kept
-    // beside it exactly while the receipt is, and are absent together once it
-    // is dropped.
-    // Rows an earlier engine found by an audit-keyed digest carry no caller
-    // and can never be found again. They are kept as tombstones rather than
-    // emptied, because an immediate action's stored results and application
-    // rows hang off them, and a revision an earlier engine journaled under a
-    // compiled effect identifier reads its provenance from those results. Each
-    // such row is converted already dropped: no raw caller or key, its receipt
-    // expired at its commit, and its held response and headers removed. The
-    // erasure shape is installed here because it reads the receipt columns.
-    migration
-        .batch_execute(&format!(
-            "DO $breg_idempotency_caller$
-             BEGIN
-                 IF NOT EXISTS (
-                     SELECT 1
-                       FROM pg_catalog.pg_attribute
-                      WHERE attrelid = 'registry_internal.registry_idempotency'::regclass
-                        AND attname = 'caller_issuer'
-                        AND NOT attisdropped
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_idempotency
-                         ADD COLUMN caller_issuer text,
-                         ADD COLUMN caller_subject text,
-                         ADD COLUMN key_scope text,
-                         ADD COLUMN idempotency_key text,
-                         ADD COLUMN receipt_expires_at timestamptz,
-                         ADD COLUMN receipt_dropped_at timestamptz;
-                     UPDATE registry_internal.registry_idempotency
-                        SET key_scope = 'mutation',
-                            receipt_expires_at = created_at + interval '1 microsecond',
-                            receipt_dropped_at = transaction_timestamp(),
-                            response_body = NULL,
-                            response_headers = decode('0000', 'hex');
-                     ALTER TABLE registry_internal.registry_idempotency
-                         ALTER COLUMN key_scope SET NOT NULL,
-                         ALTER COLUMN receipt_expires_at SET NOT NULL;
-                 END IF;
-             END
-             $breg_idempotency_caller$;
-             ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_caller_shape;
-             ALTER TABLE registry_internal.registry_idempotency
-                 ADD CONSTRAINT registry_idempotency_caller_shape CHECK (
-                     key_scope IN ('mutation', 'ingestion_chunk', 'hook_proposal')
-                     AND receipt_expires_at > created_at
-                     AND (
-                         (receipt_dropped_at IS NULL
-                             AND caller_issuer IS NOT NULL AND caller_subject IS NOT NULL
-                             AND idempotency_key IS NOT NULL
-                             AND caller_issuer <> '' AND caller_subject <> ''
-                             AND idempotency_key <> ''
-                             AND octet_length(idempotency_key) <= {MAX_IDEMPOTENCY_KEY_BYTES})
-                         OR
-                         (receipt_dropped_at IS NOT NULL
-                             AND caller_issuer IS NULL AND caller_subject IS NULL
-                             AND idempotency_key IS NULL)
-                     )
-                 ),
-                 ADD CONSTRAINT registry_idempotency_erasure_shape CHECK (
-                     (response_body IS NULL) =
-                         (erased_at IS NOT NULL OR receipt_dropped_at IS NOT NULL)
-                 );
-             CREATE UNIQUE INDEX IF NOT EXISTS registry_idempotency_caller_key
-                 ON registry_internal.registry_idempotency
-                     (caller_issuer, caller_subject, key_scope, idempotency_key);",
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
