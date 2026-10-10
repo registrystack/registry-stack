@@ -419,16 +419,20 @@ async fn assert_legacy_schema_upgrade(
     assert!(!before["jobs"].as_array().unwrap().is_empty());
     // Model the previously shipped pilot schema, including its core-only job
     // shape. Explicit apply must preserve existing protected rows while
-    // installing revision 3; serving may not silently upgrade revision 2.
+    // installing revision 4; serving may not silently upgrade revision 2.
     admin
         .batch_execute(&format!(
             "ALTER TABLE {namespace}.jobs DROP CONSTRAINT jobs_shape;
+            ALTER TABLE {namespace}.jobs DROP CONSTRAINT jobs_state_values;
+            UPDATE {namespace}.jobs SET state='dead_lettered' WHERE state='dead-lettered';
+            ALTER TABLE {namespace}.jobs ADD CONSTRAINT jobs_state_values CHECK (
+                state IN ('pending','leased','delivered','dead_lettered','expired','unknown','cancelled'));
             ALTER TABLE {namespace}.jobs ADD CONSTRAINT jobs_shape CHECK ({});
             ALTER TABLE {namespace}.control DROP CONSTRAINT control_schema_version_check;
             UPDATE {namespace}.control SET schema_version=2 WHERE id;
             ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=2);
             DELETE FROM {namespace}.coordinator_migrations WHERE version=3",
-            registry_platform_dispatch::postgres::JobTable::shape_predicate()
+            include_str!("fixtures/dispatch-revision-two-shape.sql")
         ))
         .await
         .unwrap();
@@ -453,7 +457,7 @@ async fn assert_legacy_schema_upgrade(
                 .await
                 .unwrap()
                 .get::<_, i32>(0),
-            3
+            4
         );
     }
 }

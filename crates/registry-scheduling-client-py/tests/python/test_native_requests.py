@@ -563,7 +563,7 @@ class NativeRequestTests(unittest.TestCase):
         for key, request in [("two words", {"admission": ADMISSION}), ("key", {"admission": ADMISSION, "extra": True})]:
             with self.assertRaises(SchedulingClientError) as raised:
                 self.client.appointment_receipt("token", key, request)
-            self.assertEqual(raised.exception.kind, "invalid_request")
+            self.assertEqual(raised.exception.kind, "invalid-request")
         self.assertEqual(_Handler.observations, [])
 
 

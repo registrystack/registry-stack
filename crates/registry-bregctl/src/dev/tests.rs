@@ -227,12 +227,12 @@ fn write_init_project() -> (tempfile::TempDir, PathBuf) {
 
 fn local_principal_source(claim: &str) -> Value {
     json!({
-        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-        "registry":{"id":"generic-local","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://synthetic.example.test"},
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+        "project":{"id":"generic-local","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://synthetic.example.test"},
         "package":{"sourceRevision":"synthetic-1"},
         "entities":[{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
-            "fields":[{"id":"code","type":"string","maxLength":64,"required":true,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"operator","principalClaim":claim,"requiredScopes":"unrestricted","permissions":[{"entity":"record","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"}]}]
+            "fields":[{"id":"code","type":"string","maximumLength":64,"required":true,"classification":"internal"}]}],
+        "accessProfiles":[{"id":"operator","principalClaim":claim,"requiredScopes":"unrestricted","permissions":{"entities":[{"entity":"record","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"}]}}]
     })
 }
 
