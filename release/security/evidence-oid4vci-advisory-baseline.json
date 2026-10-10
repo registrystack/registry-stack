@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:5cbd1fd8a428b4feefdcaaccc0b5d9fd6dfb2616b124ecba3b99a548bb238563",
+      "sha256:560fb854d5324a4b06751fb4d8f3d74f32f7627923d6ab13a82399f01ee9f298",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -52,7 +52,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6"
+    "definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2"
   },
   "policies": [
     {
@@ -75,8 +75,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.39.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. That base ships libc6 2.41-12+deb13u4 itself and now also libssl3t64 3.5.7-1~deb13u3, the one package that moved from the previously reviewed base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 and libssl3t64 3.5.7-1~deb13u3 over them, so its loader, libc, libm and libpthread bytes are the ones reviewed for the other release images since the v0.33.0 review. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The exposure report has no review-required dynamic lookup. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
-      "reviewed_at": "2026-10-05",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.40.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 38015071330 at source 21738c8205c14a385b438f5fc542823044a2ade7, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. The pinned base and the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.39.0 review; this renewal reviews the changed application layer and executable bytes. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The exposure report has no review-required dynamic lookup. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-10; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
+      "reviewed_at": "2026-10-10",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -93,14 +93,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
-      "component_layer_id": "sha256:5cbd1fd8a428b4feefdcaaccc0b5d9fd6dfb2616b124ecba3b99a548bb238563",
+      "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
+      "component_layer_id": "sha256:560fb854d5324a4b06751fb4d8f3d74f32f7627923d6ab13a82399f01ee9f298",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:7e1af60005906fad07d6a2e141c24bac5f279522a33a146989f7e338652c8d56",
-        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_image_digest": "sha256:fe7a124b60b841138d45f7839808d78ab5d208c2a9babcbb3836a1a0b91d2ad9",
+        "reference_source_revision": "21738c8205c14a385b438f5fc542823044a2ade7",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+        "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -120,10 +120,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:6cef445e3579a0fbcf6354d926d0a36b82e2156e30a500a2a9ef2aec7e416ca0"
+            "sha256": "sha256:26d5c9ceb4c09a252f411721e9ac08676900ffcd0a1ce960db22cef75f039c4b"
           }
         ],
-        "definition_digest": "sha256:b5b2d09c91b1bf5a4f43f9029903c7bf417ef33622bf8fb2eba225a9d99e214a"
+        "definition_digest": "sha256:50ea6c3a0c5e5a867ea81c189c62ee1c2e544a0b9fb5af46f491c08dd1f96e4f"
       }
     },
     {
@@ -133,8 +133,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.39.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. That base ships libc6 2.41-12+deb13u4 itself and now also libssl3t64 3.5.7-1~deb13u3, the one package that moved from the previously reviewed base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 and libssl3t64 3.5.7-1~deb13u3 over them, so its loader, libc, libm and libpthread bytes are the ones reviewed for the other release images since the v0.33.0 review. Its executable neither imports nor contains strfmon or strfmon_l. The exposure report has no review-required dynamic lookup. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian fixes the issue only in forky and sid.",
-      "reviewed_at": "2026-10-05",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.40.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 38015071330 at source 21738c8205c14a385b438f5fc542823044a2ade7, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. The pinned base and the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.39.0 review; this renewal reviews the changed application layer and executable bytes. Its executable neither imports nor contains strfmon or strfmon_l. The exposure report has no review-required dynamic lookup. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-10; Debian fixes the issue only in forky and sid.",
+      "reviewed_at": "2026-10-10",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -151,14 +151,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
-      "component_layer_id": "sha256:5cbd1fd8a428b4feefdcaaccc0b5d9fd6dfb2616b124ecba3b99a548bb238563",
+      "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
+      "component_layer_id": "sha256:560fb854d5324a4b06751fb4d8f3d74f32f7627923d6ab13a82399f01ee9f298",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:7e1af60005906fad07d6a2e141c24bac5f279522a33a146989f7e338652c8d56",
-        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_image_digest": "sha256:fe7a124b60b841138d45f7839808d78ab5d208c2a9babcbb3836a1a0b91d2ad9",
+        "reference_source_revision": "21738c8205c14a385b438f5fc542823044a2ade7",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+        "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -178,10 +178,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:6cef445e3579a0fbcf6354d926d0a36b82e2156e30a500a2a9ef2aec7e416ca0"
+            "sha256": "sha256:26d5c9ceb4c09a252f411721e9ac08676900ffcd0a1ce960db22cef75f039c4b"
           }
         ],
-        "definition_digest": "sha256:b5b2d09c91b1bf5a4f43f9029903c7bf417ef33622bf8fb2eba225a9d99e214a"
+        "definition_digest": "sha256:50ea6c3a0c5e5a867ea81c189c62ee1c2e544a0b9fb5af46f491c08dd1f96e4f"
       }
     },
     {
@@ -191,8 +191,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. zlib1g 1:1.3.dfsg+really1.3.1-1+b1 remains in the same unchanged base layer. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The exposure report has no review-required dynamic lookup. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian still lists no fixed zlib package for Trixie.",
-      "reviewed_at": "2026-10-05",
+      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.40.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 38015071330 at source 21738c8205c14a385b438f5fc542823044a2ade7, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. zlib1g 1:1.3.dfsg+really1.3.1-1+b1 remains in the same unchanged base layer. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The exposure report has no review-required dynamic lookup. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-10; Debian still lists no fixed zlib package for Trixie.",
+      "reviewed_at": "2026-10-10",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -209,14 +209,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+      "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:7e1af60005906fad07d6a2e141c24bac5f279522a33a146989f7e338652c8d56",
-        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_image_digest": "sha256:fe7a124b60b841138d45f7839808d78ab5d208c2a9babcbb3836a1a0b91d2ad9",
+        "reference_source_revision": "21738c8205c14a385b438f5fc542823044a2ade7",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+        "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -236,10 +236,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:6cef445e3579a0fbcf6354d926d0a36b82e2156e30a500a2a9ef2aec7e416ca0"
+            "sha256": "sha256:26d5c9ceb4c09a252f411721e9ac08676900ffcd0a1ce960db22cef75f039c4b"
           }
         ],
-        "definition_digest": "sha256:b5b2d09c91b1bf5a4f43f9029903c7bf417ef33622bf8fb2eba225a9d99e214a"
+        "definition_digest": "sha256:50ea6c3a0c5e5a867ea81c189c62ee1c2e544a0b9fb5af46f491c08dd1f96e4f"
       }
     },
     {
@@ -249,8 +249,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. gcc-14-base 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian still lists no fixed gcc-14 package for any release.",
-      "reviewed_at": "2026-10-05",
+      "rationale": "Debian Trixie gcc-14 14.2.0-19 remains vulnerable with no fixed Trixie package; Debian records sid 14.4.0-3 as fixed. The image's Trixie finding still has no fix in its Grype report. The reviewed v0.40.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 38015071330 at source 21738c8205c14a385b438f5fc542823044a2ade7, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. gcc-14-base 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-10; Debian still lists no fixed gcc-14 package for Trixie; sid 14.4.0-3 is fixed.",
+      "reviewed_at": "2026-10-10",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -267,14 +267,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+      "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:7e1af60005906fad07d6a2e141c24bac5f279522a33a146989f7e338652c8d56",
-        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_image_digest": "sha256:fe7a124b60b841138d45f7839808d78ab5d208c2a9babcbb3836a1a0b91d2ad9",
+        "reference_source_revision": "21738c8205c14a385b438f5fc542823044a2ade7",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+        "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -294,10 +294,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:6cef445e3579a0fbcf6354d926d0a36b82e2156e30a500a2a9ef2aec7e416ca0"
+            "sha256": "sha256:26d5c9ceb4c09a252f411721e9ac08676900ffcd0a1ce960db22cef75f039c4b"
           }
         ],
-        "definition_digest": "sha256:b5b2d09c91b1bf5a4f43f9029903c7bf417ef33622bf8fb2eba225a9d99e214a"
+        "definition_digest": "sha256:50ea6c3a0c5e5a867ea81c189c62ee1c2e544a0b9fb5af46f491c08dd1f96e4f"
       }
     },
     {
@@ -307,8 +307,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libgcc-s1 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian still lists no fixed gcc-14 package for any release.",
-      "reviewed_at": "2026-10-05",
+      "rationale": "Debian Trixie gcc-14 14.2.0-19 remains vulnerable with no fixed Trixie package; Debian records sid 14.4.0-3 as fixed. The image's Trixie finding still has no fix in its Grype report. The reviewed v0.40.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 38015071330 at source 21738c8205c14a385b438f5fc542823044a2ade7, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libgcc-s1 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-10; Debian still lists no fixed gcc-14 package for Trixie; sid 14.4.0-3 is fixed.",
+      "reviewed_at": "2026-10-10",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -325,14 +325,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+      "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:7e1af60005906fad07d6a2e141c24bac5f279522a33a146989f7e338652c8d56",
-        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_image_digest": "sha256:fe7a124b60b841138d45f7839808d78ab5d208c2a9babcbb3836a1a0b91d2ad9",
+        "reference_source_revision": "21738c8205c14a385b438f5fc542823044a2ade7",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+        "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -352,10 +352,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:6cef445e3579a0fbcf6354d926d0a36b82e2156e30a500a2a9ef2aec7e416ca0"
+            "sha256": "sha256:26d5c9ceb4c09a252f411721e9ac08676900ffcd0a1ce960db22cef75f039c4b"
           }
         ],
-        "definition_digest": "sha256:b5b2d09c91b1bf5a4f43f9029903c7bf417ef33622bf8fb2eba225a9d99e214a"
+        "definition_digest": "sha256:50ea6c3a0c5e5a867ea81c189c62ee1c2e544a0b9fb5af46f491c08dd1f96e4f"
       }
     },
     {
@@ -365,8 +365,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libgomp1 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian still lists no fixed gcc-14 package for any release.",
-      "reviewed_at": "2026-10-05",
+      "rationale": "Debian Trixie gcc-14 14.2.0-19 remains vulnerable with no fixed Trixie package; Debian records sid 14.4.0-3 as fixed. The image's Trixie finding still has no fix in its Grype report. The reviewed v0.40.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 38015071330 at source 21738c8205c14a385b438f5fc542823044a2ade7, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libgomp1 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-10; Debian still lists no fixed gcc-14 package for Trixie; sid 14.4.0-3 is fixed.",
+      "reviewed_at": "2026-10-10",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -383,14 +383,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+      "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:7e1af60005906fad07d6a2e141c24bac5f279522a33a146989f7e338652c8d56",
-        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_image_digest": "sha256:fe7a124b60b841138d45f7839808d78ab5d208c2a9babcbb3836a1a0b91d2ad9",
+        "reference_source_revision": "21738c8205c14a385b438f5fc542823044a2ade7",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+        "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -410,10 +410,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:6cef445e3579a0fbcf6354d926d0a36b82e2156e30a500a2a9ef2aec7e416ca0"
+            "sha256": "sha256:26d5c9ceb4c09a252f411721e9ac08676900ffcd0a1ce960db22cef75f039c4b"
           }
         ],
-        "definition_digest": "sha256:b5b2d09c91b1bf5a4f43f9029903c7bf417ef33622bf8fb2eba225a9d99e214a"
+        "definition_digest": "sha256:50ea6c3a0c5e5a867ea81c189c62ee1c2e544a0b9fb5af46f491c08dd1f96e4f"
       }
     },
     {
@@ -423,8 +423,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libstdc++6 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian still lists no fixed gcc-14 package for any release.",
-      "reviewed_at": "2026-10-05",
+      "rationale": "Debian Trixie gcc-14 14.2.0-19 remains vulnerable with no fixed Trixie package; Debian records sid 14.4.0-3 as fixed. The image's Trixie finding still has no fix in its Grype report. The reviewed v0.40.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 38015071330 at source 21738c8205c14a385b438f5fc542823044a2ade7, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libstdc++6 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-10; Debian still lists no fixed gcc-14 package for Trixie; sid 14.4.0-3 is fixed.",
+      "reviewed_at": "2026-10-10",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -441,14 +441,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+      "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:7e1af60005906fad07d6a2e141c24bac5f279522a33a146989f7e338652c8d56",
-        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_image_digest": "sha256:fe7a124b60b841138d45f7839808d78ab5d208c2a9babcbb3836a1a0b91d2ad9",
+        "reference_source_revision": "21738c8205c14a385b438f5fc542823044a2ade7",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+        "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -468,10 +468,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:6cef445e3579a0fbcf6354d926d0a36b82e2156e30a500a2a9ef2aec7e416ca0"
+            "sha256": "sha256:26d5c9ceb4c09a252f411721e9ac08676900ffcd0a1ce960db22cef75f039c4b"
           }
         ],
-        "definition_digest": "sha256:b5b2d09c91b1bf5a4f43f9029903c7bf417ef33622bf8fb2eba225a9d99e214a"
+        "definition_digest": "sha256:50ea6c3a0c5e5a867ea81c189c62ee1c2e544a0b9fb5af46f491c08dd1f96e4f"
       }
     },
     {
@@ -481,8 +481,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. gcc-14-base 14.2.0-19 remains in the same unchanged base layer. The upstream fix, GCC commit 59d235ffa5a69231eb42e5290d52dc8c90d28b7a, changes only libstdc++'s aligned operator new in libsupc++/new_opa.cc so that rounding the requested size up to the alignment detects size_t overflow; upstream states that the posix_memalign implementation does not do that rounding and is not affected. The image's libstdc++.so.6 defines the aligned operator new functions over posix_memalign, passing the requested size unrounded, and imports neither aligned_alloc nor memalign; libgcc_s.so.1 and libgomp.so.1 define no aligned operator new, and gcc-14-base installs only documentation. No ELF file in the image links libstdc++ or libgomp, and only libstdc++ itself links libgcc_s. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, imports no C++ symbol, and its bytes contain neither C++ type information nor operator new names. The exposure report has no review-required dynamic lookup. No aligned C++ operator new is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian lists no fixed gcc-14 package for any release.",
-      "reviewed_at": "2026-10-05",
+      "rationale": "Debian Trixie gcc-14 14.2.0-19 remains vulnerable with no fixed Trixie package; Debian records sid 14.4.0-3 as fixed. The image's Trixie finding still has no fix in its Grype report. The reviewed v0.40.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 38015071330 at source 21738c8205c14a385b438f5fc542823044a2ade7, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. gcc-14-base 14.2.0-19 remains in the same unchanged base layer. The upstream fix, GCC commit 59d235ffa5a69231eb42e5290d52dc8c90d28b7a, changes only libstdc++'s aligned operator new in libsupc++/new_opa.cc so that rounding the requested size up to the alignment detects size_t overflow; upstream states that the posix_memalign implementation does not do that rounding and is not affected. The image's libstdc++.so.6 defines the aligned operator new functions over posix_memalign, passing the requested size unrounded, and imports neither aligned_alloc nor memalign; libgcc_s.so.1 and libgomp.so.1 define no aligned operator new, and gcc-14-base installs only documentation. No ELF file in the image links libstdc++ or libgomp, and only libstdc++ itself links libgcc_s. Its executable links none of libstdc++, libgcc_s or libgomp, imports no C++ symbol, and its bytes contain neither C++ type information nor operator new names. The exposure report has no review-required dynamic lookup. No aligned C++ operator new is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-10; Debian still lists no fixed gcc-14 package for Trixie; sid 14.4.0-3 is fixed.",
+      "reviewed_at": "2026-10-10",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -499,14 +499,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+      "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:7e1af60005906fad07d6a2e141c24bac5f279522a33a146989f7e338652c8d56",
-        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_image_digest": "sha256:fe7a124b60b841138d45f7839808d78ab5d208c2a9babcbb3836a1a0b91d2ad9",
+        "reference_source_revision": "21738c8205c14a385b438f5fc542823044a2ade7",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+        "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -526,10 +526,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:6cef445e3579a0fbcf6354d926d0a36b82e2156e30a500a2a9ef2aec7e416ca0"
+            "sha256": "sha256:26d5c9ceb4c09a252f411721e9ac08676900ffcd0a1ce960db22cef75f039c4b"
           }
         ],
-        "definition_digest": "sha256:b5b2d09c91b1bf5a4f43f9029903c7bf417ef33622bf8fb2eba225a9d99e214a"
+        "definition_digest": "sha256:50ea6c3a0c5e5a867ea81c189c62ee1c2e544a0b9fb5af46f491c08dd1f96e4f"
       }
     },
     {
@@ -539,8 +539,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libgcc-s1 14.2.0-19 remains in the same unchanged base layer. The upstream fix, GCC commit 59d235ffa5a69231eb42e5290d52dc8c90d28b7a, changes only libstdc++'s aligned operator new in libsupc++/new_opa.cc so that rounding the requested size up to the alignment detects size_t overflow; upstream states that the posix_memalign implementation does not do that rounding and is not affected. The image's libstdc++.so.6 defines the aligned operator new functions over posix_memalign, passing the requested size unrounded, and imports neither aligned_alloc nor memalign; libgcc_s.so.1 and libgomp.so.1 define no aligned operator new, and gcc-14-base installs only documentation. No ELF file in the image links libstdc++ or libgomp, and only libstdc++ itself links libgcc_s. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, imports no C++ symbol, and its bytes contain neither C++ type information nor operator new names. The exposure report has no review-required dynamic lookup. No aligned C++ operator new is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian lists no fixed gcc-14 package for any release.",
-      "reviewed_at": "2026-10-05",
+      "rationale": "Debian Trixie gcc-14 14.2.0-19 remains vulnerable with no fixed Trixie package; Debian records sid 14.4.0-3 as fixed. The image's Trixie finding still has no fix in its Grype report. The reviewed v0.40.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 38015071330 at source 21738c8205c14a385b438f5fc542823044a2ade7, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libgcc-s1 14.2.0-19 remains in the same unchanged base layer. The upstream fix, GCC commit 59d235ffa5a69231eb42e5290d52dc8c90d28b7a, changes only libstdc++'s aligned operator new in libsupc++/new_opa.cc so that rounding the requested size up to the alignment detects size_t overflow; upstream states that the posix_memalign implementation does not do that rounding and is not affected. The image's libstdc++.so.6 defines the aligned operator new functions over posix_memalign, passing the requested size unrounded, and imports neither aligned_alloc nor memalign; libgcc_s.so.1 and libgomp.so.1 define no aligned operator new, and gcc-14-base installs only documentation. No ELF file in the image links libstdc++ or libgomp, and only libstdc++ itself links libgcc_s. Its executable links none of libstdc++, libgcc_s or libgomp, imports no C++ symbol, and its bytes contain neither C++ type information nor operator new names. The exposure report has no review-required dynamic lookup. No aligned C++ operator new is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-10; Debian still lists no fixed gcc-14 package for Trixie; sid 14.4.0-3 is fixed.",
+      "reviewed_at": "2026-10-10",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -557,14 +557,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+      "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:7e1af60005906fad07d6a2e141c24bac5f279522a33a146989f7e338652c8d56",
-        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_image_digest": "sha256:fe7a124b60b841138d45f7839808d78ab5d208c2a9babcbb3836a1a0b91d2ad9",
+        "reference_source_revision": "21738c8205c14a385b438f5fc542823044a2ade7",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+        "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -584,10 +584,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:6cef445e3579a0fbcf6354d926d0a36b82e2156e30a500a2a9ef2aec7e416ca0"
+            "sha256": "sha256:26d5c9ceb4c09a252f411721e9ac08676900ffcd0a1ce960db22cef75f039c4b"
           }
         ],
-        "definition_digest": "sha256:b5b2d09c91b1bf5a4f43f9029903c7bf417ef33622bf8fb2eba225a9d99e214a"
+        "definition_digest": "sha256:50ea6c3a0c5e5a867ea81c189c62ee1c2e544a0b9fb5af46f491c08dd1f96e4f"
       }
     },
     {
@@ -597,8 +597,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libgomp1 14.2.0-19 remains in the same unchanged base layer. The upstream fix, GCC commit 59d235ffa5a69231eb42e5290d52dc8c90d28b7a, changes only libstdc++'s aligned operator new in libsupc++/new_opa.cc so that rounding the requested size up to the alignment detects size_t overflow; upstream states that the posix_memalign implementation does not do that rounding and is not affected. The image's libstdc++.so.6 defines the aligned operator new functions over posix_memalign, passing the requested size unrounded, and imports neither aligned_alloc nor memalign; libgcc_s.so.1 and libgomp.so.1 define no aligned operator new, and gcc-14-base installs only documentation. No ELF file in the image links libstdc++ or libgomp, and only libstdc++ itself links libgcc_s. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, imports no C++ symbol, and its bytes contain neither C++ type information nor operator new names. The exposure report has no review-required dynamic lookup. No aligned C++ operator new is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian lists no fixed gcc-14 package for any release.",
-      "reviewed_at": "2026-10-05",
+      "rationale": "Debian Trixie gcc-14 14.2.0-19 remains vulnerable with no fixed Trixie package; Debian records sid 14.4.0-3 as fixed. The image's Trixie finding still has no fix in its Grype report. The reviewed v0.40.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 38015071330 at source 21738c8205c14a385b438f5fc542823044a2ade7, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libgomp1 14.2.0-19 remains in the same unchanged base layer. The upstream fix, GCC commit 59d235ffa5a69231eb42e5290d52dc8c90d28b7a, changes only libstdc++'s aligned operator new in libsupc++/new_opa.cc so that rounding the requested size up to the alignment detects size_t overflow; upstream states that the posix_memalign implementation does not do that rounding and is not affected. The image's libstdc++.so.6 defines the aligned operator new functions over posix_memalign, passing the requested size unrounded, and imports neither aligned_alloc nor memalign; libgcc_s.so.1 and libgomp.so.1 define no aligned operator new, and gcc-14-base installs only documentation. No ELF file in the image links libstdc++ or libgomp, and only libstdc++ itself links libgcc_s. Its executable links none of libstdc++, libgcc_s or libgomp, imports no C++ symbol, and its bytes contain neither C++ type information nor operator new names. The exposure report has no review-required dynamic lookup. No aligned C++ operator new is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-10; Debian still lists no fixed gcc-14 package for Trixie; sid 14.4.0-3 is fixed.",
+      "reviewed_at": "2026-10-10",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -615,14 +615,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+      "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:7e1af60005906fad07d6a2e141c24bac5f279522a33a146989f7e338652c8d56",
-        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_image_digest": "sha256:fe7a124b60b841138d45f7839808d78ab5d208c2a9babcbb3836a1a0b91d2ad9",
+        "reference_source_revision": "21738c8205c14a385b438f5fc542823044a2ade7",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+        "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -642,10 +642,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:6cef445e3579a0fbcf6354d926d0a36b82e2156e30a500a2a9ef2aec7e416ca0"
+            "sha256": "sha256:26d5c9ceb4c09a252f411721e9ac08676900ffcd0a1ce960db22cef75f039c4b"
           }
         ],
-        "definition_digest": "sha256:b5b2d09c91b1bf5a4f43f9029903c7bf417ef33622bf8fb2eba225a9d99e214a"
+        "definition_digest": "sha256:50ea6c3a0c5e5a867ea81c189c62ee1c2e544a0b9fb5af46f491c08dd1f96e4f"
       }
     },
     {
@@ -655,8 +655,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libstdc++6 14.2.0-19 remains in the same unchanged base layer. The upstream fix, GCC commit 59d235ffa5a69231eb42e5290d52dc8c90d28b7a, changes only libstdc++'s aligned operator new in libsupc++/new_opa.cc so that rounding the requested size up to the alignment detects size_t overflow; upstream states that the posix_memalign implementation does not do that rounding and is not affected. The image's libstdc++.so.6 defines the aligned operator new functions over posix_memalign, passing the requested size unrounded, and imports neither aligned_alloc nor memalign; libgcc_s.so.1 and libgomp.so.1 define no aligned operator new, and gcc-14-base installs only documentation. No ELF file in the image links libstdc++ or libgomp, and only libstdc++ itself links libgcc_s. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, imports no C++ symbol, and its bytes contain neither C++ type information nor operator new names. The exposure report has no review-required dynamic lookup. No aligned C++ operator new is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian lists no fixed gcc-14 package for any release.",
-      "reviewed_at": "2026-10-05",
+      "rationale": "Debian Trixie gcc-14 14.2.0-19 remains vulnerable with no fixed Trixie package; Debian records sid 14.4.0-3 as fixed. The image's Trixie finding still has no fix in its Grype report. The reviewed v0.40.0 Linux AMD64 Evidence OID4VCI local reproduction is exact rehearsal run 38015071330 at source 21738c8205c14a385b438f5fc542823044a2ade7, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libstdc++6 14.2.0-19 remains in the same unchanged base layer. The upstream fix, GCC commit 59d235ffa5a69231eb42e5290d52dc8c90d28b7a, changes only libstdc++'s aligned operator new in libsupc++/new_opa.cc so that rounding the requested size up to the alignment detects size_t overflow; upstream states that the posix_memalign implementation does not do that rounding and is not affected. The image's libstdc++.so.6 defines the aligned operator new functions over posix_memalign, passing the requested size unrounded, and imports neither aligned_alloc nor memalign; libgcc_s.so.1 and libgomp.so.1 define no aligned operator new, and gcc-14-base installs only documentation. No ELF file in the image links libstdc++ or libgomp, and only libstdc++ itself links libgcc_s. Its executable links none of libstdc++, libgcc_s or libgomp, imports no C++ symbol, and its bytes contain neither C++ type information nor operator new names. The exposure report has no review-required dynamic lookup. No aligned C++ operator new is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-10; Debian still lists no fixed gcc-14 package for Trixie; sid 14.4.0-3 is fixed.",
+      "reviewed_at": "2026-10-10",
       "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -673,14 +673,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+      "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:7e1af60005906fad07d6a2e141c24bac5f279522a33a146989f7e338652c8d56",
-        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_image_digest": "sha256:fe7a124b60b841138d45f7839808d78ab5d208c2a9babcbb3836a1a0b91d2ad9",
+        "reference_source_revision": "21738c8205c14a385b438f5fc542823044a2ade7",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6809622acf21161d5726d96347900f7fad6a74ad2f955fcedde32501e16e9db6",
+        "runtime_definition_digest": "sha256:58777417ced65cbc67471cd22e361904e778b49c34eb0939a818883098ca5cf2",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -700,10 +700,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:6cef445e3579a0fbcf6354d926d0a36b82e2156e30a500a2a9ef2aec7e416ca0"
+            "sha256": "sha256:26d5c9ceb4c09a252f411721e9ac08676900ffcd0a1ce960db22cef75f039c4b"
           }
         ],
-        "definition_digest": "sha256:b5b2d09c91b1bf5a4f43f9029903c7bf417ef33622bf8fb2eba225a9d99e214a"
+        "definition_digest": "sha256:50ea6c3a0c5e5a867ea81c189c62ee1c2e544a0b9fb5af46f491c08dd1f96e4f"
       }
     }
   ]
