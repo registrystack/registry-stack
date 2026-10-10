@@ -989,3 +989,20 @@ Evidence also includes `a_retained_policy_with_obsolete_windows_is_not_reinterpr
 
 Residual: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
 database. No compatibility reader or migration of earlier state is provided.
+
+## Shipped database transport refusal
+
+Threat: an operator copies `database.testOnlyPlaintext: true` from a disposable
+test fixture into a shipped runtime configuration and silently loses database
+TLS. The existing configuration guard refuses that member's true value in
+builds without `postgres-test`, before opening a database connection. The
+release binary build uses its default features; it does not enable
+`postgres-test`.
+
+`the_default_feature_runtime_refuses_test_only_plaintext` in `crates/registry-scheduling/tests/plaintext_config.rs`
+executes the actual native runtime process and requires the product's
+`scheduling.runtime.plaintext-database` refusal and `testOnlyPlaintext` recovery
+field. This regression is excluded from `postgres-test` builds so a permissive
+test binary cannot satisfy the shipped-feature proof. The runtime guard and
+release build feature selection are unchanged; the existing default-feature
+test suite owns this check.

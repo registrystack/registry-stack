@@ -2848,3 +2848,20 @@ reviewed fixtures and the person-name Rhai fixture against disposable TLS
 PostgreSQL. The runner uses the maintained Cargo runtime-library helper for
 source builds; installed mode retains its existing binary selection. No runtime
 authority, review policy, delivery, or audit rule changes.
+
+## Shipped database transport refusal
+
+Threat: an operator copies `database.testOnlyPlaintext: true` from a disposable
+test fixture into a shipped runtime configuration and silently loses database
+TLS. The existing configuration guard refuses that member's true value in
+builds without `postgres-test`, before opening a database connection. The
+release binary build uses the default features plus `runtime`; it does not enable
+`postgres-test`.
+
+`database_test_only_plaintext_is_refused_outside_test_builds_with_its_fix` in `crates/registry-breg/tests/runtime_config.rs`
+executes the actual native runtime process and requires the product's
+`breg.runtime.plaintext-database` refusal and `testOnlyPlaintext` recovery
+field. This regression is excluded from `postgres-test` builds so a permissive
+test binary cannot satisfy the shipped-feature proof. The runtime guard and
+release build feature selection are unchanged; the existing default-feature
+test suite owns this check.
