@@ -1513,35 +1513,71 @@ fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
     assert_eq!(
         dataset["accessProfiles"]["reader"],
         json!([
-            "list_releases",
-            "read_latest_release",
-            "read_release_version",
-            "read_released_series"
+            "list-releases",
+            "read-latest-release",
+            "read-release-version",
+            "read-released-series"
         ])
     );
     assert_eq!(
         dataset["accessProfiles"]["analyst"],
         json!([
-            "list_releases",
-            "read_latest_release",
-            "read_live",
-            "read_release_version",
-            "read_released_series"
+            "list-releases",
+            "read-latest-release",
+            "read-live",
+            "read-release-version",
+            "read-released-series"
         ])
     );
     assert_eq!(
         dataset["accessProfiles"]["publisher"],
         json!([
-            "list_releases",
-            "publish_release",
-            "read_latest_release",
-            "read_release_version",
-            "read_released_series",
-            "withdraw_release"
+            "list-releases",
+            "publish-release",
+            "read-latest-release",
+            "read-release-version",
+            "read-released-series",
+            "withdraw-release"
         ])
     );
 
     let openapi = artifact_json(&compiled, "generated/openapi.json");
+    let expected_operations = BTreeSet::from([
+        "read-live",
+        "list-releases",
+        "read-released-series",
+        "read-latest-release",
+        "read-release-version",
+        "publish-release",
+        "withdraw-release",
+    ]);
+    assert_eq!(
+        dataset["accessProfiles"]
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|value| value.as_array().unwrap())
+            .map(|value| value.as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        expected_operations,
+    );
+    let mut advertised_operations = BTreeSet::new();
+    for (path, item) in openapi["paths"].as_object().unwrap() {
+        if !path.starts_with("/v1/statistics/") {
+            continue;
+        }
+        for operation in item.as_object().unwrap().values() {
+            let name = operation["x-registry-statisticalOperation"]
+                .as_str()
+                .unwrap();
+            assert_eq!(
+                operation["operationId"],
+                format!("statistics.records-by-category.{name}")
+            );
+            advertised_operations.insert(name);
+        }
+    }
+    assert_eq!(advertised_operations, expected_operations);
     let statistical_paths = openapi["paths"]
         .as_object()
         .unwrap()

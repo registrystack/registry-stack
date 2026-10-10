@@ -657,7 +657,7 @@ if run_json "$temporary_root/author-apply-v1.json" apply --runtime-config "$temp
   printf '%s\n' 'author runtime unexpectedly applied a production package.' >&2
   exit 1
 fi
-assert_json_failure "$temporary_root/author-apply-v1.json" apply.database_configuration.refused
+assert_json_failure "$temporary_root/author-apply-v1.json" apply.database-configuration.refused
 if [[ "$(psql "$adopter_production_admin_url" -Atqc "SELECT to_regclass('registry_internal.registry_state') IS NULL")" != "t" ]]; then
   printf '%s\n' 'author refusal changed the production database state.' >&2
   exit 1
@@ -901,13 +901,13 @@ if run_json "$temporary_root/reconcile-v2-in-progress-execute.json" migration re
   printf '%s\n' 'reconcile execution unexpectedly ran under a held migration lock.' >&2
   exit 1
 fi
-assert_json_failure "$temporary_root/reconcile-v2-in-progress-execute.json" migration.reconcile.outcome.in_progress
+assert_json_failure "$temporary_root/reconcile-v2-in-progress-execute.json" migration.reconcile.outcome.in-progress
 if run_json "$temporary_root/apply-v2-in-progress.json" apply \
   --runtime-config "$temporary_root/runtime-operator-v2-fast-timeout.yaml" --package "$temporary_root/build-v2/package"; then
   printf '%s\n' 'successor apply unexpectedly ran under a held migration lock.' >&2
   exit 1
 fi
-assert_json_failure "$temporary_root/apply-v2-in-progress.json" apply.database.in_progress
+assert_json_failure "$temporary_root/apply-v2-in-progress.json" apply.database.in-progress
 python3 - "$temporary_root/apply-v2-in-progress.json" <<'PY'
 import json
 import sys
@@ -918,7 +918,7 @@ if not any("another session held the exclusive migration lock" in message for me
 if any("migrationUrlRef" in message for message in messages):
     raise SystemExit("apply under a held migration lock reported an unreachable database")
 actions = [item.get("suggestedAction") for item in document.get("diagnostics", [])]
-if "retry_after_migration_lock_releases" not in actions:
+if "retry-after-migration-lock-releases" not in actions:
     raise SystemExit(f"apply under a held migration lock suggested {actions}")
 PY
 if [[ "$(psql "$adopter_production_admin_url" -Atqc "SELECT pg_terminate_backend($advisory_backend_pid)")" != "t" ]]; then
@@ -968,7 +968,7 @@ if run_json "$temporary_root/apply-v2-wrong-digest.json" apply --runtime-config 
   printf '%s\n' 'successor apply unexpectedly ran under another expected digest.' >&2
   exit 1
 fi
-assert_json_failure "$temporary_root/apply-v2-wrong-digest.json" apply.package.digest_mismatch
+assert_json_failure "$temporary_root/apply-v2-wrong-digest.json" apply.package.digest-mismatch
 run_json "$temporary_root/apply-v2.json" apply --runtime-config "$temporary_root/runtime-operator-v1.yaml" --package "$temporary_root/build-v2/package" \
   --expected-digest "$package_digest_v2"
 assert_json_ok "$temporary_root/apply-v2.json" apply
@@ -1115,7 +1115,7 @@ if run_json "$temporary_root/mismatched-review-v3.json" test "${reviewed_candida
   printf '%s\n' 'reviewed schema fingerprint unexpectedly overrode the database measurement.' >&2
   exit 1
 fi
-assert_json_failure "$temporary_root/mismatched-review-v3.json" migration.review.fingerprint_mismatch
+assert_json_failure "$temporary_root/mismatched-review-v3.json" migration.review.fingerprint-mismatch
 python3 - "$temporary_root/mismatched-review-v3.json" "sha256:$(printf '0%.0s' {1..64})" "$schema_fingerprint_v3" <<'PY'
 import json
 import sys

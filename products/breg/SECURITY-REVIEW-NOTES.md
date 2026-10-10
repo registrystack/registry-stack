@@ -60,7 +60,7 @@ state, and the instance claim.
    re-hashed before the digest is trusted. `package.expectedDigest` in the
    runtime file is an optional pin: when set, a package with another digest
    is refused before any database connection. Re-applying the active package
-   is refused as already active (`apply.package.already_active`, naming
+   is refused as already active (`apply.package.already-active`, naming
    `bregctl status`); an older package, a package that skips the active one,
    or another registry's package is refused as `apply.package.refused`, with
    the roll-forward remedy. Tests:
@@ -125,7 +125,7 @@ state, and the instance claim.
    reassignment that strips them is repaired by the next apply; split startup
    refuses missing grants, naming `bregctl apply`. A change of runtime role or
    role mode over the active package is recorded as its own successor
-   activation (`metadata_only`, a fresh activation id), and apply revokes
+   activation (`metadata-only`, a fresh activation id), and apply revokes
    every privilege of a runtime role the activation stops serving with. A
    one-role runtime file is refused against a database last activated for a
    separate runtime role. In either mode, a runtime role with superuser,
@@ -429,7 +429,7 @@ as the claim on its next apply (BREG-SEC-117).
 - Startup and every readiness probe compare the claim with the live
   database: the system identifier when both expose it, the database oid
   alone otherwise. A mismatch refuses startup and answers readiness 503 with
-  `startup.instance_claim.mismatch`.
+  `startup.instance-claim.mismatch`.
 - The runtime role holds `SELECT` only on the claim.
 - The claim lives in `registry_state`. An activation records the claim, in
   the transaction that commits its ledger row, only when the state row
@@ -591,7 +591,7 @@ candidate does not declare (release provenance).
   manifest does not record which engine release built it, and the managed
   catalog includes tables the engine owns, so a predecessor built by an
   earlier release always drifts. A drift is reported as
-  `migration.rehearsal.baseline_fingerprint_drift`, with the recorded and the
+  `migration.rehearsal.baseline-fingerprint-drift`, with the recorded and the
   measured fingerprints, and it does not stop `test`. Activation is still
   protected by the other checks. A predecessor schema that the current
   compiler cannot install is refused. The rehearsed migration must reach the
@@ -1207,8 +1207,8 @@ still be refused by an audit destination it never uses.
   shorter statement timeout (`57014`) to `MigrationLockHeld`; every other
   failure keeps its existing refusal. `refusal_before_maintenance` keeps it
   apart from `DatabaseUnavailable`, so `apply` and `plan` still change
-  nothing and report `apply.database.in_progress`, with a sentence that names
-  the held lock and the `retry_after_migration_lock_releases` suggested
+  nothing and report `apply.database.in-progress`, with a sentence that names
+  the held lock and the `retry-after-migration-lock-releases` suggested
   action. An unreachable database keeps `apply.database.unavailable`.
 - The lock-free assessment preflight is safe because it authorizes nothing.
   It reads one committed snapshot of the state row and binds the configured
@@ -1220,7 +1220,7 @@ still be refused by an audit destination it never uses.
   under the lock was already the only fence.
 - `--execute` keeps the locked preflight unchanged. A lock held there, or at
   the reconciliation's own acquisition, refuses as
-  `migration.reconcile.outcome.in_progress` and changes nothing; an
+  `migration.reconcile.outcome.in-progress` and changes nothing; an
   assessment reports `in_progress` as its outcome.
 - An assessment holds only the keyed audit profile it validates the operator
   reference under. `--execute` opens the companion audit writer after the
@@ -1228,15 +1228,15 @@ still be refused by an audit destination it never uses.
   `migration.reconcile.audit.unavailable` when it cannot.
 - `history erase`, `history rebaseline`, `field-encryption preflight`, and
   `field-encryption erase-history` keep the locked preflight and report a
-  held lock as `<prefix>.active_registry.in_progress`.
+  held lock as `<prefix>.active-registry.in-progress`.
 - The history maintenance transactions take the exclusive lock through
   `lock_registry` in `crates/registry-breg/src/history_maintenance.rs`, which
   reads the lock wait with the same `lock_wait_ended` rule as
   `acquire_inner`. A held lock there refuses as `MigrationLockHeld` before the
   transaction changes anything, and `bregctl` reports it as
-  `history.erase.in_progress`, `history.rebaseline.in_progress`, or
-  `field_encryption.erase_history.in_progress` with the
-  `retry_after_migration_lock_releases` suggested action. Its request entry is
+  `history.erase.in-progress`, `history.rebaseline.in-progress`, or
+  `field-encryption.erase-history.in-progress` with the
+  `retry-after-migration-lock-releases` suggested action. Its request entry is
   answered `unfinished`, as for any other refusal. An `erase-history` run
   refused part way keeps the records it already erased, each in its own
   committed transaction, and can be run again. `field-encryption preflight`
@@ -1245,14 +1245,14 @@ still be refused by an audit destination it never uses.
   maintenance, and instance claim adoption take the exclusive lock through
   the same `lock_registry`. A held lock refuses as `MigrationLockHeld` before
   their transaction changes anything, and `bregctl` reports it as
-  `evidence_retention.in_progress`, `request_retention.in_progress`,
-  `import_authority.in_progress`, or `instance_claim.in_progress` with the
+  `evidence-retention.in-progress`, `request-retention.in-progress`,
+  `import-authority.in-progress`, or `instance-claim.in-progress` with the
   same suggested action. The Evidence erasure, the request-detail erasure,
   and the adoption answer their request entry `failed`, as for an outage;
   import authority maintenance records only committed transitions, so a
   refusal records nothing. A request-detail erasure that committed keeps its
   `committed` response when the external-deletion retry after it meets the
-  held lock, and the command still reports `request_retention.in_progress`.
+  held lock, and the command still reports `request-retention.in-progress`.
 
 ### Tests
 
@@ -1283,7 +1283,7 @@ assertion in `failed_resume_and_ddl_timeout_are_fail_closed_on_real_postgres`.
 `execution_refuses_a_held_migration_lock_as_in_progress`.
 `products/breg/scripts/test-adopter-workflow.sh` holds the advisory lock from
 a second session and proves assessment answers `in_progress` while
-`--execute` refuses and `apply` refuses with `apply.database.in_progress`
+`--execute` refuses and `apply` refuses with `apply.database.in-progress`
 and the wait-and-retry action, then proves assessment answers with a
 read-only audit directory while `--execute` refuses. Each test the change
 adds was written first and failed, or did not compile, against the code
@@ -1331,8 +1331,8 @@ damaged package.
 - The comparison runs right after the target package is verified and before
   `DatabaseAccess::resolve`, so a mismatch resolves no database secret,
   opens no connection, takes no lock, and writes no audit entry. Both
-  commands refuse with `apply.package.digest_mismatch` and the
-  `rerun_plan_on_intended_package` suggested action. The message names the
+  commands refuse with `apply.package.digest-mismatch` and the
+  `rerun-plan-on-intended-package` suggested action. The message names the
   expected and the found digest; both are package identities, not secrets.
 - Without the flag, behaviour is unchanged. The activation audit entry
   (`ActivationAttempt::begin` in `crates/registry-breg/src/migration.rs`)
@@ -1380,7 +1380,7 @@ statement timeouts its descriptor declares (`rehearse_assertions` and
 `rehearse_reviewed_steps` in `crates/registry-breg/src/postgres/rehearsal.rs`),
 retires the rehearsal receipt's `proofs` member
 (`MigrationRehearsalReceipt` in `crates/registry-breg/src/migration_plan.rs`),
-and names both schema fingerprints in `migration.review.fingerprint_mismatch`,
+and names both schema fingerprints in `migration.review.fingerprint-mismatch`,
 measured with `bregctl test --fingerprint-only`
 (`measure` in `crates/registry-bregctl/src/test_lifecycle.rs`). It touches the
 evidence a reviewed migration carries into a package, not activation:
@@ -2634,3 +2634,61 @@ installations are compared before and after, with no ledger data.
 
 Residual: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
 database. No compatibility reader or migration of earlier state is provided.
+
+## Tooling and statistics vocabulary
+
+The CLI report words, migration-ledger kinds, and statistical operation names
+use kebab-case. This changes what report, metadata, OpenAPI, and audit
+consumers compare. It changes no authorization grant, verification result,
+activation authority, or release decision.
+
+### Threat
+
+A renamed word must not select a different error recovery, bypass a migration
+constraint, grant access to another statistical route, or misidentify a
+statistical operation in its audit entry. A code copied from an HTTP client
+must keep the decoded failure's classification and recovery advice.
+
+### Enforcement and defaults
+
+- `DiagnosticArtifact`, `SuggestedAction`, and `BaselineAssurance` keep the
+  same Rust variants. Serde changes their written spelling only. Operation
+  diagnostics retain their condition, severity, path, and corrective action.
+  `tool_diagnostic` applies the CLI spelling to a borrowed closed diagnostic;
+  the client's decoded Problem variant and the HTTP Problem vocabulary are
+  unchanged. No variant or classification rule changes.
+- Migration kinds are selected through `MigrationKind` variants. Its writer
+  and the fresh ledger's CHECK constraints use `compiled-additive`,
+  `metadata-only`, and `reviewed`. No row is converted. Statement checksums,
+  review closure, role grants, and activation audit requirements are unchanged.
+- Statistical routes retain the `Kind` variants and the existing compiled
+  access grants. Their operation names are written in kebab-case in generated
+  metadata and OpenAPI and in audit `operationId`. Dataset selection, HTTP
+  method, publication, withdrawal, and replay rules are unchanged.
+
+### Tests
+
+- `crates/registry-bregctl/src/lib.rs`:
+  `diagnostic_and_assurance_words_use_the_public_kebab_case_contract`,
+  `baseline_assurance_words_use_the_public_kebab_case_contract`, and
+  `runtime_path_refusal_uses_a_kebab_case_operation_code` check the written
+  report contract; `statistics_http_failures_preserve_actionable_cli_diagnostics`
+  sends the existing HTTP Problem vocabulary through the client and checks
+  the CLI condition and recovery.
+- `crates/registry-breg/src/postgres/migration_ledger.rs`:
+  `stored_migration_kind_words_use_kebab_case` checks each stored kind.
+  `crates/registry-breg/tests/postgres_migration.rs` checks fresh activation
+  ledger rows and checksum constraints against real PostgreSQL.
+- `crates/registry-breg/tests/compiler_statistics.rs`:
+  `generated_artifacts_cover_the_effective_model_metadata_and_seven_routes`
+  checks all seven metadata/OpenAPI operation names and operation identifiers.
+  `crates/registry-breg/tests/postgres_statistics_http.rs`:
+  `statistical_http_full_journey_preserves_visibility_release_and_withdrawal_rules`
+  checks the real routes, visibility, release decisions, and audit operation
+  names.
+
+### Accepted residuals
+
+Report and audit consumers that compare the old spellings must update with
+this release. The engine does not accept both spellings or convert retained
+rows. State from earlier releases is refused; install fresh.

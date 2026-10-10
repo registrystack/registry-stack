@@ -329,7 +329,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
     if let Some(version) = &selection.model_version {
         if version != &facts.version {
             return Err(diagnostic(
-                "init.selection.model_version",
+                "init.selection.model-version",
                 "/modelVersion",
                 &format!(
                     "the selection was written against another {} version, and this bregctl embeds {} {}",
@@ -341,7 +341,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
     if let Some(revision) = &selection.model_revision {
         if revision != &facts.revision {
             return Err(diagnostic(
-                "init.selection.model_revision",
+                "init.selection.model-revision",
                 "/modelRevision",
                 &format!(
                     "the selection was written against another {} revision, and this bregctl embeds revision {}",
@@ -359,7 +359,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
     }
     if selection.registry.title.trim().is_empty() {
         return Err(diagnostic(
-            "init.selection.registry_title",
+            "init.selection.registry-title",
             "/registry/title",
             "the registry title must not be empty",
         ));
@@ -379,7 +379,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         let path = entity_pointer(position);
         let class = model.classes.get(&entity.concept).ok_or_else(|| {
             diagnostic(
-                "init.selection.concept_unknown",
+                "init.selection.concept-unknown",
                 &format!("{path}/concept"),
                 &format!(
                     "the concept is not one of {} {}; name a concept the model defines",
@@ -392,7 +392,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
                 .concrete_descendants(&class.name)
                 .map_err(|error| model_error(&path, &error))?;
             return Err(diagnostic(
-                "init.selection.concept_abstract",
+                "init.selection.concept-abstract",
                 &format!("{path}/concept"),
                 &format!(
                     "the concept is abstract; select one of its concrete concepts instead: {}",
@@ -404,7 +404,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         validate_identifier(&id, &format!("{path}/id"), "an entity identifier")?;
         if !ids.insert(id.clone()) {
             return Err(diagnostic(
-                "init.selection.entity_duplicate",
+                "init.selection.entity-duplicate",
                 &format!("{path}/id"),
                 &format!(
                     "an earlier entity already has the identifier `{id}`; set `id` to tell them apart"
@@ -415,7 +415,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         validate_identifier(&route, &format!("{path}/route"), "a route")?;
         if !routes.insert(route.clone()) {
             return Err(diagnostic(
-                "init.selection.route_duplicate",
+                "init.selection.route-duplicate",
                 &format!("{path}/route"),
                 &format!(
                     "an earlier entity already has the route `{route}`; set `route` to tell them apart"
@@ -435,7 +435,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         let path = format!("/vocabularies/{position}");
         if !model.enums.contains_key(&vocabulary.r#enum) {
             return Err(diagnostic(
-                "init.selection.vocabulary_unknown",
+                "init.selection.vocabulary-unknown",
                 &format!("{path}/enum"),
                 &format!(
                     "the enumeration is not one of {} {}; name an enumeration the model defines",
@@ -448,7 +448,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
             .is_some()
         {
             return Err(diagnostic(
-                "init.selection.vocabulary_duplicate",
+                "init.selection.vocabulary-duplicate",
                 &format!("{path}/enum"),
                 "an earlier entry already lists this enumeration; remove one of them",
             ));
@@ -473,7 +473,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         let path = &vocabulary_pointers[name];
         if !enums.drawn.contains(name) {
             return Err(diagnostic(
-                "init.selection.vocabulary_unused",
+                "init.selection.vocabulary-unused",
                 path,
                 "no selected property draws from this enumeration; remove the entry",
             ));
@@ -481,7 +481,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         let values = model.enums[name].values.len();
         if *mode == VocabularyMode::Inline && values > MAX_CODELIST_CONCEPTS {
             return Err(diagnostic(
-                "init.selection.vocabulary_size",
+                "init.selection.vocabulary-size",
                 path,
                 &format!(
                     "the enumeration has {values} values, and a project carries at most \
@@ -504,7 +504,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
     for vocabulary in &vocabularies {
         if !seen.insert(vocabulary.id.as_str()) {
             return Err(diagnostic(
-                "init.selection.vocabulary_collision",
+                "init.selection.vocabulary-collision",
                 "/entities",
                 &format!(
                     "two enumerations derive the same vocabulary identifier `{}`",
@@ -594,7 +594,7 @@ fn resolve_entity(
     )?;
     if reserved_field_id(&identifier_id) {
         return Err(diagnostic(
-            "init.selection.field_reserved",
+            "init.selection.field-reserved",
             &format!("{path}/identifierField"),
             &format!(
                 "`{identifier_id}` is a name the compiler keeps for a system column of every \
@@ -631,7 +631,7 @@ fn resolve_entity(
         let property_path = format!("{path}/properties/{position}");
         if !properties.insert(property.name.as_str()) {
             return Err(diagnostic(
-                "init.selection.property_duplicate",
+                "init.selection.property-duplicate",
                 &property_path,
                 "an earlier entry already selects this property; remove one of them",
             ));
@@ -642,7 +642,7 @@ fn resolve_entity(
             .find(|slot| slot.name == property.name)
             .ok_or_else(|| {
                 diagnostic(
-                    "init.selection.property_unknown",
+                    "init.selection.property-unknown",
                     &property_path,
                     &format!(
                         "the property is not one `{}` carries; it carries: {}",
@@ -653,7 +653,7 @@ fn resolve_entity(
             })?;
         if property.target.is_some() && !matches!(slot.range, Range::Class(_)) {
             return Err(diagnostic(
-                "init.selection.property_target",
+                "init.selection.property-target",
                 &property_path,
                 "`target` names the selected entity a reference points at, and this property does \
                  not hold records of a concept; remove `target`",
@@ -664,7 +664,7 @@ fn resolve_entity(
             classification: floor,
         } = field_kind(model, slot, property, index, vocabulary_modes).map_err(|reason| {
             diagnostic(
-                "init.selection.property_unsupported",
+                "init.selection.property-unsupported",
                 &property_path,
                 &format!("the property cannot become a field: {reason}"),
             )
@@ -678,7 +678,7 @@ fn resolve_entity(
         let id = field_id(&slot.name);
         if !field_ids.insert(id.clone()) {
             return Err(diagnostic(
-                "init.selection.field_duplicate",
+                "init.selection.field-duplicate",
                 &property_path,
                 &format!("two fields of this entity would share the identifier `{id}`"),
             ));
@@ -689,7 +689,7 @@ fn resolve_entity(
         let api_name = default_api_name(&id);
         if !api_names.insert(api_name.clone()) || !sql_names.insert(default_sql_name(&id)) {
             return Err(diagnostic(
-                "init.selection.field_name_collision",
+                "init.selection.field-name-collision",
                 &property_path,
                 &format!(
                     "two fields of this entity would derive the same API name `{api_name}` from \
@@ -1118,7 +1118,7 @@ fn resolve_vocabulary(path: &str, definition: &EnumDef) -> Result<PlannedVocabul
             || value.text.chars().any(char::is_control)
         {
             return Err(diagnostic(
-                "init.selection.vocabulary_value",
+                "init.selection.vocabulary-value",
                 path,
                 &format!(
                     "value `{}` of enumeration `{}` is not a code the compiler accepts",
@@ -1501,7 +1501,7 @@ mod tests {
             "entities:\n  - concept: Person\n    properties:\n      - name: preferred_language\n\
              vocabularies:\n  - enum: Language\n    mode: inline\n",
         );
-        assert_eq!(error.code, "init.selection.vocabulary_size");
+        assert_eq!(error.code, "init.selection.vocabulary-size");
         assert_eq!(error.path, "/vocabularies/0");
         assert!(
             error.message.contains(&MAX_CODELIST_CONCEPTS.to_string()),
@@ -1532,12 +1532,12 @@ mod tests {
             "entities:\n  - concept: Person\n    properties:\n      - name: sex\n\
              vocabularies:\n  - enum: Language\n    mode: inline\n",
         );
-        assert_eq!(error.code, "init.selection.vocabulary_unused");
+        assert_eq!(error.code, "init.selection.vocabulary-unused");
         let error = refused(
             "entities:\n  - concept: Person\n    properties:\n      - name: sex\n\
              vocabularies:\n  - enum: Colour\n    mode: inline\n",
         );
-        assert_eq!(error.code, "init.selection.vocabulary_unknown");
+        assert_eq!(error.code, "init.selection.vocabulary-unknown");
     }
 
     #[test]
@@ -1642,7 +1642,7 @@ mod tests {
         let error = refused(&format!(
             "{body}vocabularies:\n  - enum: Language\n    mode: inline\n"
         ));
-        assert_eq!(error.code, "init.selection.vocabulary_size");
+        assert_eq!(error.code, "init.selection.vocabulary-size");
     }
 
     #[test]
@@ -1798,7 +1798,7 @@ mod tests {
     fn a_reference_with_several_fitting_entities_needs_a_target() {
         let body = "entities:\n  - concept: Person\n    id: adult\n    properties:\n      - name: given_name\n  - concept: Person\n    id: child\n    properties:\n      - name: given_name\n  - concept: GroupMembership\n    properties:\n      - name: person";
         let error = refused(&format!("{body}\n"));
-        assert_eq!(error.code, "init.selection.property_unsupported");
+        assert_eq!(error.code, "init.selection.property-unsupported");
         assert!(error.message.contains("adult, child"), "{}", error.message);
         let plan = resolved(&format!("{body}\n        target: child\n"));
         assert_eq!(
@@ -1808,14 +1808,14 @@ mod tests {
             }
         );
         let error = refused(&format!("{body}\n        target: household\n"));
-        assert_eq!(error.code, "init.selection.property_unsupported");
+        assert_eq!(error.code, "init.selection.property-unsupported");
     }
 
     #[test]
     fn a_property_holding_many_concepts_is_refused_with_the_way_out() {
         let error =
             refused("entities:\n  - concept: Location\n    properties:\n      - name: geocodes\n");
-        assert_eq!(error.code, "init.selection.property_unsupported");
+        assert_eq!(error.code, "init.selection.property-unsupported");
         assert!(
             error.message.contains("as its own entity"),
             "{}",
@@ -1852,17 +1852,17 @@ mod tests {
     fn an_unknown_property_names_what_the_concept_carries() {
         let error =
             refused("entities:\n  - concept: Person\n    properties:\n      - name: shoe_size\n");
-        assert_eq!(error.code, "init.selection.property_unknown");
+        assert_eq!(error.code, "init.selection.property-unknown");
         assert!(error.message.contains("given_name"), "{}", error.message);
     }
 
     #[test]
     fn an_abstract_concept_is_refused_with_its_concrete_descendants() {
         let error = refused("entities:\n  - concept: Group\n    properties:\n      - name: name\n");
-        assert_eq!(error.code, "init.selection.concept_abstract");
+        assert_eq!(error.code, "init.selection.concept-abstract");
         assert!(error.message.contains("Household"), "{}", error.message);
         let error = refused("entities:\n  - concept: Widget\n");
-        assert_eq!(error.code, "init.selection.concept_unknown");
+        assert_eq!(error.code, "init.selection.concept-unknown");
     }
 
     #[test]
@@ -1872,17 +1872,17 @@ mod tests {
         for (body, code, path) in [
             (
                 format!("modelVersion: {MARKER}\n{person}"),
-                "init.selection.model_version",
+                "init.selection.model-version",
                 "/modelVersion",
             ),
             (
                 format!("modelRevision: {MARKER}\n{person}"),
-                "init.selection.model_revision",
+                "init.selection.model-revision",
                 "/modelRevision",
             ),
             (
                 format!("entities:\n  - concept: {MARKER}\n"),
-                "init.selection.concept_unknown",
+                "init.selection.concept-unknown",
                 "/entities/0/concept",
             ),
             (
@@ -1897,12 +1897,12 @@ mod tests {
             ),
             (
                 format!("{person}    properties:\n      - name: {MARKER}\n"),
-                "init.selection.property_unknown",
+                "init.selection.property-unknown",
                 "/entities/0/properties/0",
             ),
             (
                 format!("{person}vocabularies:\n  - enum: {MARKER}\n    mode: inline\n"),
-                "init.selection.vocabulary_unknown",
+                "init.selection.vocabulary-unknown",
                 "/vocabularies/0/enum",
             ),
             (
@@ -1911,7 +1911,7 @@ mod tests {
                      - concept: GroupMembership\n    properties:\n      - name: group\n        \
                      target: {MARKER}\n"
                 ),
-                "init.selection.property_unsupported",
+                "init.selection.property-unsupported",
                 "/entities/1/properties/0",
             ),
         ] {
@@ -1930,15 +1930,15 @@ mod tests {
         );
         assert_eq!(
             refused("entities:\n  - concept: Person\n  - concept: Person\n").code,
-            "init.selection.entity_duplicate"
+            "init.selection.entity-duplicate"
         );
         assert_eq!(
             refused("entities:\n  - concept: Person\n    route: people\n  - concept: Household\n    route: people\n").code,
-            "init.selection.route_duplicate"
+            "init.selection.route-duplicate"
         );
         assert_eq!(
             refused("entities:\n  - concept: Person\n    properties:\n      - name: sex\n      - name: sex\n").code,
-            "init.selection.property_duplicate"
+            "init.selection.property-duplicate"
         );
         assert_eq!(refused("entities: []\n").code, "init.selection.entities");
         let plan = resolved(
@@ -1955,7 +1955,7 @@ mod tests {
             let error = refused(&format!(
                 "entities:\n  - concept: Person\n    identifierField: {name}\n"
             ));
-            assert_eq!(error.code, "init.selection.field_reserved", "{name}");
+            assert_eq!(error.code, "init.selection.field-reserved", "{name}");
             assert_eq!(error.path, "/entities/0/identifierField");
         }
         let plan = resolved("entities:\n  - concept: Person\n    identifierField: person-number\n");
@@ -1967,7 +1967,7 @@ mod tests {
         let error = refused(
             "entities:\n  - concept: Person\n    identifierField: given_name\n    properties:\n      - name: given_name\n",
         );
-        assert_eq!(error.code, "init.selection.field_name_collision");
+        assert_eq!(error.code, "init.selection.field-name-collision");
         assert_eq!(error.path, "/entities/0/properties/0");
         assert!(error.message.contains("givenName"), "{}", error.message);
         assert!(resolve(
@@ -1986,7 +1986,7 @@ mod tests {
             let error = refused(&format!(
                 "entities:\n  - concept: Person\n    properties:\n      - name: {property}\n        target: household\n{others}"
             ));
-            assert_eq!(error.code, "init.selection.property_target", "{property}");
+            assert_eq!(error.code, "init.selection.property-target", "{property}");
             assert_eq!(error.path, "/entities/0/properties/0");
         }
     }
@@ -2082,7 +2082,7 @@ mod tests {
         let mut selection = selection("entities:\n  - concept: Person\n");
         selection.model_version = Some("0.0.1".to_owned());
         let error = resolve(&selection, model()).expect_err("refused");
-        assert_eq!(error.code, "init.selection.model_version");
+        assert_eq!(error.code, "init.selection.model-version");
         selection.model_version = Some(model().version.clone().expect("the snapshot is versioned"));
         assert!(resolve(&selection, model()).is_ok());
     }
@@ -2096,7 +2096,7 @@ mod tests {
         );
         selection.model_revision = Some("0000000000000000000000000000000000000000".to_owned());
         let error = resolve(&selection, model()).expect_err("refused");
-        assert_eq!(error.code, "init.selection.model_revision");
+        assert_eq!(error.code, "init.selection.model-revision");
         selection.model_revision =
             Some(publicschema::pin().expect("the snapshot is pinned").commit);
         assert!(resolve(&selection, model()).is_ok());

@@ -38,7 +38,7 @@ pub(crate) fn run(runtime_config: &Path) -> Result<CheckedStartup, DoctorRefusal
     if !runtime_config.is_absolute() {
         return Err(DoctorRefusal {
             diagnostics: vec![diagnostic(
-                "startup.runtime_config.path_invalid",
+                "startup.runtime-config.path-invalid",
                 "runtimeConfig",
                 "the runtime configuration path must be absolute",
             )],
@@ -100,7 +100,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "submissions"
         };
         return diagnostic(
-            "startup.review_authority.missing",
+            "startup.review-authority.missing",
             &format!("/reviewAuthorities/{authority}"),
             &format!(
                 "runtime review authority `{authority}` is absent but required by \
@@ -124,7 +124,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "deliveries were"
         };
         return diagnostic(
-            "startup.instance_id.pending_deliveries",
+            "startup.instance-id.pending-deliveries",
             "identity.instanceId",
             &format!(
                 "{pending_deliveries} pending webhook {noun} captured under event source \
@@ -145,7 +145,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "deliveries require"
         };
         return diagnostic(
-            "startup.webhook.retained_bindings",
+            "startup.webhook.retained-bindings",
             "eventDestinations",
             &format!(
                 "{retained_deliveries} retained webhook {noun} a superseded destination or local-handler binding; run `bregctl webhook list` to identify rows where bindingActive is false, then either restore each exact binding until its work drains or explicitly discard each delivery with its current generation; stop the runtime before discarding pending work, and retry an active lease only after it expires"
@@ -188,7 +188,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             unreachable!("handled above")
         }
         StartupError::DatabaseConnection => (
-            "startup.database.connection_refused",
+            "startup.database.connection-refused",
             "database",
             "the database connection was refused",
         ),
@@ -209,32 +209,32 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "the database holds registry state this release does not recognise: a release reads only the state its predecessor wrote, so upgrade the database one release at a time",
         ),
         StartupError::DatabaseIdentityMismatch => (
-            "startup.database.identity_mismatch",
+            "startup.database.identity-mismatch",
             "database",
             "the database records a different database id than identity.databaseId: point database.runtimeUrlRef at the database it names or correct identity.databaseId",
         ),
         StartupError::ActivePackageMismatch => (
-            "startup.package.not_active",
+            "startup.package.not-active",
             "package",
             "the database has not activated the package at package.root: run bregctl plan --package DIR then bregctl apply --package DIR",
         ),
         StartupError::InstanceClaimMismatch => (
-            "startup.instance_claim.mismatch",
+            "startup.instance-claim.mismatch",
             "database",
             "the database is not the instance the Registry's claim names, as a restored copy is: once the original is retired, run bregctl instance-claim adopt",
         ),
         StartupError::RuntimeWriteAuthority => (
-            "startup.runtime_role.can_write",
+            "startup.runtime-role.can-write",
             "database",
             "the runtime role can write the activation ledger or the registry state: run bregctl apply --package DIR to name the object and the fix",
         ),
         StartupError::RuntimeGrantsMissing => (
-            "startup.runtime_role.grants_missing",
+            "startup.runtime-role.grants-missing",
             "database",
             "the runtime role is missing grants the active package gives it: run bregctl apply --package DIR to reissue them",
         ),
         StartupError::RoleModeChanged => (
-            "startup.role_mode.changed",
+            "startup.role-mode.changed",
             "database",
             "the database was activated for a separate runtime role but the runtime file names one role: run bregctl apply --package DIR to activate it for one role",
         ),
@@ -261,12 +261,12 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "the authentication profile was refused: check the claim mapping, the accepted algorithms, and the audience against the package this runtime serves",
         ),
         StartupError::AuthenticationClientsUnlisted => (
-            "startup.authentication.clients_unlisted",
+            "startup.authentication.clients-unlisted",
             "authentication",
             "the project names clients in requesterClients, trusted actors, or consent recipients that authentication.oidc.allowedClients does not list; list each of them in allowedClients, because the keyword unrestricted lists none",
         ),
         StartupError::EventDestinations => (
-            "startup.event_destinations.refused",
+            "startup.event-destinations.refused",
             "eventDestinations",
             "the event destination bindings were refused",
         ),
@@ -274,22 +274,22 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "retained webhook binding diagnostics return before the generic mapping"
         ),
         StartupError::ReviewBindings => (
-            "startup.review_bindings.refused",
+            "startup.review-bindings.refused",
             "reviewBindings",
             "the retained review authority or executor bindings were refused",
         ),
         StartupError::AttachmentStorage => (
-            "startup.attachment_storage.refused",
+            "startup.attachment-storage.refused",
             "attachmentStorage",
             "the attachment binding was refused: check attachmentStorage and attachmentVerification credentials and endpoints, disabled S3 versioning, and the registry's pinned backend and verification policy",
         ),
         StartupError::FieldEncryption => (
-            "startup.field_encryption.refused",
+            "startup.field-encryption.refused",
             "fieldEncryption",
             "the field-encryption key state was refused: an active package with encrypted fields requires a configured fieldEncryption provider that answers, and a stored key row the provider can unwrap",
         ),
         StartupError::FieldEncryptionCustody => (
-            "startup.field_encryption.custody_refused",
+            "startup.field-encryption.custody-refused",
             "fieldEncryption",
             "the field-encryption data-key custody was refused: a databaseInitializationEnvironment other than local requires the transit provider; localFile data keys are development-only",
         ),
@@ -304,7 +304,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "the shutdown configuration was refused",
         ),
         StartupError::BackgroundTaskStopped => (
-            "startup.background_task.stopped",
+            "startup.background-task.stopped",
             "backgroundTask",
             "a background task stopped before shutdown was requested",
         ),
@@ -439,7 +439,7 @@ mod tests {
             authority: "casework-retained".to_owned(),
             retained_submissions: 2,
         });
-        assert_eq!(diagnostic.code, "startup.review_authority.missing");
+        assert_eq!(diagnostic.code, "startup.review-authority.missing");
         assert_eq!(diagnostic.path, "/reviewAuthorities/casework-retained");
         for detail in [
             "casework-retained",
@@ -462,7 +462,7 @@ mod tests {
         let diagnostic = startup_diagnostic(StartupError::RetainedWebhookBindings {
             retained_deliveries: 2,
         });
-        assert_eq!(diagnostic.code, "startup.webhook.retained_bindings");
+        assert_eq!(diagnostic.code, "startup.webhook.retained-bindings");
         assert_eq!(diagnostic.path, "eventDestinations");
         for detail in [
             "2 retained webhook deliveries require",
@@ -488,7 +488,7 @@ mod tests {
             configured_instance_id: "renamed".to_owned(),
             pending_deliveries: 1,
         });
-        assert_eq!(diagnostic.code, "startup.instance_id.pending_deliveries");
+        assert_eq!(diagnostic.code, "startup.instance-id.pending-deliveries");
         assert_eq!(diagnostic.path, "identity.instanceId");
         for detail in [
             "1 pending webhook delivery was",
@@ -515,7 +515,7 @@ mod tests {
             ),
             (
                 StartupError::DatabaseConnection,
-                "startup.database.connection_refused",
+                "startup.database.connection-refused",
                 "database",
             ),
             (
@@ -535,22 +535,22 @@ mod tests {
             ),
             (
                 StartupError::InstanceClaimMismatch,
-                "startup.instance_claim.mismatch",
+                "startup.instance-claim.mismatch",
                 "database",
             ),
             (
                 StartupError::RuntimeWriteAuthority,
-                "startup.runtime_role.can_write",
+                "startup.runtime-role.can-write",
                 "database",
             ),
             (
                 StartupError::RuntimeGrantsMissing,
-                "startup.runtime_role.grants_missing",
+                "startup.runtime-role.grants-missing",
                 "database",
             ),
             (
                 StartupError::RoleModeChanged,
-                "startup.role_mode.changed",
+                "startup.role-mode.changed",
                 "database",
             ),
             (StartupError::Audit, "startup.audit.refused", "audit"),
@@ -572,22 +572,22 @@ mod tests {
             ),
             (
                 StartupError::EventDestinations,
-                "startup.event_destinations.refused",
+                "startup.event-destinations.refused",
                 "eventDestinations",
             ),
             (
                 StartupError::FieldEncryption,
-                "startup.field_encryption.refused",
+                "startup.field-encryption.refused",
                 "fieldEncryption",
             ),
             (
                 StartupError::FieldEncryptionCustody,
-                "startup.field_encryption.custody_refused",
+                "startup.field-encryption.custody-refused",
                 "fieldEncryption",
             ),
             (
                 StartupError::ReviewBindings,
-                "startup.review_bindings.refused",
+                "startup.review-bindings.refused",
                 "reviewBindings",
             ),
             (
@@ -602,7 +602,7 @@ mod tests {
             ),
             (
                 StartupError::BackgroundTaskStopped,
-                "startup.background_task.stopped",
+                "startup.background-task.stopped",
                 "backgroundTask",
             ),
             (StartupError::Logging, "startup.logging.refused", "logging"),
@@ -657,12 +657,12 @@ mod tests {
     #[test]
     fn a_database_that_runs_another_package_or_database_id_names_the_next_command() {
         let database = startup_diagnostic(StartupError::DatabaseIdentityMismatch);
-        assert_eq!(database.code, "startup.database.identity_mismatch");
+        assert_eq!(database.code, "startup.database.identity-mismatch");
         assert_eq!(database.path, "database");
         assert!(database.message.contains("identity.databaseId"));
 
         let package = startup_diagnostic(StartupError::ActivePackageMismatch);
-        assert_eq!(package.code, "startup.package.not_active");
+        assert_eq!(package.code, "startup.package.not-active");
         assert_eq!(package.path, "package");
         assert!(package.message.contains("bregctl plan --package DIR"));
         assert!(package.message.contains("bregctl apply --package DIR"));
@@ -830,7 +830,7 @@ mod tests {
         }
 
         let unlisted = startup_diagnostic(StartupError::AuthenticationClientsUnlisted);
-        assert_eq!(unlisted.code, "startup.authentication.clients_unlisted");
+        assert_eq!(unlisted.code, "startup.authentication.clients-unlisted");
         assert_eq!(unlisted.path, "authentication");
         for fix in [
             "requesterClients",

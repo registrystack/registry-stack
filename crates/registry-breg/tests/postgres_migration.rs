@@ -1826,7 +1826,7 @@ async fn real_postgres_each_activation_is_one_ledger_row_in_apply_order() {
             None,
             initial.registry().revision(),
             "initial",
-            "compiled_additive",
+            "compiled-additive",
         ),
         (
             successor_activation,
@@ -2615,7 +2615,7 @@ async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_ac
             (
                 initial.activation_id.clone(),
                 "initial".to_owned(),
-                "compiled_additive".to_owned(),
+                "compiled-additive".to_owned(),
                 None,
                 "split".to_owned(),
                 database.runtime_role.as_str().to_owned(),
@@ -2623,7 +2623,7 @@ async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_ac
             (
                 single.activation_id.clone(),
                 "successor".to_owned(),
-                "metadata_only".to_owned(),
+                "metadata-only".to_owned(),
                 Some(digest.clone()),
                 "single".to_owned(),
                 database.migration_role.as_str().to_owned(),
@@ -2631,7 +2631,7 @@ async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_ac
             (
                 split.activation_id.clone(),
                 "successor".to_owned(),
-                "metadata_only".to_owned(),
+                "metadata-only".to_owned(),
                 Some(digest),
                 "split".to_owned(),
                 database.runtime_role.as_str().to_owned(),
@@ -3700,7 +3700,7 @@ async fn downgrade_to_pre_ledger_kernel(database: &TestDatabase) {
                  outcome text NOT NULL
              );
              INSERT INTO registry_internal.registry_migrations
-                 VALUES ('pre-ledger-revision', NULL, 1, 'compiled_additive', 'applied');
+                 VALUES ('pre-ledger-revision', NULL, 1, 'compiled-additive', 'applied');
              CREATE TABLE registry_internal.registry_migration_steps (
                  target_package_revision text NOT NULL,
                  step_id text NOT NULL,

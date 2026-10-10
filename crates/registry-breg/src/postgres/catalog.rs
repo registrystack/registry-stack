@@ -1042,7 +1042,7 @@ async fn initialize_registry_state_for_catalog(
                  artifact_paths, artifact_checksums, outcome, completed_at, applied_at,
                  role_mode, runtime_role
              ) VALUES (
-                 $1, 1, $2, NULL, $3, 'initial', 'compiled_additive', ARRAY[$2]::text[],
+                 $1, 1, $2, NULL, $3, 'initial', 'compiled-additive', ARRAY[$2]::text[],
                  ARRAY[]::text[], ARRAY[]::text[], 'applied', transaction_timestamp(),
                  transaction_timestamp(),
                  CASE WHEN $4 = current_user THEN 'single' ELSE 'split' END, $4

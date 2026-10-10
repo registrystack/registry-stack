@@ -159,11 +159,11 @@ events is a concern.
 
 A run is created only when an open authority for its entity and profile has room for the whole
 input and, if digests are pinned, one of them is the digest the run announces. Otherwise `data import`
-reports `data.import.ingestion_run.import_authority_required` and no run exists. Every chunk
+reports `data.import.ingestion-run.import-authority-required` and no run exists. Every chunk
 rechecks the authority inside its own transaction and counts its items against the volume, so a
 close or expiry during a load stops the next chunk: the run is `blocked` with reason
 `importAuthorityClosed`, `data import` reports
-`data.import.ingestion_run.import_authority_closed`, and the chunks already committed stay. A
+`data.import.ingestion-run.import-authority-closed`, and the chunks already committed stay. A
 blocked run is final. To load the rest, open a new authority and import only the uncommitted lines
 under a fresh checkpoint path; the run's `committedItems` says how many lines committed. Import is
 create only, so re-running an import of lines that already committed, under a fresh checkpoint or
@@ -258,13 +258,13 @@ server response is bounded at 2 MiB.
 | `data export` prints the diagnostics of its checkpoint | Each names the checkpoint file, line, and member that was refused. `config.wrong-kind`, `config.retired-api-version`, or `config.unsupported-api-version` means another `bregctl` release wrote it: finish the export with that `bregctl`, or remove the output and its checkpoint and export again. Any other code means the checkpoint was edited; restore it from a copy you trust. |
 | `data export` is refused with `data.export.checkpoint.refused` | The output file and its checkpoint no longer describe one another: the output is shorter than the checkpoint, its checkpointed prefix changed, more than one page follows the checkpoint, or the checkpoint belongs to another export. Keep both files and resume from copies you trust. A rerun discards at most the single page an interrupted run left unrecorded. |
 | The report says the run is incomplete | `--max-chunks` or `--max-pages` bounded it. Run the same command again to continue. |
-| A durable ingestion run reports `blocked` | Read the run's `blockedReason`. `activePackageChanged`: the active package no longer matches the binding the run was created under; start a successor run under the new package. `importAuthorityClosed`: see the next row. The blocked run stays inspectable. `data import` surfaces the first as `data.import.ingestion_run.blocked`. |
-| An import reports `data.import.ingestion_run.import_authority_closed` | The run's import authority was closed, expired, reached its volume, or was superseded by an activation. The committed chunks stay. Open a new authority and import only the uncommitted lines under a fresh checkpoint path. |
-| An import reports `data.import.ingestion_run.import_authority_required` | No open authority admits the run: none is open for the entity, it names another profile, it expired, its remaining volume is smaller than the input, or it pins other digests. Check `bregctl import-authority list`, then open one that covers this input. |
-| `import-authority open` reports `import_authority.already_open` | The entity already has an open authority. Close it, or wait for it to expire, before opening another. |
-| `import-authority open` reports `import_authority.grant.not_importable` | The profile holds no `import` grant on the entity in the active package. |
-| `import-authority open`, `close`, or `close-expired` reports `import_authority.in_progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. No authority changed. Wait for it to finish, then run the same command again. |
-| An `import-authority` command reports `import_authority.package.refused` | The package at `package.root` is not the one `package.expectedDigest` pins; the message names both digests. Deploy the pinned package or update the pin. No authority changed. |
+| A durable ingestion run reports `blocked` | Read the run's `blockedReason`. `activePackageChanged`: the active package no longer matches the binding the run was created under; start a successor run under the new package. `importAuthorityClosed`: see the next row. The blocked run stays inspectable. `data import` surfaces the first as `data.import.ingestion-run.blocked`. |
+| An import reports `data.import.ingestion-run.import-authority-closed` | The run's import authority was closed, expired, reached its volume, or was superseded by an activation. The committed chunks stay. Open a new authority and import only the uncommitted lines under a fresh checkpoint path. |
+| An import reports `data.import.ingestion-run.import-authority-required` | No open authority admits the run: none is open for the entity, it names another profile, it expired, its remaining volume is smaller than the input, or it pins other digests. Check `bregctl import-authority list`, then open one that covers this input. |
+| `import-authority open` reports `import-authority.already-open` | The entity already has an open authority. Close it, or wait for it to expire, before opening another. |
+| `import-authority open` reports `import-authority.grant.not-importable` | The profile holds no `import` grant on the entity in the active package. |
+| `import-authority open`, `close`, or `close-expired` reports `import-authority.in-progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. No authority changed. Wait for it to finish, then run the same command again. |
+| An `import-authority` command reports `import-authority.package.refused` | The package at `package.root` is not the one `package.expectedDigest` pins; the message names both digests. Deploy the pinned package or update the pin. No authority changed. |
 
 {/* Evidence: crates/registry-breg/src/import_authority.rs, begin();
     crates/registry-breg/src/history_maintenance.rs, lock_registry;

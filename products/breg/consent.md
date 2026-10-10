@@ -215,7 +215,7 @@ the project already declares a `consent` dataset, the command leaves it
 exactly as authored and reuses it for the new subject too, the way a second
 subject's run already reuses the first subject's shared vocabularies; if that
 existing dataset's access profile does not cover the module's entities, the
-command reports `module.consent.dataset_conflict` and writes nothing. The
+command reports `module.consent.dataset-conflict` and writes nothing. The
 `consent` dataset in
 [`consent-land-registry`](fixtures/consent-land-registry/registry.yaml)
 shows the declaration a first run writes.

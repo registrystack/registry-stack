@@ -93,12 +93,12 @@ fn path_disclosure_threat_is_enforced_by_refusing_a_relative_runtime_config_nega
     assert_eq!(report["command"], "doctor");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "startup.runtime_config.path_invalid"
+        "startup.runtime-config.path-invalid"
     );
     assert_tool_diagnostic(
         &report["diagnostics"][0],
-        "runtime_configuration",
-        "correct_runtime_configuration",
+        "runtime-configuration",
+        "correct-runtime-configuration",
     );
 }
 
@@ -137,8 +137,8 @@ fn startup_value_disclosure_and_listener_activation_threats_are_enforced_by_prep
     for diagnostic in diagnostics {
         assert_tool_diagnostic(
             diagnostic,
-            "runtime_configuration",
-            "correct_runtime_configuration",
+            "runtime-configuration",
+            "correct-runtime-configuration",
         );
     }
 
@@ -162,8 +162,8 @@ fn doctor_names_the_specific_configuration_cause_instead_of_a_generic_refusal() 
     assert_eq!(report["diagnostics"][0]["path"], "/not/1");
     assert_tool_diagnostic(
         &report["diagnostics"][0],
-        "runtime_configuration",
-        "correct_runtime_configuration",
+        "runtime-configuration",
+        "correct-runtime-configuration",
     );
 }
 
@@ -206,8 +206,8 @@ eventDestinations: {{}}\n",
     assert_eq!(report["diagnostics"][0]["path"], "/package/root");
     assert_tool_diagnostic(
         &report["diagnostics"][0],
-        "runtime_configuration",
-        "correct_runtime_configuration",
+        "runtime-configuration",
+        "correct-runtime-configuration",
     );
 }
 

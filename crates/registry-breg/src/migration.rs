@@ -568,7 +568,7 @@ pub struct ActivationLedgerEntry {
     /// `initial` or `successor`, or `adopted` for the first activation of a
     /// database an earlier release adopted from before the activation ledger.
     pub plan_kind: String,
-    /// `compiled_additive`, `metadata_only`, or `reviewed`.
+    /// `compiled-additive`, `metadata-only`, or `reviewed`.
     pub migration_kind: String,
     /// `applying`, `failed`, `applied`, or `reverted`.
     pub outcome: String,

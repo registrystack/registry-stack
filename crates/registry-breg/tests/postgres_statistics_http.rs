@@ -388,7 +388,7 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         .as_array()
         .is_some_and(|operations| operations
             .iter()
-            .all(|operation| operation != "read_live" && operation != "publish_release")));
+            .all(|operation| operation != "read-live" && operation != "publish-release")));
     let reader_openapi = send(
         &app,
         Method::GET,
@@ -1068,7 +1068,7 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
     let committed_release = audit_before_failure
         .iter()
         .find(|record| {
-            record["operationId"] == "statistics.records-by-category.publish_release"
+            record["operationId"] == "statistics.records-by-category.publish-release"
                 && record["outcome"] == "committed"
         })
         .expect("publication writes a terminal audit record");
@@ -1114,17 +1114,17 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
 
     let audit_entries = database.audit_entries();
     assert!(audit_entries.iter().any(|entry| {
-        entry["record"]["operationId"] == "statistics.records-by-category.publish_release"
+        entry["record"]["operationId"] == "statistics.records-by-category.publish-release"
             && entry["record"]["outcome"] == "replayed"
     }));
     let terminal_records = database.audit_records();
     for (operation, outcome, result_count) in [
-        ("read_live", "returned", 3),
-        ("read_released_series", "returned", 3),
-        ("read_release_version", "returned", 3),
-        ("list_releases", "returned", 0),
-        ("publish_release", "committed", 3),
-        ("withdraw_release", "committed", 0),
+        ("read-live", "returned", 3),
+        ("read-released-series", "returned", 3),
+        ("read-release-version", "returned", 3),
+        ("list-releases", "returned", 0),
+        ("publish-release", "committed", 3),
+        ("withdraw-release", "committed", 0),
     ] {
         assert!(
             terminal_records.iter().any(|record| {
@@ -1137,7 +1137,7 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         );
     }
     for record in terminal_records.iter().filter(|record| {
-        record["operationId"] == "statistics.records-by-category.withdraw_release"
+        record["operationId"] == "statistics.records-by-category.withdraw-release"
             && record["phase"] == "terminal"
     }) {
         assert!(
@@ -1861,7 +1861,7 @@ async fn publication_statement_timeout_reserves_the_terminal_audit_before_outer_
     assert_eq!(records[0]["requestId"], records[1]["requestId"]);
     assert_eq!(
         records[1]["operationId"],
-        "statistics.records-by-category.publish_release"
+        "statistics.records-by-category.publish-release"
     );
     for table in [
         "registry_statistical_release_versions",
@@ -2186,7 +2186,7 @@ async fn release_commit_failure_is_answered_unfinished_not_refused() {
     assert_eq!(publication.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body_json(publication).await["code"], "source.unavailable");
     remove_commit_fault(&database, "registry_statistical_release_versions").await;
-    assert_answered_unfinished(&database, "statistics.records-by-category.publish_release");
+    assert_answered_unfinished(&database, "statistics.records-by-category.publish-release");
     assert_eq!(
         release_row_count(&database, "registry_statistical_release_versions").await,
         0,
@@ -2219,7 +2219,7 @@ async fn release_commit_failure_is_answered_unfinished_not_refused() {
     assert_eq!(withdrawal.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body_json(withdrawal).await["code"], "source.unavailable");
     remove_commit_fault(&database, "registry_statistical_release_withdrawals").await;
-    assert_answered_unfinished(&database, "statistics.records-by-category.withdraw_release");
+    assert_answered_unfinished(&database, "statistics.records-by-category.withdraw-release");
     assert_eq!(
         release_row_count(&database, "registry_statistical_release_withdrawals").await,
         0,
@@ -2285,7 +2285,7 @@ async fn release_deadline_during_commit_is_answered_unfinished_not_refused() {
             &publish_uri,
             "commit-deadline-publish",
             json!({"status":"final"}),
-            "statistics.records-by-category.publish_release",
+            "statistics.records-by-category.publish-release",
             StatusCode::CREATED,
         ),
         (
@@ -2293,7 +2293,7 @@ async fn release_deadline_during_commit_is_answered_unfinished_not_refused() {
             &withdraw_uri,
             "commit-deadline-withdrawal",
             json!({"reason":"source-data-error"}),
-            "statistics.records-by-category.withdraw_release",
+            "statistics.records-by-category.withdraw-release",
             StatusCode::OK,
         ),
     ] {

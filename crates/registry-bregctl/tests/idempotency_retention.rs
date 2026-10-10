@@ -34,7 +34,7 @@ fn invalid_runtime_configuration_reports_idempotency_retention_recovery_without_
     assert_ne!(status, std::process::ExitCode::SUCCESS);
     assert!(stderr.is_empty());
     let output = String::from_utf8(stdout).unwrap();
-    for value in [PATH_CANARY, CONFIG_CANARY, "evidence_retention"] {
+    for value in [PATH_CANARY, CONFIG_CANARY, "evidence-retention"] {
         assert!(!output.contains(value));
     }
     let report: Value = serde_json::from_str(&output).unwrap();
@@ -42,11 +42,11 @@ fn invalid_runtime_configuration_reports_idempotency_retention_recovery_without_
     assert_eq!(report["command"], "idempotency-retention erase-expired");
     assert_eq!(report["diagnostics"].as_array().unwrap().len(), 1);
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "idempotency_retention.unavailable");
+    assert_eq!(diagnostic["code"], "idempotency-retention.unavailable");
     assert_eq!(diagnostic["path"], "idempotencyRetention");
-    assert_eq!(diagnostic["artifact"], "idempotency_retention_operation");
+    assert_eq!(diagnostic["artifact"], "idempotency-retention-operation");
     assert_eq!(
         diagnostic["suggestedAction"],
-        "verify_idempotency_retention_operation"
+        "verify-idempotency-retention-operation"
     );
 }

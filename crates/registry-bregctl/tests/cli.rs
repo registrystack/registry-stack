@@ -1286,8 +1286,8 @@ fn project_lock_check_refuses_stale_digest_without_rewriting() {
     assert_eq!(report["diagnostics"][0]["code"], "breg.module.lock-stale");
     assert_tool_diagnostic(
         &report["diagnostics"][0],
-        "registry_project",
-        "update_module_locks",
+        "registry-project",
+        "update-module-locks",
     );
     assert_eq!(
         fs::read(project.path().join("registry.yaml")).expect("project rereads"),
@@ -2603,9 +2603,9 @@ entities:
     let report: Value = serde_json::from_slice(&output.stdout).expect("failure reports JSON");
     assert_eq!(report["ok"], false);
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "init.selection.property_unknown");
-    assert_eq!(diagnostic["artifact"], "model_selection");
-    assert_eq!(diagnostic["suggestedAction"], "correct_model_selection");
+    assert_eq!(diagnostic["code"], "init.selection.property-unknown");
+    assert_eq!(diagnostic["artifact"], "model-selection");
+    assert_eq!(diagnostic["suggestedAction"], "correct-model-selection");
     assert!(diagnostic["message"]
         .as_str()
         .expect("message")
@@ -2691,7 +2691,7 @@ fn init_from_publicschema_without_a_terminal_names_the_two_other_ways_in() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("failure reports JSON");
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["code"], "init.selection.missing");
-    assert_eq!(diagnostic["suggestedAction"], "correct_command_usage");
+    assert_eq!(diagnostic["suggestedAction"], "correct-command-usage");
     let message = diagnostic["message"].as_str().expect("message");
     assert!(message.contains("--selection"), "{message}");
     assert!(message.contains("--starter"), "{message}");
@@ -2985,10 +2985,10 @@ fn init_and_generate_missing_output_parents_have_exact_logical_diagnostics() {
             "diagnostics": [{
                 "severity": "error",
                 "code": "output.parent.invalid",
-                "artifact": "project_initialization",
+                "artifact": "project-initialization",
                 "path": "output.parent",
                 "message": "the output parent directory is not available; create it, or give a destination inside a directory that exists",
-                "suggestedAction": "choose_safe_output_directory"
+                "suggestedAction": "choose-safe-output-directory"
             }]
         })
     );
@@ -3016,10 +3016,10 @@ fn init_and_generate_missing_output_parents_have_exact_logical_diagnostics() {
             "diagnostics": [{
                 "severity": "error",
                 "code": "output.parent.invalid",
-                "artifact": "generated_artifacts",
+                "artifact": "generated-artifacts",
                 "path": "output.parent",
                 "message": "the output parent directory is not available; create it, or give a destination inside a directory that exists",
-                "suggestedAction": "retry_artifact_generation"
+                "suggestedAction": "retry-artifact-generation"
             }]
         })
     );
@@ -4434,12 +4434,12 @@ fn package_refuses_missing_noncanonical_and_stale_receipts_before_output() {
     let missing_report = json_stdout(&missing);
     assert_eq!(
         missing_report["diagnostics"][0]["code"],
-        "package.test_receipt.missing"
+        "package.test-receipt.missing"
     );
     assert_tool_diagnostic(
         &missing_report["diagnostics"][0],
-        "schema_test_receipt",
-        "supply_schema_test_receipt",
+        "schema-test-receipt",
+        "supply-schema-test-receipt",
     );
     assert!(!missing_build.exists());
 
@@ -4509,7 +4509,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
     let cases = [
         (
             "fingerprint",
-            "package.test_receipt.fingerprint_mismatch",
+            "package.test-receipt.fingerprint-mismatch",
             original_project.clone(),
             original_module.clone(),
             original_journeys.clone(),
@@ -4517,7 +4517,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         ),
         (
             "project",
-            "package.test_receipt.candidate_mismatch",
+            "package.test-receipt.candidate-mismatch",
             original_project_text
                 .replace(PACKAGE_SOURCE_REVISION, "alternate-source")
                 .into_bytes(),
@@ -4527,7 +4527,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         ),
         (
             "module",
-            "package.test_receipt.candidate_mismatch",
+            "package.test-receipt.candidate-mismatch",
             original_project_text
                 .replace(&original_module_digest, &altered_module_digest)
                 .into_bytes(),
@@ -4537,7 +4537,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
         ),
         (
             "journey",
-            "package.test_receipt.candidate_mismatch",
+            "package.test-receipt.candidate-mismatch",
             original_project.clone(),
             original_module.clone(),
             String::from_utf8(original_journeys.clone())
@@ -4602,7 +4602,7 @@ fn package_receipt_is_stale_for_every_candidate_binding_change() {
     let diagnostic = &json_stdout(&successor)["diagnostics"][0];
     assert_eq!(
         diagnostic["code"],
-        "package.test_receipt.candidate_mismatch"
+        "package.test-receipt.candidate-mismatch"
     );
     assert_eq!(diagnostic["path"], "testReceipt.priorPackageDigest");
     assert!(!successor_build.exists());
@@ -4651,7 +4651,7 @@ fn package_takes_the_schema_fingerprint_from_the_receipt_and_refuses_disagreemen
     let report = json_stdout(&refused);
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "package.test_receipt.fingerprint_mismatch"
+        "package.test-receipt.fingerprint-mismatch"
     );
     let message = report["diagnostics"][0]["message"]
         .as_str()
@@ -4693,7 +4693,7 @@ fn package_resume_requires_the_exact_receipt_evidence() {
     assert_eq!(missing.status.code(), Some(1), "{missing:?}");
     assert_eq!(
         json_stdout(&missing)["diagnostics"][0]["code"],
-        "package.test_receipt.evidence_mismatch"
+        "package.test-receipt.evidence-mismatch"
     );
     assert!(!build.join("package").exists());
 
@@ -4703,7 +4703,7 @@ fn package_resume_requires_the_exact_receipt_evidence() {
     assert_eq!(substituted.status.code(), Some(1), "{substituted:?}");
     assert_eq!(
         json_stdout(&substituted)["diagnostics"][0]["code"],
-        "package.test_receipt.evidence_mismatch"
+        "package.test-receipt.evidence-mismatch"
     );
     assert!(!build.join("package").exists());
 
@@ -4781,7 +4781,7 @@ fn test_help_requires_test_inputs_and_exposes_no_package_or_apply_authority() {
     assert_eq!(package_reads_the_receipt_fingerprint.status.code(), Some(1));
     assert_eq!(
         json_stdout(&package_reads_the_receipt_fingerprint)["diagnostics"][0]["code"],
-        "package.test_receipt.missing"
+        "package.test-receipt.missing"
     );
 }
 
@@ -5197,8 +5197,8 @@ fn test_valid_credentials_reach_database_and_never_publish_partial_receipts() {
     assert_schema_test_refusal(
         result,
         "test.database.unavailable",
-        "schema_test_database",
-        "recreate_disposable_database",
+        "schema-test-database",
+        "recreate-disposable-database",
         &output,
         &[
             path(project.path()),
@@ -5250,8 +5250,8 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     assert_schema_test_refusal(
         test_project,
         "breg.source.file-bounds",
-        "registry_project",
-        "correct_authoring_source",
+        "registry-project",
+        "correct-authoring-source",
         &project.path().join("oversized-project-receipt.json"),
         &[path(project.path()), "unused-runtime", "unused-credentials"],
     );
@@ -5283,8 +5283,8 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     assert_schema_test_refusal(
         test_module,
         "breg.source.file-bounds",
-        "registry_project",
-        "correct_authoring_source",
+        "registry-project",
+        "correct-authoring-source",
         &project.path().join("oversized-module-receipt.json"),
         &[path(project.path()), "unused-runtime", "unused-credentials"],
     );
@@ -5483,7 +5483,7 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
     assert_eq!(relative.status.code(), Some(1), "{relative:?}");
     assert_eq!(
         json_stdout(&relative)["diagnostics"][0]["code"],
-        "apply.runtime_config.path_invalid"
+        "apply.runtime-config.path-invalid"
     );
     assert!(!String::from_utf8_lossy(&relative.stdout).contains(PACKAGE_VALUE_CANARY));
 
@@ -5507,7 +5507,7 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
     );
     assert_eq!(
         json_stdout(&malformed_backup)["diagnostics"][0]["code"],
-        "apply.backup_evidence.refused"
+        "apply.backup-evidence.refused"
     );
     assert!(!String::from_utf8_lossy(&malformed_backup.stdout).contains(PACKAGE_VALUE_CANARY));
 
@@ -5529,7 +5529,7 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
         assert_eq!(refused.status.code(), Some(1), "{refused:?}");
         assert_eq!(
             json_stdout(&refused)["diagnostics"][0]["code"],
-            "apply.operator_reference.refused"
+            "apply.operator-reference.refused"
         );
         assert!(!String::from_utf8_lossy(&refused.stdout).contains(PACKAGE_VALUE_CANARY));
         assert!(!String::from_utf8_lossy(&refused.stderr).contains(PACKAGE_VALUE_CANARY));
@@ -5560,7 +5560,7 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
     let report = json_stdout(&output);
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "apply.database_configuration.refused"
+        "apply.database-configuration.refused"
     );
     let rendered = String::from_utf8(output.stdout).expect("apply refusal is UTF-8");
     for forbidden in [
@@ -5591,7 +5591,7 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
     assert_eq!(already_active.status.code(), Some(1), "{already_active:?}");
     assert_eq!(
         json_stdout(&already_active)["diagnostics"][0]["code"],
-        "apply.database_configuration.refused"
+        "apply.database-configuration.refused"
     );
     let rendered = String::from_utf8_lossy(&already_active.stdout);
     assert!(!rendered.contains(VERIFY_RUNTIME_DATABASE_SECRET_CANARY));
@@ -5614,7 +5614,7 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
     );
     assert_eq!(
         json_stdout(&database_refusal)["diagnostics"][0]["code"],
-        "apply.database_configuration.refused"
+        "apply.database-configuration.refused"
     );
     let rendered = String::from_utf8_lossy(&database_refusal.stdout);
     assert!(!rendered.contains(VERIFY_RUNTIME_DATABASE_SECRET_CANARY));
@@ -5665,7 +5665,7 @@ fn plan_and_status_refuse_before_database_authority_and_name_the_next_command() 
     assert_eq!(report["command"], "plan");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "apply.runtime_config.path_invalid"
+        "apply.runtime-config.path-invalid"
     );
     assert!(!String::from_utf8_lossy(&relative.stdout).contains(PACKAGE_VALUE_CANARY));
 
@@ -5681,7 +5681,7 @@ fn plan_and_status_refuse_before_database_authority_and_name_the_next_command() 
     assert_eq!(report["command"], "status");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "status.runtime_config.path_invalid"
+        "status.runtime-config.path-invalid"
     );
 
     // Both commands are read-only, yet each needs the migration credential
@@ -5705,8 +5705,8 @@ fn plan_and_status_refuse_before_database_authority_and_name_the_next_command() 
         path(&fixture.runtime_config),
     ]);
     for (output, command, code) in [
-        (&planned, "plan", "apply.database_configuration.refused"),
-        (&status, "status", "status.database_configuration.refused"),
+        (&planned, "plan", "apply.database-configuration.refused"),
+        (&status, "status", "status.database-configuration.refused"),
     ] {
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert!(output.stderr.is_empty(), "{output:?}");
@@ -5742,7 +5742,7 @@ fn plan_and_status_refuse_before_database_authority_and_name_the_next_command() 
     );
     assert_eq!(
         json_stdout(&malformed_backup)["diagnostics"][0]["code"],
-        "apply.backup_evidence.refused"
+        "apply.backup-evidence.refused"
     );
 }
 
@@ -5811,12 +5811,12 @@ fn apply_and_plan_refuse_a_package_other_than_the_expected_digest_before_databas
         assert_eq!(report["ok"], false);
         assert_eq!(report["command"], command);
         let diagnostic = &report["diagnostics"][0];
-        assert_eq!(diagnostic["code"], "apply.package.digest_mismatch");
+        assert_eq!(diagnostic["code"], "apply.package.digest-mismatch");
         assert_eq!(diagnostic["path"], "package");
         assert_tool_diagnostic(
             diagnostic,
-            "verified_package",
-            "rerun_plan_on_intended_package",
+            "verified-package",
+            "rerun-plan-on-intended-package",
         );
         let message = diagnostic["message"].as_str().expect("message is text");
         assert!(message.contains(other_digest), "{message}");
@@ -5929,7 +5929,7 @@ fn apply_requires_safe_field_encryption_custody_before_database_authority() {
     );
     assert_eq!(
         json_stdout(&missing_provider)["diagnostics"][0]["code"],
-        "apply.field_encryption.configuration_refused"
+        "apply.field-encryption.configuration-refused"
     );
 
     let local_file_runtime = fixture.directory.path().join("local-file-runtime.yaml");
@@ -5954,7 +5954,7 @@ fn apply_requires_safe_field_encryption_custody_before_database_authority() {
     assert_eq!(unsafe_custody.status.code(), Some(1), "{unsafe_custody:?}");
     assert_eq!(
         json_stdout(&unsafe_custody)["diagnostics"][0]["code"],
-        "apply.field_encryption.custody_refused"
+        "apply.field-encryption.custody-refused"
     );
     let rendered = String::from_utf8(unsafe_custody.stdout).expect("apply refusal is UTF-8");
     assert!(!rendered.contains("field-encryption-dek"));
@@ -5978,7 +5978,7 @@ fn migration_reconcile_verifies_intent_before_database_authority_and_stays_value
     assert_eq!(relative.status.code(), Some(1), "{relative:?}");
     assert_eq!(
         json_stdout(&relative)["diagnostics"][0]["code"],
-        "migration.reconcile.runtime_config.path_invalid"
+        "migration.reconcile.runtime-config.path-invalid"
     );
     assert!(!String::from_utf8_lossy(&relative.stdout).contains(PACKAGE_VALUE_CANARY));
 
@@ -6002,7 +6002,7 @@ fn migration_reconcile_verifies_intent_before_database_authority_and_stays_value
     );
     assert_eq!(
         json_stdout(&relative_package)["diagnostics"][0]["code"],
-        "migration.reconcile.package.path_invalid"
+        "migration.reconcile.package.path-invalid"
     );
 
     let empty_reference = bregctl(&[
@@ -6024,7 +6024,7 @@ fn migration_reconcile_verifies_intent_before_database_authority_and_stays_value
     );
     assert_eq!(
         json_stdout(&empty_reference)["diagnostics"][0]["code"],
-        "migration.reconcile.operator_reference.refused"
+        "migration.reconcile.operator-reference.refused"
     );
 
     // The active package is never its own successor, so the pinned target is
@@ -6051,8 +6051,8 @@ fn migration_reconcile_verifies_intent_before_database_authority_and_stays_value
     );
     assert_tool_diagnostic(
         &report["diagnostics"][0],
-        "verified_package",
-        "verify_package_binding",
+        "verified-package",
+        "verify-package-binding",
     );
     let rendered = String::from_utf8(output.stdout).expect("reconcile refusal is UTF-8");
     for forbidden in [
@@ -6094,12 +6094,12 @@ fn field_encryption_preflight_refuses_a_package_that_does_not_succeed_the_active
     let report = json_stdout(&output);
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "field_encryption.preflight.package.refused"
+        "field-encryption.preflight.package.refused"
     );
     assert_tool_diagnostic(
         &report["diagnostics"][0],
-        "verified_package",
-        "verify_package_binding",
+        "verified-package",
+        "verify-package-binding",
     );
 
     // The active package is never its own successor.
@@ -6107,7 +6107,7 @@ fn field_encryption_preflight_refuses_a_package_that_does_not_succeed_the_active
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert_eq!(
         json_stdout(&output)["diagnostics"][0]["code"],
-        "field_encryption.preflight.package.refused"
+        "field-encryption.preflight.package.refused"
     );
 
     // The same package built from the active package passes the binding and
@@ -6117,7 +6117,7 @@ fn field_encryption_preflight_refuses_a_package_that_does_not_succeed_the_active
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert_eq!(
         json_stdout(&output)["diagnostics"][0]["code"],
-        "field_encryption.preflight.plan.no_backfill"
+        "field-encryption.preflight.plan.no-backfill"
     );
 }
 
@@ -6199,7 +6199,7 @@ fn verify_is_runtime_bound_deterministic_and_listener_free() {
             "kind": "BRegCtlReport",
             "ok": true,
             "command": "verify",
-            "assurance": "runtime_bound",
+            "assurance": "runtime-bound",
             "packageDigest": fixture.package_digest,
             "registry": {
                 "id": "verify-registry",
@@ -6237,7 +6237,7 @@ fn verify_is_runtime_bound_deterministic_and_listener_free() {
     assert!(human.stderr.is_empty());
     let human = String::from_utf8(human.stdout).expect("verify human report is UTF-8");
     assert!(human.starts_with(
-        "Verified the package against the runtime it is bound to.\n  assurance            runtime_bound\n"
+        "Verified the package against the runtime it is bound to.\n  assurance            runtime-bound\n"
     ));
     assert!(human.contains(&format!(
         "package digest       {}\n",
@@ -6280,7 +6280,7 @@ fn migration_explain_is_runtime_bound_deterministic_and_listener_free() {
             "kind": "BRegCtlReport",
             "ok": true,
             "command": "migration explain",
-            "assurance": "runtime_bound",
+            "assurance": "runtime-bound",
             "packageDigest": fixture.package_digest,
             "plan": {
                 "planKind": "initial",
@@ -6320,7 +6320,7 @@ fn migration_explain_is_runtime_bound_deterministic_and_listener_free() {
     assert!(human.stderr.is_empty());
     let human = String::from_utf8(human.stdout).expect("migration report is UTF-8");
     assert!(human.starts_with(
-        "Explained the migration plan. 0 changes, 0 reviewed migrations.\n  assurance                            runtime_bound\n"
+        "Explained the migration plan. 0 changes, 0 reviewed migrations.\n  assurance                            runtime-bound\n"
     ));
     assert!(human.contains("plan kind                            initial\n"));
     assert!(human.contains("change count                         0\n"));
@@ -6521,9 +6521,9 @@ fn runtime_bound_package_refusals_are_exact_and_value_free_for_both_commands() {
         arguments.extend(["--runtime-config", PACKAGE_VALUE_CANARY]);
         assert_inspection_refusal(
             &arguments,
-            &format!("{prefix}.runtime_config.path_invalid"),
-            "runtime_configuration",
-            "correct_runtime_configuration",
+            &format!("{prefix}.runtime-config.path-invalid"),
+            "runtime-configuration",
+            "correct-runtime-configuration",
             &[PACKAGE_VALUE_CANARY],
         );
     }
@@ -6546,9 +6546,9 @@ fn runtime_bound_package_refusals_are_exact_and_value_free_for_both_commands() {
         arguments.extend(["--runtime-config", path(&wrong_pin)]);
         assert_inspection_refusal(
             &arguments,
-            &format!("{prefix}.package.integrity_refused"),
-            "verified_package",
-            "verify_package_integrity",
+            &format!("{prefix}.package.integrity-refused"),
+            "verified-package",
+            "verify-package-integrity",
             &[
                 PACKAGE_VALUE_CANARY,
                 path(&wrong_pin),
@@ -6593,7 +6593,7 @@ fn apply_names_both_digests_when_the_active_package_misses_its_pin() {
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["code"], "apply.package.refused");
     assert_eq!(diagnostic["path"], "package.root");
-    assert_eq!(diagnostic["suggestedAction"], "verify_package_integrity");
+    assert_eq!(diagnostic["suggestedAction"], "verify-package-integrity");
     assert_eq!(
         diagnostic["message"],
         format!(
@@ -6644,7 +6644,7 @@ fn assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["code"], code, "{report}");
     assert_eq!(diagnostic["path"], "package");
-    assert_tool_diagnostic(diagnostic, "verified_package", "verify_package_integrity");
+    assert_tool_diagnostic(diagnostic, "verified-package", "verify-package-integrity");
     assert_eq!(
         diagnostic["message"],
         format!(
@@ -6677,7 +6677,7 @@ fn request_retention_names_both_digests_when_the_active_package_misses_its_pin()
     assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
         &["request-retention", "list"],
         &[],
-        "request_retention.package.refused",
+        "request-retention.package.refused",
     );
 }
 
@@ -6686,7 +6686,7 @@ fn import_authority_names_both_digests_when_the_active_package_misses_its_pin() 
     assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
         &["import-authority", "list"],
         &[],
-        "import_authority.package.refused",
+        "import-authority.package.refused",
     );
 }
 
@@ -6695,7 +6695,7 @@ fn evidence_retention_names_both_digests_when_the_active_package_misses_its_pin(
     assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
         &["evidence-retention", "erase-expired"],
         &["--before", "2020-01-01T00:00:00Z"],
-        "evidence_retention.package.refused",
+        "evidence-retention.package.refused",
     );
 }
 
@@ -6704,7 +6704,7 @@ fn idempotency_retention_names_both_digests_when_the_active_package_misses_its_p
     assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
         &["idempotency-retention", "erase-expired"],
         &["--before", "2020-01-01T00:00:00Z"],
-        "idempotency_retention.package.refused",
+        "idempotency-retention.package.refused",
     );
 }
 
@@ -6727,9 +6727,9 @@ fn canonical_package_tampering_is_refused_without_rendering_package_values() {
         arguments.extend(["--runtime-config", path(&fixture.runtime_config)]);
         assert_inspection_refusal(
             &arguments,
-            &format!("{prefix}.package.integrity_refused"),
-            "verified_package",
-            "verify_package_integrity",
+            &format!("{prefix}.package.integrity-refused"),
+            "verified-package",
+            "verify-package-integrity",
             &[
                 PACKAGE_VALUE_CANARY,
                 path(&fixture.runtime_config),
@@ -6753,9 +6753,9 @@ fn a_directory_without_the_shared_envelope_is_refused_as_not_a_package() {
         arguments.extend(["--runtime-config", path(&fixture.runtime_config)]);
         assert_inspection_refusal(
             &arguments,
-            &format!("{prefix}.package.integrity_refused"),
-            "verified_package",
-            "verify_package_integrity",
+            &format!("{prefix}.package.integrity-refused"),
+            "verified-package",
+            "verify-package-integrity",
             &[path(&fixture.runtime_config), path(&fixture.package)],
         );
         let report = json_stdout(&bregctl(&arguments));
@@ -6782,9 +6782,9 @@ fn unsafe_package_permissions_are_refused_without_rendering_paths() {
         arguments.extend(["--runtime-config", path(&fixture.runtime_config)]);
         assert_inspection_refusal(
             &arguments,
-            &format!("{prefix}.package.permissions_refused"),
-            "verified_package",
-            "verify_package_permissions",
+            &format!("{prefix}.package.permissions-refused"),
+            "verified-package",
+            "verify-package-permissions",
             &[path(&fixture.runtime_config), path(&fixture.package)],
         );
     }
@@ -6837,8 +6837,8 @@ fn json_usage_errors_are_machine_readable_and_value_free() {
     assert!(!message.contains('\u{1b}'), "{message}");
     assert_tool_diagnostic(
         &report["diagnostics"][0],
-        "command_arguments",
-        "correct_command_usage",
+        "command-arguments",
+        "correct-command-usage",
     );
 }
 
@@ -7082,8 +7082,8 @@ fn generation_refuses_a_broken_symlink_destination_without_publishing_output() {
     );
     assert_tool_diagnostic(
         &report["diagnostics"][0],
-        "generated_artifacts",
-        "retry_artifact_generation",
+        "generated-artifacts",
+        "retry-artifact-generation",
     );
     assert!(fs::symlink_metadata(destination)
         .expect("symlink remains intact")

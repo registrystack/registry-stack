@@ -196,7 +196,7 @@ fn plan(source: &CapturedProjectSource, subject: &str) -> Result<Plan, FailureRe
     let project = &source.project;
     let owner = subject_owner(source, subject).ok_or_else(|| {
         argument_failure(
-            "module.consent.subject_unknown",
+            "module.consent.subject-unknown",
             "subject",
             "the subject must name an entity the project or one of its modules declares",
         )
@@ -217,7 +217,7 @@ fn plan(source: &CapturedProjectSource, subject: &str) -> Result<Plan, FailureRe
         .is_none_or(|recipients| recipients.organizations.is_empty())
     {
         return Err(authoring_failure(
-            "module.consent.recipients_missing",
+            "module.consent.recipients-missing",
             "recipients",
             "declare the recipient organizations consent may be given to before adding the consent module",
         ));
@@ -229,7 +229,7 @@ fn plan(source: &CapturedProjectSource, subject: &str) -> Result<Plan, FailureRe
         .collect::<Vec<_>>();
     if !declared.contains(&PURPOSE_VOCABULARY) {
         return Err(authoring_failure(
-            "module.consent.purposes_missing",
+            "module.consent.purposes-missing",
             "vocabularies",
             "declare the data-use-purpose vocabulary of the purposes consent may be given for before adding the consent module",
         ));
@@ -343,7 +343,7 @@ fn dataset_conflict(index: usize, failure: FailureReport) -> FailureReport {
         CONFLICT_CODES.contains(&diagnostic.code.as_str()) && diagnostic.path.starts_with(&prefix)
     }) {
         return authoring_failure(
-            "module.consent.dataset_conflict",
+            "module.consent.dataset-conflict",
             &prefix,
             "the project already declares a 'consent' dataset in manifestProjection, and its access profile does not cover the entities this module adds; give it an accessProfile a generated consent access profile exposes, such as the subject's consent-steward profile, or free the 'consent' dataset id for this module to declare",
         );
@@ -730,7 +730,7 @@ fn write_module_and_registry(
     let write_failed = || {
         failure(
             diagnostic(
-                "module.consent.write_failed",
+                "module.consent.write-failed",
                 &module_path,
                 "the consent module could not be written",
             ),
@@ -833,7 +833,7 @@ fn roll_back(
     if removed.is_err() {
         report.diagnostics.push(tool_diagnostic(
             diagnostic(
-                "module.consent.rollback_failed",
+                "module.consent.rollback-failed",
                 "modules",
                 "the partly written consent module could not be removed; delete it before running the command again",
             ),
@@ -927,7 +927,7 @@ fn authoring_failure(code: &str, path: &str, message: &str) -> FailureReport {
 }
 
 fn render_failure(message: &str) -> FailureReport {
-    authoring_failure("module.consent.render_failed", "registry.yaml", message)
+    authoring_failure("module.consent.render-failed", "registry.yaml", message)
 }
 
 #[cfg(test)]

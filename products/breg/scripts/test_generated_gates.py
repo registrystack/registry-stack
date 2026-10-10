@@ -160,9 +160,9 @@ class GeneratedGateTests(unittest.TestCase):
             "--backup",
             "generate evidence-source",
             "registryRevision",
-            "apply.backup_evidence.refused",
+            "apply.backup-evidence.refused",
             "apply.package.refused",
-            "apply.database.identity_mismatch",
+            "apply.database.identity-mismatch",
             "has not activated the package at package.root",
             "catalog_digest",
         ):
@@ -181,10 +181,10 @@ class GeneratedGateTests(unittest.TestCase):
             "registry_prepare_cargo_runtime",
             "pg_dump",
             "pg_restore --exit-on-error",
-            "startup.instance_claim.mismatch",
-            "instance_claim.acknowledgement.required",
+            "startup.instance-claim.mismatch",
+            "instance-claim.acknowledgement.required",
             "--acknowledge-original-retired",
-            "startup.instance_id.pending_deliveries",
+            "startup.instance-id.pending-deliveries",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, source)
@@ -240,7 +240,7 @@ class GeneratedGateTests(unittest.TestCase):
             "compare-generated-tree.py",
             "schemaFingerprint",
             "missing-migration-url",
-            "apply.database_configuration.refused",
+            "apply.database-configuration.refused",
             "author refusal changed the production database state",
             "apply --runtime-config",
             '"$breg" --runtime-config',

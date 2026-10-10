@@ -495,7 +495,7 @@ ce-type: record-status-changed-v1
 ```
 
 The remaining headers are omitted.
-An event id the project does not deliver fails with `webhook.sample.event_refused`, and the message lists the ids the project delivers.
+An event id the project does not deliver fails with `webhook.sample.event-refused`, and the message lists the ids the project delivers.
 `explain events` prints every compiled delivery with its trigger, `when` tests, projection fields, destination, and the retry schedule the runtime will follow.
 Binding `record-receiver` to a receiver belongs to [Bind webhook receivers](../../operate/breg-webhooks/); [Send events to a webhook](../../tutorials/send-registry-events-to-a-webhook/) walks through a delivery end to end, and [Base Registry Engine API reference](../../reference/breg-api/#events-and-webhooks) documents the headers, signature, and retry contract.
 
