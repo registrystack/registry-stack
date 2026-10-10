@@ -8,6 +8,29 @@ StatisticsReleaseStatus = Literal["provisional", "final"]
 StatisticsReleaseSelection = Literal["any", "final"]
 StatisticsWithdrawalReason = Literal["computation-error", "source-data-error", "disclosure-risk"]
 
+class BRegStatisticalDimensionDescriptor(TypedDict):
+    field: str
+    vocabulary: str
+    codes: Sequence[str]
+
+class BRegStatisticalDatasetDescriptor(TypedDict):
+    id: str
+    unit: str
+    periodKind: Literal["flow", "stock"]
+    granularity: Literal["day", "month", "quarter", "year"]
+    firstPeriod: str
+    dimensions: Sequence[BRegStatisticalDimensionDescriptor]
+    definitionDigest: str
+    operations: Sequence[Literal[
+        "read_live",
+        "list_releases",
+        "read_released_series",
+        "read_latest_release",
+        "read_release_version",
+        "publish_release",
+        "withdraw_release",
+    ]]
+
 class ExchangeContext(TypedDict):
     issuer: str
     subject: str
@@ -284,6 +307,10 @@ class BRegMetadata:
         ...
     @property
     def actions(self) -> JsonValue | None: ...
+    @property
+    def statistical_datasets(self) -> Sequence[BRegStatisticalDatasetDescriptor] | None:
+        """Validated caller-filtered inert descriptions. They never grant entity authority."""
+        ...
     @property
     def immediate_actions(self) -> Sequence[dict[str, JsonValue]]: ...
     @property

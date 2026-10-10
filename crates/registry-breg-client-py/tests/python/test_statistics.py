@@ -30,6 +30,11 @@ class StatisticsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.requests = []
         requests = self.requests
+        self.metadata_document = {
+            "id": "fixture-registry", "version": "1", "metadataVersion": "1",
+            "revision": "sha256:" + "a" * 64, "entities": [], "operations": [],
+        }
+        metadata_document = self.metadata_document
 
         class Handler(BaseHTTPRequestHandler):
             def exchange(self) -> None:
@@ -43,6 +48,17 @@ class StatisticsTests(unittest.TestCase):
                         self.rfile.read(size),
                     )
                 )
+                if self.path.startswith("/v1/registry"):
+                    body = json.dumps(metadata_document).encode()
+                    self.send_response(200)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("cache-control", "no-store")
+                    self.send_header("vary", "authorization, accept")
+                    self.send_header("traceparent", TRACEPARENT)
+                    self.send_header("content-length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 publish = self.command == "POST" and self.path.endswith(
                     "/versions?accessProfile=publisher"
                 )
@@ -109,6 +125,37 @@ class StatisticsTests(unittest.TestCase):
         self.server.shutdown()
         self.thread.join()
         self.server.server_close()
+
+    def test_statistical_dataset_metadata(self) -> None:
+        self.assertIsNone(self.client.registry_contract("reader").statistical_datasets)
+        datasets = [{
+            "id": "company-counts", "unit": "company", "periodKind": "flow",
+            "granularity": "month", "firstPeriod": "2025-01",
+            "dimensions": [{
+                "field": "category", "vocabulary": "company-category",
+                "codes": ["Registered", "_U", "_T"],
+            }],
+            "definitionDigest": self.metadata_document["revision"],
+            "operations": [
+                "list_releases", "read_latest_release", "read_release_version",
+                "read_released_series",
+            ],
+        }]
+        self.metadata_document["statisticalDatasets"] = datasets
+        metadata = self.client.registry_contract("reader")
+        self.assertEqual(metadata.statistical_datasets, datasets)
+        self.assertEqual(metadata.operations, [])
+        with self.assertRaises(BaseRegistryClientError) as no_entity_authority:
+            metadata.select_create("records.company.create", "reader")
+        self.assertEqual(no_entity_authority.exception.kind, "metadata-selection")
+        self.assertEqual(no_entity_authority.exception.code, "not-found")
+        self.metadata_document["statisticalDatasets"] = []
+        self.assertEqual(self.client.registry_contract("reader").statistical_datasets, [])
+        self.metadata_document["statisticalDatasets"] = datasets
+        datasets[0]["unexpected"] = True
+        with self.assertRaises(BaseRegistryClientError) as malformed:
+            self.client.registry_contract("reader")
+        self.assertEqual(malformed.exception.kind, "protocol")
 
     def test_all_statistics_methods(self) -> None:
         live = self.client.statistics_live(

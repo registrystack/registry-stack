@@ -17,6 +17,47 @@ function problem(code, status, detail, extension = {}) {
   });
 }
 
+test('registry metadata retains statistical datasets without entity authority', async () => {
+  const metadata = {
+    id: 'fixture-registry', version: '1', metadataVersion: '1',
+    revision: `sha256:${'a'.repeat(64)}`, entities: [], operations: [],
+  };
+  const datasets = [{
+    id: 'company-counts', unit: 'company', periodKind: 'flow',
+    granularity: 'month', firstPeriod: '2025-01',
+    dimensions: [{ field: 'category', vocabulary: 'company-category', codes: ['Registered', '_U', '_T'] }],
+    definitionDigest: metadata.revision,
+    operations: ['list_releases', 'read_latest_release', 'read_release_version', 'read_released_series'],
+  }];
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.setHeader('traceparent', traceparent);
+    response.setHeader('cache-control', 'no-store');
+    response.setHeader('vary', 'authorization, accept');
+    response.end(JSON.stringify(metadata));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new BaseRegistryClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+    assert.equal((await client.registryContract('reader')).statisticalDatasets, null);
+    metadata.statisticalDatasets = datasets;
+    const contract = await client.registryContract('reader');
+    assert.deepEqual(contract.statisticalDatasets, datasets);
+    assert.deepEqual(contract.operations, []);
+    assert.throws(
+      () => contract.selectCreate('records.company.create', 'reader'),
+      error => error.kind === 'metadata-selection' && error.code === 'not-found',
+    );
+    metadata.statisticalDatasets = [];
+    assert.deepEqual((await client.registryContract('reader')).statisticalDatasets, []);
+    metadata.statisticalDatasets = datasets;
+    datasets[0].unexpected = true;
+    await assert.rejects(client.registryContract('reader'), error => error.kind === 'protocol');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('statistics methods preserve route, representation, status and caller key', async () => {
   const requests = [];
   const server = http.createServer((request, response) => {

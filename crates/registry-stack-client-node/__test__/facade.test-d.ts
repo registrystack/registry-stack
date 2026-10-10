@@ -13,6 +13,13 @@ const messagingClient = new messaging.MessagingClient({ baseUrl: 'https://messag
 const schedulingClient = new scheduling.SchedulingClient({ baseUrl: 'https://scheduling.example.invalid/' })
 
 bregClient.listRecords('people', { top: 25 })
+void bregClient.registryContract('reader').then((metadata) => {
+  const datasets: ReadonlyArray<breg.BRegStatisticalDatasetDescriptor> | null =
+    metadata.statisticalDatasets
+  if (datasets?.[0]) {
+    datasets[0].periodKind satisfies 'flow' | 'stock'
+  }
+})
 breg.verifyWebhookDelivery({
   method: 'POST',
   path: '/hooks/registry',

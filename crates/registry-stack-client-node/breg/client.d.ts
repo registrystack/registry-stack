@@ -150,6 +150,31 @@ export interface BaseRegistryClientConfig {
 
 export type RecordFormat = 'json' | 'json-ld'
 
+export interface BRegStatisticalDimensionDescriptor {
+  readonly field: string
+  readonly vocabulary: string
+  readonly codes: ReadonlyArray<string>
+}
+
+export interface BRegStatisticalDatasetDescriptor {
+  readonly id: string
+  readonly unit: string
+  readonly periodKind: 'flow' | 'stock'
+  readonly granularity: 'day' | 'month' | 'quarter' | 'year'
+  readonly firstPeriod: string
+  readonly dimensions: ReadonlyArray<BRegStatisticalDimensionDescriptor>
+  readonly definitionDigest: string
+  readonly operations: ReadonlyArray<
+    | 'read_live'
+    | 'list_releases'
+    | 'read_released_series'
+    | 'read_latest_release'
+    | 'read_release_version'
+    | 'publish_release'
+    | 'withdraw_release'
+  >
+}
+
 export interface RecordProjectionOptions {
   select?: ReadonlyArray<string> | null
   accessProfile?: string | null
@@ -1002,6 +1027,8 @@ export declare class BRegMetadata {
   readonly operations: ReadonlyArray<BRegOperationDescriptor>
   readonly immediateActions: ReadonlyArray<BRegImmediateActionDescriptor>
   readonly actionsJson: string | null
+  /** Validated caller-filtered inert descriptions. They never grant entity authority. */
+  readonly statisticalDatasets: ReadonlyArray<BRegStatisticalDatasetDescriptor> | null
   readonly registryIdentifier: string
   readonly registryVersion: string
   readonly registryRevision: string
