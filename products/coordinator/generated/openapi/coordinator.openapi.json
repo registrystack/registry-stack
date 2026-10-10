@@ -597,7 +597,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
@@ -640,7 +649,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
@@ -690,7 +708,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
@@ -743,7 +770,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
@@ -796,7 +832,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
@@ -849,7 +894,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
@@ -904,7 +958,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
@@ -964,7 +1027,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
@@ -1018,7 +1090,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
@@ -1079,7 +1160,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
@@ -1133,7 +1223,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
@@ -1194,7 +1293,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
@@ -1258,7 +1366,16 @@
             "description": "Invalid bounded request"
           },
           "401": {
-            "description": "Verified access token required"
+            "description": "Verified access token required",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "description": "Current caller policy refused"
