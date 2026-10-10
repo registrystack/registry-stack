@@ -747,6 +747,16 @@ line.
 Scheduling state is not rehearsed: `PRODUCTS` in the script names no
 Scheduling leg.
 
+For v0.39.0 to v0.40.0, BReg's ingestion-run tables do not carry the verified
+creator identity that v0.40.0 requires. The upgrade intentionally discards
+those runs and cascades the loss to their chunks and chunk-to-record receipt
+links rather than inventing an owner; records committed by those chunks remain.
+The rehearsal starts no predecessor ingestion run, so its row comparison stays
+active for every populated BReg table. The exact predecessor migration is owned
+by
+`crates/registry-breg/tests/postgres_ingestion_runs.rs::the_upgrade_discards_runs_stored_without_a_verified_creator`.
+This exception applies only to that predecessor shape and release transition.
+
 Messaging joins the rehearsal from `v0.38.0`.
 `MESSAGING_FIRST_RELEASE` in `release/scripts/release_roster.py` owns that
 boundary. The shared platform activation crate supplies the ledger behind
@@ -756,9 +766,16 @@ binaries apply the `messagingctl init` starter package, then submit scheduled
 email and SMS messages whose delivery window starts a day later, so no provider
 is contacted, and cancel one of them. After the upgrade the new binaries must
 report the same active package, serve every captured message view unchanged,
-answer an idempotent resubmission with its original receipt, and accept a new
-submission and a cancellation. A default run from a release that did not ship
-Messaging omits it and records the reason under `omitted` in the report;
+and accept a new submission and a cancellation. Normally an idempotent
+resubmission must answer with its predecessor receipt. For v0.39.0 to v0.40.0,
+Messaging schema version 3 intentionally discards the pseudonym-scoped
+idempotency records. The first post-upgrade use of an old key must create one
+fresh message and receipt, and the next identical submission must replay that
+new receipt. The exact predecessor migration is owned by
+`crates/registry-messaging/tests/postgres_migrate.rs::version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller`.
+This exception applies only to schema version 3 and this release transition. A
+default run from a release that did not ship Messaging omits it and records the
+reason under `omitted` in the report;
 naming it with `--product messaging` from such a release is refused. Messaging
 publishes Linux amd64 binaries only, so a macOS rehearsal that downloads the
 previous release omits it the same way.
@@ -772,10 +789,16 @@ count, not a comparison of the earlier records. Every record in the Evidence
 stream must also be a valid current envelope. The Evidence target is packaged again with the new `evidencectl` and
 its configuration is carried forward unchanged.
 
-Every table is subject to the row-preservation check. When the
-rehearsal reports a row loss, fix the migration so that it refuses with an error
-naming what it would lose, or keeps the rows. Do not accept the loss or narrow
-the comparison to make the run pass.
+Every table remains subject to the row-preservation rule except the
+v0.39.0-to-v0.40.0 predecessor rows in
+`registry_internal.registry_ingestion_runs`,
+`registry_internal.registry_ingestion_run_chunks`,
+`registry_internal.registry_ingestion_run_chunk_records`, and, only when
+Messaging applies schema version 3, `public.messaging_idempotency`. The
+Messaging empty-table allowance must remain keyed to schema version 3. When the
+rehearsal reports any other row loss, fix the migration so that it refuses with
+an error naming what it would lose, or keeps the rows. Do not accept the loss or
+narrow the comparison to make the run pass.
 
 This control guards against a release that loses or stops serving state its
 predecessor wrote. The release operator owns it for each release. Remove it
