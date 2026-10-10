@@ -190,7 +190,7 @@ class PostgresRunnerTests(unittest.TestCase):
         self.assertIn("postgres", job["services"])
         runs = {step["run"]: step for step in job["steps"] if "run" in step}
         contract_commands = (
-            "products/breg/scripts/check-contracts.sh",
+            "uv run --no-project --with PyYAML==6.0.2 products/breg/scripts/check-contracts.sh",
             "products/breg/scripts/check-client-contract.sh",
             "products/breg/scripts/test-postgres-tls.sh",
             "products/breg/scripts/test-adopter-workflow.sh",

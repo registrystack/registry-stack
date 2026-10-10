@@ -679,7 +679,7 @@ jobs:
         run: uv run --no-project --with PyYAML==6.0.2 python3 products/evidence/scripts/test_evidence_config_key_paths.py
 
       - name: Enforce Evidence configuration reference parity
-        run: products/evidence/scripts/check-config-key-paths.sh
+        run: uv run --no-project --with PyYAML==6.0.2 products/evidence/scripts/check-config-key-paths.sh
 
   discovery-contracts:
     name: Registry Discovery product contracts
@@ -932,8 +932,13 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
       - name: Scheduling contract consistency
-        run: products/scheduling/scripts/check-contracts.sh
+        run: uv run --no-project --with PyYAML==6.0.2 products/scheduling/scripts/check-contracts.sh
 
       - name: Check Scheduling schemas against their generators
         run: products/scheduling/scripts/check-schemas.sh
@@ -970,12 +975,17 @@ jobs:
           shared-key: workspace-registry
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
       - name: Build the Scheduling authoring tool
         run: cargo build --locked -p registry-schedulingctl
       - name: Verify Scheduling product contracts and offline authoring journeys
         env:
           SCHEDULINGCTL_BIN: ${{ github.workspace }}/target/debug/schedulingctl
-        run: products/scheduling/scripts/check-checkpoint.sh
+        run: uv run --no-project --with PyYAML==6.0.2 products/scheduling/scripts/check-checkpoint.sh
       - name: Verify commitment ledger transactions
         env:
           SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling
@@ -1020,7 +1030,7 @@ jobs:
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U scheduling hooks
-      - name: Verify the shared hook delivery schema installs and upgrades
+      - name: Verify the shared hook delivery schema installs and reinstalls
         # These tests are ignored without a database, and a run that selects
         # nothing still exits 0, so the step fails unless at least one passes.
         shell: bash
@@ -1053,8 +1063,13 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
       - name: Messaging contract consistency
-        run: products/messaging/scripts/check-contracts.sh
+        run: uv run --no-project --with PyYAML==6.0.2 products/messaging/scripts/check-contracts.sh
 
       - name: Check Messaging schemas and OpenAPI against their generators
         run: products/messaging/scripts/check-schemas.sh
@@ -1097,12 +1112,17 @@ jobs:
           shared-key: workspace-registry
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
       - name: Build the Messaging operator tool
         run: cargo build --locked -p registry-messagingctl
       - name: Verify Messaging product contracts and offline configuration checks
         env:
           MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
-        run: products/messaging/scripts/check-checkpoint.sh
+        run: uv run --no-project --with PyYAML==6.0.2 products/messaging/scripts/check-checkpoint.sh
       - name: Verify migrations, readiness, and the served runtime
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
@@ -1236,7 +1256,7 @@ jobs:
 
       - name: Base Registry Engine contract consistency
         if: matrix.lane == 'contracts'
-        run: products/breg/scripts/check-contracts.sh
+        run: uv run --no-project --with PyYAML==6.0.2 products/breg/scripts/check-contracts.sh
 
       - name: BReg client contract consistency
         if: matrix.lane == 'contracts'
@@ -1704,13 +1724,13 @@ jobs:
         run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_check_gates_inventory.py
 
       - name: Validate release manifest
-        run: release/scripts/registry-release validate-current
+        run: uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-current
 
       - name: Validate release docsets
-        run: release/scripts/registry-release validate-docsets
+        run: uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-docsets
 
       - name: Audit import map
-        run: release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
+        run: uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
 
   release-tool-required:
     # Branch protection requires this exact context. Keep it successful for
@@ -1761,7 +1781,7 @@ jobs:
           version: "0.11.16"
 
       - name: Check monorepo source model
-        run: release/scripts/check-release-source-model.sh
+        run: uv run --no-project --with PyYAML==6.0.2 release/scripts/check-release-source-model.sh
 
       - name: Test source model checker
         run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_check_release_source_model.py

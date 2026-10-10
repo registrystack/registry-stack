@@ -54,6 +54,11 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
       - name: Validate request, source, and destinations
         id: request
         env:
@@ -107,7 +112,7 @@ jobs:
             "${REQUEST_SOURCE_SHA}" refs/remotes/origin/main
           git merge-base --is-ancestor \
             "${workflow_revision}" refs/remotes/origin/main
-          release/scripts/registry-release validate-source-commit \
+          uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-source-commit \
             --source-sha "${REQUEST_SOURCE_SHA}"
           tag="v${REQUEST_VERSION}"
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" \
@@ -172,7 +177,7 @@ jobs:
               --tag "${tag}"
           done
           manifest="$(
-            python3 - "${REQUEST_VERSION}" "${REQUEST_RELEASE_ID}" <<'PY'
+            uv run --no-project --with PyYAML==6.0.2 python3 - "${REQUEST_VERSION}" "${REQUEST_RELEASE_ID}" <<'PY'
           import glob
           import sys
           import yaml
@@ -210,11 +215,11 @@ jobs:
             --version "${{ steps.request.outputs.version }}" \
             --root . \
             --allow-missing-baseline
-          release/scripts/registry-release validate \
+          uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate \
             "${{ steps.request.outputs.manifest }}"
-          release/scripts/registry-release validate-docsets
+          uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-docsets
           cargo metadata --locked --format-version 1 >/dev/null
-          release/scripts/check-release-source-model.sh
+          uv run --no-project --with PyYAML==6.0.2 release/scripts/check-release-source-model.sh
           release/scripts/check-debian13-images.py
 
   protected-ci:
