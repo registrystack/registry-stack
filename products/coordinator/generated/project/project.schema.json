@@ -163,13 +163,14 @@
       "type": "string"
     },
     "Operation": {
-      "description": "Supported product operations. No arbitrary HTTP escape hatch.",
       "enum": [
         "read-record",
         "submit-message",
         "read-scheduling",
         "read-availability",
-        "create-appointment"
+        "create-appointment",
+        "invoke-breg-action",
+        "external-get"
       ],
       "type": "string"
     },
@@ -177,7 +178,8 @@
       "enum": [
         "breg",
         "messaging",
-        "scheduling"
+        "scheduling",
+        "external-http"
       ],
       "type": "string"
     },

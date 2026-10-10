@@ -371,6 +371,68 @@
       "description": "The environment secret provider. It takes no settings.",
       "type": "object"
     },
+    "ExternalHttpConfig": {
+      "additionalProperties": false,
+      "description": "The reviewed directory contract and environment-specific destination.",
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 2000,
+          "format": "uint64",
+          "maximum": 2000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "authorization": {
+          "$ref": "#/$defs/AuthorizationConfig",
+          "description": "Omission makes the configured read public; it never inherits a caller token.",
+          "not": {
+            "required": [
+              "taskAuthority"
+            ]
+          }
+        },
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "pattern": "^[^\\s\\\\]+$"
+        },
+        "maximumResponseBytes": {
+          "default": 65536,
+          "format": "uint64",
+          "maximum": 65536,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "paths": {
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "queryParameters": {
+          "description": "Omission permits no query parameters.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "responseSchema": {
+          "description": "Local JSON Schema for the complete {status, body} response.",
+          "x-registry-foreign": "json-schema-2020-12"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "paths",
+        "responseSchema"
+      ],
+      "type": "object"
+    },
     "ExternalId": {
       "description": "An identifier another system issues, written exactly as its issuer gives it.",
       "maxLength": 512,
@@ -616,6 +678,32 @@
   "$id": "https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "anyOf": [
+        {
+          "properties": {
+            "connections": {
+              "minProperties": 1
+            }
+          },
+          "required": [
+            "connections"
+          ]
+        },
+        {
+          "properties": {
+            "externalHttpConnections": {
+              "minProperties": 1
+            }
+          },
+          "required": [
+            "externalHttpConnections"
+          ]
+        }
+      ]
+    }
+  ],
   "properties": {
     "apiVersion": {
       "const": "id.registrystack.org/formats/coordinator/runtime/v1alpha1",
@@ -625,8 +713,9 @@
       "additionalProperties": {
         "$ref": "#/$defs/ConnectionConfig"
       },
+      "default": {},
+      "description": "Omitted means no product bindings; at least one product or external HTTP connection is required.",
       "maxProperties": 16,
-      "minProperties": 1,
       "propertyNames": {
         "$ref": "#/$defs/LocalId"
       },
@@ -650,6 +739,18 @@
     "deployment": {
       "$ref": "#/$defs/DeploymentConfig"
     },
+    "externalHttpConnections": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ExternalHttpConfig"
+      },
+      "default": {},
+      "description": "Omitted means external HTTP is unavailable. Names must be distinct from product connections.",
+      "maxProperties": 16,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
     "kind": {
       "const": "CoordinatorRuntimeConfig",
       "type": "string"
@@ -667,7 +768,6 @@
     "secretProviders",
     "database",
     "namespace",
-    "connections",
     "apiVersion",
     "kind"
   ],

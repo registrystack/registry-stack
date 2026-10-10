@@ -1,0 +1,114 @@
+# Synthetic client replies only. These cases do not prove BReg action policy,
+# target preconditions, remote acceptance or provider delivery.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: action-and-notice-accepted
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {applicationId: 00000000-0000-4000-8000-000000000001}
+  replies:
+    read-application:
+    - type: success
+      value: {data: {domainData: {complete: false, missingField: proof of address, email: person@example.invalid}}}
+    request-information:
+    - type: success
+      value:
+        action: request-information
+        applicationId: 00000000-0000-4000-8000-000000000003
+        results:
+          application: {entity: applications, recordId: 00000000-0000-4000-8000-000000000001, revision: 2}
+    notify:
+    - type: success
+      value: {id: 00000000-0000-4000-8000-000000000002, status: queued}
+  expect:
+    path: [read-application, needs-information, request-information, notify, accepted]
+    state: completed
+    outcome: {type: named, value: action-and-notice-accepted}
+    output: {actionApplicationId: 00000000-0000-4000-8000-000000000003, messageId: 00000000-0000-4000-8000-000000000002}
+- id: complete-application-needs-no-action
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {applicationId: 00000000-0000-4000-8000-000000000001}
+  replies:
+    read-application:
+    - type: success
+      value: {data: {domainData: {complete: true}}}
+  expect:
+    path: [read-application, needs-information, skipped]
+    state: completed
+    outcome: {type: named, value: no-information-request-needed}
+    output: null
+- id: action-authority-refused
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {applicationId: 00000000-0000-4000-8000-000000000001}
+  replies:
+    read-application:
+    - type: success
+      value: {data: {domainData: {complete: false, missingField: proof of address}}}
+    request-information:
+    - type: refused
+      code: product-forbidden
+  expect:
+    path: [read-application, needs-information, request-information]
+    state: refused
+    outcome: {type: none}
+- id: action-response-loss-keeps-unknown
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {applicationId: 00000000-0000-4000-8000-000000000001}
+  replies:
+    read-application:
+    - type: success
+      value: {data: {domainData: {complete: false, missingField: proof of address}}}
+    request-information:
+    - type: uncertain
+      code: transport-uncertain
+  expect:
+    path: [read-application, needs-information, request-information]
+    state: uncertain
+    outcome: {type: none}
+- id: action-response-loss-reuses-original-command
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {applicationId: 00000000-0000-4000-8000-000000000001}
+  replies:
+    read-application:
+    - type: success
+      value: {data: {domainData: {complete: false, missingField: proof of address, email: person@example.invalid}}}
+    request-information:
+    - type: uncertain
+      code: transport-uncertain
+    - type: success
+      value:
+        action: request-information
+        applicationId: 00000000-0000-4000-8000-000000000003
+        results:
+          application: {entity: applications, recordId: 00000000-0000-4000-8000-000000000001, revision: 2}
+    notify:
+    - type: success
+      value: {id: 00000000-0000-4000-8000-000000000002, status: queued}
+  recovery:
+    request-information: retry-same
+  expect:
+    path: [read-application, needs-information, request-information, notify, accepted]
+    state: completed
+    outcome: {type: named, value: action-and-notice-accepted}
+    output: {actionApplicationId: 00000000-0000-4000-8000-000000000003, messageId: 00000000-0000-4000-8000-000000000002}
+- id: notice-refused-after-accepted-action
+  admittedAt: '2026-10-10T09:00:00Z'
+  input: {applicationId: 00000000-0000-4000-8000-000000000001}
+  replies:
+    read-application:
+    - type: success
+      value: {data: {domainData: {complete: false, missingField: proof of address, email: person@example.invalid}}}
+    request-information:
+    - type: success
+      value:
+        action: request-information
+        applicationId: 00000000-0000-4000-8000-000000000003
+        results:
+          application: {entity: applications, recordId: 00000000-0000-4000-8000-000000000001, revision: 2}
+    notify:
+    - type: refused
+      code: product-forbidden
+  expect:
+    path: [read-application, needs-information, request-information, notify]
+    state: refused
+    outcome: {type: none}

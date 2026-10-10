@@ -165,6 +165,70 @@
         ],
         "type": "object"
       },
+      "OperationIdentity": {
+        "additionalProperties": false,
+        "description": "Pinned public operation contract; does not establish current authority or receipt availability.",
+        "properties": {
+          "effect": {
+            "enum": [
+              "read",
+              "mutation"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "enum": [
+              "read-record",
+              "submit-message",
+              "read-scheduling",
+              "read-availability",
+              "create-appointment",
+              "invoke-breg-action",
+              "external-get"
+            ],
+            "type": "string"
+          },
+          "keyRequirement": {
+            "enum": [
+              "none",
+              "required"
+            ],
+            "type": "string"
+          },
+          "product": {
+            "type": "string"
+          },
+          "readReceipt": {
+            "type": "boolean"
+          },
+          "recovery": {
+            "enum": [
+              "read-again",
+              "same-command-and-receipt",
+              "same-command"
+            ],
+            "type": "string"
+          },
+          "requiresPreparation": {
+            "type": "boolean"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "product",
+          "effect",
+          "keyRequirement",
+          "requiresPreparation",
+          "recovery",
+          "readReceipt"
+        ],
+        "type": "object"
+      },
       "Problem": {
         "properties": {
           "code": {
@@ -239,6 +303,9 @@
         "properties": {
           "recovery": {
             "properties": {
+              "operation": {
+                "$ref": "#/components/schemas/OperationIdentity"
+              },
               "reason": {
                 "type": [
                   "string",

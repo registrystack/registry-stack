@@ -93,6 +93,22 @@ logical `connections`. Add the `deployment` block shown in
 issuer and caller policy. The example contains references only. Provision each
 secret separately through its enabled shared provider.
 
+For `invoke-breg-action`, configure a Base Registry Engine (BReg) connection with
+an ordinary service `authorization` and an explicitly permitted `profile`. Do not configure
+`authorization.taskAuthority` on that connection: this operation accepts no
+Casework grant and has no task-authority fallback. Keep a task-bound record-read
+connection separate when the workflow needs both authority types.
+
+For `external-get`, configure `externalHttpConnections` separately from product
+`connections`. Declare `baseUrl`, exact `paths`, optional `queryParameters`,
+optional ordinary service `authorization`, and the required `responseSchema`
+for `{status, body}`. Omitted authorization permits a public read and never
+borrows the caller's token. The default attempt timeout is 2000 milliseconds
+and the default response limit is 65,536 bytes; both may be reduced. Use HTTPS
+for institutional endpoints; plain HTTP requires an explicit numeric loopback
+address. See the [external directory example](examples/external-directory/runtime.yaml)
+and [configuration reference](../../docs/site/src/content/docs/reference/coordinator-configuration.mdx).
+
 Create separate migration and runtime PostgreSQL roles. The migration role owns
 the dedicated schema. The runtime role must not own that schema, inherit
 migration authority, create objects, or write activation/schema ledgers. Apply
@@ -218,6 +234,23 @@ coordinatorctl --url https://coordinator.example.org --token-file /run/operator-
 with `Idempotency-Key`. Status and list show authorized progress and the reviewed
 terminal projection. Inspection shows bounded durable step state. It never
 returns original inputs, raw product responses or prepared command payloads.
+
+Inspection includes `recovery.operation` for a compatible current call, with its
+pinned ID, version, product, effect, key/preparation requirements, recovery and
+`readReceipt` capability. When inspection can otherwise proceed, it omits the
+field if no compatible current call is available, including pure steps, erased
+payloads or incompatible snapshots. An unresolved original binding can still
+refuse inspection. BReg action invocation declares `same-command` recovery
+and `readReceipt: false`. `retryAllowed` and `reason` describe scheduling
+eligibility; neither the descriptor nor that eligibility proves current product
+authority or the existence of an original-key receipt.
+
+One deployment admits one active flow definition; retained runs keep their
+original definitions. The list endpoint returns the latest caller-owned runs
+with a default `limit` of 20 and a maximum of 100, without pagination. Use the
+authenticated HTTP API for application integration; `@registrystack/client`
+does not yet export a Coordinator client.
+
 Settled terminal history remains inspectable with its recorded binding identity
 after an old connection is retired. This requires no runnable/uncertain job or
 outstanding restore review; a failed label alone does not qualify. Unresolved
@@ -241,12 +274,22 @@ personal labels or payload values.
 
 ## Recover safely
 
-Inspect before retrying. `reconcile` asks the receiving product for authoritative
-evidence of the stored command using its original key and owner. Missing or
-expired receipts and an unavailable receiver do not prove absence. `retry-same`
+Inspect before retrying. For Messaging and Scheduling, `reconcile` asks the
+receiving product for authoritative evidence of the stored command using its
+original key and owner. Missing or expired receipts and an unavailable receiver
+do not prove absence. `retry-same`
 uses the durable original body, key, binding and authority only when the receiver's
-receipt and original deadline permit it. A fresh start key is a fresh operation,
-so it is never a recovery procedure.
+recovery contract and original deadline permit it. A fresh start key is a fresh
+operation, so it is never a recovery procedure.
+
+BReg action invocation has no read-only action receipt. `reconcile` therefore
+leaves an uncertain action unresolved. Do not infer success or absence from an
+ordinary record read. Same-command retry retains the saved client preparation,
+conditional ETags and key, and checks current metadata and fresh authority before
+dispatch. A changed contract, denied authority or stale condition safely stops
+the call rather than refreshing its command. Preparation does not mutate BReg;
+cancellation, restore holds and the original workflow deadline still fence
+dispatch. Task-bound operations retain their original approval deadline too.
 
 If a product call succeeds but the following wait mapping is invalid, the run
 reports `failed` with `mapping-invalid` while retaining that call's successful
@@ -266,8 +309,8 @@ authority leaves the effect unresolved. Observation credentials never authorize
 Coordinator dispatch.
 
 Cancellation prevents future dispatch where possible. It does not roll back an
-appointment or message the receiving product accepted. Unresolved external
-effects remain uncertain until authoritative observation resolves them. Restore
+appointment, governed action or message the receiving product accepted.
+Unresolved external effects remain uncertain until authoritative observation resolves them. Restore
 the original downstream binding if configuration drift blocks recovery. Rotate
 key material under the same registered identity rather than changing the identity.
 

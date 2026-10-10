@@ -70,8 +70,8 @@ requests. `--format json` supplies structured reports for these commands.
 ## Start from a maintained project
 
 - [Delayed follow-up](examples/delayed-follow-up/workflow.yaml) waits durably,
-  reads a current BReg record, chooses a reviewed notice policy and submits one
-  message. Its deterministic scenarios cover permission changes, waits,
+  reads a current Base Registry Engine (BReg) record, chooses a reviewed notice
+  policy and submits one message. Its deterministic scenarios cover permission changes, waits,
   uncertain responses, frozen command retries and refusals.
 - [Deferred appointment](examples/deferred-appointment/workflow.yaml) reads a
   current BReg record, waits, reads Scheduling availability, books with an
@@ -81,6 +81,11 @@ requests. `--format json` supplies structured reports for these commands.
   and Messaging identity are separately configured.
 - [Approved record check](examples/approved-record-check/workflow.yaml) exercises
   a BReg read through explicit Casework task authority.
+- [Governed action follow-up](examples/governed-action-follow-up/workflow.yaml)
+  reads an application, invokes a governed BReg action through a permitted service
+  profile, and submits a separate notice through Messaging.
+- [External directory](examples/external-directory/workflow.yaml) reads a configured
+  directory over HTTP GET and chooses an outcome from the validated response.
 
 ```sh
 coordinatorctl check --project products/coordinator/examples/deferred-appointment --explain
@@ -89,10 +94,59 @@ coordinatorctl test --project products/coordinator/examples/delayed-follow-up
 ```
 
 Adapt the reviewed functions and owning product policy to your institution. YAML
-names fixed logical connections and maintained product operations. It does not
-permit arbitrary HTTP, SQL, dynamic fan-out or automatic compensation. Rhai
-functions choose from the finite reviewed graph and perform bounded pure mapping;
-they cannot acquire credentials or contact products.
+declares the finite graph, waits and fixed logical connections. Choose pure Rhai
+for field mapping and branch selection within that graph. Rhai cannot acquire
+credentials, contact products or construct additional steps. There are no SQL
+steps, arbitrary HTTP methods, dynamic fan-out or automatic compensation.
+
+The supported operation inventory is fixed:
+
+| Operation | Receiver | Effect | Recovery |
+| --- | --- | --- | --- |
+| `read-record` | Base Registry Engine (BReg) | Read | Read again |
+| `submit-message` | Messaging | Mutation | Same command and read-only receipt |
+| `read-scheduling` | Scheduling | Read | Read again |
+| `read-availability` | Scheduling | Read | Read again |
+| `create-appointment` | Scheduling | Mutation | Same command and read-only receipt |
+| `invoke-breg-action` | BReg | Mutation | Same prepared command; no read-only receipt |
+| `external-get` | Configured external HTTP service | Read | Read again |
+
+`invoke-breg-action` takes an action identifier and an object of action inputs.
+It requires a standing BReg service identity and a profile that permits that
+immediate action. It does not accept a Casework grant or inherit task authority.
+The maintained BReg client owns metadata validation, condition ETags and prepared
+command recovery. Preparation is nonmutating; its exact request and idempotency
+key are saved before dispatch. Later attempts check current metadata and acquire
+fresh credentials without refreshing the saved conditions or key. A changed
+contract, denied authority or stale condition stops the action safely.
+
+`external-get` binds through `runtime.externalHttpConnections`, separately from
+product connections. Operators configure the base URL, exact permitted paths,
+query parameter names, optional service authorization and response schema. The
+workflow supplies only a permitted path and query values. The adapter performs
+GET, rejects redirects, and returns the validated `{status, body}` JSON value.
+An omitted authorization block means a public read, with no borrowed caller
+credential. See the [configuration reference](../../docs/site/src/content/docs/reference/coordinator-configuration.mdx)
+for limits and defaults.
+
+## Add a maintained operation
+
+For an operation on an existing product boundary, add a versioned descriptor in
+`src/operations.rs` under `crates/registry-coordinator`. Declare its product,
+effect, key requirement, preparation requirement, recovery semantics and read-only
+receipt capability. Add the owning client adapter and routing, with focused
+contract and recovery tests. Use the `AdapterSet` preparation seam when the client
+requires a saved prepared command. Product metadata, authorization and wire
+validation remain the maintained client's responsibility.
+
+The operation schema derives from the catalog; regenerate the project schema.
+The worker, store and offline scenario state machine consume those declared
+capabilities. They do not need operation-specific execution branches. Snapshots
+pin exact semantics, so changing a descriptor or its version cannot silently
+reinterpret retained runs. Preserve the original descriptors for compatible
+restore, including the fixed legacy catalog. Add offline scenarios using typed
+replies and only the declared recovery capabilities; passing them does not prove
+a live product effect. Coordinator exports are not generated into a language SDK.
 
 ## Package and deploy
 
@@ -112,6 +166,12 @@ Existing immutable packages and admitted runs retain their original definition
 bytes and ABI. New project files use the documented `CoordinatorProject` format;
 an older `Workflow` authoring envelope is refused with migration guidance.
 
+Version 4 snapshots pin each used operation's capabilities. Existing version 3
+snapshots retain their original bytes and remain restorable with their original
+five-operation contract. Packaging commands are unchanged; a newly packaged
+definition with a changed digest needs a new workflow version if that ID and
+version already exists in retained history.
+
 Use [DEPLOYMENT.md](DEPLOYMENT.md) to provision OIDC clients, downstream bindings,
 state-key custody, PostgreSQL split roles and a private listener. Apply explicitly
 migrates and activates the pinned package. The service verifies activation and
@@ -127,13 +187,33 @@ available recovery action. Operator policy explicitly grants recovery and privat
 diagnostics. Inputs, product responses and prepared commands remain encrypted and
 are absent from these responses.
 
-After a lost response, reconcile against the receiving product's original-key
-receipt before retrying. Same-command recovery preserves the body, key,
-destination, caller and original task authority. An unavailable product or expired
-receipt never proves that an effect did not occur. Messaging acceptance records a
+For a compatible current call, inspection includes `recovery.operation`: its
+pinned ID, version, product, effect, key and preparation requirements, recovery
+semantics and `readReceipt` capability. When inspection can otherwise proceed,
+it omits the field if no compatible current call is available, including pure
+steps, erased payloads or incompatible snapshots. An unresolved original binding
+can still refuse inspection. For example, `invoke-breg-action` declares
+`same-command` recovery with `readReceipt: false`. `retryAllowed` and `reason`
+describe the run's eligibility to be scheduled. The operation descriptor does
+not prove current product authority or the existence of an original-key receipt.
+
+One deployment admits one active flow definition. Previously admitted versions
+remain available for their existing runs. The list API returns the latest
+caller-owned runs, with a default limit of 20 and a maximum of 100; it has no
+pagination cursor. Coordinator does not yet have an `@registrystack/client` export.
+Institutional applications compose through its authenticated HTTP API and the
+owning Casework, BReg and optional Messaging APIs.
+
+After a lost Messaging or Scheduling response, reconcile against the receiving
+product's original-key receipt before retrying. BReg action reconciliation remains
+unresolved because no read-only action receipt is available; an ordinary record
+read does not prove that the original action succeeded. Same-command recovery
+preserves the body, key, destination, caller and original task authority.
+An unavailable product or expired receipt never proves that an effect did not
+occur. Messaging acceptance records a
 provider submission contract; provider delivery is a distinct observation.
 Cancellation prevents later dispatch where possible and does not roll back an
-appointment or notice already accepted by its owning product.
+appointment, governed action or notice already accepted by its owning product.
 
 Retention erases eligible terminal payloads while preserving spent-key tombstones.
 A retained run can still be inspected; it cannot be retried or reconciled without
@@ -154,7 +234,9 @@ ordinary workspace test runs.
 cargo test --locked -p registry-coordinator --features schema \
   --test authoring --test authored_project --test authored_scenarios \
   --test cli_authoring --test runtime_config \
-  --test deployment_surface --test http_boundary --test scheduling_adapter
+  --test deployment_surface --test http_boundary --test scheduling_adapter \
+  --test breg_action_adapter --test external_http --test external_runtime \
+  --test catalog_scenarios --test operation_compatibility
 products/coordinator/scripts/check-schemas.sh
 cargo run --locked -p registry-coordinator --bin coordinatorctl -- openapi \
   > products/coordinator/generated/openapi/coordinator.openapi.json
@@ -173,3 +255,28 @@ journey. It requires Python 3, OpenSSL and PostgreSQL client tools, Docker,
 distinct disposable PostgreSQL databases, and all ten native service/operator
 binaries described by the script's `--help`. Those contributor checks do not replace the deployment runbook or imply
 production credentials are needed to author a project.
+
+The governed-action and external-directory examples have deterministic scenarios;
+adapter checks use mock HTTP services and durable-state checks use PostgreSQL.
+For native BReg action acceptance, run this explicit helper from the checkout:
+
+```sh
+python3 products/coordinator/scripts/test-breg-action.py --env /absolute/path/coordinator-test.env
+```
+
+Provide Python 3, the current checkout's Cargo build prerequisites, and
+`COORDINATOR_TEST_DATABASE_URL` in the environment or named file. The URL must
+name an owned disposable PostgreSQL 17+ database on loopback, with authority to
+create and drop unique fixture databases and roles. The helper builds current
+`breg` and `bregctl` binaries. It provisions synthetic credentials and fixture
+data, creates and removes only its unique databases and roles, and does not reset
+the named database. No live service credentials are required.
+
+The native check proves one governed patch was accepted despite a lost response.
+Reconstructed `HttpAdapters` reload the saved preparation and recover with the
+same body, key and conditions, leaving one applied record revision and returning
+the same application receipt. It checks fresh metadata, refusal through a real
+read-only profile, and no receipt lookup during reconciliation. Separate
+PostgreSQL worker tests cover crash durability. This does not establish a full
+Coordinator process journey or native proof of the action-plus-notice example.
+The helper is an explicit contributor check, not a new CI gate.

@@ -13,6 +13,34 @@ approved product operation and finish with a declared outcome. The authored
 package contains the graph, functions and schemas; deployment configuration
 binds its logical connections to endpoints and identities.
 
+YAML owns the finite graph and waits; pure Rhai maps values and selects an authored
+branch. Functions cannot make calls, acquire credentials or add runtime steps.
+
+The seven supported operations are `read-record`, `submit-message`,
+`read-scheduling`, `read-availability`, `create-appointment`, `invoke-breg-action`
+and `external-get`. The first five keep their original product contracts.
+Messaging submission and Scheduling appointment creation support same-command
+recovery and read-only original-key receipts. Base Registry Engine (BReg) action
+invocation supports same-command recovery without a read-only action receipt. The four read
+operations can be read again.
+
+`invoke-breg-action` uses a standing BReg service identity and an explicitly
+permitted profile for an immediate governed action. Its input contains `action`
+and an `input` object, with no grant field or task-authority fallback. The maintained
+BReg client prepares the conditional request without mutation. Coordinator saves
+that preparation and original key before dispatch. Recovery checks current
+metadata and fresh authority while retaining the saved request and condition
+ETags. Changed contracts, stale conditions and revoked authority do not silently
+produce a replacement command. An ambiguous response remains uncertain; a
+record read or operator assertion cannot establish action success.
+
+`external-get` is a configured read boundary: operators bind a base URL, exact
+paths, allowed query parameter names, optional service authorization and a local
+response schema through `runtime.externalHttpConnections`. Calls can supply only
+a permitted path and query values. The adapter sends GET, refuses redirects and
+validates the complete `{status, body}` response. It provides no external write
+operation or receipt. Omitted authorization means a public read.
+
 Each run keeps its original definition and prepared commands. A repeated start
 key under the same verified issuer, subject and flow returns its original run
 when the input matches. A conflicting input is refused. New compatible package
@@ -21,10 +49,17 @@ A workflow ID and version identify one definition throughout retained run
 history, including payload-erased tombstones. Apply refuses a changed definition
 under a previously used version; give that definition a new version.
 
+Version 4 snapshots pin the capabilities of every used operation. Version 3
+snapshots preserve their original bytes and five-operation semantics during
+restore. Existing package commands remain unchanged, but a changed definition
+digest may require a new authoring version under the same history rule.
+
 Credentials are acquired when a call is attempted. A wait, retry or restart
 cannot extend a Casework approval deadline or change its principal, resource,
 scopes or bounds. Receiving products verify current authority. Standing read
 authority and read-only receipt observation cannot authorize a commitment.
+Preparation and dispatch remain subject to cancellation, recovery holds and the
+original workflow deadline. A retry cannot renew an original approval deadline.
 
 An accepted Messaging submission is distinct from provider delivery. A failed
 connection or lost response after sending may leave the effect unknown. The
@@ -58,6 +93,12 @@ Operator authority is explicit. Durable audit precedes protected actions and
 release of protected results. Retention erases eligible terminal payloads while
 keeping spent-key tombstones. Live, uncertain and restore-review work cannot be
 silently erased.
+
+Each deployment admits one active flow definition, while retained runs use their
+original versions. The list endpoint returns the latest caller-owned runs with
+`limit` from 1 to 100, defaulting to 20, and has no pagination. Applications use
+the authenticated HTTP API; no Coordinator export is available in
+`@registrystack/client` yet.
 
 ## Recovery and limits
 
@@ -123,12 +164,27 @@ After a simulated receipt expiry, the run stays uncertain. Neither `retry-same`
 nor `reconcile` can consume another reply, since the supported products cannot
 confirm an original command through an expired receipt. Before receipt expiry,
 a successful, explicitly declared reconciliation represents authoritative
-confirmation of the original command, never a new submission. Reconciliation
-can resolve an uncertain outcome; a definite retryable reply requires
+confirmation of a Messaging or Scheduling command, never a new submission.
+BReg action scenarios cannot declare successful reconciliation without a
+read-only action receipt contract. Reconciliation can resolve an uncertain
+outcome; a definite retryable reply requires
 same-command retry.
 
+The governed-action adapter has both mock HTTP checks and an explicit native
+BReg acceptance check. The native check observes a committed patch after response
+loss, reconstructs the adapters from saved preparation, and recovers with the
+same body, key and conditions. It verifies one applied record revision, the same
+application receipt, fresh metadata, a real read-only profile refusal and no
+receipt lookup. PostgreSQL worker checks separately exercise preparation and
+crash durability. This does not establish a full Coordinator process journey
+or native proof of the action-plus-notice example.
+See [the contributor checks](README.md#verify-a-change)
+for the explicit helper and its disposable loopback database prerequisites.
+Native Casework and BReg applications may compose a governed application action
+with a separate optional notice through their owning APIs.
+
 This pilot does not add language builders, a new WASM toolchain, dynamic fan-out,
-arbitrary HTTP or SQL steps, automatic compensation, or a visual editor. It does
-not promise atomic distributed revocation, rollback of accepted effects or
+arbitrary HTTP methods or SQL steps, automatic compensation, or a visual editor.
+It does not promise atomic distributed revocation, rollback of accepted effects or
 production availability. Existing hooks and APIs remain available to external
 orchestrators.
