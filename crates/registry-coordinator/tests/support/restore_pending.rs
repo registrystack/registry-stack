@@ -106,7 +106,7 @@ async fn restored_pre_command_pending_work_requires_explicit_retry_or_cancel() {
             assert!(fake.requests.lock().unwrap().is_empty());
             assert_eq!(restored_lease_identity(&h, run).await, identity);
             let held = restored_current_job(&h, run).await;
-            assert_eq!(held["state"], "dead_lettered");
+            assert_eq!(held["state"], "dead-lettered");
             assert_eq!(held["failure_code"], "restore-pre-command-held");
             let status = h.store.status(run).await.unwrap();
             assert_eq!(status.state, "failed");
@@ -180,7 +180,7 @@ async fn restored_future_pending_wait_keeps_its_original_schedule_through_recove
         .unwrap();
     assert_eq!(
         restored_current_job(&h, run).await["state"],
-        "dead_lettered"
+        "dead-lettered"
     );
     assert_eq!(restored_lease_identity(&h, run).await, identity);
     h.store
@@ -250,7 +250,7 @@ async fn wait_replay_relational_failure_rolls_back_the_entire_reset() {
         .await
         .unwrap();
     let held = restored_current_job(&h, run).await;
-    assert_eq!(held["state"], "dead_lettered");
+    assert_eq!(held["state"], "dead-lettered");
     let identity = restored_lease_identity(&h, run).await;
     // The core's dead-letter -> Pending reset succeeds. Only the consumer's
     // subsequent scheduling write fails, proving both share one transaction.
@@ -300,7 +300,7 @@ async fn restored_pre_command_calls_and_waits_keep_the_original_deadline() {
             .unwrap();
         assert_eq!(
             restored_current_job(&h, run).await["state"],
-            "dead_lettered"
+            "dead-lettered"
         );
         assert_eq!(restored_lease_identity(&h, run).await, identity);
         assert!(h

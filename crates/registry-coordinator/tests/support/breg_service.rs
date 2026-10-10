@@ -131,23 +131,23 @@ impl Breg {
         document(
             &project.join("registry.yaml"),
             json!({
-                "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
-                "registry":{"id":"coordinator-action-proof", "canonicalBaseIri":"https://synthetic.example.invalid/action-proof", "version":"1", "defaultLanguage":"en"},
+                "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
+                "project":{"id":"coordinator-action-proof", "canonicalBaseIri":"https://synthetic.example.invalid/action-proof", "version":"1", "defaultLanguage":"en"},
                 "package":{"sourceRevision":"coordinator-native-action-proof"},
                 "entities":[{"id":"item", "primaryDataset":"synthetic-items", "route":"items", "mutationMode":"mutable", "classification":"internal",
-                    "fields":[{"id":"owner", "type":"string", "required":true, "maxLength":80, "classification":"internal"},
-                        {"id":"label", "type":"string", "required":true, "minLength":1, "maxLength":80, "classification":"internal"}]}],
+                    "fields":[{"id":"owner", "type":"string", "required":true, "maximumLength":80, "classification":"internal"},
+                        {"id":"label", "type":"string", "required":true, "minimumLength":1, "maximumLength":80, "classification":"internal"}]}],
                 "actions":[{"id":"update-item", "inputs":[
                     {"id":"target", "apiName":"targetId", "type":"reference", "target":"item", "required":true, "classification":"internal"},
-                    {"id":"label", "type":"string", "required":true, "minLength":1, "maxLength":80, "classification":"internal"}],
+                    {"id":"label", "type":"string", "required":true, "minimumLength":1, "maximumLength":80, "classification":"internal"}],
                     "effects":[{"id":"item", "target":{"fromField":"target"}, "operation":"patch", "set":{"label":{"fromField":"label"}}}]}],
                 "accessProfiles":[
                     {"id":"writer", "default":true, "principalClaim":"sub", "requiredScopes":["applications:read"], "actorKind":"service", "requesterClients":["application-reader"],
-                        "permissions":[{"entity":"item", "operations":["create","get","list"], "readableFields":["owner","label"], "writableFields":["owner","label"],
-                            "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]},
-                            {"action":"update-item", "operations":["invoke"], "targets":[{"entity":"item", "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}], "results":["item"]}]},
+                        "permissions":{"entities":[{"entity":"item", "operations":["create","get","list"], "readableFields":["owner","label"], "writableFields":["owner","label"],
+                            "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}],
+                            "actions":[{"action":"update-item", "operations":["invoke"], "targets":[{"entity":"item", "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}], "results":["item"]}]}},
                     {"id":"reader", "principalClaim":"sub", "requiredScopes":["applications:read"], "actorKind":"service", "requesterClients":["application-reader"],
-                        "permissions":[{"entity":"item", "operations":["get"], "readableFields":["owner","label"], "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}]}
+                        "permissions":{"entities":[{"entity":"item", "operations":["get"], "readableFields":["owner","label"], "rowBoundaries":[{"field":"owner", "claim":"sub", "operator":"equals"}]}]}}
                 ]
             }),
         );
@@ -195,15 +195,15 @@ impl Breg {
         let address = listener.local_addr().unwrap();
         let runtime = |database: usize, package: &Path| {
             json!({
-                "apiVersion":"registry.registrystack.org/breg-runtime/v1alpha1", "kind":"BRegRuntimeConfig",
+                "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1", "kind":"BRegRuntimeConfig",
             "listener":{"bind":address.to_string()},
                 "identity":{"environment":"test", "instanceId":"coordinator-action-proof", "databaseId":"coordinator-action-proof", "databaseInitializationEnvironment":"test"},
                 "secretProviders":{"file":{"root":service.root}},
                 "database":{"runtimeUrlRef":format!("secret:file/database-{database}-1"), "migrationUrlRef":format!("secret:file/database-{database}-0"), "testOnlyPlaintext":true,
-                    "pool":{"maxSize":4}, "roles":{"migration":service.roles[0], "runtime":service.roles[1]}},
+                    "pool":{"maximumConnections":4}, "roles":{"migration":service.roles[0], "runtime":service.roles[1]}},
                 "package":{"root":package},
                 "authentication":{"oidc":{"issuer":issuer.issuer(), "audience":"urn:example:applications", "allowedAlgorithm":"ES256", "accessTokenType":"at+jwt", "scopeClaim":"scope", "scopeSeparator":" ", "allowedClients":["application-reader"],
-                    "maxTokenLifetimeSeconds":3600, "leewayMilliseconds":0, "jwksSource":{"kind":"static", "documentRef":"secret:file/jwks"}}, "authorityClaims":{"principal":"sub"}},
+                    "maximumTokenLifetimeSeconds":3600, "leewayMilliseconds":0, "jwksSource":{"type":"static", "documentRef":"secret:file/jwks"}}, "authorityClaims":{"principal":"sub"}},
                 "audit":{"hashKeyRef":"secret:file/audit-key", "path":service.root.join("audit/breg.jsonl")},
                 "cursor":{"secretRef":"secret:file/cursor-key"}
             })

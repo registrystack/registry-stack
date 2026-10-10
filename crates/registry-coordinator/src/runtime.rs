@@ -4,8 +4,8 @@
 use crate::{PocError, Result};
 use registry_breg_client::BRegRecordOptions;
 use registry_platform_config::{
-    DatabaseConfig, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvider,
-    SecretProvidersConfig, SecretReference,
+    DatabaseConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck,
+    SecretProvider, SecretProvidersConfig, SecretReference,
 };
 use registry_platform_httputil::{
     valid_resource_uri, valid_scope_token, validate_requested_scopes, ServiceBaseUrl,
@@ -18,6 +18,11 @@ use zeroize::Zeroizing;
 
 pub const API_VERSION: &str = "id.registrystack.org/formats/coordinator/runtime/v1alpha1";
 pub const KIND: &str = "CoordinatorRuntimeConfig";
+
+const REMOVED_KEYS: &[RemovedKey] = &[RemovedKey {
+    path: "deployment.authentication.jwksSource.kind",
+    replacement: "Write `deployment.authentication.jwksSource.type` with the same value.",
+}];
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -238,6 +243,7 @@ impl RuntimeConfig {
             api_version: API_VERSION,
             kind: KIND,
         })
+        .removed_keys(REMOVED_KEYS)
     }
 
     /// Serialize the complete configuration envelope without resolving credentials.
@@ -805,14 +811,16 @@ pub fn runtime_schema() -> Result<String> {
     schema["$defs"]["AuthorizationConfig"]["properties"]["clientId"]["maxLength"] = json!(256);
     schema["$defs"]["AccessConfig"]["properties"]["scopeClaim"]["maxLength"] = json!(128);
     // Admission policy requires a closed list, even though the reusable
-    // shared client block leaves the product to decide an empty-list policy.
+    // shared client block leaves the product to decide whether unrestricted
+    // admission is acceptable. Narrow the use without changing the shared type.
     let access = &mut schema["$defs"]["AccessConfig"];
-    access["required"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!("allowedClients"));
+    let required = access["required"].as_array_mut().unwrap();
+    if !required.contains(&json!("allowedClients")) {
+        required.push(json!("allowedClients"));
+    }
     let clients = &mut access["properties"]["allowedClients"];
     clients.as_object_mut().unwrap().remove("default");
+    clients["type"] = json!("array");
     clients["minItems"] = json!(1);
     clients["maxItems"] = json!(64);
     clients["uniqueItems"] = json!(true);

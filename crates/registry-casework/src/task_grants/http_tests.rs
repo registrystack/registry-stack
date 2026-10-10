@@ -2572,7 +2572,7 @@ async fn deferred_work_item_grants_ignore_drafts_but_never_revive_after_release_
             .0,
         StatusCode::FORBIDDEN
     );
-    let events: i64 = db.query_one("SELECT count(*) FROM casework_history WHERE item_id=$1 AND kind='task_invalidated' AND detail->>'grantId'=$2", &[&f.item,&id.to_string()]).await.unwrap().get(0);
+    let events: i64 = db.query_one("SELECT count(*) FROM casework_history WHERE item_id=$1 AND kind='task-invalidated' AND detail->>'grantId'=$2", &[&f.item,&id.to_string()]).await.unwrap().get(0);
     assert_eq!(events, 1, "one permanent invalidation history entry");
     f.admin
         .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))

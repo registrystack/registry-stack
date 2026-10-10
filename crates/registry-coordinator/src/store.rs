@@ -38,7 +38,7 @@ enum InspectionBinding<'a> {
     Supplied(&'a str),
 }
 
-pub(crate) const SCHEMA_VERSION: i32 = 3;
+pub(crate) const SCHEMA_VERSION: i32 = 4;
 
 pub(crate) const AUDIT_SCHEMA: &str = "registry-coordinator/audit/v1";
 
@@ -406,7 +406,7 @@ impl Store {
             tx.batch_execute(&format!("CREATE SCHEMA {}; COMMENT ON SCHEMA {} IS 'registry-coordinator/v2 protected-state'", self.namespace,self.namespace)).await.map_err(unavailable)?;
         }
         tx.batch_execute(&format!("CREATE TABLE IF NOT EXISTS {0}.control (
-            id boolean PRIMARY KEY CHECK(id), database_id text NOT NULL, schema_version integer NOT NULL CHECK(schema_version=3),
+            id boolean PRIMARY KEY CHECK(id), database_id text NOT NULL, schema_version integer NOT NULL CHECK(schema_version=4),
             restore_hold boolean NOT NULL DEFAULT false, admissions_hold boolean NOT NULL DEFAULT false, restore_evidence_hash text, admission_recovery_hash text, active_package_digest text, admission_key_commitment text NOT NULL, state_key_commitments jsonb NOT NULL);
             CREATE TABLE IF NOT EXISTS {0}.runs (
             run_id uuid PRIMARY KEY, start_identity text UNIQUE NOT NULL, input_digest text NOT NULL, owner_hash text NOT NULL,
@@ -427,14 +427,14 @@ impl Store {
         )
         .await
         .map_err(unavailable)?;
-        tx.execute(&format!("INSERT INTO {}.control(id,database_id,schema_version,admission_key_commitment,state_key_commitments) SELECT true,$1,3,$2,$3 WHERE NOT EXISTS(SELECT 1 FROM {}.control WHERE id) ON CONFLICT DO NOTHING",self.namespace,self.namespace), &[&self.security.database_id,&self.admission_key_marker(),&self.security.keys.custody_markers(&self.security.database_id)]).await.map_err(unavailable)?;
+        tx.execute(&format!("INSERT INTO {}.control(id,database_id,schema_version,admission_key_commitment,state_key_commitments) SELECT true,$1,4,$2,$3 WHERE NOT EXISTS(SELECT 1 FROM {}.control WHERE id) ON CONFLICT DO NOTHING",self.namespace,self.namespace), &[&self.security.database_id,&self.admission_key_marker(),&self.security.keys.custody_markers(&self.security.database_id)]).await.map_err(unavailable)?;
         let custody=tx.query_one(&format!("SELECT database_id,admission_key_commitment,state_key_commitments,schema_version FROM {}.control WHERE id FOR UPDATE",self.namespace),&[]).await.map_err(unavailable)?;
         if custody.get::<_, String>(0) != self.security.database_id
             || custody.get::<_, String>(1) != self.admission_key_marker()
         {
             return Err(refused("state-key-custody","preserve the deployment database identity and stable admission key; recover original custody before apply"));
         }
-        if ![2, SCHEMA_VERSION].contains(&custody.get::<_, i32>(3)) {
+        if ![2, 3, SCHEMA_VERSION].contains(&custody.get::<_, i32>(3)) {
             return Err(refused(
                 "schema-version",
                 "apply with a Coordinator version supporting this database revision",
@@ -465,11 +465,15 @@ impl Store {
             ALTER TABLE {0}.jobs ADD COLUMN IF NOT EXISTS receipt_expired boolean NOT NULL DEFAULT false;
             ALTER TABLE {0}.jobs ADD COLUMN IF NOT EXISTS pure boolean NOT NULL DEFAULT false;
             ALTER TABLE {0}.jobs ADD COLUMN IF NOT EXISTS failure_code text", self.namespace)).await.map_err(unavailable)?;
-        // Only explicit apply installs this product-owned zero-attempt hold.
-        // The shared default shape and every other consumer remain unchanged.
+        // Only explicit apply changes stored spelling and installs this product's
+        // zero-attempt hold. Old workers must be stopped before the upgrade.
+        // No command, identity, lease, uncertainty or deadline is rewritten.
         tx.batch_execute(&format!("ALTER TABLE {0}.jobs DROP CONSTRAINT jobs_shape;
+            ALTER TABLE {0}.jobs DROP CONSTRAINT jobs_state_values;
+            UPDATE {0}.jobs SET state='dead-lettered' WHERE state='dead_lettered';
+            ALTER TABLE {0}.jobs ADD CONSTRAINT jobs_state_values CHECK ({3});
             ALTER TABLE {0}.jobs ADD CONSTRAINT jobs_shape CHECK (({1}) OR (
-                state='dead_lettered' AND attempt=0 AND command IS NULL
+                state='dead-lettered' AND attempt=0 AND command IS NULL
                 AND NOT uncertain AND NOT receipt_expired
                 AND next_attempt_at IS NULL AND attempt_started_at IS NULL
                 AND lease_expires_at IS NULL AND lease_token IS NULL
@@ -479,7 +483,7 @@ impl Store {
             ALTER TABLE {0}.control DROP CONSTRAINT control_schema_version_check;
             UPDATE {0}.control SET schema_version={2} WHERE id;
             ALTER TABLE {0}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version={2})",
-            self.namespace, JobTable::shape_predicate(), SCHEMA_VERSION)).await.map_err(unavailable)?;
+            self.namespace, JobTable::shape_predicate(), SCHEMA_VERSION, JobTable::state_predicate())).await.map_err(unavailable)?;
         self.verify_transaction(tx).await.map_err(unavailable)?;
         Ok(())
     }
@@ -717,7 +721,7 @@ impl Store {
     }
 
     fn status_select(&self) -> String {
-        format!("SELECT r.workflow_id,r.workflow_version,r.definition_digest,r.binding_digest,r.step,CASE WHEN r.restore_review_required THEN 'attention' WHEN r.cancel_requested THEN r.state WHEN r.state='finished' THEN 'finished' WHEN j.state IN ('pending','leased') THEN 'running' WHEN j.state='unknown' THEN 'attention' WHEN j.state='expired' THEN 'expired' WHEN j.state='dead_lettered' THEN 'failed' ELSE r.state END,r.outcome,r.failure_code,r.admitted_at,r.deadline_at,j.next_attempt_at,j.uncertain,r.terminal_output,r.run_id,r.restore_review_required,r.cancel_requested FROM {}.runs r JOIN {}.jobs j ON j.run_id=r.run_id AND j.step=r.step", self.namespace, self.namespace)
+        format!("SELECT r.workflow_id,r.workflow_version,r.definition_digest,r.binding_digest,r.step,CASE WHEN r.restore_review_required THEN 'attention' WHEN r.cancel_requested THEN r.state WHEN r.state='finished' THEN 'finished' WHEN j.state IN ('pending','leased') THEN 'running' WHEN j.state='unknown' THEN 'attention' WHEN j.state='expired' THEN 'expired' WHEN j.state='dead-lettered' THEN 'failed' ELSE r.state END,r.outcome,r.failure_code,r.admitted_at,r.deadline_at,j.next_attempt_at,j.uncertain,r.terminal_output,r.run_id,r.restore_review_required,r.cancel_requested FROM {}.runs r JOIN {}.jobs j ON j.run_id=r.run_id AND j.step=r.step", self.namespace, self.namespace)
     }
 
     pub async fn status(&self, run: Uuid) -> Result<RunStatus> {
@@ -877,7 +881,7 @@ impl Store {
             Some(RetryBlockReason::EvaluationUncertain)
         } else if !matches!(
             row.get::<_, String>(1).as_str(),
-            "unknown" | "dead_lettered"
+            "unknown" | "dead-lettered"
         ) {
             Some(RetryBlockReason::NotRecoverable)
         } else {

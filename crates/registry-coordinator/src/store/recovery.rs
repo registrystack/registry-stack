@@ -547,7 +547,7 @@ impl Store {
             return Ok(false);
         }
         match row.get::<_, String>(2).as_str() {
-            "unknown" | "dead_lettered" | "expired" | "delivered" => {}
+            "unknown" | "dead-lettered" | "expired" | "delivered" => {}
             "leased" if !row.get::<_, Option<bool>>(3).unwrap_or(true) => {}
             _ => return Ok(false),
         }
@@ -721,7 +721,7 @@ impl Store {
                 // Preserve the original command, generation, attempt, deadline
                 // and input. Clearing the token and leased state fences a prior
                 // paused worker; only a separate explicit replay may run again.
-                let changed = tx.execute(&format!("UPDATE {}.jobs j SET state='dead_lettered',next_attempt_at=NULL,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=NULL,expired_at=NULL,dead_lettered_at=clock_timestamp(),failure_code=$7,updated_at=clock_timestamp() WHERE j.run_id=$1 AND j.step=$2 AND j.generation=$3 AND j.attempt=$4 AND j.lease_token IS NOT DISTINCT FROM $5 AND j.state=$6 AND {eligible} AND NOT j.uncertain AND NOT j.receipt_expired", self.namespace), &[&run,&step,&row.get::<_,i64>(2),&row.get::<_,i16>(3),&row.get::<_,Option<Uuid>>(4),&row.get::<_,String>(7),&failure_code]).await.map_err(unavailable)?;
+                let changed = tx.execute(&format!("UPDATE {}.jobs j SET state='dead-lettered',next_attempt_at=NULL,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=NULL,expired_at=NULL,dead_lettered_at=clock_timestamp(),failure_code=$7,updated_at=clock_timestamp() WHERE j.run_id=$1 AND j.step=$2 AND j.generation=$3 AND j.attempt=$4 AND j.lease_token IS NOT DISTINCT FROM $5 AND j.state=$6 AND {eligible} AND NOT j.uncertain AND NOT j.receipt_expired", self.namespace), &[&run,&step,&row.get::<_,i64>(2),&row.get::<_,i16>(3),&row.get::<_,Option<Uuid>>(4),&row.get::<_,String>(7),&failure_code]).await.map_err(unavailable)?;
                 if changed != 1 {
                     return Err(invalid());
                 }

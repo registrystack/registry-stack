@@ -67,6 +67,75 @@ fn state_key_versions(active: u32, versions: &[&str]) -> Value {
 }
 
 #[test]
+fn removed_jwks_tag_names_the_shared_type_replacement_without_values() {
+    let mut document = yaml_value(SCHEDULING_RUNTIME).unwrap();
+    let jwks = document["deployment"]["authentication"]["jwksSource"]
+        .as_object_mut()
+        .unwrap();
+    jwks.remove("type");
+    jwks.insert("kind".into(), json!(CANARY));
+    let error = refused(&document.to_string());
+    let removed = error
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "config.removed-key")
+        .expect("the removed member names its replacement beside the missing type");
+    assert_eq!(removed.path, "/deployment/authentication/jwksSource/kind");
+    assert!(removed
+        .suggested_action
+        .contains("deployment.authentication.jwksSource.type"));
+    assert!(!error.to_string().contains(CANARY));
+    assert!(removed.source.as_ref().unwrap().line.is_some());
+}
+
+#[test]
+fn admitted_clients_must_be_explicit_and_restricted() {
+    let original = yaml_value(SCHEDULING_RUNTIME).unwrap();
+    #[cfg(feature = "schema")]
+    let schema: Value =
+        serde_json::from_str(&registry_coordinator::runtime::runtime_schema().unwrap()).unwrap();
+    #[cfg(feature = "schema")]
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    for (clients, code, pointer) in [
+        (None, "config.missing-key", "/deployment/authentication"),
+        (
+            Some(json!([])),
+            "config.invalid-value",
+            "/deployment/authentication/allowedClients",
+        ),
+        (
+            Some(json!("unrestricted")),
+            "coordinator.access.configuration",
+            "/deployment/authentication/allowedClients",
+        ),
+    ] {
+        let mut document = original.clone();
+        let authentication = document["deployment"]["authentication"]
+            .as_object_mut()
+            .unwrap();
+        match clients {
+            Some(value) => {
+                authentication.insert("allowedClients".into(), value);
+            }
+            None => {
+                authentication.remove("allowedClients");
+            }
+        }
+        let error = refused(&document.to_string());
+        assert_eq!(error.code, code);
+        assert_eq!(error.field.as_deref(), Some(pointer));
+        #[cfg(feature = "schema")]
+        assert!(!validator.is_valid(&document));
+    }
+    load(&original.to_string()).unwrap();
+    #[cfg(feature = "schema")]
+    assert!(validator.is_valid(&original));
+}
+
+#[test]
 fn state_key_versions_refuse_zero_before_resolving_secrets() {
     for (active, versions) in [(0, vec!["0"]), (1, vec!["0", "1"])] {
         let error = refused(&state_key_versions(active, &versions).to_string());

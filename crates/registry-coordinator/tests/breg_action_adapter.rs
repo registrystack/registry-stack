@@ -73,7 +73,7 @@ fn metadata() -> Value {
                  "fieldType":{"type":"reference", "target":"item", "onDelete":"restrict"}},
                 {"id":"label", "apiName":"label", "required":true,
                  "nullable":false, "classification":"internal",
-                 "fieldType":{"type":"string", "minLength":1, "maxLength":16}}
+                 "fieldType":{"type":"string", "minimumLength":1, "maximumLength":16}}
             ],
             "referenceInputs":[{"input":"target", "apiName":"targetId", "targetEntity":"item"}],
             "requiredConditionKeys":["targetId"],
@@ -85,7 +85,7 @@ fn metadata() -> Value {
                     "inputSchema":"action-update-item-invoke-input",
                     "responseSchema":"action-update-item-invoke-response"},
                 "targetConditions":{"method":"POST", "path":"/v1/actions/update-item/target-conditions",
-                    "operationId":"actions.update-item.target_conditions", "requiresIdempotencyKey":false,
+                    "operationId":"actions.update-item.target-conditions", "requiresIdempotencyKey":false,
                     "inputSchema":"action-update-item-target-conditions-input",
                     "responseSchema":"action-update-item-target-conditions-response"}
             },

@@ -835,7 +835,7 @@ fn resolve_local_subject_markers(
             if profiles.is_empty()
                 || profiles
                     .iter()
-                    .any(|profile| profile.principal_claim.as_deref() != Some("sub"))
+                    .any(|profile| profile.principal_claim != "sub")
             {
                 bail!("$localClientSubject is supported only as claims.principal for an authenticated sub access profile");
             }

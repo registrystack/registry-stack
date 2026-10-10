@@ -220,7 +220,7 @@ async fn fixture_job_state(
     state: &str,
     uncertain: bool,
 ) {
-    admin.execute(&format!("UPDATE {namespace}.jobs SET state=$2,uncertain=$3,attempt=GREATEST(attempt,1),next_attempt_at=CASE WHEN $2='pending' THEN clock_timestamp() ELSE NULL END,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=CASE WHEN $2='delivered' THEN clock_timestamp() ELSE NULL END,dead_lettered_at=CASE WHEN $2='dead_lettered' THEN clock_timestamp() ELSE NULL END,expired_at=CASE WHEN $2='expired' THEN clock_timestamp() ELSE NULL END,failure_code=NULL WHERE run_id=$1"), &[&run,&state,&uncertain]).await.unwrap();
+    admin.execute(&format!("UPDATE {namespace}.jobs SET state=$2,uncertain=$3,attempt=GREATEST(attempt,1),next_attempt_at=CASE WHEN $2='pending' THEN clock_timestamp() ELSE NULL END,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=CASE WHEN $2='delivered' THEN clock_timestamp() ELSE NULL END,dead_lettered_at=CASE WHEN $2='dead-lettered' THEN clock_timestamp() ELSE NULL END,expired_at=CASE WHEN $2='expired' THEN clock_timestamp() ELSE NULL END,failure_code=NULL WHERE run_id=$1"), &[&run,&state,&uncertain]).await.unwrap();
 }
 struct ServiceProcess(std::process::Child);
 impl std::ops::Deref for ServiceProcess {
@@ -645,7 +645,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     d["stateKeys"] = json!({"1":{"keyRef":"secret:file/state-key"}});
     d["admissionKeyRef"] = json!("secret:file/admission-key");
     d["auditKeyRef"] = json!("secret:file/audit-key");
-    d["authentication"] = json!({"issuer":issuer.issuer(),"audience":"urn:coordinator:test","scopeClaim":"scope","jwksSource":{"kind":"uri","uri":issuer.jwks_uri()},"allowedClients":["producer","operator"],"policies":[{"clientId":"producer","requiredScopes":["coordinator:start"],"flows":["delayed-follow-up"],"actions":["start","status"]},{"clientId":"operator","requiredScopes":["coordinator:operate"],"flows":["delayed-follow-up"],"actions":["status","inspect","retry-same","cancel","reconcile","doctor","restore-hold","release-restore-hold","release-admission-hold","complete-execution-recovery","retain"],"operator":true}]});
+    d["authentication"] = json!({"issuer":issuer.issuer(),"audience":"urn:coordinator:test","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},"allowedClients":["producer","operator"],"policies":[{"clientId":"producer","requiredScopes":["coordinator:start"],"flows":["delayed-follow-up"],"actions":["start","status"]},{"clientId":"operator","requiredScopes":["coordinator:operate"],"flows":["delayed-follow-up"],"actions":["status","inspect","retry-same","cancel","reconcile","doctor","restore-hold","release-restore-hold","release-admission-hold","complete-execution-recovery","retain"],"operator":true}]});
     fs::write(&path, serde_norway::to_string(&doc).unwrap()).unwrap();
     let runtime = Arc::new(RuntimeConfig::load(&path).unwrap());
     let package =
@@ -722,7 +722,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(checked["status"], "checked");
     assert_eq!(checked["databaseId"], "router-pilot-test");
     assert_eq!(checked["packageDigest"], digest);
-    assert_eq!(checked["schemaVersion"], 3);
+    assert_eq!(checked["schemaVersion"], 4);
     assert_eq!(checked["runtimeRole"], role);
     assert_eq!(checked["active"]["roleMode"], "split");
     status_doc["deployment"]["runtimeRole"] = json!("wrong_runtime_role");
@@ -1385,7 +1385,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     // A settled refusal is still recoverable through the original identity.
     // Apply must retain that run's bindings even while its job is dead-lettered.
     let run_id = Uuid::parse_str(id).unwrap();
-    admin.execute(&format!("UPDATE {namespace}.jobs SET state='dead_lettered',attempt=1,next_attempt_at=NULL,dead_lettered_at=clock_timestamp() WHERE run_id=$1"), &[&run_id]).await.unwrap();
+    admin.execute(&format!("UPDATE {namespace}.jobs SET state='dead-lettered',attempt=1,next_attempt_at=NULL,dead_lettered_at=clock_timestamp() WHERE run_id=$1"), &[&run_id]).await.unwrap();
     admin.execute(&format!("UPDATE {namespace}.runs SET state='failed',completed_at=clock_timestamp() WHERE run_id=$1"), &[&run_id]).await.unwrap();
     let binding = recovery_runtime
         .binding_digest_for(&recovery_package.definition.workflow)
@@ -1716,7 +1716,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     // Cancellation leaves a nonuncertain dead-lettered job settled; its retained
     // tombstone must never be decoded as a live definition during apply.
     let terminal_uuid = Uuid::parse_str(terminal_id).unwrap();
-    admin.execute(&format!("UPDATE {namespace}.jobs SET state='dead_lettered',attempt=1,next_attempt_at=NULL,dead_lettered_at=clock_timestamp() WHERE run_id=$1"), &[&terminal_uuid]).await.unwrap();
+    admin.execute(&format!("UPDATE {namespace}.jobs SET state='dead-lettered',attempt=1,next_attempt_at=NULL,dead_lettered_at=clock_timestamp() WHERE run_id=$1"), &[&terminal_uuid]).await.unwrap();
     admin.execute(&format!("UPDATE {namespace}.runs SET state='failed',completed_at=clock_timestamp() WHERE run_id=$1"), &[&terminal_uuid]).await.unwrap();
     let cancelled = http
         .post(format!("{origin}/v1/runs/{terminal_id}/cancel"))
@@ -1845,7 +1845,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         ("finished", "delivered"),
         ("failed", "delivered"),
         ("expired", "expired"),
-        ("cancelled", "dead_lettered"),
+        ("cancelled", "dead-lettered"),
         ("cancelled-after-effect", "delivered"),
     ] {
         admin.execute(&format!("UPDATE {namespace}.runs SET state=$2,cancel_requested=$3,restore_review_required=false WHERE run_id=$1"), &[&retired_run,&run_state,&run_state.starts_with("cancelled")]).await.unwrap();
@@ -1865,7 +1865,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     }
     for (run_state, job_state, uncertain, review) in [
         ("cancelled", "unknown", true, false),
-        ("failed", "dead_lettered", false, false),
+        ("failed", "dead-lettered", false, false),
         ("failed", "delivered", true, false),
         ("finished", "pending", false, false),
         ("cancelled", "expired", false, true),

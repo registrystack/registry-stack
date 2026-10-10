@@ -1006,7 +1006,7 @@ mod tests {
     fn deferred_authorization_requires_explicit_mode_and_bounded_duration() {
         let project: CaseworkProject = serde_json::from_value(serde_json::json!({
             "apiVersion": crate::CASEWORK_API_VERSION, "kind": crate::CASEWORK_KIND,
-            "casework": {"id":"tasks", "version":"1"},
+            "project": {"id":"tasks", "version":"1"},
             "accessProfiles":[{"id":"staff", "principalClaim":"sub", "requiredScopes":["casework:staff"], "role":"staff"}],
             "queues":[{"id":"review", "label":"Review"}],
             "sources":[{"id":"source", "adapter":"test", "description":"Test source", "requests":[{"entity":"request", "queue":"review"}]}]

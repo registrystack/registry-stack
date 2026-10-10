@@ -131,7 +131,7 @@ impl Messaging {
             "secretProviders":{"file":{"root":root.path()}},
             "database":{"runtimeUrlRef":"secret:file/database", "migrationUrlRef":"secret:file/database", "testOnlyPlaintext":true},
             "authentication":{"oidc":{"issuer":issuer.issuer(), "audience":"urn:example:messaging",
-                "jwksSource":{"kind":"static", "documentRef":"secret:file/jwks"}, "scopeClaim":"scope", "allowedClients":["case-system"]}},
+                "jwksSource":{"type":"static", "documentRef":"secret:file/jwks"}, "scopeClaim":"scope", "allowedClients":["case-system"]}},
             "audit":{"destination":"file", "path":root.path().join("audit/messaging.ndjson"), "hashKeyRef":"secret:file/audit-key"}
         })).unwrap()).unwrap();
         drop(listener);

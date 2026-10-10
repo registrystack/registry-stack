@@ -2526,7 +2526,7 @@ async fn failed_dead_letter_remains_recoverable_and_ineligible_for_retention() {
             .find(|row| row.step == "message")
             .unwrap()
             .state,
-        "dead_lettered"
+        "dead-lettered"
     );
     assert!(inspection.recovery.retry_allowed);
     assert_eq!(h.store.doctor().await.unwrap().terminal_payloads, 0);
@@ -2679,7 +2679,7 @@ async fn attested_expired_safe_leases_settle_without_dispatch_and_keep_original_
         let inspection = h.store.inspect(run, "binding-a").await.unwrap();
         assert_eq!(
             inspection.steps.last().unwrap().state,
-            "dead_lettered",
+            "dead-lettered",
             "{kind}"
         );
         assert_eq!(
@@ -2791,7 +2791,7 @@ async fn control_lock_timeout_preserves_the_prepared_read_for_explicit_recovery(
         .unwrap();
     assert_eq!(
         restored_current_job(&h, run).await["state"],
-        "dead_lettered"
+        "dead-lettered"
     );
     assert_eq!(restored_lease_identity(&h, run).await, identity);
     assert!(fake.requests.lock().unwrap().is_empty());
@@ -3047,7 +3047,7 @@ async fn attested_unprepared_mutations_remain_held_until_explicit_retry_or_cance
                 assert_eq!(restored_lease_identity(&h, run).await, identity);
                 assert_eq!(
                     restored_current_job(&h, run).await["state"],
-                    "dead_lettered"
+                    "dead-lettered"
                 );
                 assert!(
                     !worker.tick().await.unwrap(),
@@ -3158,7 +3158,7 @@ async fn restored_prepared_pending_mutations_require_explicit_retry_or_cancel() 
             assert!(fake.requests.lock().unwrap().is_empty());
             assert_eq!(
                 restored_current_job(&h, run).await["state"],
-                "dead_lettered"
+                "dead-lettered"
             );
             assert_eq!(restored_lease_identity(&h, run).await, identity);
             if cancel {
@@ -3251,7 +3251,7 @@ async fn restored_prepared_pending_keeps_deadline_and_cancelled_retention() {
             assert_eq!(restored_lease_identity(&h, run).await, identity);
             assert_eq!(
                 restored_current_job(&h, run).await["state"],
-                "dead_lettered"
+                "dead-lettered"
             );
             assert!(h.store.retry_same(run, "binding-a").await.is_err());
             assert!(!Worker::new(h.store.clone(), fake.clone())
@@ -3396,7 +3396,7 @@ async fn active_retryable_mutation_requires_repeated_recovery_before_hold_releas
         .unwrap();
     assert_eq!(
         restored_current_job(&h, run).await["state"],
-        "dead_lettered"
+        "dead-lettered"
     );
     assert_eq!(restored_lease_identity(&h, run).await, identity);
     fake.requests.lock().unwrap().clear();
@@ -3504,7 +3504,7 @@ async fn attested_recovery_preserves_active_mutating_unknown_and_uncertain_lease
                 .unwrap();
             assert_eq!(
                 restored_current_job(&h, run).await["state"],
-                "dead_lettered"
+                "dead-lettered"
             );
             assert_eq!(restored_lease_identity(&h, run).await, identity);
         }
