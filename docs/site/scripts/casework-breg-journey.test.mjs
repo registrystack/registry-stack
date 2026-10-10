@@ -36,7 +36,10 @@ test('the operated journey states result and recovery boundaries', () => {
   assert.match(tutorial, /`202` pending, `200` retained, `410` expired/u);
   assert.match(tutorial, /do not query\s+the database directly/u);
   assert.match(caseworkOperate, /same package, runtime file, and database/u);
-  assert.match(caseworkOperate, /no in-place legacy conversion command/u);
+  assert.match(
+    caseworkOperate,
+    /v0\.39\.0-to-v0\.40\.0 step requires a new\s+database; v0\.40\.0 supports no in-place upgrade from v0\.39\.0/u,
+  );
   assert.match(caseworkOperate, /does not summarize an individual\s+review/u);
   assert.match(bregOperate, /resumes the\s+durable review submission/u);
 });
