@@ -340,8 +340,8 @@ for a fresh one. See
 
 ## Restore Registry Messaging
 
-Stop every `messaging` runtime, preserve the current database unchanged, and restore the dump
-into a separate fresh database provisioned as
+Stop every `messaging` runtime. If the current database survives, preserve it unchanged. Restore
+the dump into a separate fresh database provisioned as
 [Provision PostgreSQL](../../messaging/#provision-postgresql) describes. Point a copy of the backed-up
 runtime file at that database, keeping its package and `identity.databaseId`. With the matching
 `messagingctl`, run `status --runtime-config FILE`, `messages list --runtime-config FILE`, and
@@ -349,12 +349,21 @@ runtime file at that database, keeping its package and `identity.databaseId`. Wi
 Check that the activation ledger names the backed-up package before you consider serving it.
 
 A restore rewinds submissions, dispatch jobs, attempts, receipts, and idempotency state. It cannot
-recall a provider send. Compare the backup-to-stop window with the preserved database, audit
-archive, and provider records. The list is bounded and newest first, so use the message identifiers
+recall a provider send. Establish what happened after the backup from the audit archive, provider
+records, and the current database when it survives. The list is bounded and newest first, so use the message identifiers
 from those records for `messages show` rather than treating one list as the complete lost window.
 Follow the [Messaging rollback procedure](../upgrade-and-retire/#roll-back) to reconcile eligible
-states. A new submission missing from the backup, or a send restored as `queued` that the tools
-cannot mark `submitted`, requires fixing forward with the preserved database.
+states. If the current database survives, fix forward with it when the backup cannot represent
+those effects.
+
+If the current database was lost, resume only when the evidence establishes that no post-backup
+message effects occurred, or that every effect can be represented through the supported actions.
+This release has no import for a missing post-backup submission and no action to mark an
+already-sent message restored as `queued` as `submitted`. When either gap exists, or the evidence
+cannot establish the lost window, keep the restore stopped and record that recovery from this
+backup cannot safely resume service. Do not rewrite database rows to bypass that limit. A stopped
+snapshot taken after the submission and dispatch drain and the callback providers' receipt cutoff
+and reconciliation, with no later submissions, sends, or receipts, avoids those gaps.
 
 Do not start the restored runtime merely to inspect it: the worker resumes queued dispatch as
 soon as it starts. Serve only after reconciliation shows the restored state can safely resume.
@@ -379,8 +388,10 @@ An adopted BReg copy delivers the webhooks pending in its backup, a restored Cas
 on the sources it names, Evidence reads the sources in its bundle, and Messaging resumes queued
 sends through its configured providers. Before starting anything, point every event destination,
 Casework source, Evidence source, Messaging provider and callback registration, and OpenID Connect
-client in the drill's runtime files at non-production systems. Use test provider credentials and
-keep the drill network unable to reach production.
+client in the drill's runtime files at non-production systems. For Messaging, use local SMTP and
+HTTP sinks that capture messages and cannot deliver them externally, with test credentials and
+callback registrations. Keep the drill and its sinks unable to reach real providers, recipients,
+or production systems. Test credentials alone do not prevent delivery to a real recipient.
 :::
 
 1. Restore the latest BReg and Casework backups onto drill hosts, and redeploy Evidence, using only
@@ -394,18 +405,29 @@ keep the drill network unable to reach production.
    is sound here only because the drill network cannot reach production or its clients.
 3. Run `bregctl doctor`, `caseworkctl doctor`, and `evidence check
    --require-runtime-dependencies`, start BReg, Casework, and Evidence, and wait for `GET /ready`
-   on each. Keep Messaging stopped throughout its restore and upgrade rehearsal.
+   on each. Keep Messaging stopped until step 5.
 4. Read a known record through BReg, a known work item through Casework, and a synthetic assertion
    through Evidence. Read one encrypted field, when the project encrypts one, to prove the
    field-encryption key restored.
-5. For a Messaging upgrade rehearsal, keep the restored runtime stopped. With the target release's
-   `messagingctl`, run `plan --runtime-config FILE` and `apply --runtime-config FILE` on the drill
-   copy, then inspect `status`, `messages list`, and `messages show` again with the same runtime
-   file. Check the activation and the reconciled dispatch state before upgrading production.
+5. For Messaging, keep the restored runtime stopped until reconciliation succeeds. For an upgrade
+   rehearsal, use the target release's `messagingctl` to run `plan --runtime-config FILE` and
+   `apply --runtime-config FILE` on the drill copy, then inspect `status`, `messages list`, and
+   `messages show` again with that file. Configure its providers to use the isolated capture sinks.
+   For a local plaintext SMTP sink, use a loopback listener with `tlsTermination:
+   development-loopback`, and set the provider's `tls: development-loopback` and explicit `port`.
+   An HTTP sink may use a loopback `http` base URL. After checking the activation, dispatch state,
+   and isolation, start the matching `messaging --runtime-config FILE serve`, require `GET /ready`
+   to answer `200`, then stop it gracefully. Failed reconciliation or readiness makes the drill
+   fail; do not record a successful service recovery from stopped-copy inspection alone.
 6. Open the shipped audit archive for the period before the backup, and confirm every file is
    there and ends with a complete entry, including both Messaging streams when it runs.
 7. Record the backup time, the restore time, the measured recovery time, and every step that
    failed, and destroy the drill hosts and their copies of the secrets.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, Keys and Providers;
+    crates/registry-messaging/src/config.rs, TlsTermination::DevelopmentLoopback;
+    crates/registry-messaging/src/runtime.rs, assemble() and Listeners::serve_until();
+    crates/registry-messaging/src/http.rs, Readiness and ready(). */}
 
 ## Next
 
