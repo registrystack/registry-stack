@@ -230,6 +230,138 @@ fn uncertain() -> CallOutcome {
     }
 }
 
+struct PreparedFake {
+    preparations: std::sync::atomic::AtomicUsize,
+    calls: Mutex<Vec<(CallRequest, Vec<u8>)>>,
+    refuse_preparation: bool,
+}
+
+#[async_trait]
+impl AdapterSet for PreparedFake {
+    fn binding_digest(&self) -> &str {
+        "binding-a"
+    }
+
+    async fn prepare(&self, request: &CallRequest) -> Result<Option<Vec<u8>>, CallOutcome> {
+        if request.operation.is_read() {
+            return Ok(None);
+        }
+        if self.refuse_preparation {
+            return Err(CallOutcome::Refused {
+                code: "product-forbidden".into(),
+            });
+        }
+        let count = self
+            .preparations
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Some(
+            format!("original-target-condition-canary-{count}").into_bytes(),
+        ))
+    }
+
+    async fn call(&self, request: &CallRequest) -> CallOutcome {
+        assert!(
+            request.operation.is_read(),
+            "mutations require persisted preparation"
+        );
+        CallOutcome::Success(json!({"allowed":true,"contact":"synthetic@example.invalid"}))
+    }
+
+    async fn call_prepared(&self, request: &CallRequest, bytes: Option<&[u8]>) -> CallOutcome {
+        if request.operation.is_read() {
+            return self.call(request).await;
+        }
+        let mut calls = self.calls.lock().unwrap();
+        calls.push((request.clone(), bytes.expect("frozen bytes").to_vec()));
+        if calls.len() == 1 {
+            uncertain()
+        } else {
+            CallOutcome::Success(json!({"messageId":"original-action-receipt"}))
+        }
+    }
+}
+
+#[tokio::test]
+async fn prepared_command_survives_restart_without_refreshing_conditions_or_key() {
+    let mut h = harness().await;
+    std::fs::write(
+        h.project.path().join("workflow.yaml"),
+        WORKFLOW
+            .replace("messages: messaging", "messages: breg")
+            .replace("operation: submit-message", "operation: invoke-breg-action"),
+    )
+    .unwrap();
+    h.definition = Definition::load(h.project.path()).unwrap();
+    let run = h.admit().await;
+    let fake = Arc::new(PreparedFake {
+        preparations: std::sync::atomic::AtomicUsize::new(0),
+        calls: Mutex::new(Vec::new()),
+        refuse_preparation: false,
+    });
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    reach_message(&worker).await;
+    worker.tick().await.unwrap();
+    assert_eq!(h.store.status(run).await.unwrap().state, "attention");
+    let inspection = h.store.inspect(run, "binding-a").await.unwrap();
+    assert_eq!(
+        inspection.recovery.operation,
+        Some(Operation::InvokeBregAction.identity())
+    );
+    assert!(!serde_json::to_string(&inspection)
+        .unwrap()
+        .contains("original-target-condition"));
+    drop(worker);
+    let reopened = Arc::new(Store::connect(&h.url, &h.namespace).await.unwrap());
+    reopened.retry_same(run, "binding-a").await.unwrap();
+    let worker = Worker::new(reopened.clone(), fake.clone());
+    worker.tick().await.unwrap();
+    worker.tick().await.unwrap();
+    assert_eq!(reopened.status(run).await.unwrap().state, "finished");
+    assert_eq!(
+        fake.preparations.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    let calls = fake.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(
+        serde_json::to_value(&calls[0].0).unwrap(),
+        serde_json::to_value(&calls[1].0).unwrap()
+    );
+    assert_eq!(calls[0].1, calls[1].1);
+}
+
+#[tokio::test]
+async fn refused_preparation_never_dispatches_or_claims_an_uncertain_mutation() {
+    let mut h = harness().await;
+    std::fs::write(
+        h.project.path().join("workflow.yaml"),
+        WORKFLOW
+            .replace("messages: messaging", "messages: breg")
+            .replace("operation: submit-message", "operation: invoke-breg-action"),
+    )
+    .unwrap();
+    h.definition = Definition::load(h.project.path()).unwrap();
+    let run = h.admit().await;
+    let fake = Arc::new(PreparedFake {
+        preparations: std::sync::atomic::AtomicUsize::new(0),
+        calls: Mutex::new(Vec::new()),
+        refuse_preparation: true,
+    });
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    reach_message(&worker).await;
+    worker.tick().await.unwrap();
+    let inspection = h.store.inspect(run, "binding-a").await.unwrap();
+    assert_eq!(inspection.run.state, "failed");
+    assert!(!inspection.run.uncertain);
+    let step = inspection
+        .steps
+        .iter()
+        .find(|step| step.step == "message")
+        .unwrap();
+    assert!(!step.command_prepared);
+    assert!(fake.calls.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn admission_is_atomic_deduplicates_equal_input_and_rejects_changed_input() {
     let h = harness().await;
@@ -904,12 +1036,22 @@ async fn bounded_listing_and_inspection_use_durable_dispatch_metadata() {
         prepared.recovery.reason,
         Some(RetryBlockReason::NotRecoverable)
     );
+    assert!(prepared.recovery.operation.is_none());
     let fake = Fake::new(vec![uncertain()]);
     let worker = Worker::new(h.store.clone(), fake);
     reach_message(&worker).await;
     worker.tick().await.unwrap();
     let inspection = h.store.inspect(run, "binding-a").await.unwrap();
     assert!(inspection.recovery.retry_allowed);
+    assert_eq!(
+        inspection.recovery.operation,
+        Some(Operation::SubmitMessage.identity())
+    );
+    let schema =
+        registry_coordinator::http::openapi()["components"]["schemas"]["OperationIdentity"].clone();
+    assert!(jsonschema::JSONSchema::compile(&schema)
+        .unwrap()
+        .is_valid(&serde_json::to_value(&inspection.recovery.operation).unwrap()));
     let message = inspection
         .steps
         .iter()
@@ -942,6 +1084,7 @@ async fn bounded_listing_and_inspection_use_durable_dispatch_metadata() {
     worker.tick().await.unwrap();
     let completed = h.store.inspect(run, "binding-a").await.unwrap();
     assert_eq!(completed.run.state, "finished");
+    assert!(completed.recovery.operation.is_none());
     let message = completed
         .steps
         .iter()
@@ -953,6 +1096,36 @@ async fn bounded_listing_and_inspection_use_durable_dispatch_metadata() {
         completed.recovery.reason,
         Some(RetryBlockReason::NotRecoverable)
     );
+}
+
+#[tokio::test]
+async fn inspection_reports_read_capability_from_the_original_v3_snapshot() {
+    let mut h = harness().await;
+    let mut snapshot: Value = serde_json::from_str(&h.definition.snapshot().unwrap()).unwrap();
+    snapshot["adapterAbi"] = json!("coordinator/product-operations/v3");
+    snapshot
+        .as_object_mut()
+        .unwrap()
+        .remove("operationIdentities");
+    let snapshot =
+        String::from_utf8(registry_platform_canonical_json::canonicalize_json(&snapshot).unwrap())
+            .unwrap();
+    h.definition = Definition::from_snapshot(&snapshot).unwrap();
+    let run = h.admit().await;
+    let worker = Worker::new(h.store.clone(), Fake::new(vec![]));
+    assert!(worker.tick().await.unwrap());
+    let inspection = h.store.inspect(run, "binding-a").await.unwrap();
+    assert_eq!(inspection.run.step, "read");
+    assert_eq!(
+        inspection.recovery.operation,
+        Some(Operation::ReadRecord.identity())
+    );
+    assert!(!inspection.recovery.retry_allowed);
+    assert_eq!(
+        inspection.recovery.reason,
+        Some(RetryBlockReason::NotRecoverable)
+    );
+    assert_eq!(h.definition.snapshot().unwrap(), snapshot);
 }
 
 #[tokio::test]
@@ -973,6 +1146,10 @@ async fn inspection_refuses_recovery_after_deadline_receipt_expiry_and_unsupport
         Some(RetryBlockReason::DeadlineReached)
     );
     assert!(!inspection.recovery.retry_allowed);
+    assert_eq!(
+        inspection.recovery.operation,
+        Some(Operation::SubmitMessage.identity())
+    );
 
     let other = harness().await;
     let run = other.admit().await;
@@ -999,6 +1176,14 @@ async fn inspection_refuses_recovery_after_deadline_receipt_expiry_and_unsupport
     reach_message(&worker).await;
     worker.tick().await.unwrap();
     old.incompatible_snapshot(run).await;
+    assert!(old
+        .store
+        .inspect(run, "binding-a")
+        .await
+        .unwrap()
+        .recovery
+        .operation
+        .is_none());
     assert_eq!(
         old.store
             .inspect(run, "binding-a")
@@ -1975,6 +2160,14 @@ async fn expired_settled_payloads_are_erased_but_live_uncertain_and_restored_wor
         assert_eq!(row.get::<_, bool>(0), guard.is_none());
         assert_eq!(row.get::<_, bool>(1), guard.is_none());
         if guard.is_none() {
+            let inspection = h
+                .store
+                .inspect_owned(run, "binding-a", &owner)
+                .await
+                .unwrap();
+            assert!(serde_json::to_value(&inspection).unwrap()["recovery"]
+                .get("operation")
+                .is_none());
             assert_eq!(
                 h.store
                     .admit_owned(&h.definition, original, &owner, "expired-key", "binding-a")

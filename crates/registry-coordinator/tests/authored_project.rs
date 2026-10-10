@@ -25,7 +25,7 @@ fn write_project(root: &Path, project: &Value, source: &str) {
 }
 
 #[test]
-fn authored_project_converts_to_the_existing_snapshot_abi() {
+fn authored_project_converts_to_the_versioned_snapshot_abi() {
     let root = tempfile::tempdir().unwrap();
     write_project(root.path(), &project(), "fn identity(input) { input }");
     let definition = Definition::load(root.path()).unwrap();
@@ -42,7 +42,7 @@ fn authored_project_converts_to_the_existing_snapshot_abi() {
         frozen["workflow"]["steps"]["done"]["output"]["arguments"],
         json!(["input"])
     );
-    assert_eq!(frozen["adapterAbi"], "coordinator/product-operations/v3");
+    assert_eq!(frozen["adapterAbi"], "coordinator/product-operations/v4");
     let restored = Definition::from_snapshot(&snapshot).unwrap();
     assert_eq!(restored.digest, definition.digest);
     assert_eq!(restored.workflow, definition.workflow);

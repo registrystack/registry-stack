@@ -299,13 +299,14 @@ impl Store {
             let step:String=row.get(0);let generation:i64=row.get(3);
             if row.get::<_,String>(6)!=binding || row.get::<_,String>(4)=="leased" && row.get::<_,Option<bool>>(7).unwrap_or(true){return Err(refused("reconcile-refused","preserve the original binding and wait for the active lease to settle"));}
             let sealed:Option<Value>=row.get(2);
-            let command:CallRequest=self.open_value(run,"command",&step,sealed.as_ref().ok_or_else(||refused("reconcile-refused","the run has no prepared product command"))?)?;
-            if !command.operation.is_mutating(){return Err(refused("reconcile-refused","use same-command retry for a read operation"));}
+            let command:FrozenCommand=self.open_value(run,"command",&step,sealed.as_ref().ok_or_else(||refused("reconcile-refused","the run has no prepared product command"))?)?;
+            if !command.request().operation.is_mutating(){return Err(refused("reconcile-refused","use same-command retry for a read operation"));}
+            if !command.request().operation.supports_read_receipt(){return Err(refused("reconciliation-unavailable","this operation has no authoritative receipt lookup; inspect its same-command retry capability and original authority before recovery"));}
             let snapshot:String=self.open_value(run,"snapshot","",&row.get::<_,Value>(1))?;
             let definition=Definition::from_snapshot(&snapshot)?;
             let outputs:BTreeMap<String,Value>=self.open_value(run,"outputs","",&row.get::<_,Value>(5))?;
             tx.commit().await.map_err(unavailable)?;
-            let observation=tokio::time::timeout(Duration::from_secs(10),adapters.reconcile(&command,outputs.get(&step))).await;
+            let observation=tokio::time::timeout(Duration::from_secs(10),adapters.reconcile(command.request(),outputs.get(&step))).await;
             if let Ok(ReconciliationOutcome::Confirmed(value))=observation {
                 crate::functions::check_value(&value)?;
                 let tx=client.transaction().await.map_err(unavailable)?;
@@ -568,7 +569,7 @@ impl Store {
                     .map_err(|_| invalid())?;
                 let definition = Definition::from_snapshot(&snapshot).map_err(|_| invalid())?;
                 let sealed: Option<Value> = row.get(5);
-                let command: Option<CallRequest> = sealed
+                let command: Option<FrozenCommand> = sealed
                     .as_ref()
                     .map(|value| self.open_value(run, "command", &step, value))
                     .transpose()
@@ -579,8 +580,8 @@ impl Store {
                     Some(Step::Call { call, .. }) => {
                         if pure
                             || command.as_ref().is_some_and(|command| {
-                                command.operation != call.operation
-                                    || command.connection != call.connection
+                                command.request().operation != call.operation
+                                    || command.request().connection != call.connection
                             })
                         {
                             return Err(invalid());

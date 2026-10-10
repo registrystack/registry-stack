@@ -19,7 +19,7 @@ use registry_platform_dispatch::postgres::{
 use registry_platform_dispatch::{
     AttemptTimeoutBound, DispatchError, JobPolicy, RetrySchedule, UncertainOutcome,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
@@ -135,6 +135,9 @@ pub enum RetryBlockReason {
 pub struct RecoveryStatus {
     pub retry_allowed: bool,
     pub reason: Option<RetryBlockReason>,
+    /// Pinned public contract, not proof of current downstream authority.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation: Option<crate::operations::OperationIdentity>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -169,7 +172,50 @@ pub(crate) struct Payload {
     pub snapshot: String,
     pub input: Value,
     pub outputs: BTreeMap<String, Value>,
-    pub command: Option<CallRequest>,
+    pub command: Option<FrozenCommand>,
+}
+
+/// Old commands remain readable without rewriting their protected bytes. A
+/// prepared command additionally carries opaque evidence owned by its client;
+/// these bytes never contain credentials and never grant current authority.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum FrozenCommand {
+    Prepared(PreparedCommand),
+    Legacy(CallRequest),
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PreparedCommand {
+    request: CallRequest,
+    preparation: Vec<u8>,
+}
+
+impl FrozenCommand {
+    pub(crate) fn new(request: CallRequest, preparation: Option<Vec<u8>>) -> Self {
+        match preparation {
+            Some(preparation) => Self::Prepared(PreparedCommand {
+                request,
+                preparation,
+            }),
+            None => Self::Legacy(request),
+        }
+    }
+
+    pub(crate) fn request(&self) -> &CallRequest {
+        match self {
+            Self::Prepared(command) => &command.request,
+            Self::Legacy(request) => request,
+        }
+    }
+
+    pub(crate) fn preparation(&self) -> Option<&[u8]> {
+        match self {
+            Self::Prepared(command) => Some(&command.preparation),
+            Self::Legacy(_) => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -795,6 +841,16 @@ impl Store {
             }
         };
         let snapshot: Option<Value> = row.get(0);
+        let definition = snapshot
+            .as_ref()
+            .and_then(|value| self.open_value::<String>(run, "snapshot", "", value).ok())
+            .and_then(|snapshot| Definition::from_snapshot(&snapshot).ok());
+        let operation = definition.as_ref().and_then(|definition| {
+            match definition.workflow.steps.get(&status.step) {
+                Some(Step::Call { call, .. }) => Some(call.operation.identity()),
+                _ => None,
+            }
+        });
         let reason = if row.get::<_, Option<DateTime<Utc>>>(5).is_some() {
             Some(RetryBlockReason::PayloadErased)
         } else if status.binding_digest != current_binding_digest {
@@ -809,11 +865,7 @@ impl Store {
             Some(RetryBlockReason::Cancelled)
         } else if row.get::<_, bool>(6) {
             Some(RetryBlockReason::RestoreHold)
-        } else if snapshot
-            .as_ref()
-            .and_then(|value| self.open_value::<String>(run, "snapshot", "", value).ok())
-            .is_none_or(|snapshot| Definition::from_snapshot(&snapshot).is_err())
-        {
+        } else if definition.is_none() {
             Some(RetryBlockReason::SnapshotIncompatible)
         } else if !matches!(
             row.get::<_, String>(1).as_str(),
@@ -830,6 +882,7 @@ impl Store {
             recovery: RecoveryStatus {
                 retry_allowed: reason.is_none(),
                 reason,
+                operation,
             },
         })
     }
@@ -921,12 +974,12 @@ impl Store {
         .map_err(unavailable)
     }
 
-    /// Freeze the exact command under a live fence before any remote call.
+    /// Freeze the exact dispatch command under a live fence before any effect.
     pub(crate) async fn freeze(
         &self,
         job: &LeasedJob<Job>,
-        command: CallRequest,
-    ) -> Result<CallRequest> {
+        command: FrozenCommand,
+    ) -> Result<FrozenCommand> {
         let mut client = self.client().await.map_err(unavailable)?;
         let tx = client.transaction().await.map_err(unavailable)?;
         let fence = job.fence();

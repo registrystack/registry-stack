@@ -243,6 +243,44 @@ fn missing_appointment_task_authority_is_located_in_the_runtime_binding() {
 }
 
 #[test]
+fn missing_external_binding_names_its_runtime_container_and_repair() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    fs::write(
+        root.join("workflow.yaml"),
+        include_str!("../../../products/coordinator/examples/external-directory/workflow.yaml"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("functions.rhai"),
+        include_str!("../../../products/coordinator/examples/external-directory/functions.rhai"),
+    )
+    .unwrap();
+    let runtime =
+        include_str!("../../../products/coordinator/examples/external-directory/runtime.yaml");
+    fs::write(
+        root.join("runtime.yaml"),
+        runtime.replace("  directory:", "  unbound-directory:"),
+    )
+    .unwrap();
+    let (exit, report) = check(&root, &[]);
+    assert_eq!(exit, 1);
+    let findings = report["diagnostics"].as_array().unwrap();
+    assert_eq!(findings.len(), 1, "{report}");
+    assert_eq!(findings[0]["code"], "coordinator.runtime.workflow-binding");
+    assert_eq!(findings[0]["path"], "/externalHttpConnections/directory");
+    assert!(findings[0]["source"]["line"]
+        .as_u64()
+        .is_some_and(|line| line > 2));
+    assert!(findings[0]["suggestedAction"]
+        .as_str()
+        .unwrap()
+        .contains("externalHttpConnections.directory"));
+    fs::write(root.join("runtime.yaml"), runtime).unwrap();
+    assert_eq!(check(&root, &[]).0, 0);
+}
+
+#[test]
 fn project_check_skips_custody_warns_for_children_and_deduplicates_explicit_runtime() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();

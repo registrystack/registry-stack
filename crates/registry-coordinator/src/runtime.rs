@@ -101,6 +101,75 @@ pub struct AuthorizationConfig {
     pub scopes: Vec<String>,
 }
 
+impl AuthorizationConfig {
+    pub(crate) fn findings(
+        &self,
+        field: &str,
+        secrets: Option<&SecretProvidersConfig>,
+    ) -> Vec<PocError> {
+        let mut errors = Vec::new();
+        check_endpoint(&self.token_endpoint).map_err(|_| config_error(&format!("{field}.tokenEndpoint"), "use an HTTPS token endpoint or explicit loopback HTTP IP URL without credentials, query or fragment")).unwrap_or_else(|error| errors.push(error));
+        if self.client_id.trim().is_empty() || self.client_id.len() > 256 {
+            errors.push(config_error(
+                &format!("{field}.clientId"),
+                "supply a bounded client identity registered with the configured issuer",
+            ));
+        }
+        if !valid_resource_uri(&self.resource) {
+            errors.push(config_error(&format!("{field}.resource"),
+                    "declare one bounded absolute resource URI without credentials, whitespace or fragment"));
+        }
+        if self
+            .client_assertion_audience
+            .as_ref()
+            .is_some_and(|audience| !valid_resource_uri(audience))
+        {
+            errors.push(config_error(
+                &format!("{field}.clientAssertionAudience"),
+                "declare the issuer's bounded absolute client assertion audience URI",
+            ));
+        }
+        for (index, scope) in self.scopes.iter().enumerate() {
+            if !valid_scope_token(scope) {
+                errors.push(config_error(&format!("{field}.scopes[{index}]"),
+                        "declare one OAuth scope token per item, without whitespace or control characters"));
+            }
+        }
+        validate_requested_scopes(&self.scopes)
+            .map_err(|error| config_error(&format!("{field}.scopes"), &error.to_string()))
+            .unwrap_or_else(|error| errors.push(error));
+        if self.signing_key_ref.provider() != SecretProvider::File {
+            errors.push(config_error(
+                &format!("{field}.signingKeyRef"),
+                "use secret:file/name for the client signing key",
+            ));
+        }
+        if let Some(secrets) = secrets {
+            errors.extend(self.secret_reference_finding(field, secrets));
+        }
+        errors
+    }
+
+    fn secret_reference_finding(
+        &self,
+        field: &str,
+        secrets: &SecretProvidersConfig,
+    ) -> Option<PocError> {
+        secrets
+            .check_reference(
+                &format!("{field}.signingKeyRef"),
+                self.signing_key_ref.as_str(),
+            )
+            .err()
+            .map(|_| {
+                config_error(
+                    &format!("{field}.signingKeyRef"),
+                    "enable secretProviders.file for the client signing key",
+                )
+            })
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -132,9 +201,23 @@ pub struct RuntimeConfig {
     pub database: DatabaseConfig,
     #[cfg_attr(feature="schema", schemars(extend("pattern"="^coordinator_[a-z0-9_]*$", "maxLength"=60)))]
     pub namespace: String,
-    #[serde(deserialize_with = "connection_keys")]
-    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<registry_platform_yaml::LocalId, ConnectionConfig>", extend("minProperties" = 1, "maxProperties" = 16)))]
+    /// Omitted means no product bindings; external-only deployments may omit it.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "connection_keys"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<registry_platform_yaml::LocalId, ConnectionConfig>", extend("maxProperties" = 16)))]
     pub connections: BTreeMap<String, ConnectionConfig>,
+    /// Omitted means external HTTP is unavailable. Names share the product
+    /// connection namespace and never provide authority to select other origins.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "external_connection_keys"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<registry_platform_yaml::LocalId, crate::external_http::ExternalHttpConfig>", extend("maxProperties" = 16)))]
+    pub external_http_connections: BTreeMap<String, crate::external_http::ExternalHttpConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployment: Option<crate::deployment::DeploymentConfig>,
 }
@@ -236,10 +319,12 @@ impl RuntimeConfig {
                 "use a coordinator_ namespace with lowercase letters, digits or underscores",
             ));
         }
-        if self.connections.is_empty() || self.connections.len() > 16 {
+        if self.connections.len() + self.external_http_connections.len() == 0
+            || self.connections.len() + self.external_http_connections.len() > 16
+        {
             errors.push(config_error(
                 "connections",
-                "declare between one and sixteen logical product connections",
+                "declare between one and sixteen product or external HTTP connections",
             ));
         }
         if let Some(deployment) = &self.deployment {
@@ -263,7 +348,6 @@ impl RuntimeConfig {
                     )
                 })
                 .unwrap_or_else(|error| errors.push(error));
-            check_endpoint(&binding.authorization.token_endpoint).map_err(|_| config_error(&format!("{field}.authorization.tokenEndpoint"), "use an HTTPS token endpoint or explicit loopback HTTP IP URL without credentials, query or fragment")).map(|_| ()).unwrap_or_else(|error| errors.push(error));
             if binding.product == Product::Scheduling
                 && binding.authorization.task_authority.is_some()
                 && binding.observation_authorization.is_none()
@@ -316,37 +400,10 @@ impl RuntimeConfig {
                     .unwrap_or_else(|error| errors.push(error));
             }
             let auth = &binding.authorization;
-            if auth.client_id.trim().is_empty() || auth.client_id.len() > 256 {
-                errors.push(config_error(
-                    &format!("{field}.authorization.clientId"),
-                    "supply a bounded client identity registered with the configured issuer",
-                ));
-            }
-            if !valid_resource_uri(&auth.resource) {
-                errors.push(config_error(&format!("{field}.authorization.resource"),
-                    "declare one bounded absolute resource URI without credentials, whitespace or fragment"));
-            }
-            if auth
-                .client_assertion_audience
-                .as_ref()
-                .is_some_and(|audience| !valid_resource_uri(audience))
-            {
-                errors.push(config_error(
-                    &format!("{field}.authorization.clientAssertionAudience"),
-                    "declare the issuer's bounded absolute client assertion audience URI",
-                ));
-            }
-            for (index, scope) in auth.scopes.iter().enumerate() {
-                if !valid_scope_token(scope) {
-                    errors.push(config_error(&format!("{field}.authorization.scopes[{index}]"),
-                        "declare one OAuth scope token per item, without whitespace or control characters"));
-                }
-            }
-            validate_requested_scopes(&auth.scopes)
-                .map_err(|error| {
-                    config_error(&format!("{field}.authorization.scopes"), &error.to_string())
-                })
-                .unwrap_or_else(|error| errors.push(error));
+            errors.extend(auth.findings(
+                &format!("{field}.authorization"),
+                Some(&self.secret_providers),
+            ));
             if let Some(task) = &auth.task_authority {
                 if !matches!(binding.product, Product::Breg | Product::Scheduling) {
                     errors.push(config_error(
@@ -389,24 +446,6 @@ impl RuntimeConfig {
                     }
                 }
             }
-            if auth.signing_key_ref.provider() != SecretProvider::File {
-                errors.push(config_error(
-                    &format!("{field}.authorization.signingKeyRef"),
-                    "use secret:file/name for the client signing key",
-                ));
-            }
-            self.secret_providers
-                .check_reference(
-                    &format!("{field}.authorization.signingKeyRef"),
-                    auth.signing_key_ref.as_str(),
-                )
-                .map_err(|_| {
-                    config_error(
-                        &format!("{field}.authorization.signingKeyRef"),
-                        "enable secretProviders.file for the client signing key",
-                    )
-                })
-                .unwrap_or_else(|error| errors.push(error));
             match binding.product {
                 Product::Breg
                     if binding.profile.as_ref().is_none_or(|p| {
@@ -415,7 +454,7 @@ impl RuntimeConfig {
                 {
                     errors.push(config_error(
                         &format!("{field}.profile"),
-                        "declare a bounded BReg reader access profile accepted by the BReg client",
+                        "declare a bounded BReg access profile accepted by the BReg client",
                     ));
                 }
                 Product::Messaging | Product::Scheduling if binding.profile.is_some() => {
@@ -427,11 +466,42 @@ impl RuntimeConfig {
                 _ => {}
             }
         }
+        for (name, binding) in &self.external_http_connections {
+            let field = format!("externalHttpConnections.{name}");
+            if name.parse::<registry_platform_yaml::LocalId>().is_err()
+                || self.connections.contains_key(name)
+            {
+                errors.push(config_error(
+                    &field,
+                    "use a valid logical connection name not already declared in connections",
+                ));
+            }
+            errors.extend(binding.findings(&field));
+            if let Some(auth) = &binding.authorization {
+                errors.extend(auth.secret_reference_finding(
+                    &format!("{field}.authorization"),
+                    &self.secret_providers,
+                ));
+            }
+        }
         errors
     }
 
     pub fn validate_workflow(&self, workflow: &crate::definition::Workflow) -> Result<()> {
         for (name, product) in &workflow.connections {
+            if product == "external-http" {
+                if !self.external_http_connections.contains_key(name) {
+                    return Err(PocError::new(
+                        "workflow-binding",
+                        "the declared workflow connection has no matching external HTTP binding",
+                    )
+                    .at("runtime.yaml", format!("externalHttpConnections.{name}"))
+                    .suggest(format!(
+                        "Configure externalHttpConnections.{name} in runtime.yaml using the workflow's logical connection name.",
+                    )));
+                }
+                continue;
+            }
             let expected = match product.as_str() {
                 "breg" => Product::Breg,
                 "messaging" => Product::Messaging,
@@ -460,6 +530,16 @@ impl RuntimeConfig {
         }
         for (name, step) in &workflow.steps {
             if let crate::definition::Step::Call { call, .. } = step {
+                if call.operation == crate::protocol::Operation::InvokeBregAction
+                    && self
+                        .connections
+                        .get(&call.connection)
+                        .is_some_and(|binding| binding.authorization.task_authority.is_some())
+                {
+                    return Err(PocError::new("workflow-binding", "governed action invocation requires an explicitly permitted BReg service profile")
+                        .at("workflow.yaml", format!("steps.{name}.call"))
+                        .suggest("Use a separately authorized BReg connection without taskAuthority for this operation; task authority cannot fall back to service authority."));
+                }
                 if call.operation == crate::protocol::Operation::CreateAppointment
                     && self
                         .connections
@@ -483,7 +563,12 @@ impl RuntimeConfig {
 
     /// Configured semantic identity only. No secret is resolved or endpoint contacted.
     pub fn binding_digest(&self) -> Result<String> {
-        self.binding_digest_names(self.connections.keys().map(String::as_str))
+        self.binding_digest_names(
+            self.connections
+                .keys()
+                .chain(self.external_http_connections.keys())
+                .map(String::as_str),
+        )
     }
 
     /// Hash only this workflow's bindings. Unrelated deployment additions are compatible.
@@ -496,6 +581,43 @@ impl RuntimeConfig {
         self.validate()?;
         let mut identities = BTreeMap::new();
         for name in names {
+            if let Some(binding) = self.external_http_connections.get(name) {
+                let mut identity = serde_json::to_value(binding).map_err(|_| {
+                    config_error(
+                        "externalHttpConnections",
+                        "correct the external binding model",
+                    )
+                })?;
+                if let Some(auth) = identity
+                    .get_mut("authorization")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    auth.remove("signingKeyRef");
+                    if !auth.contains_key("clientAssertionAudience") {
+                        if let Some(endpoint) = auth.get("tokenEndpoint").cloned() {
+                            auth.insert("clientAssertionAudience".into(), endpoint);
+                        }
+                    }
+                    if let Some(scopes) = auth
+                        .get_mut("scopes")
+                        .and_then(serde_json::Value::as_array_mut)
+                    {
+                        scopes.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+                    }
+                }
+                for member in ["paths", "queryParameters"] {
+                    if let Some(values) = identity
+                        .get_mut(member)
+                        .and_then(serde_json::Value::as_array_mut)
+                    {
+                        values.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+                    }
+                }
+                identity["product"] = json!("external-http");
+                identity["abi"] = json!("coordinator-external-http/v1");
+                identities.insert(name, identity);
+                continue;
+            }
             let binding = &self.connections[name];
             let auth = &binding.authorization;
             let mut scopes = auth.scopes.clone();
@@ -589,8 +711,16 @@ pub fn runtime_schema() -> Result<String> {
         ),
     )
     .map_err(|_| config_error("", "restore the identifier schema generator"))?;
-    schema["properties"]["connections"] = json!({"type":"object", "minProperties":1,"maxProperties":16,
+    schema["properties"]["connections"] = json!({"type":"object", "default":{}, "maxProperties":16,
+        "description":"Omitted means no product bindings; at least one product or external HTTP connection is required.",
         "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/ConnectionConfig"}});
+    schema["properties"]["externalHttpConnections"] = json!({"type":"object", "default":{}, "maxProperties":16,
+        "description":"Omitted means external HTTP is unavailable. Names must be distinct from product connections.",
+        "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/ExternalHttpConfig"}});
+    schema["allOf"] = json!([{"anyOf":[
+        {"required":["connections"],"properties":{"connections":{"minProperties":1}}},
+        {"required":["externalHttpConnections"],"properties":{"externalHttpConnections":{"minProperties":1}}}
+    ]}]);
     schema["properties"]["database"] = json!({"allOf":[
         {"$ref":"#/$defs/DatabaseConfig"},
         {"properties":{"testOnlyPlaintext":{"const":false}}}
@@ -673,6 +803,12 @@ pub(crate) fn unique_strings<'de, D: Deserializer<'de>>(
                 .collect()
         },
     )
+}
+
+fn external_connection_keys<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<BTreeMap<String, crate::external_http::ExternalHttpConfig>, D::Error> {
+    BTreeMap::<registry_platform_yaml::LocalId, crate::external_http::ExternalHttpConfig>::deserialize(d).map(|map| map.into_iter().map(|(key, value)| (key.into_string(), value)).collect())
 }
 
 fn connection_keys<'de, D: Deserializer<'de>>(

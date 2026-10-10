@@ -54,6 +54,7 @@ enum Product {
     Breg,
     Messaging,
     Scheduling,
+    ExternalHttp,
 }
 
 impl Product {
@@ -62,6 +63,7 @@ impl Product {
             Self::Breg => "breg",
             Self::Messaging => "messaging",
             Self::Scheduling => "scheduling",
+            Self::ExternalHttp => "external-http",
         }
     }
 }

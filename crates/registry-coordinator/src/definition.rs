@@ -16,12 +16,14 @@ use serde_json::Value;
 
 use crate::{
     functions::{check_value, Functions, INTERPRETER_ABI},
+    operations::OperationIdentity,
     protocol::Operation,
     PocError, Result,
 };
 
 const API_VERSION: &str = "registry.registrystack.org/coordinator/v1alpha1";
-const ADAPTER_ABI: &str = "coordinator/product-operations/v3";
+const ADAPTER_ABI: &str = "coordinator/product-operations/v4";
+const LEGACY_ADAPTER_ABI: &str = "coordinator/product-operations/v3";
 const SCHEMA_ABI: &str = "coordinator/jsonschema-0.18/draft202012/formats-asserted+uuid/v1";
 const MAX_DOCUMENT_BYTES: usize = 1_048_576;
 /// Maximum canonical snapshot size, shared by authoring, restore and packaging.
@@ -117,6 +119,22 @@ struct Snapshot {
     adapter_abi: String,
     interpreter_abi: String,
     schema_abi: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operation_identities: Option<Vec<OperationIdentity>>,
+}
+
+fn operation_identities(workflow: &Workflow) -> Vec<OperationIdentity> {
+    let mut identities: Vec<_> = workflow
+        .steps
+        .values()
+        .filter_map(|step| match step {
+            Step::Call { call, .. } => Some(call.operation.identity()),
+            _ => None,
+        })
+        .collect();
+    identities.sort_by(|a, b| a.id.cmp(&b.id));
+    identities.dedup();
+    identities
 }
 
 impl Definition {
@@ -140,6 +158,7 @@ impl Definition {
             crate::authoring::positioned(&document, error.at(&path, "functions")).with_exit(exit)
         })?;
         Self::restore(Snapshot {
+            operation_identities: Some(operation_identities(&workflow)),
             workflow,
             source,
             adapter_abi: ADAPTER_ABI.into(),
@@ -160,7 +179,18 @@ impl Definition {
     }
 
     fn restore(frozen: Snapshot) -> Result<Self> {
-        if frozen.adapter_abi != ADAPTER_ABI
+        let current_identities = operation_identities(&frozen.workflow);
+        let operations_match = match (frozen.adapter_abi.as_str(), &frozen.operation_identities) {
+            (ADAPTER_ABI, Some(pinned)) => {
+                *pinned == current_identities
+                    && pinned.iter().all(OperationIdentity::matches_registered)
+            }
+            (LEGACY_ADAPTER_ABI, None) => current_identities
+                .iter()
+                .all(OperationIdentity::matches_legacy),
+            _ => false,
+        };
+        if !operations_match
             || frozen.interpreter_abi != INTERPRETER_ABI
             || frozen.schema_abi != SCHEMA_ABI
         {
@@ -249,7 +279,7 @@ impl Definition {
             serde_json::json!({"workflow":self.workflow.id,"version":self.workflow.version,"definitionDigest":self.digest,
             "start":self.workflow.start,"deadlineSeconds":parse_duration(&self.workflow.deadline)?.num_seconds(),
             "connections":self.workflow.connections,"outcomes":self.workflow.outcomes.keys().collect::<Vec<_>>(),"steps":steps,
-            "limits":crate::functions::limits(),"interpreterAbi":INTERPRETER_ABI,"schemaAbi":SCHEMA_ABI,"adapterAbi":ADAPTER_ABI,
+            "limits":crate::functions::limits(),"interpreterAbi":self.frozen.interpreter_abi,"schemaAbi":self.frozen.schema_abi,"adapterAbi":self.frozen.adapter_abi,
             "networkAccess":false,"databaseAccess":false,"secretResolution":false,
             "recovery":"A run restores this exact snapshot. retry-same preserves a frozen command and cannot adopt edited mappings."}),
         )
@@ -443,7 +473,11 @@ fn validate_workflow(flow: &Workflow) -> Result<()> {
     }
     parse_duration(&flow.deadline).map_err(|error| error.at("workflow.yaml", "deadline"))?;
     for (name, kind) in &flow.connections {
-        if !valid_name(name) || !matches!(kind.as_str(), "breg" | "messaging" | "scheduling") {
+        if !valid_name(name)
+            || !crate::operations::descriptors()
+                .iter()
+                .any(|operation| operation.product == kind)
+        {
             return Err(fail("definition.connection").at("workflow.yaml", "connections"));
         }
     }
@@ -621,7 +655,7 @@ impl SchemaResolver for NoRemoteSchemas {
     }
 }
 
-fn compile_schema(schema: &Value) -> Result<JSONSchema> {
+pub(crate) fn compile_schema(schema: &Value) -> Result<JSONSchema> {
     fn local(value: &Value, depth: usize) -> bool {
         if depth > 32 {
             return false;

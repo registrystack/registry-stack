@@ -40,6 +40,7 @@ enum Connection {
     Breg {
         client: Box<BaseRegistryClient>,
         options: BRegRecordOptions,
+        profile: String,
     },
     BregTask(Box<TaskConnection>),
     Scheduling(Box<SchedulingConnection>),
@@ -47,6 +48,7 @@ enum Connection {
         client: MessagingClient,
         tokens: Arc<PrivateKeyJwt>,
     },
+    External(Box<crate::external_http::ExternalHttpConnection>),
 }
 
 struct SchedulingConnection {
@@ -169,7 +171,7 @@ impl HttpAdapters {
                 Product::Breg => {
                     let profile = binding.profile.ok_or_else(config_error)?;
                     let options = BRegRecordOptions::default()
-                        .access_profile(profile)
+                        .access_profile(&profile)
                         .map_err(|_| config_error())?;
                     if auth.task_authority.is_some() {
                         Connection::BregTask(Box::new(TaskConnection {
@@ -189,6 +191,7 @@ impl HttpAdapters {
                                     .map_err(|_| config_error())?,
                             ),
                             options,
+                            profile,
                         }
                     }
                 }
@@ -235,6 +238,25 @@ impl HttpAdapters {
             };
             connections.insert(name, connection);
         }
+        for (name, binding) in &config.external_http_connections {
+            let provider: Option<Arc<dyn TokenProvider>> = match &binding.authorization {
+                Some(auth) => {
+                    let key_bytes = secrets
+                        .resolve_reference(&auth.signing_key_ref)
+                        .map_err(|_| config_error())?;
+                    let key_text = std::str::from_utf8(key_bytes.expose_secret())
+                        .map_err(|_| config_error())?;
+                    let key = PrivateJwk::parse(key_text).map_err(|_| config_error())?;
+                    Some(Arc::new(
+                        tokens(auth, key, &auth.resource, &auth.scopes)
+                            .map_err(|_| config_error())?,
+                    ))
+                }
+                None => None,
+            };
+            let connection = crate::external_http::ExternalHttpConnection::new(binding, provider)?;
+            connections.insert(name.clone(), Connection::External(Box::new(connection)));
+        }
         let digest = config.binding_digest()?;
         Ok(Self {
             connections,
@@ -244,18 +266,18 @@ impl HttpAdapters {
     }
 }
 
-fn refused(code: &str) -> CallOutcome {
+pub(crate) fn refused(code: &str) -> CallOutcome {
     CallOutcome::Refused {
         code: code.to_owned(),
     }
 }
-fn retryable(code: &str) -> CallOutcome {
+pub(crate) fn retryable(code: &str) -> CallOutcome {
     CallOutcome::Retryable {
         code: code.to_owned(),
     }
 }
 
-fn token_failure(error: &TokenError) -> CallOutcome {
+pub(crate) fn token_failure(error: &TokenError) -> CallOutcome {
     match error {
         TokenError::Transport { .. } | TokenError::Unavailable => {
             retryable("credential-unavailable")
@@ -391,9 +413,52 @@ impl AdapterSet for HttpAdapters {
             .unwrap_or_else(|_| "invalid-workflow-binding".into())
     }
 
+    async fn prepare(
+        &self,
+        request: &CallRequest,
+    ) -> std::result::Result<Option<Vec<u8>>, CallOutcome> {
+        if request.operation == Operation::InvokeBregAction {
+            return match self.connections.get(&request.connection) {
+                Some(Connection::Breg {
+                    client, profile, ..
+                }) => crate::breg_action::prepare(client, profile, request)
+                    .await
+                    .map(Some),
+                _ => Err(refused("operation-unbound")),
+            };
+        }
+        Ok(None)
+    }
+
+    async fn call_prepared(&self, request: &CallRequest, prepared: Option<&[u8]>) -> CallOutcome {
+        if request.operation == Operation::InvokeBregAction {
+            return match (self.connections.get(&request.connection), prepared) {
+                (
+                    Some(Connection::Breg {
+                        client, profile, ..
+                    }),
+                    Some(bytes),
+                ) => crate::breg_action::execute(client, profile, request, bytes).await,
+                _ => refused("operation-unbound"),
+            };
+        }
+        if prepared.is_some() {
+            return refused("invalid-command");
+        }
+        self.call(request).await
+    }
+
     async fn call(&self, request: &CallRequest) -> CallOutcome {
         match (self.connections.get(&request.connection), request.operation) {
-            (Some(Connection::Breg { client, options }), Operation::ReadRecord) => {
+            (Some(Connection::External(connection)), Operation::ExternalGet) => {
+                connection.get(&request.input).await
+            }
+            (
+                Some(Connection::Breg {
+                    client, options, ..
+                }),
+                Operation::ReadRecord,
+            ) => {
                 let input: ReadRequest = match serde_json::from_value(request.input.clone()) {
                     Ok(input) => input,
                     Err(_) => return refused("invalid-command"),

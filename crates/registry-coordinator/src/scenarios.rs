@@ -399,6 +399,19 @@ pub fn scenario_schema() -> std::result::Result<String, serde_json::Error> {
 /// bounded by the workflow deadline.
 pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioReport> {
     definition.validate_input(&scenario.input)?;
+    for step in scenario.replies.keys() {
+        if !matches!(definition.workflow.steps.get(step), Some(Step::Call { .. })) {
+            return Err(error("scenario.reply-step"));
+        }
+    }
+    for (step, recovery) in &scenario.recovery {
+        let Some(Step::Call { call, .. }) = definition.workflow.steps.get(step) else {
+            return Err(error("scenario.recovery"));
+        };
+        if matches!(recovery, Recovery::Reconcile) && !call.operation.supports_read_receipt() {
+            return Err(error("scenario.recovery"));
+        }
+    }
     let deadline = definition.deadline_at(scenario.admitted_at)?;
     let mut now = scenario.admitted_at;
     let mut step = definition.workflow.start.clone();
@@ -459,7 +472,7 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                     connection: call.connection.clone(),
                     operation: call.operation,
                     input: value,
-                    idempotency_key: if call.operation.is_mutating() {
+                    idempotency_key: if call.operation.requires_key() {
                         Some(format!(
                             "scenario-{}",
                             registry_platform_config::sha256_uri(
@@ -492,7 +505,7 @@ pub fn run(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                     // never create success after a definite retryable rejection.
                     if index > 0
                         && matches!(recovery, Some(Recovery::Reconcile))
-                        && (command.operation.is_read() || !prior_unknown)
+                        && (!command.operation.supports_read_receipt() || !prior_unknown)
                     {
                         return Err(error("scenario.recovery"));
                     }

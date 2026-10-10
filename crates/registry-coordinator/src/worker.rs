@@ -4,7 +4,7 @@
 use crate::{
     definition::{Definition, Step},
     protocol::{AdapterSet, CallOutcome, CallRequest},
-    store::{Detail, Job, Store},
+    store::{Detail, FrozenCommand, Job, Store},
     PocError, Result,
 };
 use async_trait::async_trait;
@@ -72,7 +72,7 @@ fn safe_code(code: &str, fallback: &'static str) -> &'static str {
         "rate-limited" => "rate-limited",
         "operation-unbound" => "operation-unbound",
         "attempt-timeout" => "attempt-timeout",
-        _ => fallback,
+        _ => crate::operations::failure_code(code).unwrap_or(fallback),
     }
 }
 
@@ -84,6 +84,24 @@ fn advance(next: String, output: Option<Value>) -> Detail {
         failure_code: None,
         uncertain: false,
         receipt_expired: false,
+    }
+}
+
+fn call_result(result: CallOutcome, next: &str, uncertain: bool) -> Sent<Detail> {
+    match result {
+        CallOutcome::Success(value) => accepted(advance(next.to_owned(), Some(value))),
+        CallOutcome::Retryable { code } if !uncertain => Sent {
+            outcome: SendOutcome::Transient { retry_after: None },
+            detail: Detail::failure(safe_code(&code, "remote-retryable"), false),
+        },
+        CallOutcome::Retryable { code } => failed(safe_code(&code, "remote-retryable"), true),
+        CallOutcome::Refused { code } => failed(safe_code(&code, "remote-refused"), uncertain),
+        CallOutcome::Uncertain { code } => failed(safe_code(&code, "remote-uncertain"), true),
+        CallOutcome::ReceiptExpired => {
+            let mut sent = failed("receipt-expired", true);
+            sent.detail.receipt_expired = true;
+            sent
+        }
     }
 }
 
@@ -142,8 +160,8 @@ impl DispatchTransport for Worker {
                 }))
             }
             Step::Call { call, next, .. } => {
-                let request = if let Some(request) = &payload.command {
-                    request.clone()
+                let command = if let Some(command) = &payload.command {
+                    command.clone()
                 } else {
                     let value = match evaluate() {
                         Ok(value) => value,
@@ -153,16 +171,67 @@ impl DispatchTransport for Worker {
                         connection: call.connection.clone(),
                         operation: call.operation,
                         input: value,
-                        idempotency_key: call.operation.is_mutating().then(|| {
+                        idempotency_key: call.operation.requires_key().then(|| {
                             self.store
                                 .command_key(&job.job.start_identity, job.key.part())
                         }),
                     };
+                    let preparation = if request.operation.requires_preparation() {
+                        // Preparation may read current metadata and target conditions,
+                        // but must never mutate a product. A crash here can prepare
+                        // again because no external effect has been dispatched.
+                        if !self
+                            .store
+                            .before_io(job, false)
+                            .await
+                            .map_err(|_| DispatchError::Unavailable)?
+                        {
+                            return Ok(failed("deadline-reached", job.job.uncertain));
+                        }
+                        let Some(budget) = job.remaining_budget(std::time::SystemTime::now())
+                        else {
+                            return Ok(failed("attempt-timeout", job.job.uncertain));
+                        };
+                        let value =
+                            match tokio::time::timeout(budget, self.adapters.prepare(&request))
+                                .await
+                            {
+                                Ok(Ok(Some(value))) => Some(value),
+                                Ok(Ok(None)) => {
+                                    return Ok(failed("preparation-invalid", job.job.uncertain))
+                                }
+                                Ok(Err(CallOutcome::Success(_))) => {
+                                    return Ok(failed("preparation-invalid", job.job.uncertain));
+                                }
+                                Ok(Err(outcome)) => {
+                                    return Ok(call_result(outcome, next, job.job.uncertain))
+                                }
+                                Err(_) => {
+                                    return Ok(call_result(
+                                        CallOutcome::Retryable {
+                                            code: "attempt-timeout".into(),
+                                        },
+                                        next,
+                                        job.job.uncertain,
+                                    ))
+                                }
+                            };
+                        if value.as_ref().is_some_and(|bytes| bytes.len() > 65_536) {
+                            return Ok(failed("preparation-too-large", job.job.uncertain));
+                        }
+                        value
+                    } else {
+                        None
+                    };
                     self.store
-                        .freeze(job, request)
+                        .freeze(job, FrozenCommand::new(request, preparation))
                         .await
                         .map_err(|_| DispatchError::Unavailable)?
                 };
+                let request = command.request();
+                if request.operation != call.operation || request.connection != call.connection {
+                    return Ok(failed("protected-state-invalid", job.job.uncertain));
+                }
                 if !self
                     .store
                     .before_io(job, request.operation.is_mutating())
@@ -177,7 +246,11 @@ impl DispatchTransport for Worker {
                         request.operation.is_mutating() || job.job.uncertain,
                     ));
                 };
-                let result = tokio::time::timeout(budget, self.adapters.call(&request)).await;
+                let result = tokio::time::timeout(
+                    budget,
+                    self.adapters.call_prepared(request, command.preparation()),
+                )
+                .await;
                 let result = match result {
                     Ok(result) => result,
                     Err(_) if request.operation.is_mutating() => CallOutcome::Uncertain {
@@ -187,27 +260,7 @@ impl DispatchTransport for Worker {
                         code: "attempt-timeout".to_owned(),
                     },
                 };
-                Ok(match result {
-                    CallOutcome::Success(value) => accepted(advance(next.clone(), Some(value))),
-                    CallOutcome::Retryable { code } if !job.job.uncertain => Sent {
-                        outcome: SendOutcome::Transient { retry_after: None },
-                        detail: Detail::failure(safe_code(&code, "remote-retryable"), false),
-                    },
-                    CallOutcome::Retryable { code } => {
-                        failed(safe_code(&code, "remote-retryable"), true)
-                    }
-                    CallOutcome::Refused { code } => {
-                        failed(safe_code(&code, "remote-refused"), job.job.uncertain)
-                    }
-                    CallOutcome::Uncertain { code } => {
-                        failed(safe_code(&code, "remote-uncertain"), true)
-                    }
-                    CallOutcome::ReceiptExpired => {
-                        let mut sent = failed("receipt-expired", true);
-                        sent.detail.receipt_expired = true;
-                        sent
-                    }
-                })
+                Ok(call_result(result, next, job.job.uncertain))
             }
         }
     }

@@ -55,7 +55,13 @@ pub(crate) fn check_runtime(
                         )),
                         _ => None,
                     })
-                    .unwrap_or_else(|| format!("/{}", field.replace('.', "/")));
+                    .unwrap_or_else(|| {
+                        if field.starts_with('/') {
+                            field.to_owned()
+                        } else {
+                            format!("/{}", field.replace('.', "/"))
+                        }
+                    });
                 let mut diagnostic = checked.error_at(
                     runtime::KIND,
                     "coordinator.runtime.workflow-binding",

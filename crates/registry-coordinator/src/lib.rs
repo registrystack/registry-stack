@@ -3,9 +3,12 @@
 
 pub mod adapters;
 pub mod authoring;
+pub mod breg_action;
 pub mod definition;
 pub mod error;
+pub mod external_http;
 mod functions;
+pub mod operations;
 pub mod project;
 mod project_check;
 pub mod protocol;
