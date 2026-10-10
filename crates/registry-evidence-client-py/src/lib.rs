@@ -221,9 +221,7 @@ impl PreparedEvidenceRequest {
     /// it.
     #[getter]
     fn policy_document(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let value = serde_json::to_value(self.inner.policy_document())
-            .map_err(|error| serialization_error("the policy document", error))?;
-        Ok(json_to_python(py, &value)?.unbind())
+        Ok(convert::policy_document_to_python(py, self.inner.policy_document())?.unbind())
     }
 
     /// The subject expectations this request closed with: either the literal
@@ -265,17 +263,17 @@ impl PreparedEvidenceRequestBatch {
     /// Independently closed policy documents in request order.
     #[getter]
     fn policy_documents(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let value = (0..self.inner.count())
+        let policies = (0..self.inner.count())
             .map(|index| {
-                serde_json::to_value(
+                convert::policy_document_to_python(
+                    py,
                     self.inner
                         .policy_document(index)
                         .expect("the index comes from the batch count"),
                 )
             })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| serialization_error("a request batch policy document", error))?;
-        Ok(json_to_python(py, &serde_json::Value::Array(value))?.unbind())
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(pyo3::types::PyList::new(py, policies)?.into_any().unbind())
     }
 
     /// Subject-verification stances in request order.

@@ -341,6 +341,28 @@ pub fn json_to_python<'py>(py: Python<'py>, value: &Value) -> PyResult<Bound<'py
     }
 }
 
+/// Convert a complete policy with its envelope first, preserving the document
+/// order without changing JSON map ordering for other binding values.
+pub fn policy_document_to_python<'py>(
+    py: Python<'py>,
+    policy: &evidence_client_sdk::EvidenceVerificationPolicyDocument,
+) -> PyResult<Bound<'py, PyAny>> {
+    let value = serde_json::to_value(policy).map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err("the policy document could not be serialized")
+    })?;
+    let object = value.as_object().expect("a policy serializes as an object");
+    let dict = PyDict::new(py);
+    for key in ["apiVersion", "kind"] {
+        dict.set_item(key, json_to_python(py, &object[key])?)?;
+    }
+    for (key, value) in object {
+        if key != "apiVersion" && key != "kind" {
+            dict.set_item(key, json_to_python(py, value)?)?;
+        }
+    }
+    Ok(dict.into_any())
+}
+
 /// The three scalar shapes a selector value may take on the wire, read off a
 /// Python value.
 ///

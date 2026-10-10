@@ -118,8 +118,19 @@
   `id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1`
   with `EvidenceHolderBoundVerificationPolicy`). A file without them is
   refused as `config.missing-envelope`. Migration: add the two lines at the
-  top of every retained policy file. The policy object the clients take is
-  unchanged.
+  top of every retained policy file. Rust, Node.js, and Python prepared
+  requests and batches now return the complete enveloped policy document;
+  retained contexts carry that same document under `verificationPolicy`.
+  Prepare fresh retained contexts with the updated client. With independently
+  pinned subject expectations, write `verificationPolicy` directly to a
+  standalone CLI policy file. A first-use draft retains its existing empty
+  `expectedSubjects` and is not a standalone CLI policy. The retained schema
+  marker remains `registry.evidence-client.retained-verification/v1`; contexts
+  with an unenveloped policy are refused. Rust struct literals for
+  `EvidenceVerificationPolicyDocument` and `HolderBoundPresentationPolicyDocument`
+  must supply typed `api_version` and `kind` fields; `Default::default()`
+  selects each field's only supported value. Prepare options and verification
+  decisions are unchanged.
 - BREAKING: in the bundle, a request's `timeoutMilliseconds` is
   `attemptTimeoutMilliseconds`, and `concurrencyLimit` on a request and on a
   source connection is `maximumConcurrency`. The old keys are refused as

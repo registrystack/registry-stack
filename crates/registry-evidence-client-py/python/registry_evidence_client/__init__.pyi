@@ -22,6 +22,28 @@ from typing import Any, Literal, Mapping, Optional, Sequence, TypedDict, Union
 
 EvidenceResponseFormat = Literal["signed-jws", "sd-jwt-vc"]
 
+EvidenceVerificationPolicyDocument = TypedDict(
+    "EvidenceVerificationPolicyDocument",
+    {
+        "apiVersion": Literal["id.registrystack.org/formats/evidence/verification-policy/v1"],
+        "kind": Literal["EvidenceVerificationPolicy"],
+        "expectedAssuranceProfile": str,
+        "issuedBy": str,
+        "providedBy": str,
+        "requirement": str,
+        "evidenceType": str,
+        "purpose": str,
+        "audience": str,
+        "configurationRevision": str,
+        "requestNonce": str,
+        "expectedSubjects": Sequence[Mapping[str, Any]],
+        "expectedOutputs": Sequence[Mapping[str, Any]],
+        "revokedKeyIds": Sequence[str],
+        "maximumAssertionLifetimeSeconds": int,
+        "clockSkewSeconds": int,
+    },
+)
+
 SubjectRequest = TypedDict(
     "SubjectRequest", {"role": str, "selector_profile": str}
 )
@@ -244,7 +266,7 @@ class PreparedEvidenceRequest:
     `request_and_verify` call."""
 
     request_nonce: str
-    policy_document: Any
+    policy_document: EvidenceVerificationPolicyDocument
     subject_expectations: Union[str, Sequence[Any]]
 
 class PreparedEvidenceRequestBatch:
@@ -254,7 +276,7 @@ class PreparedEvidenceRequestBatch:
     `request_and_verify_batch` call."""
 
     request_nonces: Sequence[str]
-    policy_documents: Sequence[Any]
+    policy_documents: Sequence[EvidenceVerificationPolicyDocument]
     subject_expectations: Sequence[Union[str, Sequence[Any]]]
     count: int
 

@@ -501,6 +501,8 @@ async fn signed_evidence_source_feeds_a_verifiable_holder_bound_credential() {
     })).await.unwrap();
     let config = &fixture.runtime.bundle().config;
     let policy: HolderBoundPresentationPolicyDocument = serde_json::from_value(json!({
+        "apiVersion": "id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1",
+        "kind": "EvidenceHolderBoundVerificationPolicy",
         "subjectBinding": "holder-bound", "expectedAssuranceProfile": config.assurance_profile,
         "issuedBy": config.issuer.id, "providedBy": config.service.provider_id,
         "requirement": request.requirement,

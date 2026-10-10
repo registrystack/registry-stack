@@ -973,9 +973,22 @@ the other kind as `config.wrong-kind`; the two verify commands report their
 closed `malformed` class, as before. Migration: add the two lines at the top
 of every retained policy file. No other member moves.
 
-The envelope belongs to the file. The policy object a relying party passes to
-the Rust, Node.js, and Python clients is the members beside the envelope, as
-before, and carries neither `apiVersion` nor `kind`.
+The Rust, Node.js, and Python clients return the same complete document in a
+prepared request's `policyDocument` (`policy_document` in Python), in each
+prepared batch policy, and under `verificationPolicy` in a retained context.
+Each document writes `apiVersion` and `kind` first. A retained context keeps
+its `registry.evidence-client.retained-verification/v1` schema marker and
+refuses a policy without the envelope. Prepare a fresh context with the
+updated client. With independently pinned subject expectations, write its
+`verificationPolicy` directly to a standalone CLI policy file. A first-use
+draft retains its existing empty `expectedSubjects` and is not a standalone
+CLI policy. Applications supply prepare options as before, and verification
+decisions do not change.
+
+Rust callers constructing `EvidenceVerificationPolicyDocument` or
+`HolderBoundPresentationPolicyDocument` with a struct literal must supply the
+required typed `api_version` and `kind` fields. `Default::default()` selects
+each field's only supported value.
 
 ### BREAKING: a request's bounds are `attemptTimeoutMilliseconds` and `maximumConcurrency`
 

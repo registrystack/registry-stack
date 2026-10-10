@@ -72,6 +72,9 @@ function envelope(credentials) {
 
 test('a request may present holder keys, and they never reach the closed policy', () => {
   const prepared = client().prepare({ ...requestSpec(), holderKeys: HOLDER_KEYS });
+  assert.equal(prepared.policyDocument.apiVersion, 'id.registrystack.org/formats/evidence/verification-policy/v1');
+  assert.equal(prepared.policyDocument.kind, 'EvidenceVerificationPolicy');
+  assert.deepEqual(Object.keys(prepared.policyDocument).slice(0, 2), ['apiVersion', 'kind']);
   const policy = JSON.stringify(prepared.policyDocument);
   for (const key of HOLDER_KEYS) {
     assert.ok(!policy.includes(key.x), 'a holder key reached the verification policy');
